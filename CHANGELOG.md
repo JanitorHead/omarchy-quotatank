@@ -50,7 +50,7 @@ All notable changes to this project will be documented here. The format follows
 - The **Default** choice in per-provider bar limits names the global value it inherits (`Global: 5-hour (session)`).
 - **Pacing follows recent use, not the average since the window began.** The projection uses an exponentially weighted rate of the window's own samples (two-hour half-life), so a limit that has been idle for days no longer reports "Runs out". The status line reads `Idle <time>` once nothing has risen for an hour, `No recent data` when the newest sample is over an hour old, and `Collecting data` for the first ten minutes. Idle and stale windows show no projection.
 - **Per-window history** (`history.json` schema 2): each limit window keeps its own samples for seven days, so weekly and monthly series never mix. A flat window is re-recorded every 30 minutes. The schema 1 file is discarded on first run, so pacing starts with empty history. Refresh intervals above one hour mark windows as `No recent data`.
-- Pace: the tick appears only once the window has usage, and its "expected N%" legend travels with the status line. Exhausted windows show "Limit reached" with no tick.
+- Pace: the tick appears only once the window has usage and its rate is trusted. Stale and collecting windows draw no tick and no Ahead/Behind tooltip; their status line gives the reason. The tick's "expected N%" legend travels with the status line. Exhausted windows show "Limit reached" with no tick.
 
 - Limit cards and menu bar chips report **percentage used** by default, matching
   provider dashboards, with one decimal when the provider gives one. The new

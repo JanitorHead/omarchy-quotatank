@@ -394,18 +394,21 @@ assert.equal(context.paceTickText(steady), "Used 40% · expected 50%\nBehind by 
 // Too little observed time is no basis for a projection.
 const fresh = context.paceForWindow(weekly(20, [[NOW - 300, 20], [NOW, 20]]), NOW);
 assert.equal(fresh.state, "collecting");
-assert.equal(context.paceText(fresh), "Collecting data · expected 50%");
+assert.equal(context.paceShowsMark(fresh), false, "no rate yet, so no tick and no Ahead/Behind");
+assert.equal(context.paceTickText(fresh), "");
+assert.equal(context.paceStatusText(fresh), "Collecting data");
 
 // A gap longer than an hour is unobserved: the rise across it is neither a rate nor idle time.
 const gapped = context.paceForWindow(weekly(20, [[NOW - 4000, 10], [NOW - 100, 20]]), NOW);
 assert.equal(gapped.state, "collecting");
 assert.equal(gapped.observedSeconds, 100);
 
-// Newest sample older than an hour: the data is stale, not idle, and the tick keeps its used/expected reading.
+// Newest sample older than an hour: the data is stale, not idle. No rate is trusted, so no tick and no Ahead/Behind.
 const silent = context.paceForWindow(weekly(60, holding(weekStart, NOW - 2 * HOUR, 60)), NOW);
 assert.equal(silent.state, "stale");
-assert.equal(context.paceText(silent), "No recent data · expected 50%");
-assert.equal(context.paceShowsMark(silent), true);
+assert.equal(context.paceShowsMark(silent), false, "stale data draws no tick");
+assert.equal(context.paceTickText(silent), "");
+assert.equal(context.paceStatusText(silent), "No recent data");
 
 // Usage recorded before the window started is not a rise inside it.
 const previous = context.paceForWindow(weekly(5, [[weekStart - HOUR, 90], ...holding(weekStart, NOW, 5)]), NOW);

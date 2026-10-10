@@ -547,9 +547,11 @@ function formatDuration(seconds) {
   return rest + "m"
 }
 
-// The pace tick is drawn only when there is usage to compare with it.
+// The pace tick is drawn only when there is usage to compare with it and a projection backs it.
+// Stale and collecting windows have no trustworthy rate: no tick, so no Ahead/Behind is claimed.
 function paceShowsMark(pace) {
-  return !!pace && pace.known && !pace.exhausted && pace.used > 0
+  return !!pace && pace.known && !pace.exhausted && pace.used > 0 &&
+    pace.state !== "stale" && pace.state !== "collecting"
 }
 
 // Hover text for the tick: usage against the expected share, then what the recent burn implies.
@@ -572,8 +574,6 @@ function projectionLine(pace) {
       : "At this pace: lasts until reset"
   }
   if (pace.state === "idle") return "No increase for " + formatDuration(pace.idleSeconds) + " · no projection"
-  if (pace.state === "stale") return "No samples in the last hour · no projection"
-  return "Collecting samples · no projection"
 }
 
 // One status line for a window card; empty when there is nothing to say.
@@ -584,8 +584,6 @@ function paceText(pace) {
   if (!paceShowsMark(pace)) return ""
   var expected = "expected " + Math.round(pace.expected) + "%"
   if (pace.state === "idle") return "Idle " + formatDuration(pace.idleSeconds) + " · " + expected
-  if (pace.state === "stale") return "No recent data · " + expected
-  if (pace.state === "collecting") return "Collecting data · " + expected
   if (pace.runsOut) return "Runs out in " + formatDuration(pace.etaSeconds) + " · " + expected
   return "Lasts until reset · " + expected
 }
@@ -596,6 +594,8 @@ function paceStatusText(pace) {
   if (text !== "") return text
   if (!pace) return "not reported"
   if (!pace.known) return "starts after 2% of the window"
+  if (pace.state === "stale") return "No recent data"
+  if (pace.state === "collecting") return "Collecting data"
   return "no usage yet"
 }
 
