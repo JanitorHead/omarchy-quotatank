@@ -10,8 +10,8 @@ import "UsageLogic.js" as UsageLogic
 
 Ui.Panel {
   id: root
-  moduleName: "digitalpals.model-usage"
-  ipcTarget: "digitalpals.model-usage"
+  moduleName: "janitorhead.quotatank"
+  ipcTarget: "janitorhead.quotatank"
   manageIpc: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -28,6 +28,12 @@ Ui.Panel {
   property string historyMode: "h24"
   property string viewMode: "limits"
   property string settingsReturnView: "limits"
+  readonly property bool historyAvailable: viewMode === "limits" && !accountOverview && !!provider
+    && !!provider.history
+    && ((UsageLogic.isListLike(provider.history.h24) && provider.history.h24.length > 0)
+      || (UsageLogic.isListLike(provider.history.d7) && provider.history.d7.length > 0))
+  readonly property bool tokensAvailable: viewMode === "limits" && !accountOverview && !!provider
+    && provider.status !== "error" && providerModels.length > 0
   readonly property bool configuring: viewMode === "settings" || viewMode === "cost-settings"
   readonly property var activeSettingsForm: viewMode === "cost-settings" ? costConfigForm : configForm
   property alias costSettingsForm: costConfigForm
@@ -41,6 +47,7 @@ Ui.Panel {
   ]
   readonly property bool hideAccountEmails: setting("hideAccountEmails", true) !== false
   readonly property real usageCardRadius: setting("squareUsageCards", true) === true ? 0 : Style.cornerRadius
+  readonly property bool notifyLimitThresholds: setting("notifyLimitThresholds", true) !== false
 
   function accountDisplayName(account, index) {
     return hideAccountEmails ? "Account " + index : String(account.account || "Account " + index)
@@ -51,8 +58,22 @@ Ui.Panel {
   readonly property int warningThreshold: Math.max(criticalThreshold, UsageLogic.clamp(
     setting("warningThreshold", 25), 0, 100))
   readonly property string displayMode: String(setting("barDisplayMode", "Percentages"))
-  readonly property var percentageProviders: UsageLogic.meaningfulProviders(
-    UsageLogic.selectedProviders(providers, setting("barProviders", ["claude", "codex", "kimi"])))
+  // Which side of the allowance cards and chips report. Dashboards show usage;
+  // the warning thresholds always gate on what is left.
+  readonly property string quotaMode: String(setting("quotaMode", "Used")) === "Remaining"
+    ? "Remaining" : "Used"
+  // Pins which reported limit supplies the bar percentage, its severity colour
+  // and its echoes. Values match the AI usage widget's setting of the same name.
+  readonly property string barWindow: UsageLogic.normalizeBarWindow(setting("barWindow", "auto"))
+  readonly property string barWindowSecondary: UsageLogic.normalizeSecondaryBarWindow(setting("barWindowSecondary", "none"))
+  readonly property string barProviderLimits: String(setting("barProviderLimits", "{}"))
+  readonly property bool barShowResets: setting("barShowResets", false) === true
+  readonly property var percentageProviders: UsageLogic.barProviders(
+    UsageLogic.selectedProviders(providers, setting("barProviders", ["claude", "codex", "kimi", "opencode"])),
+    function (provider) { return barLimitsFor(provider.id).top })
+  function barLimitsFor(providerId) {
+    return UsageLogic.barLimitsFor(barProviderLimits, providerId, barWindow, barWindowSecondary)
+  }
   property alias accountActivity: activityBackend
   readonly property bool percentageMode: displayMode === "Percentages"
     && !(bar && bar.vertical) && percentageProviders.length > 0
@@ -64,6 +85,10 @@ Ui.Panel {
   }
   readonly property var providerSummary: providers.length > 0 ? providers[providerIndex] : null
   readonly property var provider: providerSummary
+  // Per-model token activity for the provider on screen, taken from the same
+  // estimated-cost scan the Costs tab uses so both views always agree.
+  readonly property var providerModels: UsageLogic.providerModels(
+    costBackend.payload ? costBackend.payload.models : [], provider ? provider.id : "")
   readonly property var proxyAccounts: UsageLogic.listOrEmpty(providerSummary && providerSummary.accounts)
   readonly property bool accountOverview: proxyMode && proxyAccounts.length > 0
   property alias accountCards: accountRepeater
@@ -82,8 +107,16 @@ Ui.Panel {
 
   function anyProviderAlarming() {
     for (var i = 0; i < providers.length; i++) {
-      var severity = UsageLogic.severity(providers[i], warningThreshold, criticalThreshold)
+      var provider = providers[i]
+      var severity = UsageLogic.severity(
+        provider, warningThreshold, criticalThreshold,
+        UsageLogic.remainingForWindow(provider, barLimitsFor(provider.id).top))
       if (severity === "warning" || severity === "critical") return true
+      var secondary = barLimitsFor(provider.id).bottom
+      var secondRemaining = secondary !== "none" ? UsageLogic.exactRemainingForWindow(provider, secondary) : null
+      var secondSeverity = secondRemaining === null ? "none"
+        : UsageLogic.severity(provider, warningThreshold, criticalThreshold, secondRemaining)
+      if (secondSeverity === "warning" || secondSeverity === "critical") return true
     }
     return false
   }
@@ -125,6 +158,8 @@ Ui.Panel {
 
   function showLimits() {
     viewMode = "limits"
+    // Limits also renders per-model tokens, so it needs the same scan.
+    costBackend.ensureLoaded()
     open()
   }
 
@@ -165,7 +200,7 @@ Ui.Panel {
     if (changed) {
       if (!bar || !bar.shell || typeof bar.shell.updateEntryInline !== "function"
           || !bar.shell.updateEntryInline(moduleName, entry)) {
-        activeSettingsForm.errorText = "Could not save settings. Make sure Model Usage is enabled in the bar, then try again."
+        activeSettingsForm.errorText = "Could not save settings. Make sure Quotatank is enabled in the bar, then try again."
         activeSettingsForm.finishSave(false)
         return false
       }
@@ -203,6 +238,35 @@ Ui.Panel {
     return "ok"
   }
 
+  property var limitSeverityState: ({})
+
+  // Runs after each successful refresh: one desktop notification per window that moved to a worse severity.
+  function checkLimitCrossings() {
+    var readings = []
+    for (var i = 0; i < root.providers.length; i++) {
+      var provider = root.providers[i]
+      var rows = UsageLogic.listOrEmpty(provider.windows)
+      for (var j = 0; j < rows.length; j++) {
+        var row = rows[j]
+        readings.push({
+          key: String(provider.id) + "|" + String(row.label || j),
+          severity: windowSeverity(row),
+          title: String(provider.name || provider.id) + " · " + String(row.label || "Usage limit"),
+          remaining: UsageLogic.windowRemaining(row)
+        })
+      }
+    }
+    var result = UsageLogic.severityCrossings(limitSeverityState, readings)
+    limitSeverityState = result.state
+    if (!notifyLimitThresholds) return
+    for (var k = 0; k < result.crossings.length; k++) {
+      var crossing = result.crossings[k]
+      var critical = crossing.severity === "critical"
+      Util.execArgv(["notify-send", "--app-name=Quotatank", "--urgency=" + (critical ? "critical" : "normal"),
+        crossing.title, (critical ? "Critical" : "Warning") + ": " + UsageLogic.quotaText(crossing.remaining, "Remaining")])
+    }
+  }
+
   function durationUntil(epochSeconds) {
     var seconds = Number(epochSeconds)
     if (!isFinite(seconds) || seconds <= 0) return ""
@@ -225,6 +289,17 @@ Ui.Panel {
     return seconds * 1000 - nowMs < 86400000
       ? Qt.formatTime(date, "HH:mm")
       : Qt.formatDateTime(date, "MMM d, HH:mm")
+  }
+
+  function barResetText(row) {
+    if (!row) return ""
+    var seconds = Number(row.resetsAt)
+    if (!isFinite(seconds) || seconds <= 0) return ""
+    var kind = UsageLogic.barResetKind(row)
+    var format = UsageLogic.barResetFormat(kind,
+      setting("barResetTimeFormat", "24h"), setting("barResetDateFormat", "DD/MM"))
+    var date = new Date(seconds * 1000)
+    return kind === "time" ? Qt.formatTime(date, format) : Qt.formatDate(date, format)
   }
 
   function resetText(window) {
@@ -266,7 +341,7 @@ Ui.Panel {
 
   function iconUrl(provider) {
     if (!provider) return ""
-    if (!UsageLogic.contains(["claude", "codex", "kimi"], provider.id)) return ""
+    if (!UsageLogic.contains(["claude", "codex", "kimi", "opencode"], provider.id)) return ""
     if (provider.id === "codex") {
       return Qt.resolvedUrl(colorLuminance(surface) >= 0.5
         ? "assets/codex-light.svg" : "assets/codex.svg")
@@ -276,7 +351,7 @@ Ui.Panel {
 
   function barIconUrl(provider) {
     if (!provider) return ""
-    if (!UsageLogic.contains(["claude", "codex", "kimi"], provider.id)) return ""
+    if (!UsageLogic.contains(["claude", "codex", "kimi", "opencode"], provider.id)) return ""
     return Qt.resolvedUrl("assets/" + provider.id + "-bar.svg")
   }
 
@@ -335,9 +410,11 @@ Ui.Panel {
   function errorBody(provider) {
     if (!provider) return ""
     var message = String(provider.message || "Usage data is unavailable.")
-    if (provider.authCommand && (provider.errorKind === "no_credentials" || provider.errorKind === "expired"))
-      message += " Run “" + provider.authCommand + "” in a terminal, then refresh."
-    return message
+    if (!UsageLogic.errorNeedsSignIn(provider.errorKind))
+      return message + " Retries on the next automatic refresh."
+    return provider.authCommand
+      ? message + " Run “" + provider.authCommand + "” in a terminal, then refresh."
+      : message
   }
 
   function footerLeft() {
@@ -364,12 +441,15 @@ Ui.Panel {
   visible: true
   implicitWidth: percentageMode ? percentageGroup.implicitWidth : iconButton.implicitWidth
   implicitHeight: percentageMode ? percentageGroup.implicitHeight : iconButton.implicitHeight
+  // Bar draws the open-panel mark at this width (otherwise it falls back to
+  // 55% of the slot, which leaves the chips' outer ends unmarked).
+  readonly property real openPanelIndicatorWidth: implicitWidth
 
   onProvidersChanged: ensureSelection()
   onSelectedProviderIdChanged: expandedAccountLimits = false
   onOpenedChanged: if (opened) {
     nowMs = Date.now()
-    if (viewMode === "costs") costBackend.ensureLoaded()
+    costBackend.ensureLoaded()
     if (panelFlick) panelFlick.contentY = 0
     Qt.callLater(function() {
       if (resetBackend.active) resetForm.focusFirst()
@@ -394,7 +474,10 @@ Ui.Panel {
   UsageBackend {
     id: backend
     settings: root.settings
-    onRefreshed: activityBackend.refresh()
+    onRefreshed: {
+      activityBackend.refresh()
+      root.checkLimitCrossings()
+    }
   }
 
   UsageActivityBackend {
@@ -442,6 +525,7 @@ Ui.Panel {
     function costs(): string { root.showCosts(); return "ok" }
     function configureCosts(): string { root.showCostSettings(); return "ok" }
     function configure(): string { root.showSettings(); return "ok" }
+    function exportJson(): string { return UsageLogic.exportSnapshot(root.providers, Date.now() / 1000, root.hideAccountEmails) }
   }
 
   Ui.BarIconButton {
@@ -478,12 +562,37 @@ Ui.Panel {
           readonly property var lastAccount: root.lastAccount(modelData)
           readonly property bool usingPoolQuota: root.proxyMode && !lastAccount.reading
           readonly property var reading: root.proxyMode && lastAccount.reading ? lastAccount.reading : modelData
-          readonly property var remainingValue: UsageLogic.minRemaining(reading)
-          readonly property string remainingText: remainingValue === null
-            ? (root.proxyMode ? "—" : "") : Math.round(remainingValue) + "%"
+          readonly property var limits: root.barLimitsFor(modelData.id)
+          readonly property string topWindow: limits.top
+          readonly property string secondaryWindow: limits.bottom
+          readonly property bool failed: String(modelData.status) === "error"
+          readonly property bool stacked: secondaryWindow !== "none" && !failed
+          readonly property var remainingValue: UsageLogic.remainingForWindow(reading, topWindow)
+          readonly property var shownValue: root.quotaMode === "Remaining"
+            ? remainingValue : UsageLogic.usedForWindow(reading, topWindow)
+          readonly property string remainingText: shownValue === null
+            ? (root.proxyMode ? "—" : "") : UsageLogic.formatPercent(shownValue) + "%"
           readonly property string severity: UsageLogic.severity(
-            reading, root.warningThreshold, root.criticalThreshold)
+            reading, root.warningThreshold, root.criticalThreshold, remainingValue)
+          readonly property var secondaryRemaining: stacked
+            ? UsageLogic.exactRemainingForWindow(reading, secondaryWindow) : null
+          readonly property string secondaryText: secondaryRemaining === null ? "—"
+            : UsageLogic.formatPercent(root.quotaMode === "Remaining"
+              ? secondaryRemaining : UsageLogic.usedFromRemaining(secondaryRemaining)) + "%"
+          readonly property string topTag: UsageLogic.windowShortLabel(topWindow)
+          readonly property string bottomTag: UsageLogic.windowShortLabel(secondaryWindow)
+          readonly property string topReset: root.barShowResets
+            ? root.barResetText(UsageLogic.windowRowFor(reading, topWindow, true)) : ""
+          readonly property string bottomReset: root.barShowResets && stacked
+            ? root.barResetText(UsageLogic.windowRowFor(reading, secondaryWindow, false)) : ""
+          readonly property string topText: failed ? UsageLogic.errorReasonLabel(modelData.errorKind)
+            : (topTag ? topTag + " " : "") + remainingText + (topReset ? " · " + topReset : "")
+          readonly property string bottomText: (bottomTag ? bottomTag + " " : "") + secondaryText
+            + (bottomReset ? " · " + bottomReset : "")
+          readonly property string secondarySeverity: secondaryRemaining === null ? "none"
+            : UsageLogic.severity(reading, root.warningThreshold, root.criticalThreshold, secondaryRemaining)
           readonly property bool stressed: severity === "warning" || severity === "critical"
+            || secondarySeverity === "warning" || secondarySeverity === "critical"
           readonly property color contentColor: active && useActiveColor
             ? activeColor : foreground
 
@@ -492,11 +601,19 @@ Ui.Panel {
           labelVisible: false
           hasVisualContent: true
           fixedWidth: providerChipContent.implicitWidth + Style.space(10)
-          active: stressed
+          active: stressed || failed
           horizontalMargin: 0
-          tooltipText: String(modelData.name || modelData.id)
-            + (remainingValue === null ? " usage unavailable"
-              : " usage · " + Math.round(remainingValue) + "% remaining")
+          tooltipText: failed
+            ? String(modelData.name || modelData.id) + " · " + root.errorBody(modelData)
+            : String(modelData.name || modelData.id)
+            + (shownValue === null ? " usage unavailable"
+              : " · " + UsageLogic.quotaText(shownValue, root.quotaMode))
+            + (topWindow === "auto" ? ""
+              : (stacked ? "\nBar limit (top): " : "\nBar limit: ") + UsageLogic.windowSelectorLabel(topWindow))
+            + (stacked ? "\nBar limit (bottom): " + UsageLogic.windowSelectorLabel(secondaryWindow)
+              + (secondaryRemaining === null ? " not reported"
+                : " · " + UsageLogic.quotaText(root.quotaMode === "Remaining"
+                  ? secondaryRemaining : UsageLogic.usedFromRemaining(secondaryRemaining), root.quotaMode)) : "")
             + (root.proxyMode ? "\n" + root.lastAccountTooltip(lastAccount) : "")
             + (usingPoolQuota ? "\nQuota shown: account with the most remaining capacity." : "")
           onPressed: function(buttonCode) {
@@ -546,14 +663,42 @@ Ui.Panel {
 
             Text {
               objectName: "barAccountRemaining"
+              visible: !providerChip.stacked
               y: Math.round((parent.height - height) / 2)
-              text: providerChip.remainingText
+              text: providerChip.topText
               color: providerChip.contentColor
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
               font.weight: Font.Medium
             }
 
+            Column {
+              visible: providerChip.stacked
+              y: Math.round((parent.height - height) / 2)
+              spacing: 0
+
+              Text {
+                objectName: "barAccountRemainingTop"
+                text: providerChip.topText
+                color: providerChip.contentColor
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.weight: Font.Medium
+                height: 12
+                verticalAlignment: Text.AlignVCenter
+              }
+
+              Text {
+                objectName: "barAccountRemainingBottom"
+                text: providerChip.bottomText
+                color: providerChip.contentColor
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.weight: Font.Medium
+                height: 12
+                verticalAlignment: Text.AlignVCenter
+              }
+            }
           }
         }
       }
@@ -682,7 +827,7 @@ Ui.Panel {
                 anchors.right: headerActions.left
                 anchors.rightMargin: Style.spacing.md
                 anchors.verticalCenter: parent.verticalCenter
-                text: "Model Usage"
+                text: "Quotatank"
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.title
@@ -698,7 +843,7 @@ Ui.Panel {
                 Ui.PanelActionButton {
                   objectName: root.viewMode === "costs" ? "costSettingsButton" : "usageSettingsButton"
                   iconText: "󰒓"
-                  tooltipText: root.viewMode === "costs" ? "Cost sources and prices" : "Model Usage settings"
+                  tooltipText: root.viewMode === "costs" ? "Cost sources and prices" : "Quotatank settings"
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   fontSize: Style.font.body
@@ -926,7 +1071,21 @@ Ui.Panel {
                 required property var modelData
                 width: limitsSection.width
                 window: modelData
+                severity: root.windowSeverity(modelData)
+                resetLabel: root.resetText(modelData)
+                quotaMode: root.quotaMode
+                foreground: root.foreground
+                urgent: root.urgent
+                dim: root.dim
+                fontFamily: root.fontFamily
+                cardRadius: root.usageCardRadius
+                nowSeconds: root.nowMs / 1000
               }
+            }
+            PacingLegend {
+              foreground: root.foreground
+              dim: root.dim
+              fontFamily: root.fontFamily
             }
           }
 
@@ -937,35 +1096,70 @@ Ui.Panel {
             width: parent.width
             spacing: Style.spacing.lg
 
-            Ui.PanelSectionHeader {
-              text: root.provider && root.provider.credits
-                ? String(root.provider.credits.label || "CREDITS").toUpperCase() : "CREDITS"
+            UsageDisclosure {
+              id: creditsToggle
+              width: parent.width
               foreground: root.foreground
               fontFamily: root.fontFamily
+              text: root.provider && root.provider.credits
+                ? String(root.provider.credits.label || "Credits") : "Credits"
             }
 
             CreditsCard {
               width: parent.width
               credits: root.provider ? root.provider.credits : null
+              visible: creditsToggle.checked
             }
           }
 
           Ui.PanelSeparator {
-            visible: root.viewMode === "limits" && history.visible
+            visible: root.historyAvailable
             foreground: root.foreground
+          }
+
+          UsageDisclosure {
+            id: historyToggle
+            visible: root.historyAvailable
+            width: parent.width
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            text: "History"
           }
 
           UsageHistory {
             id: history
-            visible: root.viewMode === "limits" && !root.accountOverview && !!root.provider && !!root.provider.history
-              && ((UsageLogic.isListLike(root.provider.history.h24) && root.provider.history.h24.length > 0)
-                || (UsageLogic.isListLike(root.provider.history.d7) && root.provider.history.d7.length > 0))
+            visible: historyToggle.checked && root.historyAvailable
             width: parent.width
             history: root.provider ? root.provider.history : ({ h24: [], d7: [] })
             mode: root.historyMode
             foreground: root.foreground
             fontFamily: root.fontFamily
             onModeChanged: root.historyMode = mode
+          }
+
+          Ui.PanelSeparator {
+            visible: root.tokensAvailable
+            foreground: root.foreground
+          }
+
+          UsageDisclosure {
+            id: tokensToggle
+            visible: root.tokensAvailable
+            width: parent.width
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            text: "Tokens by model"
+          }
+
+          UsageTokenModels {
+            id: tokensByModel
+            visible: tokensToggle.checked && root.tokensAvailable
+            width: parent.width
+            models: root.providerModels
+            periodLabel: costBackend.payload && costBackend.payload.period
+              ? String(costBackend.payload.period.label || "") : ""
+            foreground: root.foreground
+            fontFamily: root.fontFamily
           }
 
           UsageCosts {
@@ -1219,7 +1413,10 @@ Ui.Panel {
             }
             Text {
               id: accountPercent
-              text: accountWindow.known ? Math.round(Number(accountWindow.modelData.remaining)) + "% left" : "—"
+              readonly property var shown: root.quotaMode === "Remaining"
+                ? UsageLogic.windowRemaining(accountWindow.modelData)
+                : UsageLogic.windowUsed(accountWindow.modelData)
+              text: accountWindow.known ? UsageLogic.quotaText(shown, root.quotaMode) : "—"
               color: accountWindow.stressed ? root.urgent : root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -1229,7 +1426,11 @@ Ui.Panel {
           BlockMeter {
             visible: accountWindow.known
             width: parent.width
-            value: accountWindow.known ? Number(accountWindow.modelData.remaining) / 100 : 0
+            // The bar fills toward the limit, so it always shows usage.
+            value: {
+              var used = UsageLogic.windowUsed(accountWindow.modelData)
+              return used === null ? 0 : used / 100
+            }
             fillColor: accountWindow.stressed ? root.urgent : root.foreground
             trackColor: root.alpha(root.foreground, 0.14)
           }
@@ -1256,93 +1457,6 @@ Ui.Panel {
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap
-      }
-    }
-  }
-
-  component LimitCard: Ui.BorderSurface {
-    id: limitCard
-    property var window: null
-    readonly property string severity: root.windowSeverity(window)
-    readonly property bool stressed: severity === "warning" || severity === "critical"
-
-    implicitHeight: limitContent.implicitHeight + contentTopInset + contentBottomInset
-    color: severity === "critical"
-      ? root.alpha(root.urgent, 0.09)
-      : Style.normalFillFor(root.foreground, Color.accent, root.urgent)
-    borderSpec: stressed
-      ? Border.flat(root.alpha(root.urgent, severity === "critical" ? 0.45 : 0.28), Style.spacing.hairline)
-      : Border.controlSpec("normal", root.foreground, Color.accent, root.urgent)
-    padding: Style.spacing.xxl
-    radius: root.usageCardRadius
-
-    Column {
-      id: limitContent
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.top: parent.top
-      anchors.leftMargin: limitCard.contentLeftInset
-      anchors.rightMargin: limitCard.contentRightInset
-      anchors.topMargin: limitCard.contentTopInset
-      spacing: Style.spacing.md
-
-      Item {
-        width: parent.width
-        implicitHeight: Math.max(limitLabel.implicitHeight, limitPercent.implicitHeight)
-
-        Text {
-          id: limitLabel
-          anchors.left: parent.left
-          anchors.right: limitPercent.left
-          anchors.rightMargin: Style.spacing.controlGap
-          anchors.verticalCenter: parent.verticalCenter
-          text: limitCard.window ? String(limitCard.window.label || "Usage limit") : ""
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
-          font.bold: true
-          elide: Text.ElideRight
-        }
-
-        Text {
-          id: limitPercent
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          text: limitCard.window && limitCard.window.remaining !== null && limitCard.window.remaining !== undefined && isFinite(Number(limitCard.window.remaining))
-            ? Math.round(Number(limitCard.window.remaining)) + "% left" : "—"
-          color: limitCard.stressed ? root.urgent : root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          font.bold: limitCard.stressed
-        }
-      }
-
-      BlockMeter {
-        visible: !!limitCard.window && limitCard.window.remaining !== null && limitCard.window.remaining !== undefined
-        width: parent.width
-        value: limitCard.window ? Number(limitCard.window.remaining) / 100 : 0
-        fillColor: limitCard.stressed ? root.urgent : root.foreground
-        trackColor: root.alpha(root.foreground, 0.14)
-      }
-
-      Text {
-        visible: text !== ""
-        width: parent.width
-        text: root.resetText(limitCard.window)
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        elide: Text.ElideRight
-      }
-
-      Text {
-        visible: text !== ""
-        width: parent.width
-        text: limitCard.window ? String(limitCard.window.detail || "") : ""
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        elide: Text.ElideRight
       }
     }
   }

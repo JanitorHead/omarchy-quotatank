@@ -44,6 +44,19 @@ This contract covers live subscription limits only. The on-demand transcript/cos
 
 All provider records have the same core keys, including error records. `status` is `ok` or `error`. Current `errorKind` values include `config`, `no_credentials`, `expired`, `cli_unavailable`, `rate_limited`, `timeout`, `network`, `http`, `rpc`, `malformed`, and `internal`.
 
+The `opencode` provider is a direct HTTPS call rather than a CLI RPC: OpenCode's
+Go usage endpoint returns one window per plan period, mapped to `session`
+(5 hours), `weekly` (7 days), and `monthly` (30 days) with `percent` as the used
+share and ISO `resetsAt` timestamps. The key comes from `OPENCODE_GO_API_KEY` /
+`OPENCODE_API_KEY` or the CLI's `auth.json`; `OPENCODE_API_BASE_URL` may
+override the endpoint and must be `https`. The request identifies itself with a
+plugin User-Agent because the endpoint rejects Python's default agent, and a
+rejection maps to `expired` so the UI can point at `opencode auth login`.
+
+`barWindow` and `barWindowSecondary` are display-only settings: they select which reported
+windows supply a menu-bar chip's lines. `barWindow` falls back to the provider's most restrictive
+window; `barWindowSecondary` does not, and never changes this contract.
+
 `--source cliproxy` discovers provider IDs from managed accounts, independently of `--providers` (which selects local CLI providers). Proxy records use `source: "CLIProxyAPI management API"` and an empty `authCommand`. `accounts` contains each bounded account reading with an opaque `accountId`, display label, plan, windows, credits, and status. Paused accounts have `status: "disabled"`; providers without a quota adapter have `status: "unsupported"`. Neither is queried for quotas or represented as zero usage.
 
 The provider-level fields describe the successful account with the lowest binding `used` percentage. `accountCount` includes paused accounts; `availableCount` counts successful quota lookups, not guaranteed remaining capacity. The proxy Limits view renders all `accounts` as separate cards, defaulting to the overall weekly window (monthly/first reported window when weekly is absent). An additional-limits toggle exposes other windows. Codex `planType` preserves the wire tier so `pro` and `prolite` display as Pro 20× and Pro 5×. Provider-level fields remain the pool/history summary; the proxy menubar selects an account using the separate activity contract below; account percentages are never summed. Errors preserve the previous reading in QML memory with `stale: true` and a notice. Only fresh backend readings enter history. Changing the connection clears in-memory data.
@@ -56,7 +69,9 @@ History uses a separate `cliproxy-<SHA-256 server prefix>/history.json` director
 
 Percentages are numbers in the inclusive range 0–100. `resetsAt` is a Unix timestamp in seconds or `null`. `windowSeconds` is the known window duration or `null`. Additional windows require no UI schema change.
 
-History records the binding active quota window: the highest `used` percentage among the provider's current windows. For proxy pools this is independent of the last-used menubar account and prevents an idle model-specific window from hiding usage in another active window.
+Each window of a provider whose refresh succeeded may carry `samples`: rows of `[unixSeconds, used]` for that window, kept for seven days. The desktop uses them for pacing. Samples are not attached to windows of failed refreshes.
+
+The provider history chart records the binding active quota window: the highest `used` percentage among the provider's current windows. For proxy pools this is independent of the last-used menubar account and prevents an idle model-specific window from hiding usage in another active window. Pacing never uses this maximum; it reads each window's own `samples`.
 
 `credits`, when present, has this stable shape:
 

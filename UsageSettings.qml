@@ -19,6 +19,7 @@ Column {
   property alias connectionExpanded: connectionSection.expanded
   property alias activityExpanded: activitySection.expanded
   property alias alertsExpanded: alertsSection.expanded
+  property alias refreshExpanded: refreshSection.expanded
   readonly property bool percentageDisplay: draft.barDisplayMode === "Percentages"
   onProxyModeChanged: if (proxyMode && !draft.cliproxyKeyFile) connectionSection.expanded = true
   property var draft: ({})
@@ -35,10 +36,11 @@ Column {
   readonly property var providerOptions: proxyMode ? UsageLogic.listOrEmpty(proxyProviders) : [
     { id: "claude", name: "Claude Code" },
     { id: "codex", name: "OpenAI Codex" },
-    { id: "kimi", name: "Kimi Code" }
+    { id: "kimi", name: "Kimi Code" },
+    { id: "opencode", name: "OpenCode Go" }
   ]
   readonly property var allProviderIds: {
-    var ids = ["claude", "codex", "kimi"]
+    var ids = ["claude", "codex", "kimi", "opencode"]
     for (var i = 0; i < proxyProviders.length; i++)
       if (!UsageLogic.contains(ids, proxyProviders[i].id)) ids.push(proxyProviders[i].id)
     return ids
@@ -81,11 +83,19 @@ Column {
       cliproxyKeyFile: String(value("cliproxyKeyFile", "")),
       costKeeperUrl: String(value("costKeeperUrl", "")),
       costKeeperPasswordFile: String(value("costKeeperPasswordFile", "")),
-      enabledProviders: value("enabledProviders", ["claude", "codex", "kimi"]),
-      barProviders: value("barProviders", ["claude", "codex", "kimi"]),
+      enabledProviders: value("enabledProviders", ["claude", "codex", "kimi", "opencode"]),
+      barProviders: value("barProviders", ["claude", "codex", "kimi", "opencode"]),
       liveAccountActivity: value("liveAccountActivity", true) !== false,
+      barWindow: UsageLogic.normalizeBarWindow(value("barWindow", "auto")),
+      barWindowSecondary: UsageLogic.normalizeSecondaryBarWindow(value("barWindowSecondary", "none")),
+      barProviderLimits: UsageLogic.serializeBarLimits(UsageLogic.parseBarLimits(value("barProviderLimits", "{}"))),
+      barShowResets: value("barShowResets", false) === true,
+      barResetTimeFormat: UsageLogic.normalizeBarResetChoice("time", value("barResetTimeFormat", "24h")),
+      barResetDateFormat: UsageLogic.normalizeBarResetChoice("date", value("barResetDateFormat", "DD/MM")),
+      quotaMode: String(value("quotaMode", "Used")) === "Remaining" ? "Remaining" : "Used",
       hideAccountEmails: value("hideAccountEmails", true) !== false,
       squareUsageCards: value("squareUsageCards", true) === true,
+      notifyLimitThresholds: value("notifyLimitThresholds", true) !== false,
       barDisplayMode: value("barDisplayMode", "Percentages"),
       refreshIntervalSec: String(value("refreshIntervalSec", 900)),
       warningThreshold: String(value("warningThreshold", 25)),
@@ -95,6 +105,7 @@ Column {
     connectionSection.expanded = proxyMode && !draft.cliproxyKeyFile
     activitySection.expanded = false
     alertsSection.expanded = false
+    refreshSection.expanded = false
     diagnosticsSection.expanded = false
     errorText = ""
   }
@@ -105,6 +116,15 @@ Column {
     draft = next
     if (key === "refreshIntervalSec") refreshMinutes = String(value).trim() === "" ? "" : String(Number(value) / 60)
     errorText = ""
+  }
+
+  function barLimitValue(providerId, slot) {
+    var entry = UsageLogic.parseBarLimits(draft.barProviderLimits)[providerId]
+    return entry && entry[slot] !== undefined ? entry[slot] : "default"
+  }
+
+  function barLimitOverrideCount() {
+    return Object.keys(UsageLogic.parseBarLimits(draft.barProviderLimits)).length
   }
 
   function toggleProvider(key, id) {
@@ -135,7 +155,7 @@ Column {
     var next = Object.assign({}, draft)
     var minutes = Number(refreshMinutes)
     if (refreshMinutes.trim() === "" || !isFinite(minutes) || minutes < 1 || minutes > 60)
-      return fail("Enter a refresh interval from 1 to 60 minutes.", alertsSection, refreshField)
+      return fail("Enter a refresh interval from 1 to 60 minutes.", refreshSection, refreshField)
     next.refreshIntervalSec = Math.round(minutes * 60)
     var ranges = [
       ["refreshIntervalSec", "Refresh interval", 60, 3600],
@@ -149,7 +169,7 @@ Column {
       if (raw === "" || !isFinite(value) || Math.floor(value) !== value
           || value < range[2] || value > range[3]) {
         return fail(range[1] + " must be a whole number from " + range[2] + " to " + range[3] + ".",
-          alertsSection, range[0] === "warningThreshold" ? warningField : range[0] === "criticalThreshold" ? criticalField : refreshField)
+          range[0] === "refreshIntervalSec" ? refreshSection : alertsSection, range[0] === "warningThreshold" ? warningField : range[0] === "criticalThreshold" ? criticalField : refreshField)
       }
       next[range[0]] = value
     }
@@ -310,12 +330,12 @@ Column {
     Label { text: "Display"; font.bold: true }
     Row {
       width: parent.width
-      Label { width: parent.width - barDisplay.width; text: "Menu bar"; anchors.verticalCenter: parent.verticalCenter }
+      Label { width: parent.width - barDisplay.width; text: "Menu bar shows"; anchors.verticalCenter: parent.verticalCenter }
       UsageSelect {
         id: barDisplay
         objectName: "barDisplayControl"
         width: Math.min(implicitWidth, parent.width * 0.7)
-        label: "Menu bar display"
+        label: "Menu bar shows"
         options: [{ value: "Icon", label: "Widget icon" }, { value: "Percentages", label: "Provider percentages" }]
         value: String(root.draft.barDisplayMode || "Percentages")
         foreground: root.foreground
@@ -324,6 +344,143 @@ Column {
         alignPopupRight: true
         onChanged: function(value) { root.setValue("barDisplayMode", value) }
         onMenuClosed: if (root.visible) barDisplay.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
+    Row {
+      width: parent.width
+      Label { width: parent.width - quotaModeSelect.width; text: "Show limits as"; anchors.verticalCenter: parent.verticalCenter }
+      UsageSelect {
+        id: quotaModeSelect
+        objectName: "quotaModeControl"
+        width: Math.min(implicitWidth, parent.width * 0.7)
+        label: "Show limits as"
+        options: [
+          { value: "Used", label: "Used (%)" },
+          { value: "Remaining", label: "Left (%)" }
+        ]
+        value: String(root.draft.quotaMode || "Used") === "Remaining" ? "Remaining" : "Used"
+        foreground: root.foreground
+        surface: root.surface
+        fontFamily: root.fontFamily
+        alignPopupRight: true
+        onChanged: function(value) { root.setValue("quotaMode", value) }
+        onMenuClosed: if (root.visible) quotaModeSelect.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
+    Row {
+      width: parent.width
+      visible: root.percentageDisplay
+      height: visible ? implicitHeight : 0
+      Label { width: parent.width - barWindowSelect.width; text: "Bar limit (top)"; anchors.verticalCenter: parent.verticalCenter }
+      UsageSelect {
+        id: barWindowSelect
+        objectName: "barWindowControl"
+        width: Math.min(implicitWidth, parent.width * 0.7)
+        label: "Bar limit (top)"
+        options: [
+          { value: "auto", label: "Lowest left (auto)" },
+          { value: "session", label: "5-hour (session)" },
+          { value: "weekly", label: "7-day (weekly)" },
+          { value: "monthly", label: "Monthly" }
+        ]
+        value: UsageLogic.normalizeBarWindow(root.draft.barWindow)
+        foreground: root.foreground
+        surface: root.surface
+        fontFamily: root.fontFamily
+        alignPopupRight: true
+        onChanged: function(value) { root.setValue("barWindow", value) }
+        onMenuClosed: if (root.visible) barWindowSelect.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
+    Row {
+      width: parent.width
+      visible: root.percentageDisplay
+      height: visible ? implicitHeight : 0
+      Label { width: parent.width - barWindowSecondarySelect.width; text: "Bar limit (bottom)"; anchors.verticalCenter: parent.verticalCenter }
+      UsageSelect {
+        id: barWindowSecondarySelect
+        objectName: "barWindowSecondaryControl"
+        width: Math.min(implicitWidth, parent.width * 0.7)
+        label: "Bar limit (bottom)"
+        options: [
+          { value: "none", label: "None (single limit)" },
+          { value: "session", label: "5-hour (session)" },
+          { value: "weekly", label: "7-day (weekly)" },
+          { value: "monthly", label: "Monthly" }
+        ]
+        value: UsageLogic.normalizeSecondaryBarWindow(root.draft.barWindowSecondary)
+        foreground: root.foreground
+        surface: root.surface
+        fontFamily: root.fontFamily
+        alignPopupRight: true
+        onChanged: function(value) { root.setValue("barWindowSecondary", value) }
+        onMenuClosed: if (root.visible) barWindowSecondarySelect.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
+    Row {
+      width: parent.width
+      visible: root.percentageDisplay
+      height: visible ? implicitHeight : 0
+      Label { width: parent.width - barResetsSwitch.width; text: "Show reset day in bar"; anchors.verticalCenter: parent.verticalCenter }
+      ProviderToggle {
+        id: barResetsSwitch
+        objectName: "barShowResetsToggle"
+        width: Style.space(82)
+        checked: root.draft.barShowResets === true
+        Accessible.name: "Show reset day in bar"
+        onToggled: root.setValue("barShowResets", !checked)
+      }
+    }
+    Row {
+      width: parent.width
+      visible: root.percentageDisplay && root.draft.barShowResets === true
+      height: visible ? implicitHeight : 0
+      Label { width: parent.width - barResetTimeSelect.width; text: "Reset time format"; anchors.verticalCenter: parent.verticalCenter }
+      UsageSelect {
+        id: barResetTimeSelect
+        objectName: "barResetTimeControl"
+        width: Math.min(implicitWidth, parent.width * 0.7)
+        label: "Reset time format"
+        options: [
+          { value: "24h", label: "24-hour (14:30)" },
+          { value: "12h", label: "12-hour (2:30 PM)" }
+        ]
+        value: UsageLogic.normalizeBarResetChoice("time", root.draft.barResetTimeFormat)
+        foreground: root.foreground
+        surface: root.surface
+        fontFamily: root.fontFamily
+        alignPopupRight: true
+        onChanged: function(value) { root.setValue("barResetTimeFormat", value) }
+        onMenuClosed: if (root.visible) barResetTimeSelect.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
+    Row {
+      width: parent.width
+      visible: root.percentageDisplay && root.draft.barShowResets === true
+      height: visible ? implicitHeight : 0
+      Label { width: parent.width - barResetDateSelect.width; text: "Reset date format"; anchors.verticalCenter: parent.verticalCenter }
+      UsageSelect {
+        id: barResetDateSelect
+        objectName: "barResetDateControl"
+        width: Math.min(implicitWidth, parent.width * 0.7)
+        label: "Reset date format"
+        options: [
+          { value: "DD/MM", label: "DD/MM (22/04)" },
+          { value: "MM/DD", label: "MM/DD (04/22)" },
+          { value: "D MMM", label: "D MMM (22 Apr)" }
+        ]
+        value: UsageLogic.normalizeBarResetChoice("date", root.draft.barResetDateFormat)
+        foreground: root.foreground
+        surface: root.surface
+        fontFamily: root.fontFamily
+        alignPopupRight: true
+        onChanged: function(value) { root.setValue("barResetDateFormat", value) }
+        onMenuClosed: if (root.visible) barResetDateSelect.forceActiveFocus()
         onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
       }
     }
@@ -400,7 +557,76 @@ Column {
         }
       }
     }
-    Hint { text: root.proxyMode ? "All proxy providers are monitored automatically." : "Monitoring keeps a provider available in Limits." }
+    Hint { text: root.proxyMode ? "All proxy providers are monitored automatically." : "Unmonitored providers are not fetched and are hidden from Limits." }
+  }
+
+  Section {
+    id: barLimitsSection
+    objectName: "barLimitsSection"
+    title: "Per-provider bar limits"
+    visible: root.percentageDisplay
+    summary: root.barLimitOverrideCount() === 0 ? "Global limits" : root.barLimitOverrideCount() + " overridden"
+    Hint { text: "Default inherits the global bar limit named in its selector. Any other choice overrides it for this provider only." }
+    Repeater {
+      model: root.providerOptions
+      delegate: Column {
+        id: limitRow
+        required property var modelData
+        width: parent.width
+        spacing: Style.spacing.sm
+        Label { text: limitRow.modelData.name }
+        Row {
+          width: parent.width
+          spacing: Style.spacing.lg
+          Column {
+            width: (parent.width - parent.spacing) / 2
+            spacing: Style.spacing.sm
+            Label { text: "Top" }
+            UsageSelect {
+              objectName: "barLimitTop-" + limitRow.modelData.id
+              width: parent.width
+              label: limitRow.modelData.name + " bar limit (top)"
+              options: [
+                { value: "default", label: UsageLogic.inheritedBarLimitLabel("top", root.draft.barWindow) },
+                { value: "auto", label: "Lowest left (auto)" },
+                { value: "session", label: "5-hour (session)" },
+                { value: "weekly", label: "7-day (weekly)" },
+                { value: "monthly", label: "Monthly" }
+              ]
+              value: root.barLimitValue(limitRow.modelData.id, "top")
+              foreground: root.foreground
+              surface: root.surface
+              fontFamily: root.fontFamily
+              onChanged: function(value) { root.setValue("barProviderLimits", UsageLogic.setBarLimit(root.draft.barProviderLimits, limitRow.modelData.id, "top", value)) }
+              onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+            }
+          }
+          Column {
+            width: (parent.width - parent.spacing) / 2
+            spacing: Style.spacing.sm
+            Label { text: "Bottom" }
+            UsageSelect {
+              objectName: "barLimitBottom-" + limitRow.modelData.id
+              width: parent.width
+              label: limitRow.modelData.name + " bar limit (bottom)"
+              options: [
+                { value: "default", label: UsageLogic.inheritedBarLimitLabel("bottom", root.draft.barWindowSecondary) },
+                { value: "none", label: "None" },
+                { value: "session", label: "5-hour (session)" },
+                { value: "weekly", label: "7-day (weekly)" },
+                { value: "monthly", label: "Monthly" }
+              ]
+              value: root.barLimitValue(limitRow.modelData.id, "bottom")
+              foreground: root.foreground
+              surface: root.surface
+              fontFamily: root.fontFamily
+              onChanged: function(value) { root.setValue("barProviderLimits", UsageLogic.setBarLimit(root.draft.barProviderLimits, limitRow.modelData.id, "bottom", value)) }
+              onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+            }
+          }
+        }
+      }
+    }
   }
 
   Section {
@@ -450,8 +676,44 @@ Column {
 
   Section {
     id: alertsSection
-    objectName: "refreshAlertsSection"
-    title: "Refresh and alerts"
+    objectName: "alertsSection"
+    title: "Alerts"
+    summary: root.draft.notifyLimitThresholds === false ? "Off" : "Warn at " + root.draft.warningThreshold + "% · critical at " + root.draft.criticalThreshold + "% left"
+    Row {
+      width: parent.width
+      Label { width: parent.width - notifySwitch.width; text: "Notify when limits run low"; anchors.verticalCenter: parent.verticalCenter }
+      ProviderToggle {
+        id: notifySwitch
+        objectName: "notifyLimitThresholdsToggle"
+        width: Style.space(82)
+        checked: root.draft.notifyLimitThresholds !== false
+        Accessible.name: "Notify when limits run low"
+        onToggled: root.setValue("notifyLimitThresholds", !checked)
+      }
+    }
+    Hint { text: "Desktop notification when a limit moves into the warning or critical threshold." }
+    Row {
+      width: parent.width
+      spacing: Style.spacing.lg
+      Column {
+        width: (parent.width - parent.spacing) / 2
+        spacing: Style.spacing.sm
+        Label { text: "Warn at or below (% left)" }
+        Field { id: warningField; objectName: "warningThresholdField"; settingKey: "warningThreshold"; Accessible.name: "Warning percentage left"; inputMethodHints: Qt.ImhDigitsOnly }
+      }
+      Column {
+        width: (parent.width - parent.spacing) / 2
+        spacing: Style.spacing.sm
+        Label { text: "Critical at or below (% left)" }
+        Field { id: criticalField; objectName: "criticalThresholdField"; settingKey: "criticalThreshold"; Accessible.name: "Critical percentage left"; inputMethodHints: Qt.ImhDigitsOnly }
+      }
+    }
+  }
+
+  Section {
+    id: refreshSection
+    objectName: "refreshSection"
+    title: "Refresh"
     summary: "Every " + (root.refreshMinutes || "—") + " min"
     Label { text: "Refresh interval (minutes)" }
     SettingsField {
@@ -466,22 +728,6 @@ Column {
       Accessible.name: "Refresh interval in minutes"
       onTextEdited: { root.refreshMinutes = text; root.errorText = "" }
       onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-    }
-    Row {
-      width: parent.width
-      spacing: Style.spacing.lg
-      Column {
-        width: (parent.width - parent.spacing) / 2
-        spacing: Style.spacing.sm
-        Label { text: "Warn below (% remaining)" }
-        Field { id: warningField; objectName: "warningThresholdField"; settingKey: "warningThreshold"; Accessible.name: "Warning percentage remaining"; inputMethodHints: Qt.ImhDigitsOnly }
-      }
-      Column {
-        width: (parent.width - parent.spacing) / 2
-        spacing: Style.spacing.sm
-        Label { text: "Critical (% remaining)" }
-        Field { id: criticalField; objectName: "criticalThresholdField"; settingKey: "criticalThreshold"; Accessible.name: "Critical percentage remaining"; inputMethodHints: Qt.ImhDigitsOnly }
-      }
     }
   }
 

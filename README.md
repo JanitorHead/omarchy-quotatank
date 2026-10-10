@@ -1,8 +1,8 @@
-# Model Usage for Omarchy
+# Quotatank for Omarchy
 
 [![CI](https://github.com/DigitalPals/omarchy-modelusage/actions/workflows/ci.yml/badge.svg)](https://github.com/DigitalPals/omarchy-modelusage/actions/workflows/ci.yml)
 
-AI subscription limits, token activity, and estimated API costs in your Omarchy menu bar. Monitor **Claude Code, OpenAI Codex, and Kimi Code** through local CLI sign-ins or accounts managed by [Fusebox](https://github.com/DigitalPals/Fusebox) or [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI).
+AI subscription limits, token activity, and estimated API costs in your Omarchy menu bar. Monitor **Claude Code, OpenAI Codex, Kimi Code, and OpenCode Go** through local CLI sign-ins or accounts managed by [Fusebox](https://github.com/DigitalPals/Fusebox) or [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI).
 
 <p align="center">
   <img src="docs/model-usage-menubar.png" alt="Omarchy menu bar with Claude and Codex remaining-quota percentages beside the system controls" width="488">
@@ -45,11 +45,11 @@ omarchy plugin add https://github.com/DigitalPals/omarchy-modelusage.git --enabl
 Update or remove it with:
 
 ```bash
-omarchy plugin update digitalpals.model-usage
-omarchy plugin remove digitalpals.model-usage
+omarchy plugin update janitorhead.quotatank
+omarchy plugin remove janitorhead.quotatank
 ```
 
-The built-in `omarchy.agents` widget can coexist. To use only Model Usage:
+The built-in `omarchy.agents` widget can coexist. To use only Quotatank:
 
 ```bash
 omarchy plugin disable omarchy.agents
@@ -68,6 +68,7 @@ Sign in to each provider you want to monitor, then open **Limits → gear** and 
 | Claude Code | `claude auth login` | Claude OAuth usage endpoint |
 | OpenAI Codex | `codex login` | Codex app-server account/rate-limit RPC |
 | Kimi Code | `kimi login` | Kimi usage and optional profile endpoints |
+| OpenCode Go | `opencode auth login` | OpenCode Go usage endpoint (`OPENCODE_GO_API_KEY`, or the key stored by the OpenCode CLI) |
 
 The plugin reads existing CLI credentials; sign-in and credential renewal remain with the CLI. CLI-owned environment overrides are honored; see the [configuration reference](docs/configuration.md#providers-and-authentication).
 
@@ -101,7 +102,7 @@ Full connection, credential, settings, reset-credit, and troubleshooting details
 
 ### Subscription limits and the menu bar
 
-Limits are provider-reported subscription allowances. Cards and bar chips show **percentage remaining**; quota-history bars record **percentage used**. Extra usage, credit balances, and banked reset counts appear only when the provider exposes them.
+Limits are provider-reported subscription allowances. Cards and bar chips show **percentage used** by default, matching the provider dashboards, and **Show limits as** switches them to percentage left; the warning thresholds always apply to what is left, and quota-history bars always record usage. Extra usage, credit balances, and banked reset counts appear only when the provider exposes them.
 
 - **Local mode** shows the signed-in account's reported session, weekly, model-specific, and other windows. Its bar percentage uses the most restrictive reported window.
 - **Proxy mode** shows each subscription separately. Cards default to overall weekly limits, then other weekly/monthly allowances or the first reported window. **Additional limits** reveals the other windows. Three subscriptions remain three readings: percentages are never added or averaged across accounts.
@@ -113,7 +114,8 @@ Limits are provider-reported subscription allowances. Cards and bar chips show *
 | Source or activity | Included in Costs? |
 |---|---|
 | Local Codex history | Yes, when enabled: `${CODEX_HOME:-~/.codex}/sessions/**/*.jsonl` |
-| Local Claude Code history | Yes, when enabled: `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/**/*.jsonl` |
+|Local Claude Code history|Yes, when enabled: `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/**/*.jsonl`|
+|Local OpenCode and Oh My Pi history|Yes, when enabled: the OpenCode usage database (`${OPENCODE_DB:-$XDG_DATA_HOME/opencode/opencode.db}`) plus the Oh My Pi harness session transcripts (`${OMP_SESSIONS_DIR:-~/.omp/agent/sessions}`), where each message counts under the provider it was billed to: `opencode*` under OpenCode, `openai-codex` under Codex, `anthropic` under Claude (only when Claude is enabled); other providers are skipped. Every model OpenCode reports is included, with its token split per day and the API estimate OpenCode itself priced per response — the only reliable rate for model IDs the public table cannot disambiguate. Add a custom price to override it|
 | Enabled T3 servers | Codex/Claude transcripts readable on each server, **including sessions started outside T3** |
 | Another computer | Only when its history is exposed through a configured T3 server |
 | CLIProxyAPI / Keeper request history | No. Proxy quotas and last-used account tracking do not supply Costs |
@@ -166,17 +168,17 @@ Public prices refresh daily and are cached for offline use. **Refresh in Costs**
 
 Menus use Up/Down and Enter. Tab/Shift+Tab navigates settings fields or neighboring bar panels through Omarchy's panel coordinator. Right click has no assigned action.
 
-The **Limits gear** configures quotas, bar display, privacy, card corners, refresh interval (1–60 minutes), and warning thresholds. The **Costs gear** configures history sources and prices. Both have explicit Save/Cancel, and remain accessible without connected providers. Percentage mode is the default; vertical bars or an empty chip selection use the widget icon.
+The **Limits gear** configures quotas, bar display, privacy, card corners, refresh interval (1–60 minutes), warning thresholds, and threshold notifications. The **Costs gear** configures history sources and prices. Both have explicit Save/Cancel, and remain accessible without connected providers. Percentage mode is the default; vertical bars or an empty chip selection use the widget icon.
 
 Namespaced IPC is available for keybindings and scripts:
 
 ```bash
-omarchy-shell digitalpals.model-usage limits
-omarchy-shell digitalpals.model-usage costs
-omarchy-shell digitalpals.model-usage refresh
+omarchy-shell janitorhead.quotatank limits
+omarchy-shell janitorhead.quotatank costs
+omarchy-shell janitorhead.quotatank refresh
 ```
 
-Also available: `open`, `close`, `toggle`, `next`, `configure`, and `configureCosts`. For all setting keys and terminal configuration examples, see [settings](docs/configuration.md#settings).
+Also available: `open`, `close`, `toggle`, `next`, `configure`, `configureCosts`, and `exportJson`. `exportJson` prints providers, limit windows, and pace as JSON, with account identities replaced by numbered labels while `hideAccountEmails` is on. For all setting keys and terminal configuration examples, see [settings](docs/configuration.md#settings).
 
 ## Privacy and reliability
 

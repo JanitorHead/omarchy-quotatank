@@ -23,10 +23,10 @@
    ```
 
 8. Confirm update, disable, enable, and remove behavior in an isolated installation.
-   To update the [marketplace listing](https://plugins.omarchy.org/plugin.html?id=digitalpals.model-usage),
+   To update the [marketplace listing](https://plugins.omarchy.org/plugin.html?id=janitorhead.quotatank),
    use the [plugin verification form](https://github.com/omacom/omarchy-plugin-marketplace/issues/new?template=verify-plugin.yml)
    and select **Verify and publish a newer upstream commit**. Enter
-   `digitalpals.model-usage`, the repository root URL, and the full SHA from
+   `janitorhead.quotatank`, the repository root URL, and the full SHA from
    `git rev-parse HEAD` after the final push. The description and version come
    from `manifest.json`; the description is limited to 500 characters.
    The update needs automated checks and marketplace maintainer approval before

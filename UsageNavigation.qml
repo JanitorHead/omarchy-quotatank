@@ -62,7 +62,6 @@ Item {
     options: root.providerOptions
     value: root.providerId
     label: "Provider"
-    compactLabel: root.providerId === "codex" ? "Codex" : root.providerId === "claude" ? "Claude" : ""
     foreground: root.foreground
     surface: root.surface
     fontFamily: root.fontFamily

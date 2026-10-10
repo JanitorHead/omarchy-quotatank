@@ -83,7 +83,7 @@ Column {
   function focusFirst() { localCodex.forceActiveFocus() }
   function toggleLocal(id) {
     var next = []
-    var allowed = ["claude", "codex"]
+    var allowed = ["claude", "codex", "opencode"]
     for (var i = 0; i < allowed.length; i++)
       if (UsageLogic.contains(localProviders, allowed[i]) !== (allowed[i] === id)) next.push(allowed[i])
     localProviders = next
@@ -214,6 +214,11 @@ Column {
       width: parent.width
       Label { width: parent.width - localClaude.width; text: "Claude Code"; anchors.verticalCenter: parent.verticalCenter }
       Toggle { id: localClaude; objectName: "costLocalClaude"; checked: UsageLogic.contains(root.localProviders, "claude"); onToggled: root.toggleLocal("claude"); Accessible.name: "Include local Claude Code" }
+    }
+    Row {
+      width: parent.width
+      Label { width: parent.width - localOpenCode.width; text: "OpenCode"; anchors.verticalCenter: parent.verticalCenter }
+      Toggle { id: localOpenCode; objectName: "costLocalOpenCode"; checked: UsageLogic.contains(root.localProviders, "opencode"); onToggled: root.toggleLocal("opencode"); Accessible.name: "Include local OpenCode" }
     }
     Hint { text: "Include sessions recorded on this computer." }
   }

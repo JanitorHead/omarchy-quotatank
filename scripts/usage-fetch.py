@@ -30,11 +30,12 @@ from typing import Any, Callable
 from model_usage_common import atomic_write_json, clean_message
 
 SCHEMA_VERSION = 1
-PROVIDER_ORDER = ("claude", "codex", "kimi")
+PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode")
 PROVIDER_NAMES = {
     "claude": "Claude Code",
     "codex": "OpenAI Codex",
     "kimi": "Kimi Code",
+    "opencode": "OpenCode Go",
     "antigravity": "Antigravity",
     "gemini": "Gemini",
     "gemini-cli": "Gemini CLI",
@@ -47,12 +48,16 @@ AUTH_COMMANDS = {
     "claude": "claude auth login",
     "codex": "codex login",
     "kimi": "kimi login",
+    "opencode": "opencode auth login",
 }
 
 FIVE_HOURS = 5 * 60 * 60
 SEVEN_DAYS = 7 * 24 * 60 * 60
+THIRTY_DAYS = 30 * 24 * 60 * 60
 HISTORY_RETENTION_SECONDS = SEVEN_DAYS
 HISTORY_MAX_SAMPLES = 10_080  # One sample/minute/provider for seven days.
+HISTORY_SCHEMA_VERSION = 2  # v1 kept one provider-wide series with no window identity; it is discarded.
+WINDOW_HEARTBEAT_SECONDS = 30 * 60  # an unchanged window is re-recorded this often, so flat use is not stale.
 MAX_LOCAL_JSON_BYTES = 2 * 1024 * 1024
 MAX_HTTP_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_CODEX_RPC_LINE_BYTES = 2 * 1024 * 1024
@@ -856,6 +861,121 @@ def fetch_kimi(timeout: float) -> dict[str, Any]:
     return result
 
 
+# --------------------------------------------------------------- OpenCode
+#
+# The Go plan meters come from the endpoint the OpenCode ecosystem reads. The
+# key belongs to the OpenCode CLI, so it is taken from the CLI's own credential
+# store (or the environment) and never written back. The edge in front of
+# opencode.ai answers 403 to Python's default User-Agent, so the probe has to
+# identify itself.
+
+OPENCODE_DEFAULT_API_BASE = "https://opencode.ai"
+OPENCODE_USAGE_PATH = "/zen/go/v1/usage"
+OPENCODE_USER_AGENT = (
+    "omarchy-model-usage/1.2.0 (+https://github.com/DigitalPals/omarchy-modelusage)"
+)
+OPENCODE_WINDOWS = (
+    ("rolling", "session", "5 hour limit", FIVE_HOURS),
+    ("weekly", "weekly", "Weekly limit", SEVEN_DAYS),
+    ("monthly", "monthly", "Monthly limit", THIRTY_DAYS),
+)
+
+
+def opencode_data_root() -> Path:
+    override = os.environ.get("XDG_DATA_HOME")
+    root = Path(override).expanduser() if override else Path.home() / ".local" / "share"
+    return root / "opencode"
+
+
+def opencode_token() -> str:
+    for name in ("OPENCODE_GO_API_KEY", "OPENCODE_API_KEY"):
+        value = os.environ.get(name)
+        if value and value.strip():
+            return value.strip()
+    auth_path = opencode_data_root() / "auth.json"
+    if not auth_path.is_file():
+        return ""
+    try:
+        stored = read_json(auth_path)
+    except (OSError, ValueError):
+        return ""
+    entry = stored.get("opencode-go") if isinstance(stored, dict) else None
+    key = entry.get("key") if isinstance(entry, dict) else None
+    return key.strip() if isinstance(key, str) else ""
+
+
+def opencode_api_base() -> str:
+    base = (os.environ.get("OPENCODE_API_BASE_URL") or OPENCODE_DEFAULT_API_BASE).strip().rstrip("/")
+    if urllib.parse.urlsplit(base).scheme != "https":
+        raise ProviderFailure(
+            "config", "OpenCode's API base must use https; the key is never sent over plain HTTP."
+        )
+    return base
+
+
+def parse_opencode_usage(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "OpenCode returned an unexpected usage payload.")
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        raise ProviderFailure("malformed", "OpenCode returned no plan windows.")
+
+    windows: list[dict[str, Any]] = []
+    for key, window_id, label, seconds in OPENCODE_WINDOWS:
+        bucket = usage.get(key)
+        if not isinstance(bucket, dict):
+            continue
+        # `percent` is the share of the window already used; a window that has
+        # just rolled over reports 0, so a missing value stays missing.
+        used = number(bucket.get("percent"))
+        if used is None or used < 0:
+            continue
+        windows.append(
+            make_window(
+                window_id,
+                label,
+                used,
+                bucket.get("resetsAt") or bucket.get("resets_at"),
+                seconds,
+            )
+        )
+    if not windows:
+        raise ProviderFailure("malformed", "OpenCode returned no plan windows.")
+    return windows
+
+
+def fetch_opencode(timeout: float) -> dict[str, Any]:
+    provider_id = "opencode"
+    token = opencode_token()
+    if not token:
+        return error_provider(provider_id, "no_credentials", "No OpenCode Go key was found.")
+    try:
+        payload = http_json(
+            opencode_api_base() + OPENCODE_USAGE_PATH,
+            {
+                "Authorization": "Bearer " + token,
+                "Accept": "application/json",
+                "User-Agent": OPENCODE_USER_AGENT,
+            },
+            timeout,
+        )
+        windows = parse_opencode_usage(payload)
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            # A rejected key is either expired or belongs to an account without
+            # a Go plan; both are fixed in the OpenCode CLI.
+            return error_provider(provider_id, "expired", "OpenCode Go rejected the saved key.")
+        return error_provider(provider_id, exc.kind, exc.message)
+
+    result = base_provider(provider_id)
+    result.update(
+        plan="OpenCode Go",
+        source="OpenCode Go usage API",
+        windows=windows,
+    )
+    return result
+
+
 # --------------------------------------------------------------- CLIProxyAPI
 
 
@@ -1322,7 +1442,26 @@ def history_path(state_dir: Path | None = None) -> Path:
 
 
 def empty_history() -> dict[str, Any]:
-    return {"schemaVersion": 1, "providers": {provider_id: [] for provider_id in PROVIDER_ORDER}}
+    return {
+        "schemaVersion": HISTORY_SCHEMA_VERSION,
+        "providers": {provider_id: [] for provider_id in PROVIDER_ORDER},
+        "windows": {},
+    }
+
+
+def read_series(rows: Any) -> list[list[float]]:
+    if not isinstance(rows, list):
+        return []
+    valid: list[list[float]] = []
+    for row in rows:
+        if not isinstance(row, list) or len(row) != 2:
+            continue
+        stamp = number(row[0])
+        used = number(row[1])
+        if stamp is not None and used is not None:
+            valid.append([int(stamp), round(clamp(used, 0, 100), 2)])
+    valid.sort(key=lambda row: row[0])
+    return valid[-HISTORY_MAX_SAMPLES:]
 
 
 def load_history(path: Path) -> dict[str, Any]:
@@ -1330,23 +1469,23 @@ def load_history(path: Path) -> dict[str, Any]:
         raw = read_json(path)
     except (OSError, ValueError, json.JSONDecodeError):
         return empty_history()
-    if not isinstance(raw, dict) or raw.get("schemaVersion") != 1 or not isinstance(raw.get("providers"), dict):
+    if (
+        not isinstance(raw, dict)
+        or raw.get("schemaVersion") != HISTORY_SCHEMA_VERSION
+        or not isinstance(raw.get("providers"), dict)
+        or not isinstance(raw.get("windows"), dict)
+    ):
         return empty_history()
     result = empty_history()
     for provider_id in list(dict.fromkeys([*PROVIDER_ORDER, *raw["providers"]]))[:MAX_CLIPROXY_PROVIDERS + 3]:
-        rows = raw["providers"].get(provider_id)
-        if not isinstance(rows, list):
+        result["providers"][provider_id] = read_series(raw["providers"].get(provider_id))
+    for provider_id, windows in raw["windows"].items():
+        if not isinstance(windows, dict):
             continue
-        valid: list[list[float]] = []
-        for row in rows:
-            if not isinstance(row, list) or len(row) != 2:
-                continue
-            stamp = number(row[0])
-            used = number(row[1])
-            if stamp is not None and used is not None:
-                valid.append([int(stamp), round(clamp(used, 0, 100), 2)])
-        valid.sort(key=lambda row: row[0])
-        result["providers"][provider_id] = valid[-HISTORY_MAX_SAMPLES:]
+        series_by_window = {str(window_id): read_series(rows) for window_id, rows in windows.items()}
+        series_by_window = {window_id: series for window_id, series in series_by_window.items() if series}
+        if series_by_window:
+            result["windows"][str(provider_id)] = series_by_window
     return result
 
 
@@ -1388,6 +1527,24 @@ def bucket_history(samples: list[list[float]], now: int, buckets: int, span: int
     return final
 
 
+def record_window_sample(series: list[list[float]], stamp: int, used: float) -> bool:
+    # A changed value is recorded at once. An unchanged one is recorded only as a heartbeat, so a
+    # window that stays flat is still known to be observed (idle), not missing (stale).
+    if series and stamp - series[-1][0] < 60:
+        if series[-1][1] == used:
+            return False
+        series[-1] = [stamp, used]
+        return True
+    if series and series[-1][1] == used and stamp - series[-1][0] < WINDOW_HEARTBEAT_SECONDS:
+        return False
+    series.append([stamp, used])
+    return True
+
+
+def trim_series(series: list[list[float]], cutoff: int, stamp: int) -> list[list[float]]:
+    return [row for row in series if cutoff <= row[0] <= stamp + 300][-HISTORY_MAX_SAMPLES:]
+
+
 def update_and_attach_history(
     providers: list[dict[str, Any]], state_dir: Path | None = None, now: int | None = None
 ) -> None:
@@ -1417,6 +1574,38 @@ def update_and_attach_history(
                 "h24": bucket_history(samples, stamp, 24, 24 * 60 * 60),
                 "d7": bucket_history(samples, stamp, 7, SEVEN_DAYS),
             }
+    for provider_id in list(history["windows"]):
+        kept = {}
+        for window_id, series in history["windows"][provider_id].items():
+            trimmed = trim_series(series, cutoff, stamp)
+            if trimmed != series:
+                changed = True
+            if trimmed:
+                kept[window_id] = trimmed
+        if kept:
+            history["windows"][provider_id] = kept
+        else:
+            del history["windows"][provider_id]
+            changed = True
+    # Each window keeps its own series: pacing never mixes a window with its siblings.
+    for provider_id, provider in by_id.items():
+        windows = provider.get("windows")
+        if provider.get("status") != "ok" or not isinstance(windows, list):
+            continue
+        series_by_window = history["windows"].setdefault(provider_id, {})
+        for window in windows:
+            if not isinstance(window, dict):
+                continue
+            window_id = window.get("id")
+            used = number(window.get("used"))
+            if not isinstance(window_id, str) or not window_id or used is None:
+                continue
+            series = series_by_window.setdefault(window_id, [])
+            if record_window_sample(series, stamp, round(clamp(used, 0, 100), 2)):
+                changed = True
+            window["samples"] = series
+        if not series_by_window:
+            history["windows"].pop(provider_id, None)
     if changed:
         try:
             atomic_write_json(path, history)
@@ -1432,6 +1621,7 @@ FETCHERS: dict[str, Callable[[float], dict[str, Any]]] = {
     "claude": fetch_claude,
     "codex": fetch_codex,
     "kimi": fetch_kimi,
+    "opencode": fetch_opencode,
 }
 
 

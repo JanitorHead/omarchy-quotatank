@@ -97,3 +97,11 @@ The account browsing, email privacy, and Antigravity quota-summary protocol were
 > LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
+
+## OpenCode
+
+The marks in `assets/opencode.svg` and `assets/opencode-bar.svg` identify the
+service the OpenCode provider reports on. They are the OpenCode brand mark,
+redistributed from the MIT-licensed `markbus-ai/omarchy-opencode-usage` plugin,
+which uses the same mark to identify OpenCode. OpenCode is a trademark of its
+respective owner; the mark is used here only to identify the monitored tool.

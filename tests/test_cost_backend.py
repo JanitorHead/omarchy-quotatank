@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -416,6 +417,7 @@ class CacheAndContractTests(unittest.TestCase):
                     "CLAUDE_CONFIG_DIR": str(root / "claude"),
                     "CODEX_HOME": str(root / "codex"),
                     "KIMI_SHARE_DIR": str(root / "kimi"),
+                    "OMP_SESSIONS_DIR": str(root / "omp"),
                 },
             ):
                 payload = costs.build_payload(
@@ -480,3 +482,196 @@ class CacheAndContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OpenCodeSourceTests(unittest.TestCase):
+    @staticmethod
+    def write_database(path: Path, rows) -> None:
+        connection = sqlite3.connect(path)
+        connection.execute(
+            "CREATE TABLE message (id text PRIMARY KEY, session_id text NOT NULL,"
+            " time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?,?,?,?,?)",
+            rows,
+        )
+        connection.commit()
+        connection.close()
+
+    @staticmethod
+    def write_omp_session(path: Path, *, model: str = "deepseek-v4-pro", provider: str = "opencode-go") -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            {"type": "session", "version": 3, "id": "session-id",
+             "timestamp": "2030-01-15T12:00:00Z", "cwd": "/tmp"},
+            {"type": "message", "id": "u1", "parentId": None,
+             "timestamp": "2030-01-15T12:00:00Z",
+             "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}},
+            {"type": "message", "id": "m1", "parentId": "u1",
+             "timestamp": "2030-01-15T12:00:01Z",
+             "message": {"role": "assistant", "provider": provider, "model": model,
+                         "usage": {"input": 100, "output": 20, "cacheRead": 30, "cacheWrite": 7,
+                                   "totalTokens": 157, "reasoningTokens": 5,
+                                   "cost": {"input": 0.001, "output": 0.00023, "cacheRead": 0,
+                                            "cacheWrite": 0, "total": 0.00123}},
+                         "timestamp": 1_800_000_001_000}},
+        ]
+        path.write_text("\n".join(json.dumps(row) for row in lines) + "\n", encoding="utf-8")
+
+    def test_database_maps_tokens_models_and_sessions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "opencode.db"
+            self.write_database(path, [
+                ("m1", "s1", 1_800_000_000_000, 1_800_000_000_500, json.dumps({
+                    "role": "assistant", "providerID": "opencode-go", "modelID": "deepseek-v4.1-flash",
+                    "tokens": {"input": 100, "output": 20, "reasoning": 5,
+                               "cache": {"read": 30, "write": 7}},
+                    "cost": 0.00122625,
+                })),
+                ("m4", "s3", 1_800_000_000_300, 1_800_000_000_300, json.dumps({
+                    "role": "assistant", "providerID": "opencode-go", "modelID": "free-model",
+                    "tokens": {"input": 10, "output": 1}, "cost": 0,
+                })),
+                ("m2", "s1", 1_800_000_000_100, 1_800_000_000_100, json.dumps({
+                    "role": "user", "providerID": "opencode-go", "modelID": "deepseek-v4.1-flash",
+                })),
+                ("m3", "s2", 1_800_000_000_200, 1_800_000_000_200, json.dumps({
+                    "role": "assistant", "providerID": "anthropic", "modelID": "claude-sonnet",
+                    "tokens": {"input": 900, "output": 900},
+                })),
+            ])
+            records = costs.parse_opencode_database(path, 0)
+
+        self.assertIsNotNone(records)
+        assert records is not None
+        self.assertEqual(len(records), 2, "only OpenCode's own assistant rows are usage")
+        record = records[0]
+        self.assertEqual(record.provider, "opencode")
+        self.assertEqual(record.model, "deepseek-v4.1-flash")
+        self.assertEqual(record.uncached_input, 100)
+        self.assertEqual(record.cached_input, 30)
+        self.assertEqual(record.cache_creation, 7)
+        # OpenCode reports reasoning beside output rather than inside it, and
+        # the contract never counts reasoning twice.
+        self.assertEqual(record.output, 25)
+        self.assertEqual(record.reasoning, 5)
+        self.assertEqual(record.total_tokens, 162)
+        self.assertNotEqual(record.session_id, "s1", "session ids are hashed before storage")
+        self.assertEqual(record.dedupe_key, costs.opaque_id("opencode:m1"))
+        # OpenCode prices each response with the vendor rate it used, which is
+        # the only rate available for IDs the public table cannot disambiguate.
+        self.assertEqual(record.reported_cost_usd, 0.00122625)
+        # A zero cost means the CLI had no rate either; it is not a free claim.
+        self.assertIsNone(records[1].reported_cost_usd)
+        self.assertEqual(records[1].model, "free-model")
+
+    def test_omp_harness_maps_tokens_models_and_sessions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "-tmp" / "2026-09-19T00-00-00-000Z_01a0baea.jsonl"
+            self.write_omp_session(path)
+            records = costs.parse_omp_file(path, 0)
+
+        self.assertIsNotNone(records)
+        assert records is not None
+        self.assertEqual(len(records), 1, "only assistant messages with usage become records")
+        record = records[0]
+        self.assertEqual(record.provider, "opencode")
+        self.assertEqual(record.model, "deepseek-v4-pro")
+        self.assertEqual(record.uncached_input, 100)
+        self.assertEqual(record.cached_input, 30)
+        self.assertEqual(record.cache_creation, 7)
+        # The harness reports reasoning inside output, so output is never
+        # inflated and reasoning is a sub-count for display only.
+        self.assertEqual(record.output, 20)
+        self.assertEqual(record.reasoning, 5)
+        self.assertEqual(record.total_tokens, 157)
+        self.assertEqual(record.dedupe_key, costs.opaque_id("omp:m1"))
+        self.assertEqual(record.reported_cost_usd, 0.00123)
+        self.assertNotEqual(record.session_id, "")
+        self.assertNotIn("01a0baea", record.session_id, "session ids are hashed before storage")
+
+    def test_omp_harness_zero_cost_is_not_a_free_claim(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "-tmp" / "zero.jsonl"
+            self.write_omp_session(path)
+            data = path.read_text(encoding="utf-8")
+            path.write_text(
+                data.replace('"total": 0.00123', '"total": 0'),
+                encoding="utf-8",
+            )
+            records = costs.parse_omp_file(path, 0)
+
+        self.assertIsNotNone(records)
+        assert records is not None
+        self.assertEqual(len(records), 1)
+        self.assertIsNone(records[0].reported_cost_usd)
+
+    def test_omp_harness_scan_merges_with_database(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = root / "state"
+            db = root / "opencode.db"
+            self.write_database(db, [
+                ("m1", "s1", 1_800_000_000_000, 1_800_000_000_500, json.dumps({
+                    "role": "assistant", "providerID": "opencode-go", "modelID": "deepseek-v4.1-flash",
+                    "tokens": {"input": 10, "output": 1}, "cost": 0.001,
+                })),
+            ])
+            sessions = root / "omp" / "sessions"
+            self.write_omp_session(sessions / "-tmp" / "session-a.jsonl")
+            with mock.patch.dict(os.environ, {
+                "OPENCODE_DB": str(db),
+                "OMP_SESSIONS_DIR": str(sessions),
+            }, clear=False):
+                records, coverage = costs.scan_transcripts(
+                    ["opencode"], state, int(costs.time.time() * 1000)
+                )
+
+        by_id = {row["id"]: row for row in coverage}
+        self.assertEqual(by_id["opencode"]["status"], "ok")
+        self.assertEqual(by_id["opencode"]["scannedFiles"], 1)
+        self.assertEqual(by_id["omp"]["scannedFiles"], 1)
+        models = {record.model for record in records}
+        self.assertIn("deepseek-v4.1-flash", models, "database rows are kept")
+        self.assertIn("deepseek-v4-pro", models, "harness transcripts are added")
+        self.assertEqual({r.origin for r in records if r.model == "deepseek-v4-pro"}, {"omp"})
+
+    def test_omp_messages_bill_to_their_own_provider(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sessions = root / "omp" / "sessions"
+            self.write_omp_session(sessions / "-tmp" / "codex.jsonl", provider="openai-codex", model="gpt-5.6-luna")
+            self.write_omp_session(sessions / "-tmp" / "claude.jsonl", provider="anthropic", model="claude-haiku-5-5")
+            self.write_omp_session(sessions / "-tmp" / "vendor.jsonl", provider="some-vendor", model="x")
+            with mock.patch.dict(os.environ, {
+                "OMP_SESSIONS_DIR": str(sessions),
+                "CODEX_HOME": str(root / "codex"),
+                "CLAUDE_CONFIG_DIR": str(root / "claude"),
+            }, clear=False):
+                records, _ = costs.scan_transcripts(["codex", "claude"], root / "state", int(costs.time.time() * 1000))
+
+        self.assertEqual({r.provider for r in records}, {"codex", "claude"}, "unsupported billing providers are dropped")
+        self.assertEqual({r.model for r in records if r.provider == "codex"}, {"gpt-5.6-luna"})
+        self.assertEqual({r.model for r in records if r.provider == "claude"}, {"claude-haiku-5-5"})
+        self.assertEqual({r.origin for r in records}, {"omp"})
+
+    def test_unusable_database_is_not_a_partial_history(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "opencode.db"
+            path.write_bytes(b"not a database")
+            self.assertIsNone(costs.parse_opencode_database(path, 0))
+            self.assertIsNone(costs.parse_opencode_database(Path(temporary) / "missing.db", 0))
+
+    def test_missing_database_is_a_missing_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary) / "state"
+            with mock.patch.dict(os.environ, {
+                "XDG_DATA_HOME": temporary,
+                "OMP_SESSIONS_DIR": str(Path(temporary) / "no-omp"),
+            }, clear=False):
+                for name in ("OPENCODE_DB", "OPENCODE_DATABASE"):
+                    os.environ.pop(name, None)
+                records, coverage = costs.scan_transcripts(["opencode"], state, int(costs.time.time() * 1000))
+        self.assertEqual(records, [])
+        self.assertEqual(coverage[0]["status"], "missing")

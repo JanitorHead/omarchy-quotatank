@@ -19,6 +19,7 @@ import urllib.request
 from dataclasses import dataclass, replace
 from concurrent.futures import ThreadPoolExecutor
 import socket
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -29,13 +30,15 @@ import t3_costs
 
 
 SCHEMA_VERSION = 1
-SCAN_CACHE_VERSION = 5  # Rebuild Codex records deduplicated without cumulative counters.
+SCAN_CACHE_VERSION = 7  # v7 stores each record's billing provider and origin (Oh My Pi splits by provider).
 RATE_CACHE_VERSION = 2  # v1 discarded provider prefixes and could cache conflicting rates.
-PROVIDER_ORDER = ("claude", "codex", "kimi")
+PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode")
 PROVIDER_NAMES = {
     "claude": "Claude Code",
     "codex": "OpenAI Codex",
     "kimi": "Kimi Code",
+    "opencode": "OpenCode Go",
+    "omp": "Oh My Pi",
 }
 LITELLM_RATES_URL = (
     "https://raw.githubusercontent.com/BerriAI/litellm/main/"
@@ -52,6 +55,9 @@ MAX_RATE_BYTES = 32 * 1024 * 1024
 FORK_COPY_MAX_GAP_MS = 1000
 MAX_TRANSCRIPT_LINE_BYTES = 16 * 1024 * 1024
 MAX_TRANSCRIPT_FILE_BYTES = 128 * 1024 * 1024
+# OpenCode keeps every message in one SQLite database, so the single-file
+# ceiling has to leave room for a long-lived installation.
+MAX_OPENCODE_DATABASE_BYTES = 4 * 1024 * 1024 * 1024
 MAX_TRANSCRIPT_SCAN_BYTES = 512 * 1024 * 1024
 MAX_TRANSCRIPT_RECORDS_PER_FILE = 20_000
 MAX_TRANSCRIPT_RECORDS_TOTAL = 50_000
@@ -271,11 +277,16 @@ def serialize_record(record: UsageRecord) -> list[Any]:
         record.reasoning,
         record.reported_cost_usd,
         record.dedupe_key,
+        record.provider,
+        record.origin,
     ]
 
 
-def deserialize_record(provider: str, row: Any) -> UsageRecord | None:
-    if not isinstance(row, list) or len(row) != 10:
+def deserialize_record(row: Any) -> UsageRecord | None:
+    if not isinstance(row, list) or len(row) != 12:
+        return None
+    provider, origin = row[10], row[11]
+    if provider not in PROVIDER_ORDER or origin not in ("local", "omp"):
         return None
     timestamp = finite_number(row[0])
     model = bounded_model(row[1])
@@ -301,6 +312,7 @@ def deserialize_record(provider: str, row: Any) -> UsageRecord | None:
         reasoning=int(numeric[4] or 0),
         reported_cost_usd=reported,
         dedupe_key=dedupe,
+        origin=origin,
     )
 
 
@@ -356,9 +368,12 @@ def load_scan_cache(path: Path) -> dict[str, dict[str, Any]]:
         size = entry.get("s")
         modified = entry.get("m")
         rows = entry.get("r")
+        # A usage database is one growing file rather than one transcript, so
+        # it gets the larger ceiling here and in the scanner.
+        size_ceiling = MAX_OPENCODE_DATABASE_BYTES if provider == "opencode" else MAX_TRANSCRIPT_FILE_BYTES
         if (
             type(size) is not int
-            or size < 0 or size > MAX_TRANSCRIPT_FILE_BYTES
+            or size < 0 or size > size_ceiling
             or type(modified) is not int or modified < 0
             or not isinstance(rows, list)
             or len(rows) > MAX_TRANSCRIPT_RECORDS_PER_FILE
@@ -375,7 +390,7 @@ def load_scan_cache(path: Path) -> dict[str, dict[str, Any]]:
         corrupt = False
         for row in rows:
             try:
-                record = deserialize_record(provider, row)
+                record = deserialize_record(row)
             except (ValueError, OverflowError):
                 record = None
             if record is None:
@@ -471,6 +486,243 @@ def parse_claude_file(path: Path, retention_start_ms: int, cursor: TranscriptCur
                 if record.dedupe_key in seen:
                     continue
                 seen.add(record.dedupe_key)
+            if len(records) >= MAX_TRANSCRIPT_RECORDS_PER_FILE:
+                raise TranscriptLimitError("too many usage records in one transcript")
+            append_record(records, record, cursor)
+    except (OSError, ValueError, OverflowError, RecursionError):
+        return None
+    return records
+
+
+# ---------------------------------------------------------------- OpenCode
+#
+# OpenCode keeps one SQLite database per installation instead of JSONL
+# transcripts: usage lives in the JSON `data` column of `message`. Only ids,
+# the model, the timestamp, and the token split are streamed out, so prompts and
+# responses never leave SQLite.
+
+OPENCODE_SQL = (
+    "SELECT id, session_id, time_created,"
+    " CAST(json_extract(data, '$.modelID') AS TEXT),"
+    " CAST(COALESCE(json_extract(data, '$.tokens.input'), 0) AS INTEGER),"
+    " CAST(COALESCE(json_extract(data, '$.tokens.output'), 0) AS INTEGER),"
+    " CAST(COALESCE(json_extract(data, '$.tokens.reasoning'), 0) AS INTEGER),"
+    " CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),"
+    " CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),"
+    " CAST(COALESCE(json_extract(data, '$.cost'), 0) AS REAL)"
+    " FROM message"
+    " WHERE data LIKE '%\"role\"%:%\"assistant\"%'"
+    " AND data LIKE '%\"providerID\"%:%\"opencode%'"
+    " AND CASE WHEN json_valid(data) THEN json_extract(data, '$.role') END = 'assistant'"
+    " AND CASE WHEN json_valid(data) THEN json_extract(data, '$.providerID') END LIKE 'opencode%'"
+    " AND time_created >= ?"
+)
+
+
+class DbSignature:
+    """The scan cache only reads the fields a transcript stat would provide."""
+
+    __slots__ = ("st_size", "st_dev", "st_ino", "st_mtime_ns", "st_mtime")
+
+    def __init__(self, size: int, device: int, inode: int, mtime_ns: int):
+        self.st_size = size
+        self.st_dev = device
+        self.st_ino = inode
+        self.st_mtime_ns = mtime_ns
+        self.st_mtime = mtime_ns / 1_000_000_000
+
+
+def opencode_data_root() -> Path:
+    override = os.environ.get("XDG_DATA_HOME")
+    root = Path(override).expanduser() if override else Path.home() / ".local" / "share"
+    return root / "opencode"
+
+
+def opencode_database_path() -> Path:
+    override = os.environ.get("OPENCODE_DB") or os.environ.get("OPENCODE_DATABASE")
+    if override:
+        return Path(override).expanduser()
+    data_root = opencode_data_root()
+    default = data_root / "opencode.db"
+    candidates: list[tuple[int, str, Path]] = []
+    try:
+        with os.scandir(data_root) as entries:
+            for entry in entries:
+                if entry.name.startswith(".") or not entry.name.endswith(".db"):
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                path = Path(entry.path)
+                # Each channel build owns a database, and the write-ahead log
+                # moves on every committed message, so it is the better clock.
+                stamps = []
+                for suffix in ("", "-wal"):
+                    try:
+                        stamps.append(os.stat(str(path) + suffix, follow_symlinks=False).st_mtime_ns)
+                    except OSError:
+                        continue
+                if stamps:
+                    candidates.append((max(stamps), str(path), path))
+    except OSError:
+        return default
+    if not candidates:
+        return default
+    candidates.sort()
+    return candidates[-1][2]
+
+
+def opencode_signature(path: Path) -> DbSignature | None:
+    stamps = []
+    size = 0
+    device = inode = 0
+    for suffix in ("", "-wal"):
+        try:
+            info = os.stat(str(path) + suffix, follow_symlinks=False)
+        except OSError:
+            continue
+        size += int(info.st_size)
+        stamps.append(info.st_mtime_ns)
+        device, inode = info.st_dev, info.st_ino
+    if not stamps:
+        return None
+    return DbSignature(size, device, inode, max(stamps))
+
+
+def parse_opencode_database(path: Path, retention_start_ms: int,
+                            cursor: TranscriptCursor | None = None) -> list[UsageRecord] | None:
+    # The database is queried, never read positionally, so the transcript
+    # cursor is unused here.
+    records: list[UsageRecord] = []
+    try:
+        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
+    except sqlite3.Error:
+        return None
+    try:
+        connection.execute("PRAGMA query_only = ON")
+        newest = connection.execute("SELECT MAX(time_created) FROM message").fetchone()
+        unit = 1000 if newest and newest[0] is not None and int(newest[0]) < 1e12 else 1
+        for row in connection.execute(OPENCODE_SQL, (retention_start_ms // unit,)):
+            raw_id, session, created, model, inp, out, reasoning, cache_read, cache_write, recorded = row
+            if not isinstance(raw_id, str) or not raw_id or created is None:
+                continue
+            timestamp = parse_timestamp_ms(int(created) * unit)
+            if timestamp is None:
+                continue
+            uncached, output, reasoned, cached, cache_written = (
+                nonnegative_int(value) for value in (inp, out, reasoning, cache_read, cache_write)
+            )
+            # OpenCode prices each response with the rates of the provider that
+            # served it, which is the only way to price model IDs the public
+            # table cannot disambiguate. A zero is not a price: it means the CLI
+            # had no rate either, so the table gets its turn instead.
+            recorded_cost = finite_number(recorded)
+            if recorded_cost is not None and recorded_cost <= 0:
+                recorded_cost = None
+            record = UsageRecord(
+                provider="opencode",
+                timestamp_ms=timestamp,
+                model=bounded_model(model) or "<unattributed>",
+                session_id=opaque_id("opencode:" + session) if isinstance(session, str) and session else "",
+                uncached_input=uncached,
+                cached_input=cached,
+                cache_creation=cache_written,
+                # OpenCode reports reasoning beside output rather than inside
+                # it, so the output side carries both here.
+                output=output + reasoned,
+                reasoning=reasoned,
+                reported_cost_usd=recorded_cost,
+                dedupe_key=opaque_id("opencode:" + raw_id),
+            )
+            if record.total_tokens <= 0 or record.timestamp_ms < retention_start_ms:
+                continue
+            if len(records) >= MAX_TRANSCRIPT_RECORDS_PER_FILE:
+                raise TranscriptLimitError("too many usage records in one database")
+            records.append(record)
+    except (sqlite3.Error, ValueError, OverflowError, RecursionError):
+        return None
+    finally:
+        connection.close()
+    return records
+
+
+# The Oh My Pi harness (omp) is built on the same opencode-go provider but keeps
+# its own session transcripts instead of the OpenCode CLI database. Each
+# assistant message records its model, token split, and the price the provider
+# already applied, so it maps onto the same accounting as the CLI database.
+
+def omp_sessions_root() -> Path:
+    override = os.environ.get("OMP_SESSIONS_DIR")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".omp" / "agent" / "sessions"
+
+
+def omp_record_provider(name: Any) -> str | None:
+    """Map the provider that billed an omp message onto its cost source, or None if unsupported."""
+    if not isinstance(name, str):
+        return None
+    if name.startswith("opencode"):
+        return "opencode"
+    if name == "openai-codex":
+        return "codex"
+    if name == "anthropic":
+        return "claude"
+    return None
+
+
+def parse_omp_file(path: Path, retention_start_ms: int,
+                   cursor: TranscriptCursor | None = None) -> list[UsageRecord] | None:
+    """Read one Oh My Pi harness session transcript (JSONL, one record per billing provider)."""
+    records: list[UsageRecord] = []
+    session_id = opaque_id("omp:" + path.stem) if path.stem else ""
+    try:
+        for line in bounded_jsonl_lines(path, cursor):
+            if '"usage"' not in line:
+                continue
+            try:
+                document = json.loads(line)
+            except (json.JSONDecodeError, RecursionError):
+                continue
+            if not isinstance(document, dict) or document.get("type") != "message":
+                continue
+            message = document.get("message")
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            provider = omp_record_provider(message.get("provider"))
+            if provider is None:
+                continue
+            usage = message.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            timestamp = parse_timestamp_ms(message.get("timestamp")) or parse_timestamp_ms(
+                document.get("timestamp")
+            )
+            if timestamp is None or timestamp < retention_start_ms:
+                continue
+            raw_cost = usage.get("cost")
+            reported = finite_number(raw_cost.get("total")) if isinstance(raw_cost, dict) else None
+            if reported is not None and reported <= 0:
+                reported = None
+            raw_id = document.get("id")
+            dedupe = opaque_id("omp:" + raw_id) if isinstance(raw_id, str) and raw_id else None
+            output = nonnegative_int(usage.get("output"))
+            record = UsageRecord(
+                provider=provider,
+                timestamp_ms=timestamp,
+                model=bounded_model(message.get("model")) or "<unattributed>",
+                session_id=session_id,
+                uncached_input=nonnegative_int(usage.get("input")),
+                cached_input=nonnegative_int(usage.get("cacheRead")),
+                cache_creation=nonnegative_int(usage.get("cacheWrite")),
+                # The harness reports reasoning inside output, not beside it.
+                output=output,
+                reasoning=min(output, nonnegative_int(usage.get("reasoningTokens"))),
+                reported_cost_usd=reported,
+                dedupe_key=dedupe,
+                origin="omp",
+            )
+            if record.total_tokens <= 0:
+                continue
             if len(records) >= MAX_TRANSCRIPT_RECORDS_PER_FILE:
                 raise TranscriptLimitError("too many usage records in one transcript")
             append_record(records, record, cursor)
@@ -642,6 +894,8 @@ PARSERS: dict[str, Callable[..., list[UsageRecord] | None]] = {
     "claude": parse_claude_file,
     "codex": parse_codex_file,
     "kimi": parse_kimi_file,
+    "opencode": parse_opencode_database,
+    "omp": parse_omp_file,
 }
 
 
@@ -652,6 +906,12 @@ def transcript_root(provider: str) -> Path:
         return nested if nested.is_dir() else configured / "projects"
     if provider == "codex":
         return Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser() / "sessions"
+    if provider == "opencode":
+        # OpenCode records usage in a SQLite database rather than a transcript
+        # directory, so the "root" is the database file itself.
+        return opencode_database_path()
+    if provider == "omp":
+        return omp_sessions_root()
     return Path(os.environ.get("KIMI_SHARE_DIR") or (Path.home() / ".kimi")).expanduser() / "sessions"
 
 
@@ -736,7 +996,9 @@ def scan_transcripts(
     cache_changed = False
     scan_budget = [MAX_TRANSCRIPT_SCAN_BYTES]
 
-    for provider in provider_ids:
+    # Oh My Pi transcripts are one source whose records bill to several providers.
+    scanned = [*provider_ids, "omp"] if provider_ids and omp_sessions_root().is_dir() else list(provider_ids)
+    for provider in scanned:
         root = transcript_root(provider)
         source = {
             "id": provider,
@@ -747,16 +1009,28 @@ def scan_transcripts(
             "skippedFiles": 0,
             "sessions": 0,
         }
-        if not root.is_dir():
-            source.update(status="missing", message="No local transcript directory was found.")
-            coverage.append(source)
-            continue
+        if provider == "opencode":
+            signature = opencode_signature(root)
+            if signature is None:
+                source.update(status="missing", message="No OpenCode usage database was found.")
+                coverage.append(source)
+                continue
+            key = opaque_id(str(root.absolute()))
+            candidates: list[tuple[Path, Any, str]] = [(root, signature, key)]
+            discovery_errors = 0
+            walked.add(provider)
+            live_by_provider[provider] = {key}
+        else:
+            if not root.is_dir():
+                source.update(status="missing", message="No local transcript directory was found.")
+                coverage.append(source)
+                continue
 
-        walked.add(provider)
-        candidates, live, discovery_errors, discovery_complete = discover_transcripts(
-            provider, root, retention_start_ms
-        )
-        live_by_provider[provider] = live if discovery_complete else None
+            walked.add(provider)
+            candidates, live, discovery_errors, discovery_complete = discover_transcripts(
+                provider, root, retention_start_ms
+            )
+            live_by_provider[provider] = live if discovery_complete else None
         source["skippedFiles"] += discovery_errors
         provider_record_count = 0
         for path, stats, key in candidates:
@@ -781,7 +1055,14 @@ def scan_transcripts(
                     del cache[key]
                     cache_changed = True
                 can_resume = entry and entry.get("position") and size > entry["s"] and entry["p"] == provider
-                if size > MAX_TRANSCRIPT_FILE_BYTES or (not can_resume and size > scan_budget[0]):
+                is_database = provider == "opencode" and path == root
+                if is_database:
+                    too_large = size > MAX_OPENCODE_DATABASE_BYTES
+                else:
+                    too_large = size > MAX_TRANSCRIPT_FILE_BYTES or (
+                        not can_resume and size > scan_budget[0]
+                    )
+                if too_large:
                     parsed = None
                 else:
                     cursor = TranscriptCursor(stats, scan_budget, entry if entry and entry["p"] == provider else None)
@@ -1358,7 +1639,7 @@ def aggregate_usage(
 
 def parse_provider_ids(value: str) -> list[str]:
     requested = {item.strip().lower() for item in value.split(",") if item.strip()}
-    return [provider for provider in ("claude", "codex") if provider in requested]
+    return [provider for provider in ("claude", "codex", "opencode") if provider in requested]
 
 
 def build_payload(
@@ -1369,7 +1650,7 @@ def build_payload(
 ) -> dict[str, Any]:
     started = time.monotonic()
     overrides = parse_price_overrides(price_overrides)
-    provider_ids = [p for p in provider_ids if p in ("claude", "codex")]
+    provider_ids = [p for p in provider_ids if p in ("claude", "codex", "opencode")]
     servers = [s for s in t3_costs.parse_servers(t3_servers) if s["enabled"]]
     stamp = int(time.time() * 1000) if now_ms is None else int(now_ms)
     zone = local_zone(zone_name)
@@ -1395,14 +1676,32 @@ def build_payload(
                 volume = f"{info.st_dev}:{info.st_ino}"
             except OSError:
                 volume = ""
-            records = [replace(r, reported_cost_usd=None) for r in local
-                       if r.provider == provider and start <= r.timestamp_ms <= stamp]
+            # Local sources are repriced from one table so the view is
+            # consistent. OpenCode is the exception: the CLI already priced each
+            # response with the rates of the provider that served it, which is
+            # the only way to price model IDs the public table cannot
+            # disambiguate. An explicit custom price still wins in the
+            # aggregation.
+            if provider == "omp":
+                # Oh My Pi keeps each message's billing provider, so its records are selected
+                # by origin; each provider's own transcripts never carry them.
+                selected = [r for r in local if r.origin == "omp" and r.provider in provider_ids
+                            and start <= r.timestamp_ms <= stamp]
+            else:
+                selected = [r for r in local if r.origin != "omp" and r.provider == provider
+                            and start <= r.timestamp_ms <= stamp]
+            records = [r if r.provider == "opencode" else replace(r, reported_cost_usd=None) for r in selected]
+            session_counts = None
+            if provider == "omp":
+                session_counts = {p: len({r.session_id for r in records if r.provider == p and r.session_id})
+                                  for p in {r.provider for r in records}}
             fp = t3_costs.fingerprint(socket.gethostname(), provider, str(root.resolve()), volume)
-            candidates.append({"id": "local-" + provider, "name": "Local " + ("Claude" if provider == "claude" else provider.title()),
-                "kind": "local", "provider": provider, "fingerprint": fp, "status": item["status"],
+            candidates.append({"id": "local-" + provider, "name": "Local " + ("Claude" if provider == "claude" else PROVIDER_NAMES.get(provider, provider.title())),
+                "kind": "local", "provider": provider, "providers": sorted(session_counts) if session_counts is not None else [provider],
+                "fingerprint": fp, "status": item["status"],
                 "updatedAt": stamp, "message": item["message"], "records": records,
                 "scannedFiles": item.get("scannedFiles", 0), "skippedFiles": item.get("skippedFiles", 0),
-                "sessions": len({r.session_id for r in records if r.session_id})})
+                "sessions": len({r.session_id for r in records if r.session_id}), "sessionCounts": session_counts})
         for server, future in futures:
             try:
                 summary, state, error = future.result()
@@ -1454,20 +1753,20 @@ def build_payload(
     for candidate in candidates:
         available = candidate["status"] in ("ok", "partial", "stale")
         included = available and candidate["fingerprint"] not in seen
-        public = {k: v for k, v in candidate.items() if k not in ("records", "sessions", "fingerprint")}
+        public = {k: v for k, v in candidate.items() if k not in ("records", "sessions", "sessionCounts", "fingerprint")}
         public["included"] = included
         if included:
             seen.add(candidate["fingerprint"])
             records.extend(candidate["records"])
-            provider = candidate["provider"]
-            current = sessions.get(provider, 0)
-            sessions[provider] = (None if current is None or candidate["sessions"] is None else current + candidate["sessions"])
+            for session_provider, count in (candidate.get("sessionCounts") or {candidate["provider"]: candidate["sessions"]}).items():
+                current = sessions.get(session_provider, 0)
+                sessions[session_provider] = None if current is None or count is None else current + count
         elif available:
             public.update(status="duplicate", message="This transcript folder is already included by another source.")
         sources.append(public)
     if len(records) > MAX_TRANSCRIPT_RECORDS_TOTAL:
         raise ValueError("Combined transcript history exceeds the record limit. Select a shorter period.")
-    provider_ids = sorted({c["provider"] for c in candidates})
+    provider_ids = sorted({c["provider"] for c in candidates if c["provider"] != "omp"})
     if rates_override is not None:
         rates, pricing = rates_override
     elif force_rates or any(r.model not in overrides for r in records):
@@ -1478,7 +1777,11 @@ def build_payload(
     result = aggregate_usage(records, provider_ids, days, stamp, rates, zone_name, overrides)
     coverage = []
     for provider in result["providers"]:
-        relevant = [s for s in sources if s.get("provider") == provider["id"] and s["status"] != "duplicate"]
+        relevant = [s for s in sources if s["status"] != "duplicate"
+                    and (s.get("provider") == provider["id"] or provider["id"] in s.get("providers", []))]
+        # A missing local folder is expected when that harness is unused; it only matters if nothing else supplies the provider.
+        if any(s["included"] for s in relevant):
+            relevant = [s for s in relevant if s["included"] or s["status"] != "missing"]
         status = "ok" if relevant and all(s["status"] == "ok" for s in relevant) else "partial"
         if relevant and not any(s["included"] for s in relevant):
             status = "missing"

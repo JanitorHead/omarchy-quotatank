@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "digitalpals.model-usage",
-  "name": "Model Usage",
-  "version": "1.3.2",
+  "id": "janitorhead.quotatank",
+  "name": "Quotatank",
+  "version": "1.4.0",
   "author": "DigitalPals",
   "license": "MIT",
-  "description": "Track Claude Code, OpenAI Codex, and Kimi Code subscription limits from your Omarchy menu bar. Connect local CLIs, Fusebox, or CLIProxyAPI to monitor multiple accounts, remaining quotas, reset times, and credits. Explore 24-hour, 7-day, and 30-day token history and estimated API costs from local Codex/Claude transcripts and remote T3 Code servers, with cache-aware pricing, custom model rates, and provider/model breakdowns. Includes private account labels, quota history, and keyboard-friendly settings.",
+  "description": "Track Claude Code, OpenAI Codex, Kimi Code, and OpenCode Go subscription limits from your Omarchy menu bar. Connect local CLIs, Fusebox, or CLIProxyAPI to monitor multiple accounts, remaining quotas, reset times, and credits. Explore 24-hour, 7-day, and 30-day token history and estimated API costs from local Codex/Claude transcripts and remote T3 Code servers, with cache-aware pricing, custom model rates, and provider/model breakdowns. Includes private account labels, quota history, and keyboard-friendly settings.",
   "kinds": [
     "bar-widget"
   ],
@@ -14,7 +14,7 @@
     "barWidget": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "Model Usage",
+    "displayName": "Quotatank",
     "description": "AI subscription quotas from local CLIs, Fusebox, or CLIProxyAPI, per-account limits and resets, and combined Codex/Claude token history and API cost estimates from local and T3 Code sources.",
     "category": "AI",
     "defaultSection": "right",
@@ -24,19 +24,28 @@
       "enabledProviders": [
         "claude",
         "codex",
-        "kimi"
+        "kimi",
+        "opencode"
       ],
       "usageSource": "direct",
       "cliproxyUrl": "http://127.0.0.1:8317",
       "cliproxyKeyFile": "",
       "hideAccountEmails": true,
       "squareUsageCards": true,
+      "notifyLimitThresholds": true,
       "barDisplayMode": "Percentages",
       "barProviders": [
         "claude",
         "codex",
-        "kimi"
+        "kimi",
+        "opencode"
       ],
+      "barWindow": "auto",
+      "barWindowSecondary": "none",
+      "barProviderLimits": "{}",
+      "barShowResets": false,
+      "barResetTimeFormat": "24h",
+      "barResetDateFormat": "DD/MM",
       "warningThreshold": 25,
       "criticalThreshold": 10,
       "costPriceOverrides": "{}",
@@ -90,6 +99,13 @@
         "description": "Use square corners for cards in Limits instead of the theme's corner style."
       },
       {
+        "key": "notifyLimitThresholds",
+        "type": "boolean",
+        "label": "Notify when limits run low",
+        "defaultValue": true,
+        "description": "Send a desktop notification when a limit moves into the warning or critical threshold. Recovering and a reset re-arm the next notification."
+      },
+      {
         "key": "refreshIntervalSec",
         "type": "integer",
         "label": "Refresh interval (seconds)",
@@ -124,6 +140,10 @@
           {
             "value": "kimi",
             "label": "Kimi Code"
+          },
+          {
+            "value": "opencode",
+            "label": "OpenCode Go"
           }
         ]
       },
@@ -136,7 +156,81 @@
           "Percentages"
         ],
         "defaultValue": "Percentages",
-        "description": "Percentages shows compact remaining quota on horizontal bars and falls back to the icon on vertical bars."
+        "description": "Percentages shows compact quota on horizontal bars and falls back to the icon on vertical bars."
+      },
+      {
+        "key": "quotaMode",
+        "type": "enum",
+        "label": "Show limits as",
+        "options": [
+          "Used",
+          "Remaining"
+        ],
+        "defaultValue": "Used",
+        "description": "Whether limit cards and menu bar chips report the percentage used or the percentage left. The warning thresholds always apply to what is left."
+      },
+      {
+        "key": "barWindow",
+        "type": "enum",
+        "label": "Bar limit (top)",
+        "options": [
+          "auto",
+          "session",
+          "weekly",
+          "monthly"
+        ],
+        "defaultValue": "auto",
+        "description": "Which reported limit supplies the menu bar percentage. Most restrictive uses the window with the least remaining quota; a provider that does not report the chosen window falls back to that."
+      },
+      {
+        "key": "barWindowSecondary",
+        "type": "enum",
+        "label": "Bar limit (bottom)",
+        "options": [
+          "none",
+          "session",
+          "weekly",
+          "monthly"
+        ],
+        "defaultValue": "none",
+        "description": "Optional second limit stacked under the first in each menu bar chip. none keeps a single line."
+      },
+      {
+        "key": "barShowResets",
+        "type": "boolean",
+        "label": "Show reset day in bar",
+        "description": "Adds when each bar limit resets to its chip. Limits that reset within a day show a time; weekly and monthly limits show a date.",
+        "defaultValue": false
+      },
+      {
+        "key": "barResetTimeFormat",
+        "type": "enum",
+        "label": "Reset time format",
+        "options": [
+          "24h",
+          "12h"
+        ],
+        "defaultValue": "24h",
+        "description": "Time format for limits that reset within a day, such as the 5-hour session limit: 24h (14:30) or 12h (2:30 PM)."
+      },
+      {
+        "key": "barResetDateFormat",
+        "type": "enum",
+        "label": "Reset date format",
+        "options": [
+          "DD/MM",
+          "MM/DD",
+          "D MMM"
+        ],
+        "defaultValue": "DD/MM",
+        "description": "Date format for weekly and monthly limit resets: DD/MM (22/04), MM/DD (04/22) or D MMM (22 Apr)."
+      },
+      {
+        "key": "barProviderLimits",
+        "type": "string",
+        "label": "Per-provider bar limits",
+        "description": "Managed by Per-provider bar limits in Display settings. JSON object mapping provider IDs to top and bottom bar limits; missing slots use the global bar limits.",
+        "defaultValue": "{}"
       },
       {
         "key": "barProviders",
@@ -160,13 +254,17 @@
           {
             "value": "kimi",
             "label": "Kimi Code"
+          },
+          {
+            "value": "opencode",
+            "label": "OpenCode Go"
           }
         ]
       },
       {
         "key": "warningThreshold",
         "type": "integer",
-        "label": "Warning at (% remaining)",
+        "label": "Warning at (% left)",
         "min": 1,
         "max": 100,
         "step": 1,
@@ -175,7 +273,7 @@
       {
         "key": "criticalThreshold",
         "type": "integer",
-        "label": "Critical at (% remaining)",
+        "label": "Critical at (% left)",
         "min": 0,
         "max": 100,
         "step": 1,
@@ -218,6 +316,10 @@
           {
             "value": "codex",
             "label": "Codex"
+          },
+          {
+            "value": "opencode",
+            "label": "OpenCode"
           }
         ]
       },

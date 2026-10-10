@@ -49,6 +49,29 @@ class NormalizationTests(unittest.TestCase):
         })
         self.assertEqual([row["used"] for row in windows], [0.5, 1])
 
+    def test_opencode_plan_windows(self):
+        windows = usage.parse_opencode_usage(fixture("opencode-usage.json"))
+        self.assertEqual([row["id"] for row in windows], ["session", "weekly", "monthly"])
+        self.assertEqual([row["label"] for row in windows],
+                         ["5 hour limit", "Weekly limit", "Monthly limit"])
+        self.assertEqual([row["used"] for row in windows], [12.5, 40, 20])
+        self.assertEqual([row["remaining"] for row in windows], [87.5, 60, 80])
+        self.assertEqual([row["windowSeconds"] for row in windows], [18000, 604800, 2592000])
+        self.assertEqual(windows[0]["resetsAt"], 1789818555)
+
+    def test_opencode_reports_only_the_windows_it_has(self):
+        windows = usage.parse_opencode_usage({"usage": {"weekly": {"percent": 5}}})
+        self.assertEqual([row["id"] for row in windows], ["weekly"])
+        self.assertEqual(windows[0]["resetsAt"], None)
+
+    def test_opencode_payload_without_windows_is_a_provider_failure(self):
+        payloads = ({}, {"usage": {}}, {"usage": {"weekly": {"percent": None}}}, [], "unexpected")
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                with self.assertRaises(usage.ProviderFailure) as raised:
+                    usage.parse_opencode_usage(payload)
+                self.assertEqual(raised.exception.kind, "malformed")
+
     def test_codex_multi_bucket_spend_and_reset_credits(self):
         windows, credits, plan, reached = usage.parse_codex_rate_limits(
             fixture("codex-rate-limits.json")
@@ -143,6 +166,61 @@ class FailureAndIsolationTests(unittest.TestCase):
                 }))
                 self.assertEqual(usage.fetch_claude(1)["errorKind"], "expired")
                 self.assertEqual(usage.fetch_kimi(1)["errorKind"], "expired")
+
+    def test_opencode_key_resolution_and_request_headers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "opencode").mkdir()
+            (root / "opencode" / "auth.json").write_text(json.dumps({
+                "opencode-go": {"type": "api", "key": "secret-key"}
+            }))
+            captured = {}
+            response = mock.MagicMock()
+            response.__enter__.return_value.read.return_value = json.dumps(
+                fixture("opencode-usage.json")).encode("utf-8")
+
+            def capture(request, timeout=None):
+                captured["headers"] = {key.lower(): value for key, value in request.headers.items()}
+                return response
+
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(root)}, clear=False):
+                for name in ("OPENCODE_GO_API_KEY", "OPENCODE_API_KEY", "OPENCODE_API_BASE_URL"):
+                    os.environ.pop(name, None)
+                with mock.patch.object(usage.urllib.request.OpenerDirector, "open", side_effect=capture):
+                    result = usage.fetch_opencode(1)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["plan"], "OpenCode Go")
+        self.assertEqual([row["id"] for row in result["windows"]], ["session", "weekly", "monthly"])
+        self.assertEqual(captured["headers"]["authorization"], "Bearer secret-key")
+        # The edge in front of opencode.ai rejects Python's default agent.
+        self.assertTrue(captured["headers"]["user-agent"].startswith("omarchy-model-usage/"))
+
+    def test_opencode_missing_key_and_insecure_base(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": temporary}, clear=False):
+                for name in ("OPENCODE_GO_API_KEY", "OPENCODE_API_KEY", "OPENCODE_API_BASE_URL"):
+                    os.environ.pop(name, None)
+                result = usage.fetch_opencode(1)
+        self.assertEqual(result["errorKind"], "no_credentials")
+        self.assertEqual(result["authCommand"], "opencode auth login")
+
+        with mock.patch.dict(os.environ, {
+            "OPENCODE_API_BASE_URL": "http://example.invalid",
+            "OPENCODE_GO_API_KEY": "secret",
+        }, clear=False):
+            self.assertEqual(usage.fetch_opencode(1)["errorKind"], "config")
+
+    def test_opencode_rejected_key_is_an_expired_sign_in(self):
+        error = urllib.error.HTTPError("https://opencode.ai", 403, "forbidden", {}, None)
+        try:
+            with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "secret"}, clear=False):
+                with mock.patch.object(usage.urllib.request.OpenerDirector, "open", side_effect=error):
+                    result = usage.fetch_opencode(1)
+        finally:
+            error.close()
+        self.assertEqual(result["errorKind"], "expired")
+        self.assertEqual(result["message"], "OpenCode Go rejected the saved key.")
 
     def test_codex_cli_missing(self):
         with mock.patch.object(usage.shutil, "which", return_value=None):
@@ -315,9 +393,44 @@ class HistoryAndContractTests(unittest.TestCase):
             self.assertEqual(len(provider["history"]["d7"]), 7)
             self.assertEqual(provider["history"]["h24"][-1], 95)
 
-            history_file.write_text('{"schemaVersion":1,"providers":{"claude":[null,["bad",20],[1,999]]}}')
+            history_file.write_text('{"schemaVersion":2,"providers":{"claude":[null,["bad",20],[1,999]]},"windows":{}}')
             recovered = usage.load_history(history_file)
             self.assertEqual(recovered["providers"]["claude"], [[1, 100]])
+
+    def test_each_window_keeps_its_own_series_and_expired_samples_are_dropped(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary)
+            now = 2_000_000_000
+            day = 24 * 3600
+            provider = usage.base_provider("opencode")
+            provider["windows"] = [
+                usage.make_window("session", "5 hour limit", 10, now + 900, 18_000),
+                usage.make_window("weekly", "Weekly limit", 60, now + 3600, 604_800),
+            ]
+            usage.update_and_attach_history([provider], state_dir, now - 8 * day)
+            provider["windows"][0] = usage.make_window("session", "5 hour limit", 25, now + 900, 18_000)
+            usage.update_and_attach_history([provider], state_dir, now)
+
+            saved = json.loads((state_dir / "history.json").read_text())
+            self.assertEqual(saved["windows"]["opencode"], {"session": [[now, 25]], "weekly": [[now, 60]]})
+            self.assertEqual(provider["windows"][0]["samples"], [[now, 25]])
+            self.assertEqual(provider["windows"][1]["samples"], [[now, 60]])
+
+    def test_flat_window_is_recorded_as_heartbeat_not_as_change(self):
+        series = []
+        self.assertTrue(usage.record_window_sample(series, 1000, 40.0))
+        self.assertFalse(usage.record_window_sample(series, 1900, 40.0), "unchanged and recent: no new row")
+        self.assertTrue(usage.record_window_sample(series, 2800, 40.0), "unchanged for 30 minutes: heartbeat")
+        self.assertTrue(usage.record_window_sample(series, 3700, 45.0), "a changed value is recorded at once")
+        self.assertEqual(series, [[1000, 40.0], [2800, 40.0], [3700, 45.0]])
+
+    def test_previous_history_schema_is_discarded(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            history_file = Path(temporary) / "history.json"
+            history_file.write_text('{"schemaVersion":1,"providers":{"claude":[[1,50]]}}')
+            recovered = usage.load_history(history_file)
+        self.assertEqual(recovered["providers"]["claude"], [])
+        self.assertEqual(recovered["windows"], {})
 
     def test_no_successful_sample_means_no_history_chart(self):
         provider = usage.error_provider("kimi", "timeout", "timed out")

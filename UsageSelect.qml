@@ -11,7 +11,6 @@ Controls.ComboBox {
   property var options: []
   property string value: ""
   property string label: ""
-  property string compactLabel: ""
   property color foreground: Color.foreground
   property color surface: Color.popups.background
   property string fontFamily: Style.font.family
@@ -39,7 +38,6 @@ Controls.ComboBox {
       if (options[i].value === value) return i
     return -1
   }
-  displayText: compactLabel || currentText
   Accessible.name: label + ": " + currentText
   onActivated: changed(String(currentValue))
 

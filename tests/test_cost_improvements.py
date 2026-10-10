@@ -153,7 +153,7 @@ class ModelPricingTests(unittest.TestCase):
             (projects / "session.jsonl").write_text(json.dumps(raw) + "\n")
             custom = json.dumps({"claude-test": {"inputCostPerMillionTokens": 2, "outputCostPerMillionTokens": 8}})
             command = [sys.executable, str(base.BACKEND), "--providers", "claude", "--state-dir", str(root / "state")]
-            env = {**os.environ, "CLAUDE_CONFIG_DIR": str(root / "claude")}
+            env = {**os.environ, "CLAUDE_CONFIG_DIR": str(root / "claude"), "OMP_SESSIONS_DIR": str(root / "omp")}
             good = json.loads(subprocess.check_output(command + ["--price-overrides", custom], env=env))
             self.assertEqual(good["totals"]["costSource"], "customPriced")
             self.assertEqual(good["pricing"]["status"], "notNeeded")
@@ -179,7 +179,8 @@ class IncrementalScanTests(unittest.TestCase):
         os.utime(path, ns=(stamp, stamp))
 
     def scan(self, provider="claude", state=None):
-        with mock.patch.object(costs, "transcript_root", return_value=self.transcripts):
+        with mock.patch.object(costs, "transcript_root", return_value=self.transcripts), \
+                mock.patch.dict(os.environ, {"OMP_SESSIONS_DIR": str(self.root / "no-omp")}):
             return costs.scan_transcripts([provider], state or self.state, NOW)
 
     def test_codex_equal_response_sizes_with_advancing_totals_are_distinct(self):

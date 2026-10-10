@@ -13,7 +13,7 @@ class ProjectContractTests(unittest.TestCase):
     def test_manifest_has_current_quattro_bar_widget_shape(self):
         manifest = json.loads((ROOT / "manifest.json").read_text())
         self.assertEqual(manifest["schemaVersion"], 1)
-        self.assertEqual(manifest["id"], "digitalpals.model-usage")
+        self.assertEqual(manifest["id"], "janitorhead.quotatank")
         self.assertEqual(manifest["kinds"], ["bar-widget"])
         self.assertEqual(manifest["entryPoints"]["barWidget"], "Panel.qml")
         self.assertEqual(manifest["barWidget"]["category"], "AI")
@@ -22,9 +22,10 @@ class ProjectContractTests(unittest.TestCase):
         self.assertNotIn("aliases", manifest)
         keys = {entry["key"] for entry in manifest["barWidget"]["schema"]}
         self.assertEqual(keys, {
-            "refreshIntervalSec", "enabledProviders", "barDisplayMode", "barProviders",
+            "refreshIntervalSec", "enabledProviders", "barDisplayMode", "quotaMode", "barWindow", "barWindowSecondary", "barProviders",
+            "barProviderLimits", "barShowResets", "barResetTimeFormat", "barResetDateFormat",
             "warningThreshold", "criticalThreshold", "liveAccountActivity",
-            "usageSource", "cliproxyUrl", "cliproxyKeyFile", "hideAccountEmails", "squareUsageCards", "costPriceOverrides",
+            "usageSource", "cliproxyUrl", "cliproxyKeyFile", "hideAccountEmails", "squareUsageCards", "notifyLimitThresholds", "costPriceOverrides",
             "costLocalProviders", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers",
         })
 
@@ -37,8 +38,8 @@ class ProjectContractTests(unittest.TestCase):
         self.assertTrue((ROOT / "scripts" / "model_usage_common.py").is_file())
         self.assertIn('Qt.resolvedUrl("assets/', panel)
         for name in (
-            "claude.svg", "codex.svg", "codex-light.svg", "kimi.svg",
-            "claude-bar.svg", "codex-bar.svg", "kimi-bar.svg",
+            "claude.svg", "codex.svg", "codex-light.svg", "kimi.svg", "opencode.svg",
+            "claude-bar.svg", "codex-bar.svg", "kimi-bar.svg", "opencode-bar.svg",
         ):
             self.assertTrue((ROOT / "assets" / name).is_file(), name)
         all_source = (
@@ -117,7 +118,7 @@ class ProjectContractTests(unittest.TestCase):
 
     def test_namespaced_ipc_and_no_builtin_alias_collision(self):
         panel = (ROOT / "Panel.qml").read_text()
-        self.assertIn('ipcTarget: "digitalpals.model-usage"', panel)
+        self.assertIn('ipcTarget: "janitorhead.quotatank"', panel)
         for operation in ("open", "close", "toggle", "refresh", "next"):
             self.assertIn(f"function {operation}(", panel)
         for operation in ("limits", "costs"):
@@ -140,7 +141,6 @@ class ProjectContractTests(unittest.TestCase):
         self.assertIn("model: root.percentageProviders", panel)
         self.assertIn("source: root.barIconUrl(providerChip.modelData)", panel)
         self.assertIn("colorizationColor: providerChip.contentColor", panel)
-        self.assertIn("text: providerChip.remainingText", panel)
         self.assertIn("root.handleProviderChipPress", panel)
 
     def test_account_details_are_available_in_settings(self):

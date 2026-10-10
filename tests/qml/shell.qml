@@ -81,7 +81,9 @@ ShellRoot {
     assertTrue(widget.configuring, "settings opens from the panel")
     var form = widget.settingsForm
     assertEqual(form.refreshMinutes, "60", "refresh interval is presented in minutes")
-    assertTrue(!form.alertsExpanded && !form.activityExpanded, "optional settings start collapsed")
+    assertTrue(!form.alertsExpanded && !form.refreshExpanded && !form.activityExpanded, "optional settings start collapsed")
+    var initialBarProviders = form.draft.barProviders.join(",")
+    var expectedBarProviders = initialBarProviders.split(",").filter(function (id) { return id !== "codex" }).join(",")
     form.toggleProvider("barProviders", "codex")
     form.setValue("hideAccountEmails", true)
     assertTrue(!widget.hideAccountEmails, "draft privacy change waits for Save")
@@ -89,7 +91,7 @@ ShellRoot {
     form.cancelRequested()
     assertEqual(widget.viewMode, "limits", "Cancel returns to Limits")
     widget.showSettings()
-    assertEqual(form.draft.barProviders.length, 3, "Cancel discards draft edits")
+    assertEqual(form.draft.barProviders.join(","), initialBarProviders, "Cancel discards draft edits")
     assertEqual(form.draft.hideAccountEmails, false, "Cancel discards privacy edits")
 
     form.setValue("usageSource", "cliproxy")
@@ -102,7 +104,7 @@ ShellRoot {
     form.managementKey = "synthetic-secret"
     form.setValue("refreshIntervalSec", "")
     assertTrue(!form.submit(), "empty numeric input cannot be saved")
-    assertTrue(form.alertsExpanded, "invalid interval reveals the collapsed alert settings")
+    assertTrue(form.refreshExpanded, "invalid interval reveals the collapsed refresh settings")
     form.setValue("refreshIntervalSec", "900")
     form.setValue("criticalThreshold", "80")
     assertTrue(!form.submit(), "inverted thresholds cannot be saved")
@@ -125,12 +127,12 @@ ShellRoot {
     assertEqual(mockShell.savedSettings.hideAccountEmails, true, "privacy preference is persisted")
     assertEqual(mockShell.savedId, widget.moduleName, "settings are saved to this widget only")
     assertEqual(mockShell.savedSettings.unrelatedPreference, "keep", "Save preserves unrelated settings")
-    assertEqual(mockShell.savedSettings.barProviders.join(","), "claude,kimi", "bar selection is persisted")
+    assertEqual(mockShell.savedSettings.barProviders.join(","), expectedBarProviders, "bar selection is persisted")
     assertEqual(widget.percentageProviders.length, 2, "hidden provider leaves the bar immediately")
     assertEqual(widget.providers.length, 3, "hiding from the bar retains all popup providers")
     widget.settings = JSON.parse(JSON.stringify(mockShell.savedSettings))
     widget.showSettings()
-    assertEqual(form.draft.barProviders.join(","), "claude,kimi", "reopening reads persisted selection")
+    assertEqual(form.draft.barProviders.join(","), expectedBarProviders, "reopening reads persisted selection")
     form.setValue("barProviders", [])
     form.submit()
     assertTrue(!widget.percentageMode, "hiding every chip retains the widget icon")
@@ -153,7 +155,7 @@ ShellRoot {
 
   function setup() {
     widget = loadComponent(panelUrl, {
-      moduleName: "digitalpals.model-usage",
+      moduleName: "janitorhead.quotatank",
       bar: fakeBar,
       settings: {
         enabledProviders: ["claude", "codex", "kimi"],
@@ -240,7 +242,7 @@ ShellRoot {
       assertEqual(proxyWidget.accountDisplayName({account: "secret@example.invalid"}, 2), "Account 2", "hidden label contains no account identity")
       assertTrue(proxyWidget.accountTooltip({account: "secret@example.invalid"}).indexOf("secret") < 0, "settings cannot reveal hidden account identity")
       proxyWidget.settings = Object.assign({}, proxyWidget.settings,
-        {barDisplayMode: "Percentages", barProviders: ["codex"]})
+        {barDisplayMode: "Percentages", barProviders: ["codex"], quotaMode: "Remaining"})
       proxyWidget.selectProviderId("codex")
       proxyWidget.accountActivity.providers = [{id: "codex", status: "ok", accountId: "0", lastUsedAt: 123}]
       var barLabel = namedChild(proxyWidget, "barAccountLabel")
@@ -263,8 +265,8 @@ ShellRoot {
       assertEqual(barRemaining.text, "9%", "ambiguous activity still shows the known pool quota")
     }
     if (widget) {
-      assertEqual(widget.moduleName, "digitalpals.model-usage", "moduleName injection")
-      assertEqual(widget.ipcTarget, "digitalpals.model-usage", "IPC target")
+      assertEqual(widget.moduleName, "janitorhead.quotatank", "moduleName injection")
+      assertEqual(widget.ipcTarget, "janitorhead.quotatank", "IPC target")
       assertEqual(widget.setting("missing", "fallback"), "fallback", "setting fallback")
       assertTrue(finite(widget.implicitWidth), "horizontal implicitWidth is finite")
       assertTrue(finite(widget.implicitHeight), "horizontal implicitHeight is finite")

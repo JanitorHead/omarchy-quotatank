@@ -20,7 +20,7 @@ Item {
   readonly property int refreshIntervalSec: Math.max(60, Math.min(3600,
     Math.round(Number(setting("refreshIntervalSec", 900)) || 900)))
   readonly property var enabledProviderIds: normalizedProviderIds(setting(
-    "enabledProviders", ["claude", "codex", "kimi"]))
+    "enabledProviders", ["claude", "codex", "kimi", "opencode"]))
   readonly property string usageSource: String(setting("usageSource", "direct")) === "cliproxy" ? "cliproxy" : "direct"
   readonly property string cliproxyUrl: String(setting("cliproxyUrl", "http://127.0.0.1:8317"))
   readonly property string cliproxyKeyFile: String(setting("cliproxyKeyFile", ""))
@@ -39,7 +39,7 @@ Item {
   }
 
   function normalizedProviderIds(value) {
-    var allowed = ["claude", "codex", "kimi"]
+    var allowed = ["claude", "codex", "kimi", "opencode"]
     var requested = UsageLogic.isListLike(value) ? value : allowed
     var result = []
     for (var i = 0; i < allowed.length; i++) {
@@ -97,7 +97,7 @@ Item {
     } else if (fetchProcess.timedOut) {
       fetchError = "Model usage backend timed out"
     } else if (!fetchProcess.exitSeen) {
-      fetchError = "Could not start python3 for Model Usage"
+      fetchError = "Could not start python3 for Quotatank"
     } else if (fetchProcess.lastExit !== 0) {
       fetchError = "Model usage backend exited with status " + fetchProcess.lastExit
     } else {

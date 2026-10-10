@@ -4,19 +4,22 @@
 
 ## Providers and authentication
 
-Model Usage is a monitor, not an authentication manager. Its backend code reads credentials already owned by each official CLI, performs read-only calls, and does not write authentication state. A provider CLI may continue managing its own credentials when it is started normally—for example, Codex owns the app-server process used for its account RPC.
+Quotatank is a monitor, not an authentication manager. Its backend code reads credentials already owned by each official CLI, performs read-only calls, and does not write authentication state. A provider CLI may continue managing its own credentials when it is started normally—for example, Codex owns the app-server process used for its account RPC.
 
 | Provider | Usage source | Sign-in command |
 |---|---|---|
 | Claude Code | Claude OAuth usage endpoint, including structured/scoped limits and extra usage | `claude auth login` |
 | OpenAI Codex | `codex app-server` account/rate-limit RPC in a read-only sandbox | `codex login` |
 | Kimi Code | Kimi's current `/usages` and optional `/me` endpoints | `kimi login` |
+| OpenCode Go | OpenCode's Go usage endpoint (`https://opencode.ai/zen/go/v1/usage`), read-only | `opencode auth login` (or `OPENCODE_GO_API_KEY`) |
 
 Environment overrides owned by the CLIs are honored: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`, `KIMI_CODE_BASE_URL`, and `KIMI_SHARE_DIR`.
 
+The OpenCode provider reads the key the CLI stored in `$XDG_DATA_HOME/opencode/auth.json` (`opencode-go`), or `OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY` when either is set. `OPENCODE_API_BASE_URL` overrides the endpoint and must use `https`; the key is never sent over plain HTTP. Cost history is read from the OpenCode usage database, chosen from `OPENCODE_DB` / `OPENCODE_DATABASE` or the freshest `opencode*.db` under `$XDG_DATA_HOME/opencode`, plus the Oh My Pi harness session transcripts under `${OMP_SESSIONS_DIR:-~/.omp/agent/sessions}` when that directory exists. Each Oh My Pi message is attributed to the provider it was billed to, not to OpenCode: `opencode*` → OpenCode, `openai-codex` → Codex, `anthropic` → Claude (only while `claude` is in `costLocalProviders`); other providers are not counted.
+
 ### CLIProxyAPI
 
-Open the Model Usage popup and click the **gear icon** in its upper-right corner. Select **CLIProxyAPI** under **Quota source** to discover all providers and accounts managed by [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) or [CLIProxyAPI-Rust](https://github.com/IuCC123/CLIProxyAPI-Rust). The implementation is detected automatically with the same management key. Local CLI sign-ins are not needed for this source. The default `direct` source retains the existing behavior. Click **Save** to apply your configuration.
+Open the Quotatank popup and click the **gear icon** in its upper-right corner. Select **CLIProxyAPI** under **Quota source** to discover all providers and accounts managed by [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) or [CLIProxyAPI-Rust](https://github.com/IuCC123/CLIProxyAPI-Rust). The implementation is detected automatically with the same management key. Local CLI sign-ins are not needed for this source. The default `direct` source retains the existing behavior. Click **Save** to apply your configuration.
 
 Set **CLIProxyAPI server URL** to your server address (default `http://127.0.0.1:8317`). Dashboard URLs ending in `/management.html`, management API URLs ending in `/v0/management` or `/v0/management/auth-files`, and reverse-proxy path prefixes are accepted. HTTPS certificates are verified; redirects are rejected.
 
@@ -33,17 +36,17 @@ install -d -m 700 "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/model-usage"
 Enable the source:
 
 ```bash
-omarchy bar set digitalpals.model-usage usageSource cliproxy
-omarchy bar set digitalpals.model-usage cliproxyUrl https://proxy.example.com
+omarchy bar set janitorhead.quotatank usageSource cliproxy
+omarchy bar set janitorhead.quotatank cliproxyUrl https://proxy.example.com
 ```
 
 The Go collector lists managed accounts and asks CLIProxyAPI to make read-only upstream quota calls using `$TOKEN$` substitution. Provider tokens stay on the server. All managed providers are discovered automatically, independently of the local CLI provider selection. Claude, Codex, Kimi, and Antigravity have quota lookups; other providers stay visible with an explicit unsupported-quota notice. Antigravity requires the account’s project ID. Paused accounts remain browsable without being queried. Remote servers must permit remote management access.
 
-**Limits** shows every connected account for the selected provider as a separate card, with its own account label, plan, remaining quota, and reset time. Codex defaults to the overall weekly limit, with **Codex Pro · 20×** and **Codex Pro · 5×** labels taken from the reported plan tier. A badge beside each Codex plan shows its banked manual resets, including zero; the badge is hidden when the count is unavailable. For example, three connected Codex subscriptions produce three account cards. **Show additional limits** reveals session, model-specific, and other windows. Monthly-only plans show their monthly allowance; accounts without a weekly/monthly allowance show their first reported window. Paused and failed accounts stay visible with their own status. Percentages are never added across accounts.
+**Limits** shows every connected account for the selected provider as a separate card, with its own account label, plan, remaining quota, and reset time. Below the quota history, **Tokens by model** lists every model that provider recorded, heaviest first, each row carrying a bar scaled to the heaviest model plus its token total and API estimate for the period the Costs tab is set to. Rows name the pricing source behind their estimate, and a model without a price keeps its tokens with an explicit note instead of a dollar figure. Codex defaults to the overall weekly limit, with **Codex Pro · 20×** and **Codex Pro · 5×** labels taken from the reported plan tier. A badge beside each Codex plan shows its banked manual resets, including zero; the badge is hidden when the count is unavailable. For example, three connected Codex subscriptions produce three account cards. **Show additional limits** reveals session, model-specific, and other windows. Monthly-only plans show their monthly allowance; accounts without a weekly/monthly allowance show their first reported window. Paused and failed accounts stay visible with their own status. Percentages are never added across accounts.
 
 In CLIProxyAPI mode, click a nonzero **banked resets** badge to review that account's current reset credits. The confirmation shows each reset's effect and expiry, selects the earliest expiry first (non-expiring credits last), and lets you choose another credit before clicking **Apply reset**. Account labels respect **Hide account emails**. The action spends one selected credit only on that account, then refreshes usage. Confirmations expire after two minutes and are dismissed when the configured connection changes. If the outcome is uncertain, **Retry same reset** reuses the original request identifier; closing the popup preserves that retry while the widget remains loaded. The upstream reset endpoints are internal ChatGPT APIs and may change.
 
-Provider buttons wrap to fit the panel. Failed refreshes preserve the last known reading in memory with a stale-data notice; switching servers clears those readings. At most 32 accounts per provider are checked, with four concurrent checks per provider and a shared deadline. In **Percentages** menubar mode, each provider shows only its icon and remaining quota; account names appear in the tooltip. When the last-used account is known, the percentage belongs to that account. Account activity refreshes every 15 seconds through the configured CPA Usage Keeper, independently of quota refreshes and the Costs source. Configure the Keeper URL and password in settings for the same proxy. Hover for the last recorded request time. Round-robin and concurrent requests can use different accounts, so this identifies the most recently recorded request, not a guaranteed account for the next request. Without matching activity, or when account timestamps are tied, the bar still shows the best-capacity account’s quota. The tooltip identifies this pool summary and explains that the last-used account is unknown. Failed activity refreshes retain the last-known account with a tooltip notice. Icon mode includes last-used details in its tooltip.
+Provider buttons wrap to fit the panel. Failed refreshes preserve the last known reading in memory with a stale-data notice; switching servers clears those readings. At most 32 accounts per provider are checked, with four concurrent checks per provider and a shared deadline. In **Percentages** menubar mode, each provider shows only its icon and the quota figure chosen under **Show limits as**; account names appear in the tooltip. When the last-used account is known, the percentage belongs to that account. Account activity refreshes every 15 seconds through the configured CPA Usage Keeper, independently of quota refreshes and the Costs source. Configure the Keeper URL and password in settings for the same proxy. Hover for the last recorded request time. Round-robin and concurrent requests can use different accounts, so this identifies the most recently recorded request, not a guaranteed account for the next request. Without matching activity, or when account timestamps are tied, the bar still shows the best-capacity account’s quota. The tooltip identifies this pool summary and explains that the last-used account is unknown. Failed activity refreshes retain the last-known account with a tooltip notice. Icon mode includes last-used details in its tooltip.
 
 **Hide account emails** is enabled by default in widget settings. Account cards and menubar tooltips use numbered labels (Account 1, Account 2, …), and account identities are omitted from the settings details. Turn it off and Save to show usernames/email addresses. This is a display preference; quota collection continues normally.
 
@@ -89,19 +92,19 @@ ${XDG_STATE_HOME:-~/.local/state}/omarchy/model-usage/cost-scan-cache.json
 ${XDG_STATE_HOME:-~/.local/state}/omarchy/model-usage/cost-model-rates.json
 ```
 
-`history.json` contains bounded quota percentages. The cost scan cache contains only timestamps, model names, token counters, reported cost values, SHA-256 identifiers for transcript paths, sessions, and deduplication keys, and bounded resume metadata (byte position, device/inode, hashed tail guard, and sanitized Codex parser state). It never contains prompts, responses, or tool output. The model-rate cache is a compact copy of public LiteLLM prices.
+`history.json` contains bounded quota percentages: one series per provider for the history chart and one per limit window for pacing, each kept for seven days. The cost scan cache contains only timestamps, model names, token counters, reported cost values, SHA-256 identifiers for transcript paths, sessions, and deduplication keys, and bounded resume metadata (byte position, device/inode, hashed tail guard, and sanitized Codex parser state). It never contains prompts, responses, or tool output. The model-rate cache is a compact copy of public LiteLLM prices.
 
 ## Settings
 
-Open the popup and click the **gear icon** beside Refresh to configure Model Usage. The Limits gear configures quotas and appearance; the Costs gear configures history sources and model prices. Both remain available when no providers are enabled. The fixed footer keeps **Cancel** and **Save changes** visible while scrolling. Saving writes your changes to the widget's entry in `~/.config/omarchy/shell.json` and applies them immediately; **Cancel** or Escape discards the draft.
+Open the popup and click the **gear icon** beside Refresh to configure Quotatank. The Limits gear configures quotas and appearance; the Costs gear configures history sources and model prices. Both remain available when no providers are enabled. The fixed footer keeps **Cancel** and **Save changes** visible while scrolling. Saving writes your changes to the widget's entry in `~/.config/omarchy/shell.json` and applies them immediately; **Cancel** or Escape discards the draft.
 
 Under **Limits → gear → Display**, **Square usage cards** is enabled by default for account, limit, credit, and error cards. Turn it off to follow the theme's corners. Click **Save changes** to apply it.
 
-In local CLI mode, each provider has two controls: **Monitor** enables quota checks and includes it in the popup; **Menu bar** allows its percentage chip in the bar. Choose **Provider percentages** under **Menu bar display** to show those chips. Hiding a provider from the bar keeps it available in the popup. The widget icon remains accessible when all chips are hidden, on vertical bars, or when no selected provider has quota data.
+In local CLI mode, each provider has two controls: **Monitor** enables quota checks and includes it in the popup; **Menu bar** allows its percentage chip in the bar. Choose **Provider percentages** under **Menu bar shows** to show those chips. Hiding a provider from the bar keeps it available in the popup. The widget icon remains accessible when all chips are hidden, on vertical bars, or when no selected provider has quota data.
 
 In CLIProxyAPI mode, all discovered providers are monitored automatically; the provider list controls their menu-bar visibility. The Monitor column is hidden in this mode. Choosing **Widget icon** hides the menu-bar provider controls while preserving your selections.
 
-Quota source and menu-bar display use compact dropdowns. Configured connections, optional last-used account tracking, refresh and alerts, and diagnostics sit in expandable sections. Refresh intervals are entered in minutes (1–60). Saved credentials show a **Change** action; blank replacements retain the existing secret, which is never loaded into the form. Non-secret settings are also declared in `manifest.json` and can be changed using `omarchy bar set`.
+Quota source and menu-bar display use compact dropdowns. Configured connections, optional last-used account tracking, alerts (notifications and thresholds), refresh, and diagnostics sit in expandable sections; a collapsed **Alerts** or **Refresh** header shows its current values. Refresh intervals are entered in minutes (1–60). Saved credentials show a **Change** action; blank replacements retain the existing secret, which is never loaded into the form. Non-secret settings are also declared in `manifest.json` and can be changed using `omarchy bar set`.
 
 Costs settings keeps local history switches visible and collapses **Remote T3 servers**, **Custom prices**, and **Last scan**. Adding a server or price opens and focuses its editor; validation opens the relevant section and focuses the field needing attention.
 
@@ -116,12 +119,20 @@ In **Costs → gear → Custom prices**, add the exact model ID and its input/ou
 | `cliproxyKeyFile` | empty | Set automatically when saving a key in the GUI; can also point to an existing private key file |
 | `hideAccountEmails` | `true` | Replace account identities with numbered labels and hide them in settings |
 | `squareUsageCards` | `true` | Use square corners for cards in Limits; otherwise follow the theme |
+| `notifyLimitThresholds` | `true` | Send a desktop notification (`notify-send`) when a limit moves into the warning or critical threshold. Recovering re-arms the next notification |
 | `barDisplayMode` | `Percentages` | `Icon` or compact `Percentages` |
+| `quotaMode` | `Used` | `Used` or `Remaining`: which side of each allowance cards and chips report. Thresholds always gate on what is left |
+| `barWindow` | `auto` | Which reported limit supplies each chip's percentage: `auto` (lowest left), `session`/`5h`, `weekly`/`7d`, or `monthly`/`30d`. A provider that does not report the chosen window falls back to its most restrictive one |
+| `barWindowSecondary` | `none` | Optional second limit stacked under the first in each chip: `session`/`5h`, `weekly`/`7d`, or `monthly`/`30d`. `none` keeps one line. The second line has no fallback: a provider that does not report that window shows `—`. Warning colour considers both lines |
+| `barProviderLimits` | `"{}"` | JSON string managed by Per-provider bar limits in Display settings. Maps provider IDs to a `top` and/or `bottom` limit using the same values as `barWindow` and `barWindowSecondary`. A missing slot inherits the global value |
+| `barShowResets` | `false` | Append each chip's limit reset. Windows of a day or less (5h) show a time; longer windows (weekly, monthly) show a date |
+| `barResetTimeFormat` | `24h` | Time format for limits that reset within a day: `24h` (14:30) or `12h` (2:30 PM) |
+| `barResetDateFormat` | `DD/MM` | Date format for weekly and monthly resets: `DD/MM` (22/04), `MM/DD` (04/22) or `D MMM` (22 Apr) |
 | `barProviders` | all three | Enabled providers allowed to show percentage chips; independent of popup visibility |
-| `warningThreshold` | `25` | Mark urgent at or below this percentage remaining |
-| `criticalThreshold` | `10` | Critical threshold in percentage remaining |
+| `warningThreshold` | `25` | Mark urgent at or below this percentage left |
+| `criticalThreshold` | `10` | Critical threshold in percentage left |
 | `costPriceOverrides` | `"{}"` | JSON string managed by Custom model prices; exact IDs mapped to USD-per-million rates |
-| `costLocalProviders` | `["claude", "codex"]` | Local cost sources, independent of quota providers |
+| `costLocalProviders` | `["claude", "codex"]` | Local cost sources (`claude`, `codex`, `opencode`), independent of quota providers |
 | `costKeeperUrl` | empty | Optional Keeper URL for last-used quota account activity |
 | `costT3Servers` | `"[]"` | T3 server configurations managed in Costs settings; credentials are private file references |
 | `costKeeperPasswordFile` | empty | Private Keeper password for quota account activity (legacy setting name) |
@@ -129,14 +140,29 @@ In **Costs → gear → Custom prices**, add the exact model ID and its input/ou
 Examples:
 
 ```bash
-omarchy bar set digitalpals.model-usage refreshIntervalSec 300 --json
-omarchy bar set digitalpals.model-usage enabledProviders '["claude", "codex"]' --json
-omarchy bar set digitalpals.model-usage barDisplayMode Percentages
-omarchy bar set digitalpals.model-usage warningThreshold 20 --json
-omarchy bar set digitalpals.model-usage criticalThreshold 5 --json
+omarchy bar set janitorhead.quotatank refreshIntervalSec 300 --json
+omarchy bar set janitorhead.quotatank enabledProviders '["claude", "codex", "opencode"]' --json
+omarchy bar set janitorhead.quotatank barDisplayMode Percentages
+omarchy bar set janitorhead.quotatank quotaMode Remaining
+omarchy bar set janitorhead.quotatank barWindow weekly
+omarchy bar set janitorhead.quotatank barProviderLimits '{"opencode":{"top":"weekly"}}' --json
+omarchy bar set janitorhead.quotatank warningThreshold 20 --json
+omarchy bar set janitorhead.quotatank criticalThreshold 5 --json
 ```
 
-New installations use `Percentages`: one compact provider-logo chip per provider with meaningful limits, followed by its binding window's remaining percentage. Clicking a chip opens that provider directly. Left and right bars automatically fall back to the icon presentation so the widget does not become excessively tall.
+New installations use `Percentages`: one compact provider-logo chip per provider with meaningful limits, followed by its binding window's percentage, shown as used or left per **Show limits as**. **Bar limit (top)** pins which reported limit every chip shows — lowest left (auto), 5-hour, 7-day, or monthly — and it drives the chip's warning colour and tooltip. A pinned limit tags each stacked line with its period (5h, 7d, 30d). A provider that does not report the chosen window falls back to its most restrictive one instead of losing its percentage. Clicking a chip opens that provider directly. Left and right bars automatically fall back to the icon presentation so the widget does not become excessively tall.
+
+A provider whose last refresh failed stays in the bar. Its chip shows a short reason in place of a figure: `rate limited`, `sign in`, `timeout`, `offline`, `bad data`, or `error`. Hover the chip for the full message and the next step. A sign-in failure names the command to run; other failures retry on the next automatic refresh.
+
+Per-provider bar limits override the global top and bottom limits for one provider only; providers without an override keep the global values. **Show reset day in bar** appends when each chip's limit resets, so a weekly limit can show its date instead of waiting for a monthly window to reset. It is off by default. The 5-hour limit shows a time and weekly/monthly limits show a date; **Reset time format** and **Reset date format** choose how each is written.
+
+The **Default** choice in each provider's bar-limit selectors names the global value it inherits, for example `Global: 5-hour (session)`. Any other choice overrides it for that provider only.
+
+Each limit card with usage draws a pace tick on its meter at the share of the window that has already passed. Under each card, a status line gives the projection from the recent rate (`Runs out in …` when it exhausts the limit before reset, or `Lasts until reset`). The recent rate is an exponentially weighted average of the window's own samples with a two-hour half-life, so use from days earlier does not count. When nothing has risen for an hour the status reads `Idle <time>` and makes no projection; when the newest sample is over an hour old it reads `No recent data`; during the first ten minutes of observation it reads `Collecting data`. The status line also gives the reason when there is no tick yet: `not reported`, `starts after 2% of the window`, or `no usage yet`. One **Pacing** row under all limit cards explains these; its ⓘ badge shows the explanation on hover, and a click keeps it open until clicked again. The projection assumes the recent rate continues; bursts inside a window are not predicted.
+
+Hover the tick to read the used and expected shares, whether usage is ahead or behind by how many points, and the projection at the recent rate. Usage past the tick is shaded to show the excess over pace.
+
+Refresh intervals above one hour mark every window `No recent data`, because the recent rate needs a sample at least hourly. History keeps each limit window's samples for seven days, and idle durations are measured within that span. The first run after this change starts history empty, so pacing shows `Collecting data` until ten minutes of samples exist.
 
 ## Troubleshooting
 
@@ -150,6 +176,8 @@ New installations use `Percentages`: one compact provider-logo chip per provider
 
 **History is empty.** History begins after the first successful limit fetch. Errors are not recorded as zero usage.
 
+**A provider chip shows an error.** Hover the chip. `sign in` means the stored sign-in is expired or missing: run the command shown in the tooltip, then refresh. `rate limited` comes from the provider; the next automatic refresh retries it. The chip stays until a refresh succeeds.
+
 **Costs are unavailable but tokens appear.** The transcript was readable but its historical model could not be matched to a price, or the LiteLLM table has never been downloaded successfully. Connect and refresh Costs, configure an exact-model custom price, or use the Tokens metric; unknown prices are intentionally not displayed as zero. Invalid custom-price settings produce an error and preserve the last good result rather than silently falling back to different prices.
 
 **The first Costs scan is slower.** A cold scan streams recent transcript files. Later scans reuse unchanged files and read only the appended bytes of growing sessions. Replaced, shortened, or detected rewritten files restart from the beginning. The first scan after this upgrade rebuilds old scan and price caches; stale flattened prices are never reused.
@@ -158,7 +186,7 @@ New installations use `Percentages`: one compact provider-logo chip per provider
 
 **The backend cannot start.** Python 3.10 or newer must be available as `python3`. The backend uses only the Python standard library.
 
-**I see two AI widgets.** `digitalpals.model-usage` and `omarchy.agents` are intentionally independent. Disable whichever one you do not want.
+**I see two AI widgets.** `janitorhead.quotatank` and `omarchy.agents` are intentionally independent. Disable whichever one you do not want.
 
 ## Rust proxy support
 

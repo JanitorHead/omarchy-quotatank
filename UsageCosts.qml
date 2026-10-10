@@ -48,30 +48,6 @@ Item {
     return Qt.rgba(color.r, color.g, color.b, opacity)
   }
 
-  function formatUsd(value) {
-    if (value === null || value === undefined || !isFinite(Number(value))) return "—"
-    var amount = Number(value)
-    if (Math.abs(amount) > 0 && Math.abs(amount) < 0.01) return "$" + amount.toFixed(4)
-    return "$" + amount.toLocaleString(Qt.locale("en_US"), "f", 2)
-  }
-
-  function formatTokens(value) {
-    var amount = Number(value)
-    if (!isFinite(amount)) return "—"
-    var absolute = Math.abs(amount)
-    if (absolute >= 1000000000000) return trimNumber(amount / 1000000000000) + "T"
-    if (absolute >= 1000000000) return trimNumber(amount / 1000000000) + "B"
-    if (absolute >= 1000000) return trimNumber(amount / 1000000) + "M"
-    if (absolute >= 1000) return trimNumber(amount / 1000) + "K"
-    return Math.round(amount).toString()
-  }
-
-  function trimNumber(value) {
-    var absolute = Math.abs(value)
-    var digits = absolute >= 100 ? 0 : (absolute >= 10 ? 1 : 2)
-    return value.toFixed(digits).replace(/\.0+$/, "")
-  }
-
   function priceCoverage(row) {
     if (!row || Number(row.records) <= 0) return 1
     return Math.max(0, Math.min(1, Number(row.pricedRecords || 0) / Number(row.records)))
@@ -107,7 +83,8 @@ Item {
 
   function primaryValue(row) {
     if (row && (row.status === "missing" || row.status === "failed" || row.historyStatus === "unavailable")) return "—"
-    return metric === "tokens" ? formatTokens(row ? row.totalTokens : 0) : formatUsd(row ? row.costUsd : null)
+    return metric === "tokens" ? UsageLogic.formatTokens(row ? row.totalTokens : 0)
+      : UsageLogic.formatUsd(row ? row.costUsd : null)
   }
 
   function providerMetaText(row) {
@@ -115,7 +92,7 @@ Item {
     if (row.status === "missing" || row.status === "failed")
       return String(row.message || "Usage coverage unavailable")
     if (row.historyStatus === "unavailable") return "History unavailable"
-    return formatTokens(row.totalTokens) + " tokens"
+    return UsageLogic.formatTokens(row.totalTokens) + " tokens"
       + (Number(row.records || 0) > 0
         ? " · " + pricingPercent(row) + " of responses priced" : "")
   }
@@ -540,12 +517,12 @@ Item {
 
         Repeater {
           model: [
-            { label: "Processed", value: root.formatTokens(root.totals.totalTokens) },
-            { label: "Cached input", value: root.formatTokens(root.totals.cachedInputTokens) },
-            { label: "Uncached input", value: root.formatTokens(root.totals.uncachedInputTokens) },
-            { label: "Output", value: root.formatTokens(root.totals.outputTokens) },
-            { label: "Reasoning output", value: root.formatTokens(root.totals.reasoningTokens) },
-            { label: "Cache savings", value: root.formatUsd(root.totals.cacheSavingsUsd) }
+            { label: "Processed", value: UsageLogic.formatTokens(root.totals.totalTokens) },
+            { label: "Cached input", value: UsageLogic.formatTokens(root.totals.cachedInputTokens) },
+            { label: "Uncached input", value: UsageLogic.formatTokens(root.totals.uncachedInputTokens) },
+            { label: "Output", value: UsageLogic.formatTokens(root.totals.outputTokens) },
+            { label: "Reasoning output", value: UsageLogic.formatTokens(root.totals.reasoningTokens) },
+            { label: "Cache savings", value: UsageLogic.formatUsd(root.totals.cacheSavingsUsd) }
           ]
 
           delegate: Column {
@@ -658,7 +635,7 @@ Item {
                 anchors.top: modelName.bottom
                 anchors.topMargin: Style.spacing.labelGap
                 text: String(parent.modelData.providerName || "") + " · "
-                  + root.formatTokens(parent.modelData.totalTokens) + " tokens"
+                  + UsageLogic.formatTokens(parent.modelData.totalTokens) + " tokens"
                   + (Number(parent.modelData.customPricedRecords || 0) > 0 ? " · custom prices"
                     : Number(parent.modelData.basePricedRecords || 0) > 0 ? " · base rates"
                     : parent.modelData.costSource === "providerReported" ? " · reported cost" : "")

@@ -1,12 +1,35 @@
 # Estimated-cost contract
 
 `scripts/cost-fetch.py` writes schema-v1 JSON. Costs combines local Codex/Claude
-history selected by `--providers claude,codex` with enabled servers in
+history selected by `--providers claude,codex,opencode` with enabled servers in
 `--t3-servers`. The latter is a JSON array of at most four objects:
 `{"id":"home","name":"Home T3","url":"https://t3.example","tokenFile":"/private/token","enabled":true}`.
 `costLocalProviders` and `costT3Servers` are independent of quota settings.
 Legacy `costSource` and `costLocalBackfill` settings are ignored. Keeper is used
 only by quota account activity, through `scripts/keeper_client.py`.
+
+The `opencode` local source reads the OpenCode usage database
+(`OPENCODE_DB` / `OPENCODE_DATABASE`, otherwise the freshest `opencode*.db` —
+the write-ahead log is the clock — under `$XDG_DATA_HOME/opencode`). The Oh My
+Pi harness session transcripts (`${OMP_SESSIONS_DIR:-~/.omp/agent/sessions}`,
+one JSONL transcript per session) form a separate `omp` source. Each message
+counts under the provider it was billed to: `opencode*` → OpenCode,
+`openai-codex` → Codex, `anthropic` → Claude; other providers are dropped.
+Assistant rows recorded by OpenCode's own
+providers are mapped to `uncached_input` (`input`), `cached_input` (cache
+read), `cache_creation` (cache write), and `output`. The CLI database reports
+reasoning beside output, so `output` plus `reasoning` is the output total; the
+harness reports reasoning inside output, so its `output` is used as-is and
+`reasoningTokens` stays informational. Rows are deduplicated by their message
+id, and the database is queried read-only with `query_only` set; no row content
+outside ids, model, timestamp, and the token split leaves SQLite. OpenCode's own
+recorded cost is kept and used, because the CLI priced each response with the
+rates of the provider that served it — the only reliable rate for model IDs the
+public table cannot disambiguate (`deepseek-v4.1-flash`, for instance, exists
+there under two vendors with different prices, so the bare id stays
+unresolvable). A custom price still wins over the recorded cost, and a recorded
+zero is treated as "no rate" rather than as a free model, so unknown pricing
+never becomes a `$0.00` claim.
 
 `CostBackend.qml` scans on demand, retains same-source results on process failure,
 and clears results when the selected folders or server configuration changes.

@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Ui as Ui
 
 // Omarchy-native segmented quota meter. Every segment is a single track item;
 // only the boundary fragment is overlaid, so the strip is not rendered twice.
@@ -15,6 +16,17 @@ Item {
   property int blockWidth: Math.max(2, Style.space(5))
   property int blockGap: Math.max(1, Style.space(2))
   property real animatedValue: Math.max(0, Math.min(1, value))
+  // Pace tick: a centred mark on the block at `markValue` (0-1). Negative hides it.
+  property real markValue: -1
+  property color markColor: Color.foreground
+  // Usage past the tick is shaded so the excess over pace reads at a glance.
+  property bool markAhead: false
+  // Hover text for the tick; empty disables it.
+  property string markTooltip: ""
+  readonly property int tickOvershoot: Style.space(2)
+  readonly property real tickX: root.markBlock * root.pitch + Math.floor((root.blockWidth - 2) / 2)
+  readonly property color aheadColor: Qt.rgba(root.fillColor.r, root.fillColor.g, root.fillColor.b, 0.4)
+  readonly property int markBlock: Math.min(root.blockCount - 1, Math.floor(Math.max(0, root.markValue) * root.blockCount))
 
   readonly property int pitch: blockWidth + blockGap
   readonly property int blockCount: Math.max(1, Math.floor((width + blockGap) / pitch))
@@ -23,7 +35,7 @@ Item {
   readonly property real boundaryFraction: filledBlocks - completeBlocks
 
   implicitHeight: Math.max(Style.space(8), Math.round(Style.spacing.controlHeight * 0.3))
-  clip: true
+  clip: false
 
   Behavior on animatedValue {
     NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
@@ -38,7 +50,7 @@ Item {
       width: root.blockWidth
       height: root.height
       radius: 0
-      color: index < root.completeBlocks ? root.fillColor : root.trackColor
+      color: index < root.completeBlocks ? (root.markAhead && index > root.markBlock ? root.aheadColor : root.fillColor) : root.trackColor
     }
   }
 
@@ -48,6 +60,50 @@ Item {
     width: Math.round(root.blockWidth * root.boundaryFraction)
     height: root.height
     radius: 0
-    color: root.fillColor
+    color: root.markAhead && root.completeBlocks > root.markBlock ? root.aheadColor : root.fillColor
+  }
+
+  // Pace tick: a cut through filled blocks, with caps above and below so it reads on any fill.
+  Rectangle {
+    visible: root.markValue >= 0
+    x: root.tickX
+    width: 2
+    height: root.height
+    radius: 0
+    color: root.markBlock < root.completeBlocks ? Color.background : root.markColor
+  }
+
+  Rectangle {
+    visible: root.markValue >= 0
+    x: root.tickX
+    y: -root.tickOvershoot
+    width: 2
+    height: root.tickOvershoot
+    radius: 0
+    color: root.markColor
+  }
+
+  Rectangle {
+    visible: root.markValue >= 0
+    x: root.tickX
+    y: root.height
+    width: 2
+    height: root.tickOvershoot
+    radius: 0
+    color: root.markColor
+  }
+
+  MouseArea {
+    id: tickMouse
+    anchors.fill: parent
+    anchors.topMargin: -root.tickOvershoot
+    anchors.bottomMargin: -root.tickOvershoot
+    hoverEnabled: true
+    readonly property bool onTick: root.markValue >= 0 && containsMouse && Math.abs(mouseX - (root.tickX + 1)) <= root.pitch / 2
+  }
+
+  Ui.PanelToolTip {
+    visible: tickMouse.onTick && root.markTooltip !== ""
+    text: root.markTooltip
   }
 }
