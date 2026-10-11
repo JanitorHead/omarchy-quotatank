@@ -1,12 +1,12 @@
 # Release checklist
 
-1. Update `manifest.json`, `CHANGELOG.md`, and `COMPATIBILITY.md` together.
+1. Update `manifest.json` and `CHANGELOG.md` together.
 2. Run `./tests/run` from the development checkout.
 3. Create a clean archive or clone and run `omarchy plugin validate` against it.
    The packaged tree must contain no symlinks.
 4. Smoke-test Limits and Costs with each available provider account. Record any
-   provider that could only be fixture-tested in `COMPATIBILITY.md`.
-5. Refresh the README screenshots under `docs/model-usage-*.png` when visible UI
+   provider that could only be fixture-tested. Name it in the changelog entry.
+5. Refresh the README screenshots under `docs/screenshots/*.png` when visible UI
    changes. Use fixture data or owner-approved captures with account identities
    hidden. Crop to the widget; never publish unrelated desktop content or account
    tooltips. Label fixture examples in the README.

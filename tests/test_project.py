@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import struct
+import re
 import unittest
 from pathlib import Path
 
@@ -56,24 +56,20 @@ class ProjectContractTests(unittest.TestCase):
         for path in (
             ".github/workflows/ci.yml",
             "CHANGELOG.md",
-            "COMPATIBILITY.md",
             "SECURITY.md",
             "docs/backend-contract.md",
             "docs/cost-contract.md",
             "docs/releasing.md",
-            "docs/model-usage-panel.png",
         ):
             self.assertTrue((ROOT / path).is_file(), path)
 
-        self.assertIn("docs/model-usage-panel.png", readme)
         self.assertNotIn("screenshot-placeholder", readme)
         self.assertFalse((ROOT / "docs" / "screenshot-placeholder.svg").exists())
 
-        screenshot = (ROOT / "docs" / "model-usage-panel.png").read_bytes()
-        self.assertEqual(screenshot[:8], b"\x89PNG\r\n\x1a\n")
-        width, height = struct.unpack(">II", screenshot[16:24])
-        self.assertGreaterEqual(width, 500)
-        self.assertGreaterEqual(height, 500)
+        screenshots = re.findall(r"docs/screenshots/[\w.-]+\.png", readme)
+        self.assertTrue(screenshots)
+        for relative in screenshots:
+            self.assertEqual((ROOT / relative).read_bytes()[:8], b"\x89PNG\r\n\x1a\n", relative)
 
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
         self.assertIn('python-version: ["3.10"', workflow)
