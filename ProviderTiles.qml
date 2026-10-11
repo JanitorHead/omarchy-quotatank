@@ -120,23 +120,28 @@ Flow {
             font.bold: true
           }
 
+          // The figure shrinks to fit a narrow tile; the unit shows only when there is room beside it.
           Text {
             id: figureText
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            width: tile.modelData.failed ? parent.width : implicitWidth
+            width: parent.width
             text: tile.modelData.figure
             color: tile.figureColor
             font.family: root.fontFamily
             font.pixelSize: tile.modelData.failed ? Style.font.bodySmall : Style.font.heading
             font.bold: true
+            fontSizeMode: tile.modelData.failed ? Text.FixedSize : Text.HorizontalFit
+            minimumPixelSize: Style.font.bodySmall
             elide: Text.ElideRight
           }
 
           Text {
+            id: unitText
             visible: !tile.modelData.failed && tile.modelData.unit !== ""
-            anchors.left: figureText.right
-            anchors.leftMargin: Style.spacing.sm
+              && figureText.contentWidth + Style.spacing.sm + implicitWidth <= parent.width
+            anchors.left: parent.left
+            anchors.leftMargin: figureText.contentWidth + Style.spacing.sm
             anchors.baseline: figureText.baseline
             text: tile.modelData.unit
             color: Qt.darker(root.foreground, 1.55)
