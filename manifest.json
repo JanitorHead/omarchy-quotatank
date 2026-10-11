@@ -94,7 +94,7 @@
         "type": "string",
         "label": "OpenRouter key file",
         "defaultValue": "",
-        "description": "Managed automatically when you save an OpenRouter key in settings. A regular API key shows key limits and spend; a management key also shows the account balance. OPENROUTER_API_KEY in the environment takes precedence."
+        "description": "Managed automatically when you save an OpenRouter key in settings. An API key shows the account balance, the key's limits, and spend. OPENROUTER_API_KEY in the environment takes precedence."
       },
       {
         "key": "hideAccountEmails",

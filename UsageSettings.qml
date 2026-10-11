@@ -517,7 +517,7 @@ Column {
       onEdited: root.errorText = ""
       onRevealRequested: function(item) { root.revealRequested(item) }
     }
-    Hint { text: "An API key shows its spending limit and spend. A management key also shows the account balance. The key is saved privately on this device; OPENROUTER_API_KEY in the environment takes precedence." }
+    Hint { text: "Any OpenRouter API key shows the account balance, the key's spending limit, and spend. The key is saved privately on this device; OPENROUTER_API_KEY in the environment takes precedence." }
     Ui.Button {
       objectName: "openrouterKeysLink"
       text: "Create a key on OpenRouter ↗"

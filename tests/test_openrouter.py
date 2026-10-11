@@ -87,19 +87,37 @@ class FetchTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_regular_key_never_asks_for_the_balance(self):
-        calls = []
-
+    def test_regular_key_reads_the_balance_when_allowed(self):
         def fake(url, headers, timeout):
-            calls.append(url)
             self.assertEqual(headers["Authorization"], "Bearer sk-or-synthetic")
-            return key_data(limit=10, limit_remaining=4, limit_reset="daily")
+            if url.endswith("/key"):
+                return key_data()
+            return {"data": {"total_credits": 10, "total_usage": 2.5}}
 
         with mock.patch.object(usage, "http_json", side_effect=fake):
             result = usage.fetch_openrouter(1)
-        self.assertEqual(calls, [usage.OPENROUTER_API_BASE + "/key"])
+        self.assertEqual(result["plan"], "API key")
+        self.assertEqual(result["credits"]["spendable"], 7.5, "an unlimited key still shows the account balance")
+        self.assertEqual(result["notice"], "")
+
+    def test_refused_balance_keeps_the_key_limit_and_explains(self):
+        def limited(url, headers, timeout):
+            if url.endswith("/credits"):
+                raise usage.ProviderFailure("expired", "403")
+            return key_data(limit=10, limit_remaining=4, limit_reset="daily")
+
+        def unlimited(url, headers, timeout):
+            if url.endswith("/credits"):
+                raise usage.ProviderFailure("expired", "403")
+            return key_data()
+
+        with mock.patch.object(usage, "http_json", side_effect=limited):
+            result = usage.fetch_openrouter(1)
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["credits"]["spendable"], 4)
+        with mock.patch.object(usage, "http_json", side_effect=unlimited):
+            result = usage.fetch_openrouter(1)
+        self.assertIn("management key", result["notice"], "an unlimited key without a balance says what to do")
 
     def test_management_key_reads_the_balance(self):
         def fake(url, headers, timeout):

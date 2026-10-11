@@ -12,7 +12,7 @@ Quotatank is a monitor, not an authentication manager. Its backend code reads cr
 | OpenAI Codex | `codex app-server` account/rate-limit RPC in a read-only sandbox | `codex login` |
 | Kimi Code | Kimi's current `/usages` and optional `/me` endpoints | `kimi login` |
 | OpenCode Go | OpenCode's Go usage endpoint (`https://opencode.ai/zen/go/v1/usage`), read-only | `opencode auth login` (or `OPENCODE_GO_API_KEY`) |
-| OpenRouter | OpenRouter's `GET /api/v1/key` and, for management keys, `GET /api/v1/credits`, read-only | Key saved under **Limits → gear → OpenRouter** (or `OPENROUTER_API_KEY`) |
+| OpenRouter | OpenRouter's `GET /api/v1/key` and `GET /api/v1/credits`, read-only | Key saved under **Limits → gear → OpenRouter** (or `OPENROUTER_API_KEY`) |
 
 Environment overrides owned by the CLIs are honored: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`, `KIMI_CODE_BASE_URL`, and `KIMI_SHARE_DIR`.
 
@@ -26,7 +26,7 @@ OpenRouter is measured in money as well as limits:
 
 - **Spending limits that reset** become ordinary limit cards with a pace tick, projection, and percentage alerts: the key's own limit (`limit_reset` daily, weekly, or monthly; days and months are UTC, weeks start Monday), guardrail and workspace budgets, and free-model daily requests once any are used or on a free-tier key. A key limit without a reset has a card but no pace.
 - **Can spend now** is the lowest of the account balance and every limit's remaining allowance. It leads the OpenRouter tile, its chip (`$74.00`, with the tightest limit's percentage stacked below), and the headline (`$74.00 left · lasts about 8 weeks`, at this UTC week's average daily spend).
-- **Balance** needs a management key: a regular API key cannot read the account's purchased and used credits, so the card then says **Can spend** and shows the key limit's allowance. Today's, this week's, and this month's spend come from either key.
+- **Balance** comes from `GET /api/v1/credits`. OpenRouter documents it for management keys, but regular API keys can read it as well; if OpenRouter refuses a key, the card says **Can spend** and shows the key limit's allowance, and an unlimited key explains that a management key adds the balance. Today's, this week's, and this month's spend come from either key.
 
 **Low balance** alerts use dollars, not percentages: **Alerts → Warn at or below ($)** (default `$5`) and **Critical at or below ($)** (default `$1`) color the chip, tile, and card and send a desktop notification when the amount crosses them. The money meter always shows what is left, whatever **Show limits as** says, because the figure beside it is always an amount left.
 

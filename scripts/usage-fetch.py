@@ -1132,17 +1132,15 @@ def fetch_openrouter(timeout: float, key_file: Path | None = None) -> dict[str, 
         except ProviderFailure as exc:
             if exc.kind != "expired":
                 raise
-        # Only a management key may read the account balance; a regular key would get 403.
-        is_management = isinstance(key_payload, dict) and isinstance(key_payload.get("data"), dict) \
-            and key_payload["data"].get("is_management_key") is True
-        if key_payload is None or is_management:
-            try:
-                credits_payload = http_json(OPENROUTER_API_BASE + "/credits", headers, timeout)
-            except ProviderFailure as exc:
-                if key_payload is not None and exc.kind == "expired":
-                    credits_payload = None
-                else:
-                    raise
+        # OpenRouter documents /credits as management-key only, but regular keys can read it too.
+        # Always ask; a refusal (401/403) leaves the key's own limits and spend.
+        try:
+            credits_payload = http_json(OPENROUTER_API_BASE + "/credits", headers, timeout)
+        except ProviderFailure as exc:
+            if key_payload is not None and exc.kind == "expired":
+                credits_payload = None
+            else:
+                raise
         windows, credits, plan = parse_openrouter(key_payload, credits_payload, time.time())
     except ProviderFailure as exc:
         if exc.kind == "expired":
@@ -1151,8 +1149,8 @@ def fetch_openrouter(timeout: float, key_file: Path | None = None) -> dict[str, 
 
     result = base_provider(provider_id)
     result.update(plan=plan, source="OpenRouter API", windows=windows, credits=credits)
-    if credits is None and not windows:
-        result["notice"] = "This key has no limit, and only a management key can read the account balance."
+    if credits is None or credits.get("spendable") is None:
+        result["notice"] = "OpenRouter did not share the account balance with this key, and the key has no spending limit. Save a management key to see the balance."
     return result
 
 
