@@ -15,7 +15,6 @@
   },
   "barWidget": {
     "displayName": "Quotatank",
-    "description": "AI subscription quotas from local CLIs, Fusebox, or CLIProxyAPI, per-account limits and resets, and combined Codex/Claude token history and API cost estimates from local and T3 Code sources.",
     "category": "AI",
     "defaultSection": "right",
     "allowMultiple": false,

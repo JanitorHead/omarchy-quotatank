@@ -8,6 +8,8 @@ Quotatank puts your AI subscription limits in the Omarchy menu bar: Claude Code,
 
 ![Quotatank limits for Claude Code with provider colors enabled](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/limits-brand.png)
 
+![Quotatank limits in four Omarchy themes: Tokyo Night, Catppuccin, Gruvbox, and Nord](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/themes.png)
+
 ## Features
 
 - **Limits per provider:** session, weekly, and model-specific windows with reset countdowns, pacing, and warning colors.
