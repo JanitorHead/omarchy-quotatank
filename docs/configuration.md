@@ -25,10 +25,10 @@ OpenRouter has no CLI sign-in and is off by default. Turn on its **Monitor** swi
 OpenRouter is measured in money as well as limits:
 
 - **Spending limits that reset** become ordinary limit cards with a pace tick, projection, and percentage alerts: the key's own limit (`limit_reset` daily, weekly, or monthly; days and months are UTC, weeks start Monday), guardrail and workspace budgets, and free-model daily requests once any are used or on a free-tier key. A key limit without a reset has a card but no pace.
-- **Can spend now** is the lowest of the account balance and every limit's remaining allowance. It leads the OpenRouter tile, its chip (`$74.00`, with the tightest limit's percentage stacked below), and the headline (`$74.00 left · lasts about 8 weeks`, at this UTC week's average daily spend).
+- **Can spend now** is the lowest of the account balance and every limit's remaining allowance. It leads the OpenRouter tile, its chip (with the tightest limit's percentage stacked below), and the headline (`$74.00 left · lasts about 8 weeks`, at this UTC week's average daily spend), shown as used or left per **Show limits as**.
 - **Balance** comes from `GET /api/v1/credits`. OpenRouter documents it for management keys, but regular API keys can read it as well; if OpenRouter refuses a key, the card says **Can spend** and shows the key limit's allowance, and an unlimited key explains that a management key adds the balance. Today's, this week's, and this month's spend come from either key.
 
-**Low balance** alerts use dollars, not percentages: **Alerts → Warn at or below ($)** (default `$5`) and **Critical at or below ($)** (default `$1`) color the chip, tile, and card and send a desktop notification when the amount crosses them. The money meter always shows what is left, whatever **Show limits as** says, because the figure beside it is always an amount left.
+**Low balance** alerts use dollars, not percentages: **Alerts → Warn at or below ($)** (default `$5`) and **Critical at or below ($)** (default `$1`) color the chip, tile, and card and send a desktop notification when the amount crosses them. Money follows **Show limits as** like every percentage: under `Used`, the tile, chip, headline, and **Balance** card show what the binding allowance has spent (`$73.42 of $75.00 used`, against the purchased balance or the key limit, whichever holds back spending); under `Remaining`, what can still be spent (`$1.58 left`). Low-balance thresholds are always amounts left, and the chip tooltip gives both.
 
 ### CLIProxyAPI
 

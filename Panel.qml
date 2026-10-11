@@ -114,28 +114,14 @@ Ui.Panel {
     return UsageLogic.moneySeverity(UsageLogic.spendable(provider), creditWarningUsd, creditCriticalUsd)
   }
 
-  // Share of a money provider's allowance that is left, as a fuel gauge: the balance against what was
-  // purchased, or the tightest spending limit if lower. Money figures always read "left", so the
-  // meter does too, whatever Show limits as says. Null when neither is known.
-  function moneyShare(provider) {
-    var credits = provider && provider.credits
-    var left = null
-    if (credits && Number(credits.total) > 0 && credits.remaining !== null && credits.remaining !== undefined)
-      left = clamp(Number(credits.remaining) / Number(credits.total) * 100, 0, 100)
-    var tightest = UsageLogic.minRemaining(provider)
-    if (tightest !== null && (left === null || tightest < left)) left = tightest
-    return left
-  }
-
   // One overview tile: logo, short name, the most pressing figure on the chosen side, and a mini
-  // meter. Money providers show what can still be spent. A failed refresh shows its short reason.
+  // meter. Money providers show dollars on that side too. A failed refresh shows its short reason.
   function providerTile(provider) {
     var id = String(provider.id)
     var failed = String(provider.status) === "error"
-    var money = failed ? null : UsageLogic.spendable(provider)
+    var money = failed ? null : UsageLogic.moneyView(provider, quotaMode)
     var remaining = failed ? null : UsageLogic.minRemaining(provider)
     var shown = remaining === null ? null : (quotaMode === "Remaining" ? remaining : UsageLogic.usedFromRemaining(remaining))
-    var share = money === null ? null : moneyShare(provider)
     var shortNames = { claude: "Claude", codex: "Codex", kimi: "Kimi", opencode: "OpenCode" }
     return {
       value: id,
@@ -143,10 +129,10 @@ Ui.Panel {
       name: String(provider.name || id),
       iconUrl: barIconUrl(provider),
       figure: failed ? UsageLogic.errorReasonLabel(provider.errorKind)
-        : money !== null ? UsageLogic.formatUsd(money)
+        : money !== null ? UsageLogic.formatUsd(money.amount)
         : (shown === null ? "—" : UsageLogic.formatPercent(shown) + "%"),
-      unit: money !== null ? "left" : shown === null ? "" : (quotaMode === "Remaining" ? "left" : "used"),
-      fill: money !== null ? (share === null ? 0 : share / 100) : shown === null ? 0 : shown / 100,
+      unit: money !== null ? money.unit : shown === null ? "" : (quotaMode === "Remaining" ? "left" : "used"),
+      fill: money !== null ? (money.share === null ? 0 : money.share / 100) : shown === null ? 0 : shown / 100,
       alert: providerNeedsAttention(provider),
       failed: failed
     }
@@ -196,7 +182,10 @@ Ui.Panel {
       var runway = UsageLogic.moneyRunway(money, spend.weekly, nowMs / 1000)
       var level = moneySeverityOf(provider)
       moneyLow = level === "warning" || level === "critical"
-      moneyLine = UsageLogic.formatUsd(money) + " left" + (runway ? " · lasts " + runway : "")
+      var view = UsageLogic.moneyView(provider, quotaMode)
+      moneyLine = (view.unit === "used"
+        ? UsageLogic.formatUsd(view.amount) + " of " + UsageLogic.formatUsd(view.total) + " used"
+        : UsageLogic.formatUsd(view.amount) + " left") + (runway ? " · lasts " + runway : "")
     }
     if (moneyLow) return { text: moneyLine, urgent: true }
     if (soonest) {
@@ -696,8 +685,9 @@ Ui.Panel {
             limits.bottom, UsageLogic.exactRemainingForWindow(reading, limits.bottom))
           readonly property string topWindow: blocking !== "" ? blocking : limits.top
           readonly property string secondaryWindow: blocking !== "" ? "none" : limits.bottom
-          // Money providers (OpenRouter) lead with what can still be spent; their tightest limit, if any, sits below.
+          // Money providers (OpenRouter) lead with dollars on the chosen side; their tightest limit, if any, sits below.
           readonly property var money: failed ? null : UsageLogic.spendable(reading)
+          readonly property var moneyShown: money === null ? null : UsageLogic.moneyView(reading, root.quotaMode)
           readonly property bool moneyChip: money !== null
           readonly property bool windowStacked: secondaryWindow !== "none" && !failed && !moneyChip
           readonly property var remainingValue: UsageLogic.remainingForWindow(reading, topWindow)
@@ -724,7 +714,7 @@ Ui.Panel {
             : UsageLogic.rowPeriodTag(UsageLogic.windowRowFor(reading, topWindow, true))
           readonly property string percentLine: (percentTag ? percentTag + " " : "") + shownText + (topReset ? " · " + topReset : "")
           readonly property string topText: failed ? UsageLogic.errorReasonLabel(modelData.errorKind)
-            : moneyChip ? UsageLogic.formatUsd(money) : percentLine
+            : moneyChip ? UsageLogic.formatUsd(moneyShown.amount) : percentLine
           readonly property string bottomText: moneyChip ? percentLine
             : (bottomTag ? bottomTag + " " : "") + secondaryText + (bottomReset ? " · " + bottomReset : "")
           readonly property string topSeverity: moneyChip ? moneySeverity : severity
@@ -752,7 +742,8 @@ Ui.Panel {
           tooltipText: failed
             ? String(modelData.name || modelData.id) + " · " + root.errorBody(modelData)
             : String(modelData.name || modelData.id)
-            + (moneyChip ? "\nCan spend now: " + UsageLogic.formatUsd(money) : "")
+            + (moneyChip ? (moneyShown.unit === "used" ? "\nSpent: " + UsageLogic.formatUsd(moneyShown.amount) + " of " + UsageLogic.formatUsd(moneyShown.total) : "")
+              + "\nCan spend now: " + UsageLogic.formatUsd(money) : "")
             + (shownValue === null ? (moneyChip ? "" : " usage unavailable")
               : "\n" + root.limitName(UsageLogic.windowRowFor(reading, topWindow, true), topWindow)
                 + ": " + UsageLogic.quotaText(shownValue, root.quotaMode))
@@ -1641,7 +1632,8 @@ Ui.Panel {
     property var provider: null
     readonly property var credits: provider ? provider.credits : null
     readonly property var amount: UsageLogic.spendable(provider)
-    readonly property var share: provider ? root.moneyShare(provider) : null
+    readonly property var view: UsageLogic.moneyView(provider, root.quotaMode)
+    readonly property var share: view ? view.share : null
     readonly property string level: provider ? root.moneySeverityOf(provider) : "none"
     readonly property bool stressed: level === "warning" || level === "critical"
     readonly property bool hasBalance: !!credits && credits.remaining !== null && credits.remaining !== undefined
@@ -1705,7 +1697,7 @@ Ui.Panel {
           id: moneyFigure
           anchors.right: moneyUnit.left
           anchors.rightMargin: Style.spacing.sm
-          text: UsageLogic.formatUsd(moneyCard.amount)
+          text: UsageLogic.formatUsd(moneyCard.view ? moneyCard.view.amount : moneyCard.amount)
           color: moneyCard.stressed ? root.urgent : root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
@@ -1716,7 +1708,7 @@ Ui.Panel {
           id: moneyUnit
           anchors.right: parent.right
           anchors.baseline: moneyFigure.baseline
-          text: "left"
+          text: moneyCard.view ? moneyCard.view.unit : "left"
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption

@@ -1040,6 +1040,7 @@ def money_window(window_id: str, label: str, spent: float, limit: float, interva
                          f"${clamp(spent, 0.0, limit):.2f} of ${limit:.2f}")
     window["unit"] = "usd"
     window["remainingAmount"] = round(max(0.0, limit - spent), 2)
+    window["limitAmount"] = round(limit, 2)
     return window
 
 

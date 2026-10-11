@@ -964,6 +964,36 @@ function spendable(provider) {
   return Math.max(0, amount)
 }
 
+// Money on the side "Show limits as" picks, like every percentage: under Used, what the binding
+// allowance has spent ("$73.42 used" of a $75.00 balance, or of a key limit); under Remaining, what
+// can still be spent ("$1.58 left"). The allowance that binds is the one `spendable` came from.
+// `share` is the shown side as 0-100 of that allowance, null when its size is unknown.
+// Returns { amount, total, share, unit } or null for providers without money.
+function moneyView(provider, mode) {
+  var left = spendable(provider)
+  if (left === null) return null
+  var credits = provider.credits
+  var total = null
+  var balance = Number(credits.remaining)
+  if (credits.remaining !== null && credits.remaining !== undefined && Math.abs(balance - left) < 0.005
+      && Number(credits.total) > 0) {
+    total = Number(credits.total)
+  } else {
+    var rows = listOrEmpty(provider.windows)
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i]
+      if (row && row.unit === "usd" && Number(row.limitAmount) > 0 && Math.abs(Number(row.remainingAmount) - left) < 0.005) {
+        total = Number(row.limitAmount)
+        break
+      }
+    }
+  }
+  var used = total === null ? null : Math.max(0, total - left)
+  if (String(mode) === "Used" && used !== null)
+    return { amount: used, total: total, share: clamp(used / total * 100, 0, 100), unit: "used" }
+  return { amount: left, total: total, share: total === null ? null : clamp(left / total * 100, 0, 100), unit: "left" }
+}
+
 // Low-balance severity from dollar thresholds: at or below `critical` is critical, at or below `warning` warns.
 function moneySeverity(amount, warning, critical) {
   if (amount === null || amount === undefined || !isFinite(Number(amount))) return "none"

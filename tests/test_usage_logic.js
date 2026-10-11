@@ -609,3 +609,19 @@ assert.equal(context.usedUpLongWindow(usedUp([
   { id: "weekly", remaining: 0, windowSeconds: 604800, resetsAt: 20 },
 ])).id, "weekly", "the soonest return is reported");
 assert.equal(context.usedUpLongWindow({ ...usedUp([{ id: "weekly", remaining: 0, windowSeconds: 604800 }]), status: "error" }), null);
+
+// Money follows Show limits as, against whichever allowance binds.
+const balanceBound = { id: "openrouter", status: "ok", windows: [],
+  credits: { currency: "USD", spendable: 1.58, remaining: 1.58, total: 75, used: 73.42 } };
+const usedView = context.moneyView(balanceBound, "Used");
+assert.equal(usedView.unit, "used");
+assert.equal(usedView.amount.toFixed(2), "73.42");
+assert.equal(Math.round(usedView.share), 98);
+assert.equal(context.moneyView(balanceBound, "Remaining").amount, 1.58);
+const limitBound = { id: "openrouter", status: "ok",
+  windows: [{ unit: "usd", remainingAmount: 4, limitAmount: 10, remaining: 40 }],
+  credits: { currency: "USD", spendable: 4, remaining: 50, total: 60 } };
+assert.equal(context.moneyView(limitBound, "Used").amount, 6, "a key limit holding back spending is the allowance shown");
+assert.equal(context.moneyView(limitBound, "Used").total, 10);
+const unknownSize = { id: "openrouter", status: "ok", windows: [], credits: { currency: "USD", spendable: 4, remaining: null } };
+assert.equal(context.moneyView(unknownSize, "Used").unit, "left", "without the allowance's size, used cannot be told");
