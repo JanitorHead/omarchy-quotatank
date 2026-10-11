@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.5.2
+
+### Added
+
+- **Reorder providers** with ▲ ▼ under Settings → Providers (`providerOrder`). The order applies everywhere at once: provider tiles, menu bar chips, and `p` / middle-click cycling. Providers added later join the end.
+
 ## 1.5.1
 
 ### Added
@@ -282,6 +288,7 @@ All notable changes to this project will be documented here. The format follows
   for horizontal and vertical bars.
 - Fixture, contract, QML lint, and live Quickshell runtime tests.
 
+[1.5.2]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.2
 [1.5.1]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.1
 [1.5.0]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.0
 [1.1.1]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.1.1

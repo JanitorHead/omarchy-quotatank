@@ -22,8 +22,10 @@ Ui.Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property bool proxyMode: backend.usageSource === "cliproxy"
-  readonly property var providers: UsageLogic.availableProviders(proxyMode
-    ? backend.providers : UsageLogic.selectedProviders(backend.providers, backend.enabledProviderIds))
+  // The saved order drives tiles, chips, and provider cycling alike.
+  readonly property string providerOrder: String(setting("providerOrder", "[]"))
+  readonly property var providers: UsageLogic.orderProviders(UsageLogic.availableProviders(proxyMode
+    ? backend.providers : UsageLogic.selectedProviders(backend.providers, backend.enabledProviderIds)), providerOrder)
   property string selectedProviderId: ""
   property bool expandedAccountLimits: false
   property string historyMode: "h24"

@@ -653,3 +653,17 @@ assert.deepEqual(Object.keys(context.parseQuotaModes('{"claude":"Remaining","kim
 assert.equal(context.quotaModeFor("not json", "claude", "Remaining"), "Remaining", "unreadable overrides fall back to the global choice");
 assert.equal(context.quotaModeLabel("Remaining"), "Left (%)");
 console.log("Per-provider quota modes: passed");
+
+// Provider order: listed ids first, the rest after in their natural order; moves keep the full list.
+const sample = [{ id: "claude" }, { id: "codex" }, { id: "kimi" }, { id: "opencode" }];
+assert.equal(context.orderProviders(sample, "[]").map(p => p.id).join(","), "claude,codex,kimi,opencode");
+assert.equal(context.orderProviders(sample, '["kimi","claude"]').map(p => p.id).join(","), "kimi,claude,codex,opencode", "unlisted providers follow the listed ones");
+assert.equal(context.orderProviders(sample, '["ghost","codex"]').map(p => p.id).join(","), "codex,claude,kimi,opencode", "ids that are not present are ignored");
+assert.equal(context.orderProviders(sample, "nope").map(p => p.id).join(","), "claude,codex,kimi,opencode", "unreadable order keeps the natural order");
+const ids = ["claude", "codex", "kimi", "opencode"];
+assert.equal(context.moveProvider("[]", ids, "kimi", -1), '["claude","kimi","codex","opencode"]');
+assert.equal(context.moveProvider("[]", ids, "claude", -1), "[]", "moving past the start changes nothing");
+assert.equal(context.moveProvider("[]", ids, "opencode", 1), "[]", "moving past the end changes nothing");
+assert.equal(context.moveProvider("[]", ids, "ghost", 1), "[]");
+assert.equal(context.parseProviderOrder('["codex","codex","Bad Id",3]').join(","), "codex", "duplicates and invalid ids are dropped");
+console.log("Provider order: passed");

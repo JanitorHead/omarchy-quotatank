@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "janitorhead.quotatank",
   "name": "Quotatank",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "author": "JanitorHead",
   "license": "MIT",
   "description": "Menu-bar quota monitor for Claude Code, OpenAI Codex, Kimi Code, OpenCode Go, OpenRouter, and DeepSeek. Shows used or remaining per limit, a pacing tick, a projected run-out time, and prepaid balances with low-balance alerts. Fusebox and CLIProxyAPI accounts get one card each. Settings apply as you change them. Estimated API cost history from local Codex, Claude Code, and OpenCode transcripts and T3 Code servers, by model.",
@@ -26,6 +26,7 @@
         "kimi",
         "opencode"
       ],
+      "providerOrder": "[]",
       "usageSource": "direct",
       "cliproxyUrl": "http://127.0.0.1:8317",
       "cliproxyKeyFile": "",
@@ -182,6 +183,13 @@
             "label": "DeepSeek"
           }
         ]
+      },
+      {
+        "key": "providerOrder",
+        "type": "string",
+        "label": "Provider order",
+        "defaultValue": "[]",
+        "description": "Managed with the ▲ ▼ buttons under Settings → Providers. JSON array of provider IDs; listed providers come first in that order in tiles, chips, and provider cycling, the rest follow."
       },
       {
         "key": "barDisplayMode",

@@ -132,7 +132,7 @@ The gear opens an index of six pages, and each row already says what the page is
 
 | Page | What lives there |
 |---|---|
-| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server), one row per provider with **Monitor** and **Menu bar** switches, the API key editor under OpenRouter and DeepSeek, and **Customize** under each provider to override the defaults for that one: read it as used or left, pin the limit its chip shows and the second one below |
+| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server), one row per provider with ▲ ▼ to set the order tiles and chips follow, **Monitor** and **Menu bar** switches, the API key editor under OpenRouter and DeepSeek, and **Customize** under each provider to override the defaults for that one: read it as used or left, pin the limit its chip shows and the second one below |
 | **Menu bar** | Chips or the widget icon, the limit each chip shows, a second limit, reset times and formats, hiding used-up providers |
 | **Alerts** | Desktop notifications, the percentage thresholds, and the low-balance amounts |
 | **Display** | Used or left, provider colors, square cards, hidden account emails |

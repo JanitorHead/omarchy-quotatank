@@ -331,6 +331,45 @@ function quotaModeLabel(mode) {
   return String(mode) === "Remaining" ? "Left (%)" : "Used (%)"
 }
 
+// Provider order (`providerOrder`, a JSON array of provider ids). Listed providers come first in that
+// order; the rest keep their natural order after them, so a saved order survives new providers.
+function parseProviderOrder(text) {
+  var parsed
+  try { parsed = JSON.parse(String(text === undefined || text === null ? "[]" : text)) }
+  catch (error) { return [] }
+  if (!Array.isArray(parsed)) return []
+  var result = []
+  for (var i = 0; i < parsed.length; i++) {
+    var id = parsed[i]
+    if (typeof id === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(id) && result.indexOf(id) === -1) result.push(id)
+  }
+  return result
+}
+
+function orderProviders(list, text) {
+  var order = parseProviderOrder(text)
+  var rows = listOrEmpty(list)
+  var ranked = []
+  for (var i = 0; i < rows.length; i++) {
+    var index = order.indexOf(String(rows[i] && rows[i].id))
+    ranked.push({ row: rows[i], rank: index === -1 ? order.length + i : index, index: i })
+  }
+  ranked.sort(function (a, b) { return a.rank - b.rank || a.index - b.index })
+  return ranked.map(function (entry) { return entry.row })
+}
+
+// Moves `id` by `delta` places within `ids`, the current effective order; returns the new order as
+// JSON, or the unchanged text when the move would leave the list.
+function moveProvider(text, ids, id, delta) {
+  var current = listOrEmpty(ids).map(String)
+  var index = current.indexOf(String(id))
+  var target = index + delta
+  if (index === -1 || target < 0 || target >= current.length) return String(text === undefined || text === null ? "[]" : text)
+  current.splice(index, 1)
+  current.splice(target, 0, String(id))
+  return JSON.stringify(current)
+}
+
 // Short period tag for stacked chips. Auto has no single period, so it has no tag.
 function windowShortLabel(selector) {
   var normalized = normalizeBarWindow(selector)

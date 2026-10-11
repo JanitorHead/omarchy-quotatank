@@ -34,7 +34,7 @@ Column {
   readonly property var enabledProviders: UsageLogic.listOrEmpty(value("enabledProviders", ["claude", "codex", "kimi", "opencode"]))
   readonly property var barProviders: UsageLogic.listOrEmpty(value("barProviders", ["claude", "codex", "kimi", "opencode"]))
   readonly property bool moneyMonitored: !proxyMode && (monitored("openrouter") || monitored("deepseek"))
-  readonly property var providerOptions: proxyMode ? UsageLogic.listOrEmpty(proxyProviders) : UsageLogic.LOCAL_PROVIDERS
+  readonly property var providerOptions: UsageLogic.orderProviders(proxyMode ? UsageLogic.listOrEmpty(proxyProviders) : UsageLogic.LOCAL_PROVIDERS, value("providerOrder", "[]"))
   readonly property var allProviderIds: {
     var ids = UsageLogic.LOCAL_PROVIDER_IDS.slice()
     for (var i = 0; i < proxyProviders.length; i++)
@@ -101,6 +101,12 @@ Column {
       if (UsageLogic.contains(selected, candidate) !== (candidate === id)) result.push(candidate)
     }
     set(key, result)
+  }
+
+  // Saves the full current order with `id` moved by `delta`, so later providers keep their place.
+  function moveProvider(id, delta) {
+    var ids = providerOptions.map(function (option) { return String(option.id) })
+    set("providerOrder", UsageLogic.moveProvider(value("providerOrder", "[]"), ids, id, delta))
   }
 
   function open(pageId) {
@@ -381,6 +387,7 @@ Column {
       delegate: Column {
         id: providerRow
         required property var modelData
+        required property int index
         readonly property string providerId: String(modelData.id)
         readonly property bool money: modelData.money === true
         readonly property bool on: root.proxyMode || UsageLogic.contains(root.enabledProviders, providerId)
@@ -389,8 +396,26 @@ Column {
 
         Row {
           width: parent.width
+          spacing: Style.spacing.sm
+          // Order controls: the same order the tiles, chips, and provider cycling use.
+          OrderButton {
+            id: upButton
+            objectName: "moveUp-" + providerRow.providerId
+            text: "▲"
+            enabled: providerRow.index > 0
+            Accessible.name: "Move " + providerRow.modelData.name + " up"
+            onClicked: root.moveProvider(providerRow.providerId, -1)
+          }
+          OrderButton {
+            id: downButton
+            objectName: "moveDown-" + providerRow.providerId
+            text: "▼"
+            enabled: providerRow.index < root.providerOptions.length - 1
+            Accessible.name: "Move " + providerRow.modelData.name + " down"
+            onClicked: root.moveProvider(providerRow.providerId, 1)
+          }
           Label {
-            width: parent.width - monitorSwitch.width - barSwitch.width
+            width: parent.width - upButton.width - downButton.width - monitorSwitch.width - barSwitch.width - parent.spacing * 4
             anchors.verticalCenter: parent.verticalCenter
             text: providerRow.modelData.name
           }
@@ -1321,6 +1346,20 @@ Column {
     Accessible.name: "Open " + url
     onClicked: Qt.openUrlExternally(url)
     onActiveFocusChanged: if (activeFocus) root.revealRequested(linkButton)
+  }
+
+  // ▲ / ▼ beside a provider: small, quiet, disabled at the ends of the list.
+  component OrderButton: Ui.Button {
+    id: orderButton
+    anchors.verticalCenter: parent.verticalCenter
+    foreground: root.foreground
+    fontFamily: root.fontFamily
+    fontSize: Style.font.caption
+    horizontalPadding: Style.spacing.xs
+    verticalPadding: Style.spacing.xxs
+    opacity: enabled ? 1 : 0.3
+    focusable: true
+    onActiveFocusChanged: if (activeFocus) root.revealRequested(orderButton)
   }
 
   // ---- index summaries: what each page is set to, so the index already answers most questions
