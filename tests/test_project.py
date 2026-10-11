@@ -27,6 +27,7 @@ class ProjectContractTests(unittest.TestCase):
             "warningThreshold", "criticalThreshold", "liveAccountActivity",
             "usageSource", "cliproxyUrl", "cliproxyKeyFile", "hideAccountEmails", "squareUsageCards", "providerColors", "notifyLimitThresholds", "costPriceOverrides",
             "costLocalProviders", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers",
+            "openrouterKeyFile", "creditWarningUsd", "creditCriticalUsd",
         })
 
     def test_packaged_paths_and_assets_are_self_contained(self):
@@ -38,8 +39,8 @@ class ProjectContractTests(unittest.TestCase):
         self.assertTrue((ROOT / "scripts" / "model_usage_common.py").is_file())
         self.assertIn('Qt.resolvedUrl("assets/', panel)
         for name in (
-            "claude.svg", "codex.svg", "codex-light.svg", "kimi.svg", "opencode.svg",
-            "claude-bar.svg", "codex-bar.svg", "kimi-bar.svg", "opencode-bar.svg",
+            "claude.svg", "codex.svg", "codex-light.svg", "kimi.svg", "opencode.svg", "openrouter.svg",
+            "claude-bar.svg", "codex-bar.svg", "kimi-bar.svg", "opencode-bar.svg", "openrouter-bar.svg",
         ):
             self.assertTrue((ROOT / "assets" / name).is_file(), name)
         all_source = (

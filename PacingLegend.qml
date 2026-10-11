@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 import "UsageLogic.js" as UsageLogic
 
@@ -10,7 +11,7 @@ import "UsageLogic.js" as UsageLogic
 Row {
   id: root
 
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property color dim: Qt.darker(foreground, 1.55)
   property string fontFamily: Style.font.family
   // Legend pinned open by a click on the badge; a second click closes it.
@@ -25,10 +26,16 @@ Row {
   Text {
     id: paceLabel
     anchors.verticalCenter: parent.verticalCenter
-    text: "Pacing"
+    text: "How the tick and projection work"
     color: root.dim
     font.family: root.fontFamily
     font.pixelSize: Style.font.caption
+
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      onClicked: root.paceOpen = !root.paceOpen
+    }
   }
 
   Rectangle {

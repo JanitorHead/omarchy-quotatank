@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 import "UsageLogic.js" as UsageLogic
 
@@ -14,8 +15,8 @@ Ui.BorderSurface {
   property string severity: "none"
   property string resetLabel: ""
   property string quotaMode: "Used"
-  property color foreground: Color.foreground
-  property color urgent: Color.urgent
+  property color foreground: Commons.Color.foreground
+  property color urgent: Commons.Color.urgent
   property color providerColor: foreground
   property color dim: Qt.darker(foreground, 1.55)
   property string fontFamily: Style.font.family
@@ -33,10 +34,10 @@ Ui.BorderSurface {
   implicitHeight: limitContent.implicitHeight + contentTopInset + contentBottomInset
   color: severity === "critical"
     ? alpha(root.urgent, 0.09)
-    : Style.normalFillFor(root.foreground, Color.accent, root.urgent)
+    : Style.normalFillFor(root.foreground, Commons.Color.accent, root.urgent)
   borderSpec: stressed
     ? Border.flat(alpha(root.urgent, severity === "critical" ? 0.45 : 0.28), Style.spacing.hairline)
-    : Border.controlSpec("normal", root.foreground, Color.accent, root.urgent)
+    : Border.controlSpec("normal", root.foreground, Commons.Color.accent, root.urgent)
   padding: Style.spacing.xxl
   radius: root.cardRadius
 
@@ -52,14 +53,14 @@ Ui.BorderSurface {
 
     Item {
       width: parent.width
-      implicitHeight: Math.max(limitLabel.implicitHeight, limitPercent.implicitHeight)
+      implicitHeight: Math.max(limitLabel.implicitHeight, limitFigure.implicitHeight)
 
       Text {
         id: limitLabel
         anchors.left: parent.left
-        anchors.right: limitPercent.left
+        anchors.right: figureGroup.left
         anchors.rightMargin: Style.spacing.controlGap
-        anchors.verticalCenter: parent.verticalCenter
+        anchors.baseline: figureGroup.baseline
         text: root.window ? String(root.window.label || "Usage limit") : ""
         color: root.foreground
         font.family: root.fontFamily
@@ -68,18 +69,36 @@ Ui.BorderSurface {
         elide: Text.ElideRight
       }
 
-      Text {
-        id: limitPercent
+      Item {
+        id: figureGroup
         anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
+        width: limitFigure.implicitWidth + limitUnit.implicitWidth + Style.spacing.sm
+        height: limitFigure.implicitHeight
+        baselineOffset: limitFigure.baselineOffset
         readonly property var shown: root.quotaMode === "Remaining"
           ? UsageLogic.windowRemaining(root.window)
           : UsageLogic.windowUsed(root.window)
-        text: UsageLogic.quotaText(shown, root.quotaMode) || "—"
-        color: root.stressed ? root.urgent : root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        font.bold: root.stressed
+
+        Text {
+          id: limitFigure
+          anchors.left: parent.left
+          text: figureGroup.shown === null || figureGroup.shown === undefined ? "—" : UsageLogic.formatPercent(figureGroup.shown) + "%"
+          color: root.stressed ? root.urgent : root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.heading
+          font.bold: true
+        }
+
+        Text {
+          id: limitUnit
+          anchors.left: limitFigure.right
+          anchors.leftMargin: Style.spacing.sm
+          anchors.baseline: limitFigure.baseline
+          text: root.quotaMode === "Remaining" ? "left" : "used"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
       }
     }
 
@@ -87,6 +106,7 @@ Ui.BorderSurface {
       id: meter
       visible: UsageLogic.meterFill(root.window, root.quotaMode) !== null
       width: parent.width
+      height: Style.space(12)
       value: UsageLogic.meterFill(root.window, root.quotaMode) || 0
       fillColor: root.stressed ? root.urgent : root.providerColor
       trackColor: root.alpha(root.foreground, 0.14)
@@ -99,14 +119,48 @@ Ui.BorderSurface {
       }
     }
 
-    Text {
-      visible: text !== ""
+    Item {
       width: parent.width
-      text: root.resetLabel
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-      elide: Text.ElideRight
+      implicitHeight: Math.max(resetText.implicitHeight, paceBadge.visible ? paceBadge.height : 0)
+
+      Text {
+        id: resetText
+        anchors.left: parent.left
+        anchors.right: paceBadge.visible ? paceBadge.left : parent.right
+        anchors.rightMargin: Style.spacing.controlGap
+        anchors.verticalCenter: parent.verticalCenter
+        text: root.resetLabel
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        elide: Text.ElideRight
+      }
+
+      // Ahead or behind pace in points, at a glance; the line below says what that means.
+      Rectangle {
+        id: paceBadge
+        readonly property string label: UsageLogic.paceBadgeText(root.pace)
+        readonly property bool hot: !!root.pace && root.pace.runsOut === true
+        visible: label !== ""
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        width: badgeText.implicitWidth + Style.spacing.lg * 2
+        height: badgeText.implicitHeight + Style.spacing.sm
+        radius: height / 2
+        color: root.alpha(hot ? root.urgent : root.foreground, hot ? 0.16 : 0.08)
+        border.width: Style.spacing.hairline
+        border.color: root.alpha(hot ? root.urgent : root.foreground, hot ? 0.55 : 0.22)
+
+        Text {
+          id: badgeText
+          anchors.centerIn: parent
+          text: paceBadge.label
+          color: paceBadge.hot ? root.urgent : root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          font.weight: Font.DemiBold
+        }
+      }
     }
 
     Text {

@@ -4,6 +4,25 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **OpenRouter** as a provider (off by default; local mode). Save an API key or a management key under **Limits → gear → OpenRouter**, or set `OPENROUTER_API_KEY`. Spending limits that reset (the key's daily, weekly, or monthly limit, guardrail and workspace budgets, free-model daily requests) are ordinary limit cards with pace and projection. What can still be spent, the lowest of the balance and every limit's allowance, leads the tile, the chip (dollars on top, the tightest limit's percentage below), and the headline with how long it lasts at this week's rate. A management key adds the account balance; a **Balance** card shows purchased, used, and today's, this week's, and this month's spend.
+- **Low balance alerts in dollars** (`creditWarningUsd`, default `$5`; `creditCriticalUsd`, default `$1`) color OpenRouter's chip, tile, and card and send a desktop notification when crossed.
+
+### Changed
+
+- **Settings regrouped** into Providers, Menu bar (with Per provider inside), Display, Alerts, Refresh, Privacy, and Diagnostics. Providers and Menu bar open by default; collapsed headers summarize their values (`4 monitored · 3 in menu bar`, `5-hour + 7-day · resets`). Menu bar options are renamed **Limit shown**, **Second limit below**, and **Show when limits reset**; per-provider defaults read `Default (5-hour)`.
+- **Clearer card status lines**: the pace share reads `pace 58%` instead of `expected 58%`, and the reasons without a tick are full sentences (`No pace for this limit`, `Pace starts after 2% of the window`, `No usage yet`).
+- **Limit cards are ordered shortest window first** for every provider, so a 5-hour limit always sits above weekly and monthly ones.
+- **Limits redesigned as a dashboard.** Provider tiles replace the provider tab row: each shows the provider's logo, its most pressing figure, and a mini meter, in the theme's alert color when a refresh failed or a limit is at warning or critical. Under them, a headline answers the main question for the selected provider (`5 hour limit runs out in 1h 9m`, `Every limit lasts until reset`).
+- **Bolder limit cards**: a large figure, a taller meter, and a badge with the points ahead of or behind pace (`14 pts ahead`). Account cards in Fusebox and CLIProxyAPI mode use the same large figure. The `USAGE LIMITS` header is gone; the headline replaces it.
+- **Chip tooltips name the limits shown** with the provider's own labels (`5 hour limit: 72% used`).
+- The pacing help row reads **How the tick and projection work**, opens on a click of the text as well as the ⓘ badge, and its explanation is wrapped to fit the tooltip.
+- Error cards put the next step on its own line.
+- Opening Costs settings no longer draws a focus ring on the first switch.
+
 ## 1.4.2
 
 ### Fixed

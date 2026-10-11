@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 
 Column {
@@ -10,7 +11,7 @@ Column {
   property bool changing: false
   property alias text: field.text
   property string editorObjectName: ""
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   signal edited(string value)
   signal revealRequested(var item)

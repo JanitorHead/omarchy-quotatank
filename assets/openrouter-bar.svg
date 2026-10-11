@@ -1,0 +1,5 @@
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><title>OpenRouter</title>
+  <circle cx="5" cy="12" r="2.6" fill="#fff"/>
+  <path d="M7.4 12H11.5C13 12 13.6 7 15.6 7H17.5M11.5 12C13 12 13.6 17 15.6 17H17.5" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round"/>
+  <path d="M17 4.6L20.4 7L17 9.4ZM17 14.6L20.4 17L17 19.4Z" fill="#fff"/>
+</svg>

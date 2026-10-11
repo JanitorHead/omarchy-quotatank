@@ -3,14 +3,15 @@ import QtQuick
 import QtQuick.Controls as Controls
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 import "UsageLogic.js" as UsageLogic
 
 Column {
   id: root
-  property color foreground: Color.foreground
-  property color urgent: Color.urgent
-  property color surface: Color.popups.background
+  property color foreground: Commons.Color.foreground
+  property color urgent: Commons.Color.urgent
+  property color surface: Commons.Color.popups.background
   property string fontFamily: Style.font.family
   property var sources: []
   property string errorText: ""
@@ -80,7 +81,9 @@ Column {
     if (loadError) serverSection.expanded = true
     if (prices.loadError) priceSection.expanded = true
   }
-  function focusFirst() { localCodex.forceActiveFocus() }
+  // Focus the form itself: Escape still cancels and Tab reaches the first switch, but opening
+  // the form does not paint a focus ring on a control the user has not chosen.
+  function focusFirst() { root.forceActiveFocus() }
   function toggleLocal(id) {
     var next = []
     var allowed = ["claude", "codex", "opencode"]

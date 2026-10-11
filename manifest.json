@@ -29,6 +29,7 @@
       "usageSource": "direct",
       "cliproxyUrl": "http://127.0.0.1:8317",
       "cliproxyKeyFile": "",
+      "openrouterKeyFile": "",
       "hideAccountEmails": true,
       "squareUsageCards": true,
       "providerColors": false,
@@ -49,6 +50,8 @@
       "barResetDateFormat": "DD/MM",
       "warningThreshold": 25,
       "criticalThreshold": 10,
+      "creditWarningUsd": 5,
+      "creditCriticalUsd": 1,
       "costPriceOverrides": "{}",
       "costKeeperUrl": "",
       "costKeeperPasswordFile": "",
@@ -84,6 +87,13 @@
         "label": "Proxy management key file",
         "defaultValue": "",
         "description": "Managed automatically by the settings menu when saving a Management API key. Advanced users can supply an existing private key file path here."
+      },
+      {
+        "key": "openrouterKeyFile",
+        "type": "string",
+        "label": "OpenRouter key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save an OpenRouter key in settings. A regular API key shows key limits and spend; a management key also shows the account balance. OPENROUTER_API_KEY in the environment takes precedence."
       },
       {
         "key": "hideAccountEmails",
@@ -127,7 +137,7 @@
         "key": "enabledProviders",
         "type": "multiselect",
         "label": "Providers",
-        "description": "Select local CLI providers. Fusebox and CLIProxyAPI discover all managed providers automatically.",
+        "description": "Select providers to monitor in local mode. OpenRouter needs an API key saved in settings. Fusebox and CLIProxyAPI discover all managed providers automatically.",
         "noSelectionText": "No providers",
         "placeholderText": "Search providers...",
         "emptyText": "No providers found",
@@ -152,6 +162,10 @@
           {
             "value": "opencode",
             "label": "OpenCode Go"
+          },
+          {
+            "value": "openrouter",
+            "label": "OpenRouter"
           }
         ]
       },
@@ -180,7 +194,7 @@
       {
         "key": "barWindow",
         "type": "enum",
-        "label": "Menu bar limit (top)",
+        "label": "Menu bar: limit shown",
         "options": [
           "auto",
           "session",
@@ -193,7 +207,7 @@
       {
         "key": "barWindowSecondary",
         "type": "enum",
-        "label": "Menu bar limit (bottom)",
+        "label": "Menu bar: second limit below",
         "options": [
           "none",
           "session",
@@ -206,14 +220,14 @@
       {
         "key": "barShowResets",
         "type": "boolean",
-        "label": "Show reset day in menu bar",
-        "description": "Adds when each bar limit resets to its chip. Limits that reset within a day show a time; weekly and monthly limits show a date.",
+        "label": "Menu bar: show when limits reset",
+        "description": "Adds when each chip's limit resets. Limits that reset within a day show a time; weekly and monthly limits show a date.",
         "defaultValue": false
       },
       {
         "key": "barResetTimeFormat",
         "type": "enum",
-        "label": "Reset time format",
+        "label": "Menu bar: reset time format",
         "options": [
           "24h",
           "12h"
@@ -224,7 +238,7 @@
       {
         "key": "barResetDateFormat",
         "type": "enum",
-        "label": "Reset date format",
+        "label": "Menu bar: reset date format",
         "options": [
           "DD/MM",
           "MM/DD",
@@ -236,8 +250,8 @@
       {
         "key": "barProviderLimits",
         "type": "string",
-        "label": "Menu bar limits per provider",
-        "description": "Managed by Menu bar limits per provider in settings. JSON object mapping provider IDs to top and bottom bar limits; missing slots use the global bar limits.",
+        "label": "Menu bar: per-provider limits",
+        "description": "Managed under Menu bar → Per provider in settings. JSON object mapping provider IDs to top and bottom bar limits; missing slots use the limits chosen for all providers.",
         "defaultValue": "{}"
       },
       {
@@ -267,6 +281,10 @@
           {
             "value": "opencode",
             "label": "OpenCode Go"
+          },
+          {
+            "value": "openrouter",
+            "label": "OpenRouter"
           }
         ]
       },
@@ -287,6 +305,26 @@
         "max": 100,
         "step": 1,
         "defaultValue": 10
+      },
+      {
+        "key": "creditWarningUsd",
+        "type": "number",
+        "label": "Low balance warning (USD)",
+        "min": 0,
+        "max": 100000,
+        "step": 0.5,
+        "defaultValue": 5,
+        "description": "Warn when the money an OpenRouter key can still spend falls to this amount or below."
+      },
+      {
+        "key": "creditCriticalUsd",
+        "type": "number",
+        "label": "Low balance critical (USD)",
+        "min": 0,
+        "max": 100000,
+        "step": 0.5,
+        "defaultValue": 1,
+        "description": "Critical when the money left falls to this amount or below. Must not be above the warning amount."
       },
       {
         "key": "costPriceOverrides",

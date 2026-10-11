@@ -475,7 +475,13 @@ assert.equal(context.paceText(exhausted), "Limit reached");
 assert.equal(context.paceShowsMark(exhausted), false, "an exhausted window has no tick");
 
 assert.equal(context.paceText(null), "");
-assert.equal(context.paceStatusText(null), "not reported");
+const kimiOrder = context.orderedWindows([
+  { id: "weekly", windowSeconds: 604800 },
+  { id: "extra" },
+  { id: "session", windowSeconds: 18000 },
+  { id: "opus", windowSeconds: 604800 },
+]).map((row) => row.id).join(",");
+assert.equal(kimiOrder, "session,weekly,opus,extra", "shortest window first; ties and untimed rows keep their order");
 assert.equal(context.paceShowsMark(unused), false);
 
 assert.equal(context.formatDuration(0), "0m");
@@ -563,8 +569,31 @@ assert.equal(context.normalizeBarResetChoice("time", "12h"), "12h")
 assert.equal(context.normalizeBarResetChoice("time", undefined), "24h")
 
 // Provider colours: distinct per provider; unknown ids fall back, including prototype keys.
-const brandColors = ["claude", "codex", "kimi", "opencode"].map((id) => context.providerAccent(id, "#000000"))
-assert.equal(new Set(brandColors).size, 4)
+const brandColors = ["claude", "codex", "kimi", "opencode", "openrouter"].map((id) => context.providerAccent(id, "#000000"))
+assert.equal(new Set(brandColors).size, 5)
 assert.equal(context.providerAccent("local-codex", "#ffffff"), "#ffffff")
 assert.equal(context.providerAccent("", "#ffffff"), "#ffffff")
 assert.equal(context.providerAccent("constructor", "#ffffff"), "#ffffff")
+
+// Money providers (OpenRouter): what can be spent, its alert level, and how long it lasts.
+const wallet = (spendable, extra = {}) => ({ id: "openrouter", status: "ok", windows: [],
+  credits: { currency: "USD", spendable, remaining: null, ...extra } });
+assert.equal(context.spendable(wallet(17.5)), 17.5);
+assert.equal(context.spendable(wallet(-2)), 0, "an overdrawn allowance reads as nothing left");
+assert.equal(context.spendable(wallet(null)), null, "spend without a balance or limit has no figure");
+assert.equal(context.spendable({ id: "codex", credits: { currency: "", remaining: 5 } }), null, "credit counts are not money");
+assert.equal(context.barProviders([wallet(4)], "auto").length, 1, "a balance alone earns a chip");
+assert.equal(context.barProviders([wallet(null)], "auto").length, 0);
+assert.equal(context.moneySeverity(5, 5, 1), "warning", "the warning amount itself warns");
+assert.equal(context.moneySeverity(1, 5, 1), "critical");
+assert.equal(context.moneySeverity(5.01, 5, 1), "ok");
+assert.equal(context.moneySeverity(null, 5, 1), "none");
+const wednesdayNoon = Date.UTC(2026, 9, 14, 12) / 1000; // 2.5 days into the UTC week
+assert.equal(context.moneyRunway(30, 10, wednesdayNoon), "about 8 days", "$10 over 2.5 days is $4 a day");
+assert.equal(context.moneyRunway(100, 5, wednesdayNoon), "about 7 weeks");
+assert.equal(context.moneyRunway(1, 10, wednesdayNoon), "less than a day");
+assert.equal(context.moneyRunway(30, 0, wednesdayNoon), "", "no spend this week, no runway");
+assert.equal(context.moneyRunway(30, 10, Date.UTC(2026, 9, 12, 2) / 1000), "", "too early in the week to project");
+assert.equal(context.rowPeriodTag({ windowSeconds: 86400 }), "1d");
+assert.equal(context.rowPeriodTag({ windowSeconds: 2592000 }), "30d");
+assert.equal(context.rowPeriodTag({ id: "x" }), "");

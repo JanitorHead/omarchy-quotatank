@@ -1,13 +1,14 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 
 Column {
   id: root
   required property var backend
-  property color foreground: Color.foreground
-  property color background: Color.popups.background
+  property color foreground: Commons.Color.foreground
+  property color background: Commons.Color.popups.background
   property string fontFamily: Style.font.family
   signal closeRequested()
   spacing: Style.spacing.lg

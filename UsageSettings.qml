@@ -3,15 +3,16 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 import "UsageLogic.js" as UsageLogic
 
 Column {
   id: root
 
-  property color foreground: Color.foreground
-  property color urgent: Color.urgent
-  property color surface: Color.popups.background
+  property color foreground: Commons.Color.foreground
+  property color urgent: Commons.Color.urgent
+  property color surface: Commons.Color.popups.background
   property string fontFamily: Style.font.family
   property string accountDetails: ""
   property string errorText: ""
@@ -26,6 +27,7 @@ Column {
   property var draft: ({})
   property alias managementKey: managementCredential.text
   property alias keeperPassword: keeperCredential.text
+  property alias openrouterKey: openrouterCredential.text
   readonly property bool saving: keyWriter.running
   property var pendingValues: null
   property var pendingKeys: ({})
@@ -34,19 +36,22 @@ Column {
   property string proxyImplementation: ""
   readonly property string proxyName: UsageLogic.proxyName(proxyImplementation)
   readonly property string fuseboxRepositoryUrl: "https://github.com/DigitalPals/Fusebox"
+  readonly property string openrouterKeysUrl: "https://openrouter.ai/settings/keys"
   readonly property var providerOptions: proxyMode ? UsageLogic.listOrEmpty(proxyProviders) : [
     { id: "claude", name: "Claude Code" },
     { id: "codex", name: "OpenAI Codex" },
     { id: "kimi", name: "Kimi Code" },
-    { id: "opencode", name: "OpenCode Go" }
+    { id: "opencode", name: "OpenCode Go" },
+    { id: "openrouter", name: "OpenRouter" }
   ]
   readonly property var allProviderIds: {
-    var ids = ["claude", "codex", "kimi", "opencode"]
+    var ids = ["claude", "codex", "kimi", "opencode", "openrouter"]
     for (var i = 0; i < proxyProviders.length; i++)
       if (!UsageLogic.contains(ids, proxyProviders[i].id)) ids.push(proxyProviders[i].id)
     return ids
   }
   readonly property bool proxyMode: draft.usageSource === "cliproxy"
+  readonly property bool openrouterMonitored: !proxyMode && UsageLogic.contains(draft.enabledProviders, "openrouter")
 
   signal saveRequested(var values)
   signal cancelRequested()
@@ -59,6 +64,7 @@ Column {
   function discardKey() {
     managementCredential.reset()
     keeperCredential.reset()
+    openrouterCredential.reset()
     pendingKeys = ({})
     pendingValues = null
     if (keyWriter.running && !keySaveDecided) keyWriter.running = false
@@ -70,7 +76,7 @@ Column {
       keyWriter.write(saved ? "commit\n" : "abort\n")
     }
     pendingValues = null
-    if (saved) { managementKey = ""; keeperPassword = "" }
+    if (saved) { managementKey = ""; keeperPassword = ""; openrouterKey = "" }
   }
 
   function begin(settings) {
@@ -85,6 +91,9 @@ Column {
       cliproxyKeyFile: String(value("cliproxyKeyFile", "")),
       costKeeperUrl: String(value("costKeeperUrl", "")),
       costKeeperPasswordFile: String(value("costKeeperPasswordFile", "")),
+      openrouterKeyFile: String(value("openrouterKeyFile", "")),
+      creditWarningUsd: String(value("creditWarningUsd", 5)),
+      creditCriticalUsd: String(value("creditCriticalUsd", 1)),
       enabledProviders: value("enabledProviders", ["claude", "codex", "kimi", "opencode"]),
       barProviders: value("barProviders", ["claude", "codex", "kimi", "opencode"]),
       liveAccountActivity: value("liveAccountActivity", true) !== false,
@@ -107,8 +116,14 @@ Column {
     refreshMinutes = String(Number(draft.refreshIntervalSec) / 60)
     connectionSection.expanded = proxyMode && !draft.cliproxyKeyFile
     activitySection.expanded = false
+    providerSection.expanded = true
+    menuBarSection.expanded = true
+    barLimitsSection.expanded = false
+    displaySection.expanded = false
     alertsSection.expanded = false
     refreshSection.expanded = false
+    privacySection.expanded = false
+    openrouterSection.expanded = !proxyMode && UsageLogic.contains(draft.enabledProviders, "openrouter") && !draft.openrouterKeyFile
     diagnosticsSection.expanded = false
     errorText = ""
   }
@@ -144,6 +159,30 @@ Column {
 
   function barLimitOverrideCount() {
     return Object.keys(UsageLogic.parseBarLimits(draft.barProviderLimits)).length
+  }
+
+  // Collapsed-section summaries: the current choice, so a closed section still says what it does.
+  function providersSummary() {
+    var bar = UsageLogic.listOrEmpty(draft.barProviders)
+    var shown = 0
+    var monitored = 0
+    for (var i = 0; i < providerOptions.length; i++) {
+      var id = providerOptions[i].id
+      var on = proxyMode || UsageLogic.contains(draft.enabledProviders, id)
+      if (on) monitored++
+      if (on && UsageLogic.contains(bar, id)) shown++
+    }
+    if (!percentageDisplay) return monitored + " monitored"
+    return proxyMode ? shown + " in menu bar" : monitored + " monitored · " + shown + " in menu bar"
+  }
+
+  function menuBarSummary() {
+    if (!percentageDisplay) return "Widget icon"
+    var text = UsageLogic.windowSelectorLabel(draft.barWindow)
+    var bottom = UsageLogic.normalizeSecondaryBarWindow(draft.barWindowSecondary)
+    if (bottom !== "none") text += " + " + UsageLogic.windowSelectorLabel(bottom)
+    if (draft.barShowResets === true) text += " · resets"
+    return text
   }
 
   function toggleProvider(key, id) {
@@ -203,6 +242,14 @@ Column {
     }
     next.warningThreshold = warningLeft
     next.criticalThreshold = criticalLeft
+    var warnUsd = Number(String(next.creditWarningUsd).trim())
+    var critUsd = Number(String(next.creditCriticalUsd).trim())
+    if (String(next.creditWarningUsd).trim() === "" || !isFinite(warnUsd) || warnUsd < 0 || warnUsd > 100000)
+      return fail("Enter a low balance warning from $0 to $100000.", alertsSection, moneyWarningField)
+    if (String(next.creditCriticalUsd).trim() === "" || !isFinite(critUsd) || critUsd < 0 || critUsd > warnUsd)
+      return fail("Enter a low balance critical amount from $0 up to the warning amount.", alertsSection, moneyCriticalField)
+    next.creditWarningUsd = warnUsd
+    next.creditCriticalUsd = critUsd
     next.cliproxyUrl = String(next.cliproxyUrl).trim()
     next.cliproxyKeyFile = String(next.cliproxyKeyFile).trim()
     if (proxyMode && !/^https?:\/\/[^\s/?#@]+(?::[0-9]+)?(?:\/[^\s?#]*)?$/.test(next.cliproxyUrl)) {
@@ -221,9 +268,14 @@ Column {
     if (keeperPassword !== "" && (password === "" || password.length > 8191 || /[^\x20-\x7e]/.test(password))) {
       return fail("Enter a nonempty Keeper password using ASCII characters.", activitySection, keeperCredential)
     }
+    var openrouterSecret = openrouterKey.trim()
+    if (openrouterKey !== "" && (openrouterSecret === "" || openrouterSecret.length > 8191 || /[^\x20-\x7e]/.test(openrouterSecret))) {
+      return fail("Enter a nonempty OpenRouter key using ASCII characters.", openrouterSection, openrouterCredential)
+    }
     var keys = ({})
     if (proxyMode && key !== "") keys.cliproxyKeyFile = key
     if (proxyMode && password !== "") keys.costKeeperPasswordFile = password
+    if (openrouterSecret !== "") keys.openrouterKeyFile = openrouterSecret
     errorText = ""
     if (Object.keys(keys).length > 0) {
       pendingValues = next
@@ -241,7 +293,8 @@ Column {
     onStarted: {
       write(JSON.stringify({ keys: root.pendingKeys, previousPaths: {
         cliproxyKeyFile: root.draft.cliproxyKeyFile,
-        costKeeperPasswordFile: root.draft.costKeeperPasswordFile
+        costKeeperPasswordFile: root.draft.costKeeperPasswordFile,
+        openrouterKeyFile: root.draft.openrouterKeyFile
       } }) + "\n")
       root.pendingKeys = ({})
     }
@@ -396,220 +449,17 @@ Column {
   }
 
   Section {
-    id: displaySection
-    objectName: "displaySection"
-    title: "Display"
-    expanded: true
-    summary: (root.draft.quotaMode === "Remaining" ? "Left" : "Used") + " · " + (root.percentageDisplay ? "Percentages" : "Icon")
-    Row {
-      width: parent.width
-      Label { width: parent.width - quotaModeSelect.width; text: "Show limits as"; anchors.verticalCenter: parent.verticalCenter }
-      UsageSelect {
-        id: quotaModeSelect
-        objectName: "quotaModeControl"
-        width: Math.min(implicitWidth, parent.width * 0.7)
-        label: "Show limits as"
-        options: [
-          { value: "Used", label: "Used (%)" },
-          { value: "Remaining", label: "Left (%)" }
-        ]
-        value: String(root.draft.quotaMode || "Used") === "Remaining" ? "Remaining" : "Used"
-        foreground: root.foreground
-        surface: root.surface
-        fontFamily: root.fontFamily
-        alignPopupRight: true
-        onChanged: function(value) { root.setQuotaMode(value) }
-        onMenuClosed: if (root.visible) quotaModeSelect.forceActiveFocus()
-        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-      }
-    }
-    Row {
-      width: parent.width
-      Label { width: parent.width - barDisplay.width; text: "Menu bar shows"; anchors.verticalCenter: parent.verticalCenter }
-      UsageSelect {
-        id: barDisplay
-        objectName: "barDisplayControl"
-        width: Math.min(implicitWidth, parent.width * 0.7)
-        label: "Menu bar shows"
-        options: [{ value: "Icon", label: "Widget icon" }, { value: "Percentages", label: "Provider percentages" }]
-        value: String(root.draft.barDisplayMode || "Percentages")
-        foreground: root.foreground
-        surface: root.surface
-        fontFamily: root.fontFamily
-        alignPopupRight: true
-        onChanged: function(value) { root.setValue("barDisplayMode", value) }
-        onMenuClosed: if (root.visible) barDisplay.forceActiveFocus()
-        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-      }
-    }
-    Hint { text: "The widget uses an icon on vertical bars or when selected providers have no quota data." }
-    Row {
-      width: parent.width
-      visible: root.percentageDisplay
-      height: visible ? implicitHeight : 0
-      Label { width: parent.width - barWindowSelect.width; text: "Menu bar limit (top)"; anchors.verticalCenter: parent.verticalCenter }
-      UsageSelect {
-        id: barWindowSelect
-        objectName: "barWindowControl"
-        width: Math.min(implicitWidth, parent.width * 0.7)
-        label: "Menu bar limit (top)"
-        options: [
-          { value: "auto", label: "Most constrained (auto)" },
-          { value: "session", label: "5-hour (session)" },
-          { value: "weekly", label: "7-day (weekly)" },
-          { value: "monthly", label: "Monthly" }
-        ]
-        value: UsageLogic.normalizeBarWindow(root.draft.barWindow)
-        foreground: root.foreground
-        surface: root.surface
-        fontFamily: root.fontFamily
-        alignPopupRight: true
-        onChanged: function(value) { root.setValue("barWindow", value) }
-        onMenuClosed: if (root.visible) barWindowSelect.forceActiveFocus()
-        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-      }
-    }
-    Row {
-      width: parent.width
-      visible: root.percentageDisplay
-      height: visible ? implicitHeight : 0
-      Label { width: parent.width - barWindowSecondarySelect.width; text: "Menu bar limit (bottom)"; anchors.verticalCenter: parent.verticalCenter }
-      UsageSelect {
-        id: barWindowSecondarySelect
-        objectName: "barWindowSecondaryControl"
-        width: Math.min(implicitWidth, parent.width * 0.7)
-        label: "Menu bar limit (bottom)"
-        options: [
-          { value: "none", label: "None (single limit)" },
-          { value: "session", label: "5-hour (session)" },
-          { value: "weekly", label: "7-day (weekly)" },
-          { value: "monthly", label: "Monthly" }
-        ]
-        value: UsageLogic.normalizeSecondaryBarWindow(root.draft.barWindowSecondary)
-        foreground: root.foreground
-        surface: root.surface
-        fontFamily: root.fontFamily
-        alignPopupRight: true
-        onChanged: function(value) { root.setValue("barWindowSecondary", value) }
-        onMenuClosed: if (root.visible) barWindowSecondarySelect.forceActiveFocus()
-        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-      }
-    }
-    Row {
-      width: parent.width
-      visible: root.percentageDisplay
-      height: visible ? implicitHeight : 0
-      Label { width: parent.width - barResetsSwitch.width; text: "Show reset day in menu bar"; anchors.verticalCenter: parent.verticalCenter }
-      ProviderToggle {
-        id: barResetsSwitch
-        objectName: "barShowResetsToggle"
-        width: Style.space(82)
-        checked: root.draft.barShowResets === true
-        Accessible.name: "Show reset day in menu bar"
-        onToggled: root.setValue("barShowResets", !checked)
-      }
-    }
-    Row {
-      width: parent.width
-      visible: root.percentageDisplay && root.draft.barShowResets === true
-      height: visible ? implicitHeight : 0
-      Label { width: parent.width - barResetTimeSelect.width; text: "Reset time format"; anchors.verticalCenter: parent.verticalCenter }
-      UsageSelect {
-        id: barResetTimeSelect
-        objectName: "barResetTimeControl"
-        width: Math.min(implicitWidth, parent.width * 0.7)
-        label: "Reset time format"
-        options: [
-          { value: "24h", label: "24-hour (14:30)" },
-          { value: "12h", label: "12-hour (2:30 PM)" }
-        ]
-        value: UsageLogic.normalizeBarResetChoice("time", root.draft.barResetTimeFormat)
-        foreground: root.foreground
-        surface: root.surface
-        fontFamily: root.fontFamily
-        alignPopupRight: true
-        onChanged: function(value) { root.setValue("barResetTimeFormat", value) }
-        onMenuClosed: if (root.visible) barResetTimeSelect.forceActiveFocus()
-        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-      }
-    }
-    Row {
-      width: parent.width
-      visible: root.percentageDisplay && root.draft.barShowResets === true
-      height: visible ? implicitHeight : 0
-      Label { width: parent.width - barResetDateSelect.width; text: "Reset date format"; anchors.verticalCenter: parent.verticalCenter }
-      UsageSelect {
-        id: barResetDateSelect
-        objectName: "barResetDateControl"
-        width: Math.min(implicitWidth, parent.width * 0.7)
-        label: "Reset date format"
-        options: [
-          { value: "DD/MM", label: "DD/MM (22/04)" },
-          { value: "MM/DD", label: "MM/DD (04/22)" },
-          { value: "D MMM", label: "D MMM (22 Apr)" }
-        ]
-        value: UsageLogic.normalizeBarResetChoice("date", root.draft.barResetDateFormat)
-        foreground: root.foreground
-        surface: root.surface
-        fontFamily: root.fontFamily
-        alignPopupRight: true
-        onChanged: function(value) { root.setValue("barResetDateFormat", value) }
-        onMenuClosed: if (root.visible) barResetDateSelect.forceActiveFocus()
-        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-      }
-    }
-    Row {
-      width: parent.width
-      Label { width: parent.width - hideEmailSwitch.width; text: "Hide account emails"; anchors.verticalCenter: parent.verticalCenter }
-      ProviderToggle {
-        id: hideEmailSwitch
-        objectName: "hideAccountEmailsToggle"
-        width: Style.space(82)
-        checked: root.draft.hideAccountEmails !== false
-        Accessible.name: "Hide account emails"
-        onToggled: root.setValue("hideAccountEmails", !checked)
-      }
-    }
-    Hint { text: "Use Account 1, Account 2, … instead of account identities." }
-    Row {
-      width: parent.width
-      Label { width: parent.width - squareCardsSwitch.width; text: "Square usage cards"; anchors.verticalCenter: parent.verticalCenter }
-      ProviderToggle {
-        id: squareCardsSwitch
-        objectName: "squareUsageCardsToggle"
-        width: Style.space(82)
-        checked: root.draft.squareUsageCards === true
-        Accessible.name: "Square usage cards"
-        onToggled: root.setValue("squareUsageCards", !checked)
-      }
-    }
-    Hint { text: "Override theme corners for cards in Limits. Turn off to follow the theme." }
-    Row {
-      width: parent.width
-      Label { width: parent.width - providerColorsSwitch.width; text: "Provider colors"; anchors.verticalCenter: parent.verticalCenter }
-      ProviderToggle {
-        id: providerColorsSwitch
-        objectName: "providerColorsToggle"
-        width: Style.space(82)
-        checked: root.draft.providerColors === true
-        Accessible.name: "Provider colors"
-        onToggled: root.setValue("providerColors", !checked)
-      }
-    }
-    Hint { text: "Color each provider's bar chip and limit meters with its brand color. Off uses the Omarchy theme colors. The cost chart always uses provider colors." }
-  }
-
-  Section {
     id: providerSection
     objectName: "providerSection"
     visible: !root.proxyMode || root.percentageDisplay
     title: "Providers"
     expanded: true
+    summary: root.providersSummary()
     Row {
       width: parent.width
       Label { width: parent.width - monitorHeading.width - barHeading.width; text: "Provider"; font.bold: true }
       Label { id: monitorHeading; visible: !root.proxyMode; width: visible ? Style.space(82) : 0; text: "Monitor"; horizontalAlignment: Text.AlignHCenter }
-      Label { id: barHeading; visible: !root.proxyMode && root.percentageDisplay; width: visible ? Style.space(100) : 0; text: "Menu bar"; horizontalAlignment: Text.AlignHCenter }
+      Label { id: barHeading; visible: root.percentageDisplay; width: visible ? (root.proxyMode ? Style.space(82) : Style.space(100)) : 0; text: "Menu bar"; horizontalAlignment: Text.AlignHCenter }
     }
     Repeater {
       model: root.providerOptions
@@ -645,71 +495,252 @@ Column {
         }
       }
     }
-    Hint { text: root.proxyMode ? "All proxy providers are monitored automatically." : "Unmonitored providers are not fetched and are hidden from Limits." }
+    Hint { text: root.proxyMode ? "Every provider on the server is monitored. Choose which ones get a menu bar chip." : "Monitor fetches a provider and shows it in Limits. Menu bar adds its chip to the bar." }
   }
 
   Section {
-    id: barLimitsSection
-    objectName: "barLimitsSection"
-    title: "Menu bar limits per provider"
-    visible: root.percentageDisplay
-    summary: root.barLimitOverrideCount() === 0 ? "Global limits" : root.barLimitOverrideCount() + " overridden"
-    Hint { text: "Default inherits the global bar limit named in its selector. Any other choice overrides it for this provider only." }
-    Repeater {
-      model: root.providerOptions
-      delegate: Column {
-        id: limitRow
-        required property var modelData
-        width: parent.width
-        spacing: Style.spacing.sm
-        Label { text: limitRow.modelData.name }
-        Row {
+    id: openrouterSection
+    objectName: "openrouterSection"
+    visible: root.openrouterMonitored
+    title: "OpenRouter"
+    summary: root.draft.openrouterKeyFile ? "Key saved" : "Add a key"
+    SettingsCredential {
+      id: openrouterCredential
+      width: parent.width
+      label: "OpenRouter key"
+      editorObjectName: "openrouterKeyField"
+      saved: !!root.draft.openrouterKeyFile
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onEdited: root.errorText = ""
+      onRevealRequested: function(item) { root.revealRequested(item) }
+    }
+    Hint { text: "An API key shows its spending limit and spend. A management key also shows the account balance. The key is saved privately on this device; OPENROUTER_API_KEY in the environment takes precedence." }
+    Ui.Button {
+      objectName: "openrouterKeysLink"
+      text: "Create a key on OpenRouter ↗"
+      tooltipText: root.openrouterKeysUrl
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      fontSize: Style.font.caption
+      horizontalPadding: Style.spacing.sm
+      verticalPadding: Style.spacing.xs
+      focusable: true
+      Accessible.name: "Open OpenRouter key settings"
+      onClicked: Qt.openUrlExternally(root.openrouterKeysUrl)
+      onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+    }
+  }
+
+  Section {
+    id: menuBarSection
+    objectName: "menuBarSection"
+    title: "Menu bar"
+    expanded: true
+    summary: root.menuBarSummary()
+    Row {
+      width: parent.width
+      Label { width: parent.width - barDisplay.width; text: "Menu bar shows"; anchors.verticalCenter: parent.verticalCenter }
+      UsageSelect {
+        id: barDisplay
+        objectName: "barDisplayControl"
+        width: Math.min(implicitWidth, parent.width * 0.7)
+        label: "Menu bar shows"
+        options: [{ value: "Icon", label: "Widget icon" }, { value: "Percentages", label: "Provider percentages" }]
+        value: String(root.draft.barDisplayMode || "Percentages")
+        foreground: root.foreground
+        surface: root.surface
+        fontFamily: root.fontFamily
+        alignPopupRight: true
+        onChanged: function(value) { root.setValue("barDisplayMode", value) }
+        onMenuClosed: if (root.visible) barDisplay.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
+    Hint { text: "Vertical bars, and providers without data, show the widget icon instead." }
+    Row {
+      width: parent.width
+      visible: root.percentageDisplay
+      height: visible ? implicitHeight : 0
+      Label { width: parent.width - barWindowSelect.width; text: "Limit shown"; anchors.verticalCenter: parent.verticalCenter }
+      UsageSelect {
+        id: barWindowSelect
+        objectName: "barWindowControl"
+        width: Math.min(implicitWidth, parent.width * 0.7)
+        label: "Limit shown"
+        options: [
+          { value: "auto", label: "Most constrained" },
+          { value: "session", label: "5-hour" },
+          { value: "weekly", label: "7-day" },
+          { value: "monthly", label: "Monthly" }
+        ]
+        value: UsageLogic.normalizeBarWindow(root.draft.barWindow)
+        foreground: root.foreground
+        surface: root.surface
+        fontFamily: root.fontFamily
+        alignPopupRight: true
+        onChanged: function(value) { root.setValue("barWindow", value) }
+        onMenuClosed: if (root.visible) barWindowSelect.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
+    Row {
+      width: parent.width
+      visible: root.percentageDisplay
+      height: visible ? implicitHeight : 0
+      Label { width: parent.width - barWindowSecondarySelect.width; text: "Second limit below"; anchors.verticalCenter: parent.verticalCenter }
+      UsageSelect {
+        id: barWindowSecondarySelect
+        objectName: "barWindowSecondaryControl"
+        width: Math.min(implicitWidth, parent.width * 0.7)
+        label: "Second limit below"
+        options: [
+          { value: "none", label: "None" },
+          { value: "session", label: "5-hour" },
+          { value: "weekly", label: "7-day" },
+          { value: "monthly", label: "Monthly" }
+        ]
+        value: UsageLogic.normalizeSecondaryBarWindow(root.draft.barWindowSecondary)
+        foreground: root.foreground
+        surface: root.surface
+        fontFamily: root.fontFamily
+        alignPopupRight: true
+        onChanged: function(value) { root.setValue("barWindowSecondary", value) }
+        onMenuClosed: if (root.visible) barWindowSecondarySelect.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
+    Row {
+      width: parent.width
+      visible: root.percentageDisplay
+      height: visible ? implicitHeight : 0
+      Label { width: parent.width - barResetsSwitch.width; text: "Show when limits reset"; anchors.verticalCenter: parent.verticalCenter }
+      ProviderToggle {
+        id: barResetsSwitch
+        objectName: "barShowResetsToggle"
+        width: Style.space(82)
+        checked: root.draft.barShowResets === true
+        Accessible.name: "Show when limits reset"
+        onToggled: root.setValue("barShowResets", !checked)
+      }
+    }
+    Hint {
+      visible: root.percentageDisplay
+      text: "A time for limits that reset within a day, a date for weekly and monthly ones."
+    }
+    Row {
+      width: parent.width
+      visible: root.percentageDisplay && root.draft.barShowResets === true
+      height: visible ? implicitHeight : 0
+      Label { width: parent.width - barResetTimeSelect.width; text: "Time format"; anchors.verticalCenter: parent.verticalCenter }
+      UsageSelect {
+        id: barResetTimeSelect
+        objectName: "barResetTimeControl"
+        width: Math.min(implicitWidth, parent.width * 0.7)
+        label: "Reset time format"
+        options: [
+          { value: "24h", label: "24-hour (14:30)" },
+          { value: "12h", label: "12-hour (2:30 PM)" }
+        ]
+        value: UsageLogic.normalizeBarResetChoice("time", root.draft.barResetTimeFormat)
+        foreground: root.foreground
+        surface: root.surface
+        fontFamily: root.fontFamily
+        alignPopupRight: true
+        onChanged: function(value) { root.setValue("barResetTimeFormat", value) }
+        onMenuClosed: if (root.visible) barResetTimeSelect.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
+    Row {
+      width: parent.width
+      visible: root.percentageDisplay && root.draft.barShowResets === true
+      height: visible ? implicitHeight : 0
+      Label { width: parent.width - barResetDateSelect.width; text: "Date format"; anchors.verticalCenter: parent.verticalCenter }
+      UsageSelect {
+        id: barResetDateSelect
+        objectName: "barResetDateControl"
+        width: Math.min(implicitWidth, parent.width * 0.7)
+        label: "Reset date format"
+        options: [
+          { value: "DD/MM", label: "DD/MM (22/04)" },
+          { value: "MM/DD", label: "MM/DD (04/22)" },
+          { value: "D MMM", label: "D MMM (22 Apr)" }
+        ]
+        value: UsageLogic.normalizeBarResetChoice("date", root.draft.barResetDateFormat)
+        foreground: root.foreground
+        surface: root.surface
+        fontFamily: root.fontFamily
+        alignPopupRight: true
+        onChanged: function(value) { root.setValue("barResetDateFormat", value) }
+        onMenuClosed: if (root.visible) barResetDateSelect.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
+
+    Section {
+      id: barLimitsSection
+      objectName: "barLimitsSection"
+      title: "Per provider"
+      visible: root.percentageDisplay
+      summary: root.barLimitOverrideCount() === 0 ? "Same for all" : root.barLimitOverrideCount() + " customized"
+      Hint { text: "Pick different limits for one provider. Default follows the choices above." }
+      Repeater {
+        model: root.providerOptions
+        delegate: Column {
+          id: limitRow
+          required property var modelData
           width: parent.width
-          spacing: Style.spacing.lg
-          Column {
-            width: (parent.width - parent.spacing) / 2
-            spacing: Style.spacing.sm
-            Label { text: "Top" }
-            UsageSelect {
-              objectName: "barLimitTop-" + limitRow.modelData.id
-              width: parent.width
-              label: limitRow.modelData.name + " menu bar limit (top)"
-              options: [
-                { value: "default", label: UsageLogic.inheritedBarLimitLabel("top", root.draft.barWindow) },
-                { value: "auto", label: "Most constrained (auto)" },
-                { value: "session", label: "5-hour (session)" },
-                { value: "weekly", label: "7-day (weekly)" },
-                { value: "monthly", label: "Monthly" }
-              ]
-              value: root.barLimitValue(limitRow.modelData.id, "top")
-              foreground: root.foreground
-              surface: root.surface
-              fontFamily: root.fontFamily
-              onChanged: function(value) { root.setValue("barProviderLimits", UsageLogic.setBarLimit(root.draft.barProviderLimits, limitRow.modelData.id, "top", value)) }
-              onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+          spacing: Style.spacing.sm
+          Label { text: limitRow.modelData.name }
+          Row {
+            width: parent.width
+            spacing: Style.spacing.lg
+            Column {
+              width: (parent.width - parent.spacing) / 2
+              spacing: Style.spacing.sm
+              Label { text: "Limit shown" }
+              UsageSelect {
+                objectName: "barLimitTop-" + limitRow.modelData.id
+                width: parent.width
+                label: limitRow.modelData.name + " limit shown"
+                options: [
+                  { value: "default", label: UsageLogic.inheritedBarLimitLabel("top", root.draft.barWindow) },
+                  { value: "auto", label: "Most constrained" },
+                  { value: "session", label: "5-hour" },
+                  { value: "weekly", label: "7-day" },
+                  { value: "monthly", label: "Monthly" }
+                ]
+                value: root.barLimitValue(limitRow.modelData.id, "top")
+                foreground: root.foreground
+                surface: root.surface
+                fontFamily: root.fontFamily
+                onChanged: function(value) { root.setValue("barProviderLimits", UsageLogic.setBarLimit(root.draft.barProviderLimits, limitRow.modelData.id, "top", value)) }
+                onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+              }
             }
-          }
-          Column {
-            width: (parent.width - parent.spacing) / 2
-            spacing: Style.spacing.sm
-            Label { text: "Bottom" }
-            UsageSelect {
-              objectName: "barLimitBottom-" + limitRow.modelData.id
-              width: parent.width
-              label: limitRow.modelData.name + " menu bar limit (bottom)"
-              options: [
-                { value: "default", label: UsageLogic.inheritedBarLimitLabel("bottom", root.draft.barWindowSecondary) },
-                { value: "none", label: "None (single limit)" },
-                { value: "session", label: "5-hour (session)" },
-                { value: "weekly", label: "7-day (weekly)" },
-                { value: "monthly", label: "Monthly" }
-              ]
-              value: root.barLimitValue(limitRow.modelData.id, "bottom")
-              foreground: root.foreground
-              surface: root.surface
-              fontFamily: root.fontFamily
-              onChanged: function(value) { root.setValue("barProviderLimits", UsageLogic.setBarLimit(root.draft.barProviderLimits, limitRow.modelData.id, "bottom", value)) }
-              onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+            Column {
+              width: (parent.width - parent.spacing) / 2
+              spacing: Style.spacing.sm
+              Label { text: "Second limit below" }
+              UsageSelect {
+                objectName: "barLimitBottom-" + limitRow.modelData.id
+                width: parent.width
+                label: limitRow.modelData.name + " second limit below"
+                options: [
+                  { value: "default", label: UsageLogic.inheritedBarLimitLabel("bottom", root.draft.barWindowSecondary) },
+                  { value: "none", label: "None" },
+                  { value: "session", label: "5-hour" },
+                  { value: "weekly", label: "7-day" },
+                  { value: "monthly", label: "Monthly" }
+                ]
+                value: root.barLimitValue(limitRow.modelData.id, "bottom")
+                foreground: root.foreground
+                surface: root.surface
+                fontFamily: root.fontFamily
+                onChanged: function(value) { root.setValue("barProviderLimits", UsageLogic.setBarLimit(root.draft.barProviderLimits, limitRow.modelData.id, "bottom", value)) }
+                onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+              }
             }
           }
         }
@@ -718,10 +749,67 @@ Column {
   }
 
   Section {
+    id: displaySection
+    objectName: "displaySection"
+    title: "Display"
+    summary: (root.draft.quotaMode === "Remaining" ? "% left" : "% used") + " · " + (root.draft.providerColors === true ? "Brand colors" : "Theme colors")
+    Row {
+      width: parent.width
+      Label { width: parent.width - quotaModeSelect.width; text: "Show limits as"; anchors.verticalCenter: parent.verticalCenter }
+      UsageSelect {
+        id: quotaModeSelect
+        objectName: "quotaModeControl"
+        width: Math.min(implicitWidth, parent.width * 0.7)
+        label: "Show limits as"
+        options: [
+          { value: "Used", label: "Used (%)" },
+          { value: "Remaining", label: "Left (%)" }
+        ]
+        value: String(root.draft.quotaMode || "Used") === "Remaining" ? "Remaining" : "Used"
+        foreground: root.foreground
+        surface: root.surface
+        fontFamily: root.fontFamily
+        alignPopupRight: true
+        onChanged: function(value) { root.setQuotaMode(value) }
+        onMenuClosed: if (root.visible) quotaModeSelect.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
+    Hint { text: "Applies to cards, chips, and alerts." }
+    Row {
+      width: parent.width
+      Label { width: parent.width - providerColorsSwitch.width; text: "Provider colors"; anchors.verticalCenter: parent.verticalCenter }
+      ProviderToggle {
+        id: providerColorsSwitch
+        objectName: "providerColorsToggle"
+        width: Style.space(82)
+        checked: root.draft.providerColors === true
+        Accessible.name: "Provider colors"
+        onToggled: root.setValue("providerColors", !checked)
+      }
+    }
+    Hint { text: "Brand colors on chips and limit meters. Alerts keep the theme's alert color; the cost chart always uses brand colors." }
+    Row {
+      width: parent.width
+      Label { width: parent.width - squareCardsSwitch.width; text: "Square usage cards"; anchors.verticalCenter: parent.verticalCenter }
+      ProviderToggle {
+        id: squareCardsSwitch
+        objectName: "squareUsageCardsToggle"
+        width: Style.space(82)
+        checked: root.draft.squareUsageCards === true
+        Accessible.name: "Square usage cards"
+        onToggled: root.setValue("squareUsageCards", !checked)
+      }
+    }
+    Hint { text: "Off follows the theme's corners." }
+  }
+
+  Section {
     id: alertsSection
     objectName: "alertsSection"
     title: "Alerts"
     summary: root.draft.notifyLimitThresholds === false ? "Off" : "Warning at " + root.draft.warningThreshold + root.thresholdUnit + " · Critical at " + root.draft.criticalThreshold + root.thresholdUnit
+      + (root.openrouterMonitored ? " · Balance at $" + root.draft.creditWarningUsd : "")
     Row {
       width: parent.width
       Label { width: parent.width - notifySwitch.width; text: "Notify when limits run low"; anchors.verticalCenter: parent.verticalCenter }
@@ -751,6 +839,28 @@ Column {
         Field { id: criticalField; objectName: "criticalThresholdField"; settingKey: "criticalThreshold"; Accessible.name: "Critical threshold " + root.thresholdUnit; inputMethodHints: Qt.ImhDigitsOnly }
       }
     }
+    Label {
+      visible: root.openrouterMonitored
+      text: "Low balance (OpenRouter)"
+      font.bold: true
+    }
+    Row {
+      visible: root.openrouterMonitored
+      width: parent.width
+      spacing: Style.spacing.lg
+      Column {
+        width: (parent.width - parent.spacing) / 2
+        spacing: Style.spacing.sm
+        Label { text: "Warn at or below ($)" }
+        Field { id: moneyWarningField; objectName: "creditWarningUsdField"; settingKey: "creditWarningUsd"; Accessible.name: "Low balance warning in dollars"; inputMethodHints: Qt.ImhFormattedNumbersOnly }
+      }
+      Column {
+        width: (parent.width - parent.spacing) / 2
+        spacing: Style.spacing.sm
+        Label { text: "Critical at or below ($)" }
+        Field { id: moneyCriticalField; objectName: "creditCriticalUsdField"; settingKey: "creditCriticalUsd"; Accessible.name: "Low balance critical in dollars"; inputMethodHints: Qt.ImhFormattedNumbersOnly }
+      }
+    }
   }
 
   Section {
@@ -772,6 +882,26 @@ Column {
       onTextEdited: { root.refreshMinutes = text; root.errorText = "" }
       onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
     }
+  }
+
+  Section {
+    id: privacySection
+    objectName: "privacySection"
+    title: "Privacy"
+    summary: root.draft.hideAccountEmails !== false ? "Emails hidden" : "Emails shown"
+    Row {
+      width: parent.width
+      Label { width: parent.width - hideEmailSwitch.width; text: "Hide account emails"; anchors.verticalCenter: parent.verticalCenter }
+      ProviderToggle {
+        id: hideEmailSwitch
+        objectName: "hideAccountEmailsToggle"
+        width: Style.space(82)
+        checked: root.draft.hideAccountEmails !== false
+        Accessible.name: "Hide account emails"
+        onToggled: root.setValue("hideAccountEmails", !checked)
+      }
+    }
+    Hint { text: "Shows Account 1, Account 2, … instead of account identities, on screen and in exports." }
   }
 
   Section {

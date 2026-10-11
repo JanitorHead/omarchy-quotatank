@@ -274,16 +274,16 @@ function barLimitsFor(text, providerId, globalTop, globalBottom) {
 
 function windowSelectorLabel(selector) {
   var normalized = normalizeBarWindow(selector)
-  if (normalized === "session") return "5-hour (session)"
-  if (normalized === "weekly") return "7-day (weekly)"
+  if (normalized === "session") return "5-hour"
+  if (normalized === "weekly") return "7-day"
   if (normalized === "monthly") return "Monthly"
-  return "Most constrained (auto)"
+  return "Most constrained"
 }
 
 // Label for the "Default" choice of one provider slot: names the global value it inherits.
 function inheritedBarLimitLabel(slot, globalSelector) {
   var normalized = slot === "bottom" ? normalizeSecondaryBarWindow(globalSelector) : normalizeBarWindow(globalSelector)
-  return "Global: " + (normalized === "none" ? "None (single limit)" : windowSelectorLabel(normalized))
+  return "Default (" + (normalized === "none" ? "None" : windowSelectorLabel(normalized)) + ")"
 }
 
 // Short period tag for stacked chips. Auto has no single period, so it has no tag.
@@ -303,11 +303,17 @@ function barTagFor(provider, selector, allowFallback) {
   if (want === "auto") return ""
   var row = windowRowFor(provider, want, allowFallback)
   if (row === null || windowMatches(row, want)) return windowShortLabel(want)
+  return rowPeriodTag(row)
+}
+
+// Short period of one reported row: 5h, 7d, 30d, or 1d for a daily limit; empty when unknown.
+function rowPeriodTag(row) {
+  if (!row) return ""
   var selectors = Object.keys(WINDOW_SELECTORS)
   for (var i = 0; i < selectors.length; i++) {
     if (windowMatches(row, selectors[i])) return windowShortLabel(selectors[i])
   }
-  return ""
+  return Number(row.windowSeconds) === 86400 ? "1d" : ""
 }
 
 // Reset-day formats for the bar. Keys are the values stored in shell.json; values are Qt formats.
@@ -388,6 +394,23 @@ function windowRowFor(provider, selector, allowFallback) {
     if (exact !== null || !allowFallback) return exact
   }
   return lowestRow(windows)
+}
+
+// Limit cards in one order for every provider: shortest window first, so a 5-hour
+// limit always sits above weekly and monthly ones. Rows without a window length keep
+// their reported order after the timed ones.
+function orderedWindows(windows) {
+  var rows = listOrEmpty(windows)
+  var indexed = []
+  for (var i = 0; i < rows.length; i++) {
+    var seconds = Number(rows[i] && rows[i].windowSeconds)
+    indexed.push({ row: rows[i], index: i, seconds: isFinite(seconds) && seconds > 0 ? seconds : Infinity })
+  }
+  indexed.sort(function(a, b) {
+    if (a.seconds !== b.seconds) return a.seconds < b.seconds ? -1 : 1
+    return a.index - b.index
+  })
+  return indexed.map(function(entry) { return entry.row })
 }
 
 function lowestRow(rows) {
@@ -594,9 +617,10 @@ function meterMark(pace, mode) {
   return paceShowsMark(pace) ? sideOfUsed(pace.expected, mode) / 100 : -1
 }
 
-// The expected share as the chosen side reads it: "expected 50%" under Used, "expected 50% left" under Remaining.
+// The pace share as the chosen side reads it: "pace 50%" under Used, "pace 50% left" under Remaining.
+// "Pace" is where steady use would be by now, the same point the meter's tick marks.
 function expectedText(pace, mode) {
-  return "expected " + Math.round(sideOfUsed(pace.expected, mode)) + "%" + (mode === "Remaining" ? " left" : "")
+  return "pace " + Math.round(sideOfUsed(pace.expected, mode)) + "%" + (mode === "Remaining" ? " left" : "")
 }
 
 // The pace tick is drawn only when there is usage to compare with it and a projection backs it.
@@ -641,25 +665,42 @@ function paceText(pace, mode) {
   return "Lasts until reset · " + expected
 }
 
-// What the Pacing row says when no tick is drawn yet: the reason, not a blank.
+// Short ahead/behind badge for a card: points of use past or short of pace. Empty without a tick.
+function paceBadgeText(pace) {
+  if (!paceShowsMark(pace)) return ""
+  var delta = Math.round(pace.used - pace.expected)
+  if (delta > 0) return delta + " pts ahead"
+  if (delta < 0) return (-delta) + " pts behind"
+  return "On pace"
+}
+
+// What the card says when no tick is drawn yet: the reason, not a blank.
 function paceStatusText(pace, mode) {
   var text = paceText(pace, mode)
   if (text !== "") return text
-  if (!pace) return "not reported"
-  if (!pace.known) return "starts after 2% of the window"
+  if (!pace) return "No pace for this limit"
+  if (!pace.known) return "Pace starts after 2% of the window"
   if (pace.state === "stale") return "No recent data"
   if (pace.state === "collecting") return "Collecting data"
-  return "no usage yet"
+  return "No usage yet"
 }
 
 // One legend for all limit cards of a provider, shown once under them. Each card's line gives its figures.
+// Lines are wrapped by hand: the shell tooltip does not wrap text.
 var PACING_LEGEND = [
-  "Pacing compares usage with a steady burn across each limit's window.",
-  "The tick on a meter marks where usage should be by now; shading between the tick and the fill is ahead of pace.",
-  "The line under each limit projects from recent use; the newest samples weigh most (half-life " + Math.round(PACE_HALF_LIFE_SECONDS / 3600) + "h).",
-  "No run-out is projected while a limit is idle, has no recent samples, or is still collecting them.",
-  "Pace starts after " + Math.round(PACE_MIN_ELAPSED_FRACTION * 100) + "% of a window has passed.",
-  "Assumes the recent rate continues; bursts are not predicted."
+  "The tick on each meter is the pace: where usage",
+  "would be by now if the limit were spread evenly",
+  "over its window. Blocks past the tick are use",
+  "ahead of pace.",
+  "",
+  "The line under each limit projects your recent",
+  "rate: \"Runs out in …\" if the limit would empty",
+  "before it resets, \"Lasts until reset\" if not.",
+  "Recent use counts most (half-life " + Math.round(PACE_HALF_LIFE_SECONDS / 3600) + "h); bursts",
+  "are not predicted.",
+  "",
+  "No projection while a limit is idle or collecting",
+  "samples; no pace in the first " + Math.round(PACE_MIN_ELAPSED_FRACTION * 100) + "% of a window."
 ].join("\n")
 
 // Severity order for threshold crossings. "none" means no reading and never counts as one.
@@ -786,13 +827,13 @@ function alertText(level, remaining, mode) {
   return title + ": " + quotaText(figure, mode)
 }
 
-// Providers that get a bar chip: a reading for the chosen window, or a failure the user must see.
+// Providers that get a bar chip: a reading for the chosen window, money left to spend, or a failure the user must see.
 function barProviders(providers, selector) {
   var result = []
   var list = listOrEmpty(providers)
   for (var i = 0; i < list.length; i++) {
     var chosen = typeof selector === "function" ? selector(list[i]) : selector
-    if (String(list[i].status) === "error" || remainingForWindow(list[i], chosen) !== null)
+    if (String(list[i].status) === "error" || remainingForWindow(list[i], chosen) !== null || spendable(list[i]) !== null)
       result.push(list[i])
   }
   return result
@@ -888,7 +929,44 @@ var PROVIDER_COLORS = {
   claude: "#d97757",
   codex: "#10a37f",
   kimi: "#eab308",
-  opencode: "#a78bfa"
+  opencode: "#a78bfa",
+  openrouter: "#6467f2"
+}
+
+// Money a provider can still spend now (OpenRouter): the backend's `spendable`, the lowest of the
+// balance and every spending limit's allowance. Null for providers measured only in percentages.
+function spendable(provider) {
+  var credits = provider && provider.credits
+  if (!credits || String(credits.currency) !== "USD") return null
+  var amount = Number(credits.spendable)
+  if (credits.spendable === null || credits.spendable === undefined || !isFinite(amount)) return null
+  return Math.max(0, amount)
+}
+
+// Low-balance severity from dollar thresholds: at or below `critical` is critical, at or below `warning` warns.
+function moneySeverity(amount, warning, critical) {
+  if (amount === null || amount === undefined || !isFinite(Number(amount))) return "none"
+  var value = Number(amount)
+  if (value <= Number(critical)) return "critical"
+  if (value <= Number(warning)) return "warning"
+  return "ok"
+}
+
+// How long the money lasts at this UTC week's average daily spend, e.g. "about 6 weeks".
+// Empty when there is no spend yet this week or the week has barely started.
+function moneyRunway(amount, weeklySpend, nowSeconds) {
+  var spentWeek = Number(weeklySpend)
+  if (amount === null || amount === undefined || !isFinite(spentWeek) || spentWeek <= 0) return ""
+  var now = new Date(nowSeconds * 1000)
+  var weekday = (now.getUTCDay() + 6) % 7
+  var weekStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - weekday) / 1000
+  var days = (nowSeconds - weekStart) / 86400
+  if (days < 0.25) return ""
+  var left = Number(amount) / (spentWeek / days)
+  if (left < 1) return "less than a day"
+  if (left < 14) return "about " + Math.round(left) + (Math.round(left) === 1 ? " day" : " days")
+  if (left < 90) return "about " + Math.round(left / 7) + " weeks"
+  return "more than 3 months"
 }
 
 // Brand colour for a provider id; ids without one (T3 servers, local-* sources) get the fallback.

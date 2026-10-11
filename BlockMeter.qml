@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 
 // Omarchy-native segmented quota meter. Every segment is a single track item;
@@ -11,14 +12,14 @@ Item {
   id: root
 
   property real value: 0
-  property color fillColor: Color.foreground
+  property color fillColor: Commons.Color.foreground
   property color trackColor: Qt.rgba(fillColor.r, fillColor.g, fillColor.b, 0.14)
   property int blockWidth: Math.max(2, Style.space(5))
   property int blockGap: Math.max(1, Style.space(2))
   property real animatedValue: Math.max(0, Math.min(1, value))
   // Pace tick: a centred mark on the block at `markValue` (0-1). Negative hides it.
   property real markValue: -1
-  property color markColor: Color.foreground
+  property color markColor: Commons.Color.foreground
   // Usage past the tick is shaded so the excess over pace reads at a glance.
   property bool markAhead: false
   // Hover text for the tick; empty disables it.
@@ -75,7 +76,7 @@ Item {
     width: 2
     height: root.height
     radius: 0
-    color: root.markBlock < root.completeBlocks ? Color.background : root.markColor
+    color: root.markBlock < root.completeBlocks ? Commons.Color.background : root.markColor
   }
 
   Rectangle {

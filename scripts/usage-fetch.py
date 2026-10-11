@@ -30,12 +30,13 @@ from typing import Any, Callable
 from model_usage_common import atomic_write_json, clean_message
 
 SCHEMA_VERSION = 1
-PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode")
+PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode", "openrouter")
 PROVIDER_NAMES = {
     "claude": "Claude Code",
     "codex": "OpenAI Codex",
     "kimi": "Kimi Code",
     "opencode": "OpenCode Go",
+    "openrouter": "OpenRouter",
     "antigravity": "Antigravity",
     "gemini": "Gemini",
     "gemini-cli": "Gemini CLI",
@@ -51,6 +52,7 @@ AUTH_COMMANDS = {
     "opencode": "opencode auth login",
 }
 
+ONE_DAY = 24 * 60 * 60
 FIVE_HOURS = 5 * 60 * 60
 SEVEN_DAYS = 7 * 24 * 60 * 60
 THIRTY_DAYS = 30 * 24 * 60 * 60
@@ -976,6 +978,185 @@ def fetch_opencode(timeout: float) -> dict[str, Any]:
     return result
 
 
+# --------------------------------------------------------------- OpenRouter
+
+
+OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+OPENROUTER_INTERVALS = {"daily": ONE_DAY, "weekly": SEVEN_DAYS, "monthly": THIRTY_DAYS}
+OPENROUTER_INTERVAL_NAMES = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly"}
+OPENROUTER_BUDGET_NAMES = {
+    "workspace_default_member": "member budget",
+    "workspace_default_key": "key budget",
+    "member": "member budget",
+    "api_key": "key guardrail",
+    "workspace": "workspace budget",
+}
+MAX_OPENROUTER_BUDGETS = 4
+
+
+def openrouter_key_path() -> Path:
+    override = os.environ.get("OPENROUTER_API_KEY_FILE")
+    if override:
+        return Path(override).expanduser()
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    return config_home / "omarchy" / "model-usage" / "openrouter.key"
+
+
+def openrouter_key(key_file: Path | None) -> str:
+    """The environment wins, then the private file saved from widget settings."""
+    value = os.environ.get("OPENROUTER_API_KEY")
+    if value and value.strip():
+        return value.strip()
+    path = key_file or openrouter_key_path()
+    if not path.exists() and key_file is None:
+        return ""
+    return read_private_key(path, "OpenRouter key")
+
+
+def next_utc_reset(interval: str, now: float) -> int | None:
+    """Start of the next UTC day, week (Monday), or month: when OpenRouter's counters return to zero."""
+    current = datetime.fromtimestamp(now, timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    if interval == "daily":
+        return int(current.timestamp()) + ONE_DAY
+    if interval == "weekly":
+        return int(current.timestamp()) + (7 - current.weekday()) * ONE_DAY
+    if interval == "monthly":
+        year, month = (current.year + 1, 1) if current.month == 12 else (current.year, current.month + 1)
+        return int(current.replace(year=year, month=month, day=1).timestamp())
+    return None
+
+
+def usd(value: Any) -> float | None:
+    amount = number(value)
+    return None if amount is None else round(amount, 2)
+
+
+def money_window(window_id: str, label: str, spent: float, limit: float, interval: Any,
+                 resets_at: Any, now: float) -> dict[str, Any]:
+    interval = interval if isinstance(interval, str) else None
+    seconds = OPENROUTER_INTERVALS.get(interval or "")
+    resets = resets_at or (next_utc_reset(interval, now) if seconds else None)
+    window = make_window(window_id, label, clamp(spent, 0.0, limit) / limit * 100.0, resets, seconds,
+                         f"${clamp(spent, 0.0, limit):.2f} of ${limit:.2f}")
+    window["unit"] = "usd"
+    window["remainingAmount"] = round(max(0.0, limit - spent), 2)
+    return window
+
+
+def parse_openrouter(key_payload: Any, credits_payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
+    """Limits that reset become windows; the prepaid balance and spend become `credits` in USD."""
+    data = key_payload.get("data") if isinstance(key_payload, dict) else None
+    if key_payload is not None and not isinstance(data, dict):
+        raise ProviderFailure("malformed", "OpenRouter returned unreadable key data.")
+    data = data or {}
+    windows: list[dict[str, Any]] = []
+    limits_left: list[float] = []
+
+    limit, left = number(data.get("limit")), number(data.get("limit_remaining"))
+    if limit is not None and limit > 0 and left is not None:
+        interval = data.get("limit_reset")
+        prefix = OPENROUTER_INTERVAL_NAMES.get(interval if isinstance(interval, str) else "", "")
+        windows.append(money_window("key", (prefix + " key limit").strip().capitalize(), limit - left, limit,
+                                    interval, None, now))
+        limits_left.append(max(0.0, left))
+
+    budgets = data.get("budgets") if isinstance(data.get("budgets"), list) else []
+    for budget in budgets[:MAX_OPENROUTER_BUDGETS]:
+        if not isinstance(budget, dict) or budget.get("scope") == "key_limit":
+            continue
+        cap, spent = number(budget.get("limit_usd")), number(budget.get("spend_usd"))
+        if cap is None or cap <= 0 or spent is None:
+            continue
+        interval = budget.get("reset_interval")
+        prefix = OPENROUTER_INTERVAL_NAMES.get(interval if isinstance(interval, str) else "", "")
+        name = OPENROUTER_BUDGET_NAMES.get(str(budget.get("scope")), "budget")
+        windows.append(money_window("budget-" + str(budget.get("scope") or len(windows)),
+                                    (prefix + " " + name).strip().capitalize(), spent, cap, interval,
+                                    budget.get("resets_at"), now))
+        limits_left.append(max(0.0, cap - spent))
+
+    free = data.get("free_model_daily_requests")
+    if isinstance(free, dict):
+        cap, used = number(free.get("limit")), number(free.get("used"))
+        if cap is not None and cap > 0 and used is not None and (used > 0 or data.get("is_free_tier") is True):
+            windows.append(make_window("free", "Free model requests", clamp(used, 0.0, cap) / cap * 100.0,
+                                       next_utc_reset("daily", now), ONE_DAY, f"{int(used)} of {int(cap)} today"))
+
+    balance = total = spent_total = None
+    credit_data = credits_payload.get("data") if isinstance(credits_payload, dict) else None
+    if isinstance(credit_data, dict):
+        total, spent_total = usd(credit_data.get("total_credits")), usd(credit_data.get("total_usage"))
+        if total is not None and spent_total is not None:
+            balance = round(total - spent_total, 2)
+            limits_left.append(max(0.0, balance))
+
+    spend = {name: usd(data.get("usage_" + name)) for name in ("daily", "weekly", "monthly")}
+    credits = None
+    if balance is not None or limits_left or any(value is not None for value in spend.values()):
+        credits = {
+            "label": "Balance",
+            "currency": "USD",
+            "used": spent_total,
+            "limit": None,
+            "remaining": balance,
+            "total": total,
+            "unlimited": False,
+            "resetCreditsAvailable": None,
+            # What can still be spent now: the lowest of the balance and every limit's allowance.
+            "spendable": round(min(limits_left), 2) if limits_left else None,
+            "spend": spend,
+        }
+    if data.get("is_management_key") is True or (key_payload is None and credits_payload is not None):
+        plan = "Management key"
+    elif data.get("is_free_tier") is True:
+        plan = "Free tier"
+    else:
+        plan = "API key"
+    return windows, credits, plan
+
+
+def fetch_openrouter(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "openrouter"
+    try:
+        token = openrouter_key(key_file)
+    except ProviderFailure as exc:
+        return error_provider(provider_id, exc.kind, exc.message)
+    if not token:
+        return error_provider(provider_id, "no_credentials",
+                              "No OpenRouter key was found. Add one under Limits → gear → OpenRouter.")
+    headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
+    key_payload = credits_payload = None
+    try:
+        try:
+            key_payload = http_json(OPENROUTER_API_BASE + "/key", headers, timeout)
+        except ProviderFailure as exc:
+            if exc.kind != "expired":
+                raise
+        # Only a management key may read the account balance; a regular key would get 403.
+        is_management = isinstance(key_payload, dict) and isinstance(key_payload.get("data"), dict) \
+            and key_payload["data"].get("is_management_key") is True
+        if key_payload is None or is_management:
+            try:
+                credits_payload = http_json(OPENROUTER_API_BASE + "/credits", headers, timeout)
+            except ProviderFailure as exc:
+                if key_payload is not None and exc.kind == "expired":
+                    credits_payload = None
+                else:
+                    raise
+        windows, credits, plan = parse_openrouter(key_payload, credits_payload, time.time())
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            return error_provider(provider_id, "expired", "OpenRouter rejected the saved key. Enter a new one in Limits settings.")
+        return error_provider(provider_id, exc.kind, exc.message)
+
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="OpenRouter API", windows=windows, credits=credits)
+    if credits is None and not windows:
+        result["notice"] = "This key has no limit, and only a management key can read the account balance."
+    return result
+
+
+
 # --------------------------------------------------------------- CLIProxyAPI
 
 
@@ -987,26 +1168,31 @@ def cliproxy_key_path() -> Path:
     return config_home / "omarchy" / "model-usage" / "cliproxy.key"
 
 
-def read_cliproxy_key(path: Path) -> str:
+def read_private_key(path: Path, name: str = "Proxy management key") -> str:
+    """One ASCII secret from a regular 0600 file owned by the user; the error names `name`, never the secret."""
     try:
         # NONBLOCK also prevents a misconfigured FIFO from stalling the poll.
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         try:
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-                raise ProviderFailure("config", "Proxy key file must be a regular file owned by you with mode 0600.")
+                raise ProviderFailure("config", f"{name} file must be a regular file owned by you with mode 0600.")
             raw = os.read(fd, 8193)
         finally:
             os.close(fd)
     except OSError:
-        raise ProviderFailure("config", "Proxy management key could not be read. Enter your Management API key in widget settings.") from None
+        raise ProviderFailure("config", f"{name} could not be read. Enter it again in widget settings.") from None
     try:
         key = raw.decode("utf-8").strip()
     except UnicodeDecodeError:
         key = ""
     if len(raw) > 8192 or not key or any(ord(char) < 32 or ord(char) > 126 for char in key):
-        raise ProviderFailure("config", "Proxy management key file must contain one nonempty ASCII key.")
+        raise ProviderFailure("config", f"{name} file must contain one nonempty ASCII key.")
     return key
+
+
+def read_cliproxy_key(path: Path) -> str:
+    return read_private_key(path, "Proxy management key")
 
 
 def normalize_cliproxy_url(address: str) -> str:
@@ -1622,12 +1808,14 @@ FETCHERS: dict[str, Callable[[float], dict[str, Any]]] = {
     "codex": fetch_codex,
     "kimi": fetch_kimi,
     "opencode": fetch_opencode,
+    "openrouter": fetch_openrouter,
 }
 
 
-def safe_fetch(provider_id: str, timeout: float) -> dict[str, Any]:
+def safe_fetch(provider_id: str, timeout: float,
+               fetchers: dict[str, Callable[[float], dict[str, Any]]] | None = None) -> dict[str, Any]:
     try:
-        result = FETCHERS[provider_id](timeout)
+        result = (fetchers or FETCHERS)[provider_id](timeout)
         if not isinstance(result, dict) or result.get("id") != provider_id:
             raise ValueError("invalid normalized result")
         return result
@@ -1635,12 +1823,15 @@ def safe_fetch(provider_id: str, timeout: float) -> dict[str, Any]:
         return error_provider(provider_id, "internal", "The provider collector could not read usage data.")
 
 
-def collect_providers(provider_ids: list[str], timeout: float) -> list[dict[str, Any]]:
+def collect_providers(provider_ids: list[str], timeout: float, openrouter_key_file: Path | None = None) -> list[dict[str, Any]]:
     if not provider_ids:
         return []
+    fetchers = dict(FETCHERS)
+    if openrouter_key_file is not None and FETCHERS.get("openrouter") is fetch_openrouter:
+        fetchers["openrouter"] = lambda seconds: fetch_openrouter(seconds, openrouter_key_file)
     results: dict[str, dict[str, Any]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(provider_ids)) as executor:
-        futures = {executor.submit(safe_fetch, provider_id, timeout): provider_id for provider_id in provider_ids}
+        futures = {executor.submit(safe_fetch, provider_id, timeout, fetchers): provider_id for provider_id in provider_ids}
         for future in concurrent.futures.as_completed(futures):
             provider_id = futures[future]
             try:
@@ -1658,7 +1849,7 @@ def parse_provider_ids(value: str) -> list[str]:
 def build_payload(
     provider_ids: list[str], timeout: float, state_dir: Path | None,
     source: str = "direct", cliproxy_url: str = "http://127.0.0.1:8317",
-    key_file: Path | None = None,
+    key_file: Path | None = None, openrouter_key_file: Path | None = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     if source == "cliproxy":
@@ -1670,7 +1861,7 @@ def build_payload(
         server_id = hashlib.sha256(server.encode("utf-8")).hexdigest()[:16]
         state_dir = history_path(state_dir).parent / ("cliproxy-" + server_id)
     else:
-        providers = collect_providers(provider_ids, timeout)
+        providers = collect_providers(provider_ids, timeout, openrouter_key_file)
     update_and_attach_history(providers, state_dir)
     return {
         "schemaVersion": SCHEMA_VERSION,
@@ -1689,12 +1880,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source", choices=("direct", "cliproxy"), default="direct")
     parser.add_argument("--cliproxy-url", default=os.environ.get("CLIPROXY_API_URL") or "http://127.0.0.1:8317")
     parser.add_argument("--cliproxy-key-file", type=lambda value: Path(value).expanduser())
+    parser.add_argument("--openrouter-key-file", type=lambda value: Path(value).expanduser())
     args = parser.parse_args(argv)
 
     provider_ids = parse_provider_ids(args.providers)
     timeout = clamp(args.timeout, 1.0, 30.0)
     try:
-        payload = build_payload(provider_ids, timeout, args.state_dir, args.source, args.cliproxy_url, args.cliproxy_key_file)
+        payload = build_payload(provider_ids, timeout, args.state_dir, args.source, args.cliproxy_url,
+                                args.cliproxy_key_file, args.openrouter_key_file)
     except Exception as exc:
         payload = {
             "schemaVersion": SCHEMA_VERSION,

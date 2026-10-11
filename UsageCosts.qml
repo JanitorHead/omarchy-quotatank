@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls as Controls
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 import "UsageLogic.js" as UsageLogic
 
@@ -21,9 +22,9 @@ Item {
     ? Number(payload.period.days) : periodDays
   readonly property bool incompletePricing: Number(totals.unpricedRecords || 0) > 0
   readonly property bool lowPricingCoverage: incompletePricing && priceCoverage(totals) < 0.9
-  property color foreground: Color.foreground
-  property color urgent: Color.urgent
-  property color surface: Color.popups.background
+  property color foreground: Commons.Color.foreground
+  property color urgent: Commons.Color.urgent
+  property color surface: Commons.Color.popups.background
   property string fontFamily: Style.font.family
 
   readonly property color dim: Qt.darker(foreground, 1.55)
@@ -411,7 +412,7 @@ Item {
         id: providerSurface
         width: parent.width
         implicitHeight: providerRows.implicitHeight + contentTopInset + contentBottomInset
-        color: Style.normalFillFor(root.foreground, Color.accent, root.urgent)
+        color: Style.normalFillFor(root.foreground, Commons.Color.accent, root.urgent)
         borderSpec: Border.flat(root.alpha(root.foreground, 0.22), Style.spacing.hairline)
         padding: Style.spacing.xl
         radius: Style.cornerRadius
@@ -586,7 +587,7 @@ Item {
         visible: root.modelsExpanded
         width: parent.width
         implicitHeight: modelRows.implicitHeight + contentTopInset + contentBottomInset
-        color: Style.normalFillFor(root.foreground, Color.accent, root.urgent)
+        color: Style.normalFillFor(root.foreground, Commons.Color.accent, root.urgent)
         borderSpec: Border.flat(root.alpha(root.foreground, 0.22), Style.spacing.hairline)
         padding: Style.spacing.xl
         radius: Style.cornerRadius
