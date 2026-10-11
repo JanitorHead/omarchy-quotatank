@@ -4,7 +4,9 @@
 
 Quotatank puts your AI subscription limits in the Omarchy menu bar: Claude Code, OpenAI Codex, Kimi Code, and OpenCode Go, plus estimated API costs from your local CLI and T3 Code history.
 
-![Quotatank limits for Claude Code, with usage meters in provider colors and a critical 91% card](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/limits.png)
+![Quotatank limits for Claude Code in Omarchy theme colors, with a critical 91% card](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/limits.png)
+
+![Quotatank limits for Claude Code with provider colors enabled](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/limits-brand.png)
 
 ## Features
 
@@ -16,7 +18,9 @@ Quotatank puts your AI subscription limits in the Omarchy menu bar: Claude Code,
 - **Costs:** estimated API value of recorded tokens from local Codex and Claude Code transcripts and up to four T3 Code servers, over 24H, 7D, or 30D.
 - **Privacy controls:** hide account emails, and keep management keys in private files.
 
-![Quotatank menu bar chips for Claude Code, Codex, Kimi Code, and OpenCode Go](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/bar.png)
+![Quotatank menu bar chips for Claude Code, Codex, Kimi Code, and OpenCode Go in Omarchy theme colors](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/bar.png)
+
+![Quotatank menu bar chips with provider colors enabled](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/bar-brand.png)
 
 This is a derived work of [omarchy-modelusage](https://github.com/DigitalPals/omarchy-modelusage) by DigitalPals (MIT). See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 

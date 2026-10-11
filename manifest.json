@@ -5,7 +5,7 @@
   "version": "1.4.0",
   "author": "JanitorHead",
   "license": "MIT",
-  "description": "Track Claude Code, OpenAI Codex, Kimi Code, and OpenCode Go subscription limits from your Omarchy menu bar. Connect local CLIs, Fusebox, or CLIProxyAPI to monitor multiple accounts, remaining quotas, reset times, and credits. Explore 24-hour, 7-day, and 30-day token history and estimated API costs from local Codex/Claude transcripts and remote T3 Code servers, with cache-aware pricing, custom model rates, and provider/model breakdowns. Includes private account labels, quota history, and keyboard-friendly settings.",
+  "description": "Menu bar quota monitor for Claude Code, OpenAI Codex, Kimi Code, and OpenCode Go. Each limit has a pace tick showing the expected use at this point in the window, with a projection such as 'Runs out in 2h 5m' based on recent use. Per-provider bar limits, reset times in each chip, provider brand colors, and failed providers that stay visible with the reason. Desktop alerts at your thresholds, plus token and cost history from local transcripts.",
   "kinds": [
     "bar-widget"
   ],
