@@ -926,8 +926,9 @@ Ui.Panel {
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
-        interactive: contentHeight > height
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        // A fractional height difference from fitting must not paint a scrollbar over the content.
+        interactive: contentHeight > height + 1
+        ScrollBar.vertical: ScrollBar { policy: panelFlick.interactive ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff }
 
         ResetConfirmation {
           id: resetForm

@@ -18,9 +18,37 @@ Flow {
   property color urgent: Commons.Color.urgent
   property string fontFamily: Style.font.family
   property real cardRadius: 0
-  // Up to four tiles in one row; five or six wrap as two even rows of three.
-  readonly property int columns: options.length <= 4 ? Math.max(1, options.length) : options.length <= 6 ? 3 : 4
+  // Adaptive grid: every tile must fit the longest provider name (logo included) and figure, so the
+  // row holds as many tiles as fit at that width. Rows are then balanced (five tiles that fit four
+  // per row become 3 + 2, not 4 + 1), and each row stretches its tiles to the full width.
+  readonly property real minTileWidth: {
+    var widest = 0
+    for (var i = 0; i < options.length; i++) {
+      var option = options[i]
+      var label = Style.space(12) + Style.spacing.sm + labelMetrics.advanceWidth(String(option.label || ""))
+      var figure = option.failed ? labelMetrics.advanceWidth(String(option.figure || "")) : figureMetrics.advanceWidth(String(option.figure || ""))
+      widest = Math.max(widest, label, figure)
+    }
+    return Math.ceil(widest) + 2 * Style.spacing.lg + 2 * Style.spacing.hairline
+  }
+  readonly property int fitColumns: Math.max(1, Math.floor((width + spacing) / (minTileWidth + spacing)))
+  readonly property int rows: Math.max(1, Math.ceil(options.length / Math.max(1, Math.min(fitColumns, options.length))))
+  readonly property int columns: Math.max(1, Math.ceil(options.length / rows))
   readonly property real tileWidth: Math.floor((width - spacing * (columns - 1)) / columns)
+
+  FontMetrics {
+    id: labelMetrics
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    font.weight: Font.DemiBold
+  }
+
+  FontMetrics {
+    id: figureMetrics
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.heading
+    font.bold: true
+  }
   signal changed(string value)
 
   function alpha(color, opacity) { return Qt.rgba(color.r, color.g, color.b, opacity) }
