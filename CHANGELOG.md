@@ -4,11 +4,16 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 1.4.1
 
 ### Fixed
 
 - Fixed pacing and run-out estimates showing "No recent data" on Quickshell builds where widget data fails `Array.isArray`.
+
+### Changed
+
+- The README shows every feature with a screenshot: two stacked limits per chip, reset times and dates in the menu bar, the menu bar limit choice, used or remaining, one card per account, the banked Codex reset confirmation, the Costs model breakdown, and theme following. The marketplace preview is a new 1920×1080 image.
+- Removed the CPA Usage Keeper service and environment templates. The [account activity guide](docs/keeper-deployment.md) now covers only the widget setup and links to Keeper's own deployment guide.
 
 ## 1.4.0
 
