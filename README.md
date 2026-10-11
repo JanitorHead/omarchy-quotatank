@@ -154,7 +154,7 @@ Privacy:
 Limits and Costs have separate sources. A proxy can supply Limits while local transcripts supply Costs.
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph Limits
     cli["CLI sign-ins<br/>claude · codex · kimi · opencode"] --> uf["usage-fetch.py"]
     keys["API keys<br/>OpenRouter · DeepSeek"] --> uf
