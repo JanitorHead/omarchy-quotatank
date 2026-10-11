@@ -30,13 +30,14 @@ from typing import Any, Callable
 from model_usage_common import atomic_write_json, clean_message
 
 SCHEMA_VERSION = 1
-PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode", "openrouter")
+PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode", "openrouter", "deepseek")
 PROVIDER_NAMES = {
     "claude": "Claude Code",
     "codex": "OpenAI Codex",
     "kimi": "Kimi Code",
     "opencode": "OpenCode Go",
     "openrouter": "OpenRouter",
+    "deepseek": "DeepSeek",
     "antigravity": "Antigravity",
     "gemini": "Gemini",
     "gemini-cli": "Gemini CLI",
@@ -1154,6 +1155,81 @@ def fetch_openrouter(timeout: float, key_file: Path | None = None) -> dict[str, 
         result["notice"] = "OpenRouter did not share the account balance with this key, and the key has no spending limit. Save a management key to see the balance."
     return result
 
+# ------------------------------------------------------------------ DeepSeek
+
+DEEPSEEK_API_BASE = "https://api.deepseek.com"
+
+
+def deepseek_key_path() -> Path:
+    override = os.environ.get("DEEPSEEK_API_KEY_FILE")
+    if override:
+        return Path(override).expanduser()
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    return config_home / "omarchy" / "model-usage" / "deepseek.key"
+
+
+def deepseek_key(key_file: Path | None) -> str:
+    """The environment wins, then the private file saved from widget settings."""
+    value = os.environ.get("DEEPSEEK_API_KEY")
+    if value and value.strip():
+        return value.strip()
+    path = key_file or deepseek_key_path()
+    if not path.exists() and key_file is None:
+        return ""
+    return read_private_key(path, "DeepSeek key")
+
+
+def parse_deepseek(payload: Any) -> tuple[dict[str, Any], str]:
+    """The platform balance becomes `credits`: prepaid money with no limits and no spend history.
+
+    DeepSeek reports one balance per currency; the USD one is preferred, else the first. The
+    amounts are strings in the API. A notice explains when the platform has stopped serving calls."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("balance_infos"), list):
+        raise ProviderFailure("malformed", "DeepSeek returned unreadable balance data.")
+    infos = [info for info in payload["balance_infos"] if isinstance(info, dict)]
+    chosen = next((info for info in infos if str(info.get("currency") or "").upper() == "USD"), infos[0] if infos else None)
+    balance = usd(chosen.get("total_balance")) if chosen else None
+    if balance is None:
+        raise ProviderFailure("malformed", "DeepSeek returned no balance for this key.")
+    credits = {
+        "label": "Balance",
+        "currency": str(chosen.get("currency") or "USD").upper(),
+        "used": None,
+        "limit": None,
+        "remaining": balance,
+        "total": None,
+        "unlimited": False,
+        "resetCreditsAvailable": None,
+        "spendable": max(0.0, balance),
+        "spend": {},
+        "granted": usd(chosen.get("granted_balance")),
+        "toppedUp": usd(chosen.get("topped_up_balance")),
+    }
+    notice = "" if payload.get("is_available") is not False else "DeepSeek is refusing API calls until the balance is topped up."
+    return credits, notice
+
+
+def fetch_deepseek(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "deepseek"
+    try:
+        token = deepseek_key(key_file)
+    except ProviderFailure as exc:
+        return error_provider(provider_id, exc.kind, exc.message)
+    if not token:
+        return error_provider(provider_id, "no_credentials",
+                              "No DeepSeek key was found. Add one under Settings → Providers.")
+    headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
+    try:
+        credits, notice = parse_deepseek(http_json(DEEPSEEK_API_BASE + "/user/balance", headers, timeout))
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            return error_provider(provider_id, "expired", "DeepSeek rejected the saved key. Enter a new one under Settings → Providers.")
+        return error_provider(provider_id, exc.kind, exc.message)
+    result = base_provider(provider_id)
+    result.update(plan="API key", source="DeepSeek API", credits=credits, notice=notice)
+    return result
+
+
 
 
 # --------------------------------------------------------------- CLIProxyAPI
@@ -1808,6 +1884,13 @@ FETCHERS: dict[str, Callable[[float], dict[str, Any]]] = {
     "kimi": fetch_kimi,
     "opencode": fetch_opencode,
     "openrouter": fetch_openrouter,
+    "deepseek": fetch_deepseek,
+}
+
+# Providers whose key the widget saves to a private file, and the fetcher that takes that file.
+KEYED_FETCHERS: dict[str, Callable[[float, Path | None], dict[str, Any]]] = {
+    "openrouter": fetch_openrouter,
+    "deepseek": fetch_deepseek,
 }
 
 
@@ -1822,12 +1905,15 @@ def safe_fetch(provider_id: str, timeout: float,
         return error_provider(provider_id, "internal", "The provider collector could not read usage data.")
 
 
-def collect_providers(provider_ids: list[str], timeout: float, openrouter_key_file: Path | None = None) -> list[dict[str, Any]]:
+def collect_providers(provider_ids: list[str], timeout: float,
+                      key_files: dict[str, Path] | None = None) -> list[dict[str, Any]]:
     if not provider_ids:
         return []
     fetchers = dict(FETCHERS)
-    if openrouter_key_file is not None and FETCHERS.get("openrouter") is fetch_openrouter:
-        fetchers["openrouter"] = lambda seconds: fetch_openrouter(seconds, openrouter_key_file)
+    for provider_id, path in (key_files or {}).items():
+        keyed = KEYED_FETCHERS.get(provider_id)
+        if keyed is not None and FETCHERS.get(provider_id) is keyed:
+            fetchers[provider_id] = (lambda seconds, fetch=keyed, file=path: fetch(seconds, file))
     results: dict[str, dict[str, Any]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(provider_ids)) as executor:
         futures = {executor.submit(safe_fetch, provider_id, timeout, fetchers): provider_id for provider_id in provider_ids}
@@ -1848,7 +1934,7 @@ def parse_provider_ids(value: str) -> list[str]:
 def build_payload(
     provider_ids: list[str], timeout: float, state_dir: Path | None,
     source: str = "direct", cliproxy_url: str = "http://127.0.0.1:8317",
-    key_file: Path | None = None, openrouter_key_file: Path | None = None,
+    key_file: Path | None = None, key_files: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     if source == "cliproxy":
@@ -1860,7 +1946,7 @@ def build_payload(
         server_id = hashlib.sha256(server.encode("utf-8")).hexdigest()[:16]
         state_dir = history_path(state_dir).parent / ("cliproxy-" + server_id)
     else:
-        providers = collect_providers(provider_ids, timeout, openrouter_key_file)
+        providers = collect_providers(provider_ids, timeout, key_files)
     update_and_attach_history(providers, state_dir)
     return {
         "schemaVersion": SCHEMA_VERSION,
@@ -1880,13 +1966,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cliproxy-url", default=os.environ.get("CLIPROXY_API_URL") or "http://127.0.0.1:8317")
     parser.add_argument("--cliproxy-key-file", type=lambda value: Path(value).expanduser())
     parser.add_argument("--openrouter-key-file", type=lambda value: Path(value).expanduser())
+    parser.add_argument("--deepseek-key-file", type=lambda value: Path(value).expanduser())
     args = parser.parse_args(argv)
 
     provider_ids = parse_provider_ids(args.providers)
     timeout = clamp(args.timeout, 1.0, 30.0)
     try:
+        key_files = {name: path for name, path in (("openrouter", args.openrouter_key_file), ("deepseek", args.deepseek_key_file))
+                     if path is not None}
         payload = build_payload(provider_ids, timeout, args.state_dir, args.source, args.cliproxy_url,
-                                args.cliproxy_key_file, args.openrouter_key_file)
+                                args.cliproxy_key_file, key_files)
     except Exception as exc:
         payload = {
             "schemaVersion": SCHEMA_VERSION,

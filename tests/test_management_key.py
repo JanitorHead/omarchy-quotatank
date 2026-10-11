@@ -186,6 +186,24 @@ class ManagementKeyTests(unittest.TestCase):
                 for path in paths.values():
                     self.assertEqual(Path(path).exists(), decision == "commit")
 
+    def test_remove_unlinks_only_managed_key_files(self):
+        with tempfile.TemporaryDirectory() as config:
+            process = self.start(config)
+            path = Path(json.loads(process.stdout.readline())["path"])
+            process.communicate("commit\n", timeout=3)
+            custom = Path(config) / "custom.key"
+            custom.write_text("keep\n")
+            remover = subprocess.Popen(
+                [sys.executable, "-u", str(HELPER)], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                env={**os.environ, "XDG_CONFIG_HOME": config})
+            stdout, stderr = remover.communicate(
+                json.dumps({"remove": {"openrouterKeyFile": str(path), "deepseekKeyFile": str(custom)}}) + "\n", timeout=3)
+            self.assertEqual((remover.returncode, stderr), (0, ""))
+            self.assertEqual(json.loads(stdout)["removed"], ["openrouterKeyFile"])
+            self.assertFalse(path.exists())
+            self.assertTrue(custom.exists(), "files the widget did not create are left alone")
+
 
 if __name__ == "__main__":
     unittest.main()

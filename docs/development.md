@@ -9,8 +9,8 @@
 - `scripts/usage-fetch.py` performs parallel, failure-isolated provider collection and emits the versioned provider-neutral contract documented in [docs/backend-contract.md](backend-contract.md).
 - `CostBackend.qml` owns an independent, on-demand transcript scan, keeps the last known-good result across malformed responses, and never changes quota polling.
 - `scripts/cost-fetch.py` streams CLI JSONL, applies provider-specific deduplication, resumes growing files from a guarded byte position, caches sanitized usage records, prices attributable models, and emits [the estimated-cost contract](cost-contract.md).
-- `CostPriceEditor.qml` provides validated custom-price fields inside settings, with exact model matching and Save/Cancel behavior.
-- `CostSettings.qml` edits local sources, remote T3 servers and private tokens, and common model prices.
+- `UsageSettings.qml` is the whole settings surface: an index of six pages (Providers, Menu bar, Alerts, Display, Costs, Advanced), each flat. Every control saves as it changes through `changeRequested`; secrets are the exception and go through `scripts/management-key.py` with an explicit Save, committed once the path is persisted.
+- `CostPriceEditor.qml` provides validated custom-price rows inside the Costs page, with exact model matching.
 - `scripts/t3_costs.py` reads bounded T3 usage RPC responses and keeps private offline snapshots.
 - `UsageCosts.qml` renders the metric/period controls, time chart, token mix, pricing coverage percentages, and provider/model breakdowns without parsing raw history in QML.
 - `BlockMeter.qml` renders one track item per fixed block plus only the partial boundary fragment—there is no duplicate full-width fill layer.

@@ -25,9 +25,10 @@ Item {
   readonly property string cliproxyUrl: String(setting("cliproxyUrl", "http://127.0.0.1:8317"))
   readonly property string cliproxyKeyFile: String(setting("cliproxyKeyFile", ""))
   readonly property string openrouterKeyFile: String(setting("openrouterKeyFile", ""))
+  readonly property string deepseekKeyFile: String(setting("deepseekKeyFile", ""))
   readonly property var providers: payload ? UsageLogic.listOrEmpty(payload.providers) : []
   readonly property string proxyImplementation: String(payload && payload.proxyImplementation || "")
-  readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl, cliproxyKeyFile, openrouterKeyFile])
+  readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl, cliproxyKeyFile, openrouterKeyFile, deepseekKeyFile])
   readonly property string scriptPath: localPath(Qt.resolvedUrl("scripts/usage-fetch.py"))
   readonly property double nextRefreshAt: lastAttemptAt > 0
     ? lastAttemptAt + refreshIntervalSec * 1000 : 0
@@ -40,7 +41,7 @@ Item {
   }
 
   function normalizedProviderIds(value) {
-    var allowed = ["claude", "codex", "kimi", "opencode", "openrouter"]
+    var allowed = UsageLogic.LOCAL_PROVIDER_IDS
     var requested = UsageLogic.isListLike(value) ? value : allowed
     var result = []
     for (var i = 0; i < allowed.length; i++) {
@@ -83,7 +84,10 @@ Item {
       if (cliproxyUrl.trim() !== "") command.push("--cliproxy-url", cliproxyUrl.trim())
       if (cliproxyKeyFile.trim() !== "") command.push("--cliproxy-key-file", cliproxyKeyFile.trim())
     }
-    if (usageSource !== "cliproxy" && openrouterKeyFile.trim() !== "") command.push("--openrouter-key-file", openrouterKeyFile.trim())
+    if (usageSource !== "cliproxy") {
+      if (openrouterKeyFile.trim() !== "") command.push("--openrouter-key-file", openrouterKeyFile.trim())
+      if (deepseekKeyFile.trim() !== "") command.push("--deepseek-key-file", deepseekKeyFile.trim())
+    }
     fetchProcess.command = command
     fetchProcess.connectionId = connectionId
     fetchProcess.running = true

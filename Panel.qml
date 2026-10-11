@@ -35,9 +35,7 @@ Ui.Panel {
       || (UsageLogic.isListLike(provider.history.d7) && provider.history.d7.length > 0))
   readonly property bool tokensAvailable: viewMode === "limits" && !accountOverview && !!provider
     && provider.status !== "error" && providerModels.length > 0
-  readonly property bool configuring: viewMode === "settings" || viewMode === "cost-settings"
-  readonly property var activeSettingsForm: viewMode === "cost-settings" ? costConfigForm : configForm
-  property alias costSettingsForm: costConfigForm
+  readonly property bool configuring: viewMode === "settings"
   property alias settingsForm: configForm
   property alias resetAction: resetBackend
   property double nowMs: Date.now()
@@ -106,7 +104,8 @@ Ui.Panel {
     return result
   }
 
-  // Low-balance thresholds in USD for providers measured in money (OpenRouter).
+  // Low-balance thresholds for providers measured in money (OpenRouter, DeepSeek), compared in the
+  // balance's own currency.
   readonly property real creditCriticalUsd: Math.max(0, Number(setting("creditCriticalUsd", 1)) || 0)
   readonly property real creditWarningUsd: Math.max(creditCriticalUsd, Number(setting("creditWarningUsd", 5)) || 0)
 
@@ -122,14 +121,13 @@ Ui.Panel {
     var money = failed ? null : UsageLogic.moneyView(provider, quotaMode)
     var remaining = failed ? null : UsageLogic.minRemaining(provider)
     var shown = remaining === null ? null : (quotaMode === "Remaining" ? remaining : UsageLogic.usedFromRemaining(remaining))
-    var shortNames = { claude: "Claude", codex: "Codex", kimi: "Kimi", opencode: "OpenCode" }
     return {
       value: id,
-      label: shortNames[id] || String(provider.name || id),
+      label: UsageLogic.providerShortName(provider),
       name: String(provider.name || id),
       iconUrl: barIconUrl(provider),
       figure: failed ? UsageLogic.errorReasonLabel(provider.errorKind)
-        : money !== null ? UsageLogic.formatUsd(money.amount)
+        : money !== null ? money.text
         : (shown === null ? "—" : UsageLogic.formatPercent(shown) + "%"),
       unit: money !== null ? money.unit : shown === null ? "" : (quotaMode === "Remaining" ? "left" : "used"),
       fill: money !== null ? (money.share === null ? 0 : money.share / 100) : shown === null ? 0 : shown / 100,
@@ -184,8 +182,8 @@ Ui.Panel {
       moneyLow = level === "warning" || level === "critical"
       var view = UsageLogic.moneyView(provider, quotaMode)
       moneyLine = (view.unit === "used"
-        ? UsageLogic.formatUsd(view.amount) + " of " + UsageLogic.formatUsd(view.total) + " used"
-        : UsageLogic.formatUsd(view.amount) + " left") + (runway ? " · lasts " + runway : "")
+        ? view.text + " of " + UsageLogic.formatMoney(view.total, view.currency) + " used"
+        : view.text + " left") + (runway ? " · lasts " + runway : "")
     }
     if (moneyLow) return { text: moneyLine, urgent: true }
     if (soonest) {
@@ -277,9 +275,10 @@ Ui.Panel {
     open()
   }
 
-  function showSettings() {
+  // Settings open on the index, or straight on one page (the gear in Costs opens Costs).
+  function showSettings(pageId) {
     if (!configuring) settingsReturnView = viewMode
-    configForm.begin(settings)
+    configForm.begin(pageId || "")
     viewMode = "settings"
     open()
     Qt.callLater(function() { configForm.focusFirst() })
@@ -287,18 +286,16 @@ Ui.Panel {
 
   function showCostSettings() {
     settingsReturnView = "costs"
-    costConfigForm.begin(settings)
-    viewMode = "cost-settings"
-    open()
-    Qt.callLater(function() { costConfigForm.focusFirst() })
+    showSettings("costs")
   }
 
   function leaveSettings() {
-    activeSettingsForm.discardKey()
+    configForm.discardKey()
     viewMode = settingsReturnView
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
+  // Persists one batch of changed values; the form stays where it is so the result can be compared.
   function saveSettings(values) {
     var entry = Object.assign({}, settings, values)
     var changed = false
@@ -308,14 +305,13 @@ Ui.Panel {
     if (changed) {
       if (!bar || !bar.shell || typeof bar.shell.updateEntryInline !== "function"
           || !bar.shell.updateEntryInline(moduleName, entry)) {
-        activeSettingsForm.errorText = "Could not save settings. Make sure Quotatank is enabled in the bar, then try again."
-        activeSettingsForm.finishSave(false)
+        configForm.errorText = "Could not save settings. Make sure Quotatank is enabled in the bar, then try again."
+        configForm.finishSave(false)
         return false
       }
       settings = entry
     }
-    activeSettingsForm.finishSave(true)
-    leaveSettings()
+    configForm.finishSave(true)
     return true
   }
 
@@ -370,7 +366,7 @@ Ui.Panel {
           key: String(provider.id) + "|money",
           severity: level,
           title: String(provider.name || provider.id) + " · Balance",
-          body: (level === "critical" ? "Almost out: " : "Running low: ") + UsageLogic.formatUsd(money) + " left"
+          body: (level === "critical" ? "Almost out: " : "Running low: ") + UsageLogic.formatMoney(money, UsageLogic.moneyCurrency(provider)) + " left"
         })
       }
     }
@@ -459,7 +455,7 @@ Ui.Panel {
 
   function iconUrl(provider) {
     if (!provider) return ""
-    if (!UsageLogic.contains(["claude", "codex", "kimi", "opencode", "openrouter"], provider.id)) return ""
+    if (!UsageLogic.localProvider(provider.id)) return ""
     if (provider.id === "codex") {
       return Qt.resolvedUrl(colorLuminance(surface) >= 0.5
         ? "assets/codex-light.svg" : "assets/codex.svg")
@@ -469,7 +465,7 @@ Ui.Panel {
 
   function barIconUrl(provider) {
     if (!provider) return ""
-    if (!UsageLogic.contains(["claude", "codex", "kimi", "opencode", "openrouter"], provider.id)) return ""
+    if (!UsageLogic.localProvider(provider.id)) return ""
     return Qt.resolvedUrl("assets/" + provider.id + "-bar.svg")
   }
 
@@ -480,29 +476,13 @@ Ui.Panel {
     return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
   }
 
-  function currencyPrefix(currency) {
-    var value = String(currency || "").toUpperCase()
-    if (value === "USD") return "$"
-    if (value === "EUR") return "€"
-    if (value === "GBP") return "£"
-    if (value === "CNY") return "¥"
-    return value === "" ? "" : value + " "
-  }
-
-  function formatAmount(value, currency) {
-    var amount = Number(value)
-    if (!isFinite(amount)) return "—"
-    var digits = Math.abs(amount - Math.round(amount)) < 0.001 ? 0 : 2
-    return currencyPrefix(currency) + amount.toFixed(digits)
-  }
-
   function creditsPrimary(credits) {
     if (!credits) return ""
     if (credits.remaining !== null && credits.remaining !== undefined)
-      return formatAmount(credits.remaining, credits.currency) + " remaining"
+      return UsageLogic.formatMoney(credits.remaining, credits.currency) + " remaining"
     if (credits.unlimited) return "Unlimited"
     if (credits.used !== null && credits.used !== undefined)
-      return formatAmount(credits.used, credits.currency) + " used"
+      return UsageLogic.formatMoney(credits.used, credits.currency) + " used"
     if (credits.resetCreditsAvailable !== null && credits.resetCreditsAvailable !== undefined)
       return credits.resetCreditsAvailable + " reset credit" + (credits.resetCreditsAvailable === 1 ? "" : "s")
     return "Available"
@@ -513,13 +493,13 @@ Ui.Panel {
     var parts = []
     if (credits.used !== null && credits.used !== undefined) {
       if (credits.limit !== null && credits.limit !== undefined)
-        parts.push(formatAmount(credits.used, credits.currency) + " used of " + formatAmount(credits.limit, credits.currency))
-      else parts.push(formatAmount(credits.used, credits.currency) + " used this month")
+        parts.push(UsageLogic.formatMoney(credits.used, credits.currency) + " used of " + UsageLogic.formatMoney(credits.limit, credits.currency))
+      else parts.push(UsageLogic.formatMoney(credits.used, credits.currency) + " used this month")
     }
     if (credits.unlimited && credits.remaining !== null && credits.remaining !== undefined)
       parts.push("No monthly spending cap")
     if (credits.total !== null && credits.total !== undefined)
-      parts.push(formatAmount(credits.total, credits.currency) + " funded")
+      parts.push(UsageLogic.formatMoney(credits.total, credits.currency) + " funded")
     if (credits.resetCreditsAvailable !== null && credits.resetCreditsAvailable !== undefined)
       parts.push(credits.resetCreditsAvailable + " rate-limit reset credit" + (credits.resetCreditsAvailable === 1 ? "" : "s"))
     return parts.join(" · ")
@@ -571,7 +551,7 @@ Ui.Panel {
     if (panelFlick) panelFlick.contentY = 0
     Qt.callLater(function() {
       if (resetBackend.active) resetForm.focusFirst()
-      else if (root.configuring) activeSettingsForm.focusFirst()
+      else if (root.configuring) configForm.focusFirst()
       else keyCatcher.forceActiveFocus()
     })
   } else {
@@ -582,7 +562,6 @@ Ui.Panel {
   onViewModeChanged: {
     if (costsView) costsView.closeMenu()
     if (viewMode !== "settings") configForm.discardKey()
-    if (viewMode !== "cost-settings") costConfigForm.discardKey()
     if (viewMode === "costs") costBackend.ensureLoaded()
     if (panelFlick) panelFlick.contentY = 0
   }
@@ -685,7 +664,7 @@ Ui.Panel {
             limits.bottom, UsageLogic.exactRemainingForWindow(reading, limits.bottom))
           readonly property string topWindow: blocking !== "" ? blocking : limits.top
           readonly property string secondaryWindow: blocking !== "" ? "none" : limits.bottom
-          // Money providers (OpenRouter) lead with dollars on the chosen side; their tightest limit, if any, sits below.
+          // Money providers (OpenRouter, DeepSeek) lead with the balance on the chosen side; their tightest limit, if any, sits below.
           readonly property var money: failed ? null : UsageLogic.spendable(reading)
           readonly property var moneyShown: money === null ? null : UsageLogic.moneyView(reading, root.quotaMode)
           readonly property bool moneyChip: money !== null
@@ -714,7 +693,7 @@ Ui.Panel {
             : UsageLogic.rowPeriodTag(UsageLogic.windowRowFor(reading, topWindow, true))
           readonly property string percentLine: (percentTag ? percentTag + " " : "") + shownText + (topReset ? " · " + topReset : "")
           readonly property string topText: failed ? UsageLogic.errorReasonLabel(modelData.errorKind)
-            : moneyChip ? UsageLogic.formatUsd(moneyShown.amount) : percentLine
+            : moneyChip ? moneyShown.text : percentLine
           readonly property string bottomText: moneyChip ? percentLine
             : (bottomTag ? bottomTag + " " : "") + secondaryText + (bottomReset ? " · " + bottomReset : "")
           readonly property string topSeverity: moneyChip ? moneySeverity : severity
@@ -742,8 +721,8 @@ Ui.Panel {
           tooltipText: failed
             ? String(modelData.name || modelData.id) + " · " + root.errorBody(modelData)
             : String(modelData.name || modelData.id)
-            + (moneyChip ? (moneyShown.unit === "used" ? "\nSpent: " + UsageLogic.formatUsd(moneyShown.amount) + " of " + UsageLogic.formatUsd(moneyShown.total) : "")
-              + "\nCan spend now: " + UsageLogic.formatUsd(money) : "")
+            + (moneyChip ? (moneyShown.unit === "used" ? "\nSpent: " + moneyShown.text + " of " + UsageLogic.formatMoney(moneyShown.total, moneyShown.currency) : "")
+              + "\nCan spend now: " + UsageLogic.formatMoney(money, moneyShown.currency) : "")
             + (shownValue === null ? (moneyChip ? "" : " usage unavailable")
               : "\n" + root.limitName(UsageLogic.windowRowFor(reading, topWindow, true), topWindow)
                 + ": " + UsageLogic.quotaText(shownValue, root.quotaMode))
@@ -848,10 +827,9 @@ Ui.Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: resetBackend.active ? resetForm : root.configuring ? root.activeSettingsForm : keyCatcher
+    focusTarget: resetBackend.active ? resetForm : root.configuring ? configForm : keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(420))
-    contentHeight: panel.fittedContentHeight(resetBackend.active ? resetForm.implicitHeight
-      : contentColumn.implicitHeight + (root.configuring ? settingsActions.implicitHeight + Style.spacing.lg : 0))
+    contentHeight: panel.fittedContentHeight(resetBackend.active ? resetForm.implicitHeight : contentColumn.implicitHeight)
 
     Ui.PanelKeyCatcher {
       id: keyCatcher
@@ -882,22 +860,6 @@ Ui.Panel {
         else if (text === "s" || text === "S") root.showSettings()
       }
 
-      SettingsActions {
-        id: settingsActions
-        objectName: "settingsActions"
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        visible: root.configuring && !resetBackend.active
-        foreground: root.foreground
-        urgent: root.urgent
-        fontFamily: root.fontFamily
-        errorText: root.configuring ? root.activeSettingsForm.errorText : ""
-        saving: root.configuring && root.activeSettingsForm.saving
-        onSaveRequested: root.activeSettingsForm.submit()
-        onCancelRequested: root.leaveSettings()
-      }
-
       // Expanded sections and new delegates must be laid out before their
       // coordinates can be used to scroll the focused field into view.
       Timer {
@@ -920,7 +882,6 @@ Ui.Panel {
       Flickable {
         id: panelFlick
         anchors.fill: parent
-        anchors.bottomMargin: settingsActions.visible ? settingsActions.implicitHeight + Style.spacing.lg : 0
         contentWidth: width
         contentHeight: resetBackend.active ? resetForm.implicitHeight : contentColumn.implicitHeight
         clip: true
@@ -1052,6 +1013,7 @@ Ui.Panel {
             id: configForm
             visible: root.viewMode === "settings"
             width: parent.width
+            settings: root.settings
             foreground: root.foreground
             urgent: root.urgent
             surface: root.surface
@@ -1059,24 +1021,9 @@ Ui.Panel {
             accountDetails: root.accountTooltip(root.provider)
             proxyProviders: root.proxyMode ? backend.providers : []
             proxyImplementation: backend.proxyImplementation
-            onSaveRequested: function(values) { root.saveSettings(values) }
-            onCancelRequested: root.leaveSettings()
-            onRevealRequested: function(item) {
-              settingsRevealTimer.item = item
-              settingsRevealTimer.restart()
-            }
-          }
-          CostSettings {
-            id: costConfigForm
-            sources: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sources) : []
-            visible: root.viewMode === "cost-settings"
-            width: parent.width
-            foreground: root.foreground
-            urgent: root.urgent
-            surface: root.surface
-            fontFamily: root.fontFamily
-            onSaveRequested: function(values) { root.saveSettings(values) }
-            onCancelRequested: root.leaveSettings()
+            costSources: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sources) : []
+            onChangeRequested: function(values) { root.saveSettings(values) }
+            onCloseRequested: root.leaveSettings()
             onRevealRequested: function(item) {
               settingsRevealTimer.item = item
               settingsRevealTimer.restart()
@@ -1626,8 +1573,8 @@ Ui.Panel {
     }
   }
 
-  // Money a provider can still spend (OpenRouter): the amount large, its share as a meter, where it
-  // comes from, recent spend, and how long it lasts at this week's rate.
+  // Money a provider can still spend (OpenRouter, DeepSeek): the amount large, its share as a meter,
+  // where it comes from, recent spend, and how long it lasts at this week's rate.
   component BalanceCard: Ui.BorderSurface {
     id: moneyCard
     property var provider: null
@@ -1640,21 +1587,30 @@ Ui.Panel {
     readonly property bool hasBalance: !!credits && credits.remaining !== null && credits.remaining !== undefined
     readonly property var spend: credits && credits.spend ? credits.spend : ({})
     readonly property string runway: UsageLogic.moneyRunway(amount, spend.weekly, root.nowMs / 1000)
+    readonly property string currency: UsageLogic.moneyCurrency(provider)
+
+    function money(value) { return UsageLogic.formatMoney(value, currency) }
 
     function spendLine() {
       var parts = []
-      if (spend.daily !== null && spend.daily !== undefined) parts.push("Today " + UsageLogic.formatUsd(spend.daily))
-      if (spend.weekly !== null && spend.weekly !== undefined) parts.push("Week " + UsageLogic.formatUsd(spend.weekly))
-      if (spend.monthly !== null && spend.monthly !== undefined) parts.push("Month " + UsageLogic.formatUsd(spend.monthly))
+      if (spend.daily !== null && spend.daily !== undefined) parts.push("Today " + money(spend.daily))
+      if (spend.weekly !== null && spend.weekly !== undefined) parts.push("Week " + money(spend.weekly))
+      if (spend.monthly !== null && spend.monthly !== undefined) parts.push("Month " + money(spend.monthly))
       return parts.join(" · ")
     }
 
+    // Where the balance comes from: purchased and used for OpenRouter; granted and topped up for
+    // DeepSeek. A spending limit is named only when it holds back a noticeable part of the balance.
     function sourceLine() {
       if (!hasBalance) return "Save a management key to see the account balance too."
-      var text = UsageLogic.formatUsd(credits.total) + " purchased · " + UsageLogic.formatUsd(credits.used) + " used"
-      // Name the limit only when it holds back a noticeable part of the balance.
+      var parts = []
+      if (credits.total !== null && credits.total !== undefined) parts.push(money(credits.total) + " purchased")
+      if (credits.used !== null && credits.used !== undefined) parts.push(money(credits.used) + " used")
+      if (Number(credits.granted) > 0) parts.push(money(credits.granted) + " granted")
+      if (Number(credits.toppedUp) > 0) parts.push(money(credits.toppedUp) + " topped up")
+      var text = parts.join(" · ")
       if (amount !== null && Number(credits.remaining) - amount >= Math.max(1, Number(credits.remaining) * 0.05))
-        text += "\nA spending limit allows " + UsageLogic.formatUsd(amount) + " of the " + UsageLogic.formatUsd(credits.remaining) + " balance now"
+        text += (text ? "\n" : "") + "A spending limit allows " + money(amount) + " of the " + money(credits.remaining) + " balance now"
       return text
     }
 
@@ -1698,7 +1654,7 @@ Ui.Panel {
           id: moneyFigure
           anchors.right: moneyUnit.left
           anchors.rightMargin: Style.spacing.sm
-          text: UsageLogic.formatUsd(moneyCard.view ? moneyCard.view.amount : moneyCard.amount)
+          text: moneyCard.view ? moneyCard.view.text : moneyCard.money(moneyCard.amount)
           color: moneyCard.stressed ? root.urgent : root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
@@ -1748,8 +1704,8 @@ Ui.Panel {
       Text {
         visible: text !== ""
         width: parent.width
-        text: (moneyCard.stressed ? UsageLogic.formatUsd(moneyCard.amount) + " left, at or below your "
-            + UsageLogic.formatUsd(moneyCard.level === "critical" ? root.creditCriticalUsd : root.creditWarningUsd) + " alert"
+        text: (moneyCard.stressed ? moneyCard.money(moneyCard.amount) + " left, at or below your "
+            + moneyCard.money(moneyCard.level === "critical" ? root.creditCriticalUsd : root.creditWarningUsd) + " alert"
             + (moneyCard.runway !== "" ? " · " : "") : "")
           + (moneyCard.runway !== "" ? (moneyCard.stressed ? "lasts " : "Lasts ") + moneyCard.runway + " at this week's rate" : "")
         color: moneyCard.stressed ? root.urgent : root.dim

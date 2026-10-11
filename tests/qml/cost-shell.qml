@@ -11,6 +11,8 @@ ShellRoot {
   property var overview: null
   property string pickedClient: ""
   property var saved: null
+  property int saves: 0
+  property int savesBeforeBlankRow: 0
   property int responses: 0
   property int phase: 0
   readonly property string custom: '{"vendor/Example[1m]":{"inputCostPerMillionTokens":2,"outputCostPerMillionTokens":8,"cacheReadCostPerMillionTokens":0}}'
@@ -34,17 +36,26 @@ ShellRoot {
     }
     return null
   }
-  function edit(name, text) {
+  // Type into a field; `done` also finishes editing, which is when free text saves.
+  function edit(name, text, done) {
     var field = find(form, name)
-    check(field !== null, "price field exists: " + name)
+    check(field !== null, "field exists: " + name)
     field.text = text
     field.textEdited()
+    if (done) field.editingFinished()
+  }
+  // The host: persist a change batch into the live settings and acknowledge it.
+  function host(values) {
+    root.saves++
+    root.saved = Object.assign({}, root.form.settings, values)
+    root.form.settings = root.saved
+    root.form.finishSave(true)
   }
 
   Component.onCompleted: {
-    form = create("CostSettings.qml", { width: 420 })
-    form.saveRequested.connect(function(values) { root.saved = values })
-    form.begin({costPriceOverrides: custom})
+    form = create("UsageSettings.qml", { width: 420, settings: { costPriceOverrides: custom } })
+    form.changeRequested.connect(host)
+    form.begin("costs")
     view = create("UsageCosts.qml", {width: 420, payload: {
       source: "transcripts", generatedAt: "2030-01-15T12:00:00Z",
       totals: {records: 0, totalTokens: 0, costUsd: 0, historyStatus: "unavailable"},
@@ -88,8 +99,7 @@ ShellRoot {
     repeat: true
     onTriggered: {
       if (root.phase === 0) {
-        root.check(!root.form.remoteExpanded && !root.form.pricesExpanded && !root.form.diagnosticsExpanded,
-          "cost settings start with advanced sections collapsed")
+        root.check(root.form.page === "costs", "the gear in Costs opens the Costs page directly")
         root.check(!root.find(root.overview, "costModelDetails").visible, "model breakdown starts collapsed")
         root.check(!root.find(root.overview, "costTokenDetails").visible, "cost overview starts without token details")
         root.check(root.find(root.overview, "costModel-0") === null, "collapsed models are not instantiated")
@@ -127,37 +137,39 @@ ShellRoot {
         root.check(root.find(root.view, "costSummaryValue").text === "—", "missing history is not a zero estimate")
         root.check(root.find(root.view, "costHistoryGap-0").visible, "missing chart history is marked")
         root.check(root.find(root.view, "costSource-remote") === null, "source diagnostics are absent from Costs")
-        root.form.sources = root.view.payload.sources
+        root.form.costSources = root.view.payload.sources
         root.check(root.find(root.view, "costClient-t3") === null, "app filters are removed")
         root.check(root.form.priceEditor.serialize() === root.custom, "saved prices round-trip through QML model roles")
         root.edit("costRate-0-outputCostPerMillionTokens", "12")
-        root.check(JSON.parse(root.form.priceEditor.serialize())["vendor/Example[1m]"].outputCostPerMillionTokens === 12,
-          "editing a field updates its model role")
-        root.form.submit()
         root.check(JSON.parse(root.saved.costPriceOverrides)["vendor/Example[1m]"].outputCostPerMillionTokens === 12,
-          "Save includes the edited custom price")
-        root.form.begin({costPriceOverrides: root.custom})
-        root.check(root.form.priceEditor.serialize() === root.custom, "reopening discards unsaved draft prices")
+          "editing a price saves it at once")
+        root.check(root.form.priceEditor.serialize() === root.saved.costPriceOverrides, "the editor keeps showing what it saved")
+        root.form.settings = Object.assign({}, root.form.settings, { costPriceOverrides: root.custom })
+        root.check(root.form.priceEditor.serialize() === root.custom, "a change saved elsewhere replaces the editor contents")
+        root.savesBeforeBlankRow = root.saves
         root.form.priceEditor.addPrice()
         root.phase++
       } else if (root.phase === 1) {
-        root.check(root.form.pricesExpanded, "adding a price opens its editor")
         root.check(root.find(root.overview, "costModel-9") !== null, "expanded breakdown includes models beyond the former top eight")
         root.check(root.find(root.overview, "costModelDetails").visible, "expanded models render")
         root.overview.modelsExpanded = false
         root.check(root.find(root.overview, "costModel-9") === null, "collapsing releases model rows")
         root.check(root.find(root.form, "costSource-remote").text.indexOf("Unavailable") >= 0, "source diagnostics are available in Costs settings")
-        root.check(!root.form.submit(), "blank added rows block Save")
+        var before = root.saves
+        root.check(root.form.priceError !== "" && root.saves === root.savesBeforeBlankRow, "a blank added row is explained and not saved")
         root.edit("costModel-1", "free-model")
         root.edit("costRate-1-inputCostPerMillionTokens", "0")
         root.edit("costRate-1-outputCostPerMillionTokens", "0")
-        root.check(root.form.submit(), "explicit zero prices can be saved")
+        root.check(root.form.priceError === "" && root.saves > before, "explicit zero prices save once the row is complete")
         root.check(JSON.parse(root.saved.costPriceOverrides)["free-model"].outputCostPerMillionTokens === 0,
           "zero survives settings serialization")
-        root.form.begin({costPriceOverrides: "invalid"})
-        root.check(!root.form.submit(), "invalid existing prices cannot be silently replaced")
+        root.form.settings = Object.assign({}, root.form.settings, { costPriceOverrides: "invalid" })
+        root.check(root.form.priceEditor.loadError !== "", "invalid existing prices are reported")
+        root.find(root.form, "costLocal-codexSwitch").toggled()
+        root.check(root.saved.costPriceOverrides === "invalid", "an unrelated change never silently replaces invalid prices")
         root.form.priceEditor.begin("{}")
-        root.check(root.form.submit() && root.saved.costPriceOverrides === "{}", "removing prices restores automatic pricing")
+        root.form.applyPrices()
+        root.check(root.saved.costPriceOverrides === "{}", "removing prices restores automatic pricing")
         root.phase++
       } else if (root.phase === 2 && root.responses >= 2 && !root.backend.loading) {
         root.check(root.openingResponses === 1 && !root.openingBackend.loading,
@@ -169,14 +181,12 @@ ShellRoot {
         root.phase++
       } else if (root.phase === 3 && root.responses === 3 && !root.backend.loading) {
         root.check(!root.backend.payload.testRequest.force, "period changes do not force price downloads")
-        var lastGood = root.backend.payload
         root.backend.settings = {costLocalProviders: ["codex"]}
-        root.saved = lastGood
         root.phase++
       } else if (root.phase === 4 && root.backend.fetchError !== "" && !root.backend.loading) {
         root.check(!root.backend.payload.generatedAt, "source change clears old totals even on failure")
-        root.form.begin({costLocalProviders: [], costT3Servers: '[{"id":"first","name":"Remote","url":"https://first.example","tokenFile":"","enabled":true}]'})
-        root.check(root.form.submit(), "T3 settings save")
+        root.form.settings = {costLocalProviders: ["claude"], costT3Servers: '[{"id":"first","name":"Remote","url":"https://first.example","tokenFile":"","enabled":true}]'}
+        root.find(root.form, "costLocal-claudeSwitch").toggled()
         root.check(root.saved.costLocalProviders.length === 0 && JSON.parse(root.saved.costT3Servers)[0].enabled, "remote-only setting round trips and is included")
         root.backend.settings = root.saved
         root.phase++
@@ -185,31 +195,33 @@ ShellRoot {
         root.phase++
       } else if (root.phase === 6 && !root.backend.loading && root.backend.payload.generatedAt) {
         root.check(JSON.parse(root.backend.payload.testRequest.servers)[0].url === "https://second.example", "in-flight old server response is discarded")
-        root.form.begin({})
-        root.form.addServer()
+        root.form.settings = {}
+        root.form.begin("costs")
+        root.find(root.form, "addT3Server").clicked()
         root.phase++
       } else if (root.phase === 7) {
-        root.check(root.form.remoteExpanded && root.find(root.form, "t3Details-0").expanded,
-          "adding a server opens the section and its connection editor")
-        root.form.remoteExpanded = false
-        root.check(!root.form.submit(), "new server needs a valid URL")
-        root.check(root.form.remoteExpanded, "invalid server expands the hidden section")
-        root.edit("t3Url-0", "https://t3.example")
-        root.edit("t3Token-0", "synthetic-t3-token")
+        root.check(root.find(root.form, "t3Url-0Field") !== null, "a new server row appears at once")
+        var before = root.saves
+        root.edit("t3Url-0Field", "https://user:secret@t3.example", true)
+        root.check(root.saves === before && root.find(root.form, "t3Url-0").error !== "", "a URL with credentials is refused in place")
+        root.edit("t3Url-0Field", "https://t3.example", true)
+        root.check(root.saves === before, "a server without a name is not saved yet")
+        root.check(!root.find(root.form, "t3Credential-0Save").enabled, "a token cannot be saved before the server is complete")
+        root.edit("t3Name-0Field", "Lab", true)
+        root.check(root.saves > before && JSON.parse(root.saved.costT3Servers)[0].url === "https://t3.example", "a complete server saves on its own")
+        root.edit("t3Credential-0Field", "synthetic-t3-token")
         root.saved = null
-        root.form.saveRequested.connect(function(values) { root.form.finishSave(true) })
-        root.check(root.form.submit(), "private token staging starts")
+        root.find(root.form, "t3Credential-0Save").clicked()
+        root.check(root.form.pendingApply !== null, "private token staging starts")
         root.phase++
       } else if (root.phase === 8 && root.saved && !root.form.saving) {
         var remote = JSON.parse(root.saved.costT3Servers)[0]
         root.check(remote.enabled && remote.tokenFile.indexOf("/management-keys/key-") >= 0, "token stored as private file reference")
         root.check(JSON.stringify(root.saved).indexOf("synthetic-t3-token") < 0, "raw token never enters widget settings")
-        root.form.begin(root.saved)
-        root.check(!root.form.remoteExpanded, "saved server starts summarized")
         root.check(root.find(root.form, "t3Credential-0").saved, "saved token has an explicit configured state")
-        root.check(!root.find(root.form, "t3Token-0").visible, "saved token does not show an empty editor")
-        root.check(root.form.submit(), "blank token preserves saved credential")
-        root.check(JSON.parse(root.saved.costT3Servers)[0].tokenFile === remote.tokenFile, "saved token path round trips")
+        root.check(!root.find(root.form, "t3Credential-0Field").visible, "saved token does not show an empty editor")
+        root.form.begin("costs")
+        root.check(JSON.parse(root.form.settings.costT3Servers)[0].tokenFile === remote.tokenFile, "saved token path round trips")
         console.log("Cost QML contract: passed")
         Qt.quit()
       }

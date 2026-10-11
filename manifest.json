@@ -30,6 +30,7 @@
       "cliproxyUrl": "http://127.0.0.1:8317",
       "cliproxyKeyFile": "",
       "openrouterKeyFile": "",
+      "deepseekKeyFile": "",
       "hideAccountEmails": true,
       "squareUsageCards": true,
       "providerColors": false,
@@ -97,6 +98,13 @@
         "description": "Managed automatically when you save an OpenRouter key in settings. An API key shows the account balance, the key's limits, and spend. OPENROUTER_API_KEY in the environment takes precedence."
       },
       {
+        "key": "deepseekKeyFile",
+        "type": "string",
+        "label": "DeepSeek key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a DeepSeek API key in settings. The key shows the platform balance. DEEPSEEK_API_KEY in the environment takes precedence."
+      },
+      {
         "key": "hideAccountEmails",
         "type": "boolean",
         "label": "Hide account emails",
@@ -138,7 +146,7 @@
         "key": "enabledProviders",
         "type": "multiselect",
         "label": "Providers",
-        "description": "Select providers to monitor in local mode. OpenRouter needs an API key saved in settings. Fusebox and CLIProxyAPI discover all managed providers automatically.",
+        "description": "Select providers to monitor in local mode. OpenRouter and DeepSeek need an API key saved in settings. Fusebox and CLIProxyAPI discover all managed providers automatically.",
         "noSelectionText": "No providers",
         "placeholderText": "Search providers...",
         "emptyText": "No providers found",
@@ -167,6 +175,10 @@
           {
             "value": "openrouter",
             "label": "OpenRouter"
+          },
+          {
+            "value": "deepseek",
+            "label": "DeepSeek"
           }
         ]
       },
@@ -293,6 +305,10 @@
           {
             "value": "openrouter",
             "label": "OpenRouter"
+          },
+          {
+            "value": "deepseek",
+            "label": "DeepSeek"
           }
         ]
       },
@@ -322,7 +338,7 @@
         "max": 100000,
         "step": 0.5,
         "defaultValue": 5,
-        "description": "Warn when the money an OpenRouter key can still spend falls to this amount or below."
+        "description": "Warn when the money an OpenRouter or DeepSeek balance can still spend falls to this amount or below, in the balance's currency."
       },
       {
         "key": "creditCriticalUsd",

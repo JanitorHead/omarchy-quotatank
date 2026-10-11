@@ -133,14 +133,7 @@ function formatTokens(value) {
 }
 
 function formatUsd(value) {
-  if (value === null || value === undefined || !isFinite(Number(value))) return "—"
-  var amount = Number(value)
-  if (Math.abs(amount) > 0 && Math.abs(amount) < 0.01) return "$" + amount.toFixed(4)
-  // Grouped the same way Qt.locale("en_US") does, without depending on the QML
-  // engine, so the formatter stays a pure function.
-  var parts = Math.abs(amount).toFixed(2).split(".")
-  var whole = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",")
-  return (amount < 0 ? "-$" : "$") + whole + "." + parts[1]
+  return formatMoney(value, "USD")
 }
 
 // Models of one provider, heaviest first, for the Limits view's token list.
@@ -946,20 +939,66 @@ function providerMark(providerId) {
   return String(providerId || "?").charAt(0).toUpperCase()
 }
 
+// Providers the widget reads on this computer, in the order they appear everywhere. `short` is the
+// tile and chip name; `money` marks providers measured in a prepaid balance rather than percentages.
+var LOCAL_PROVIDERS = [
+  { id: "claude", name: "Claude Code", short: "Claude" },
+  { id: "codex", name: "OpenAI Codex", short: "Codex" },
+  { id: "kimi", name: "Kimi Code", short: "Kimi" },
+  { id: "opencode", name: "OpenCode Go", short: "OpenCode" },
+  { id: "openrouter", name: "OpenRouter", short: "OpenRouter", money: true },
+  { id: "deepseek", name: "DeepSeek", short: "DeepSeek", money: true }
+]
+var LOCAL_PROVIDER_IDS = LOCAL_PROVIDERS.map(function (entry) { return entry.id })
+
+function localProvider(providerId) {
+  for (var i = 0; i < LOCAL_PROVIDERS.length; i++)
+    if (LOCAL_PROVIDERS[i].id === String(providerId)) return LOCAL_PROVIDERS[i]
+  return null
+}
+
+function providerShortName(provider) {
+  var entry = localProvider(provider && provider.id)
+  return entry ? entry.short : String(provider && (provider.name || provider.id) || "")
+}
+
 // Brand colour per provider. The cost chart always uses these; the bar and Limits use them when providerColors is on.
 var PROVIDER_COLORS = {
   claude: "#d97757",
   codex: "#10a37f",
   kimi: "#eab308",
   opencode: "#a78bfa",
-  openrouter: "#6467f2"
+  openrouter: "#6467f2",
+  deepseek: "#4d6bfe"
 }
 
-// Money a provider can still spend now (OpenRouter): the backend's `spendable`, the lowest of the
-// balance and every spending limit's allowance. Null for providers measured only in percentages.
+var CURRENCY_PREFIX = { USD: "$", EUR: "€", GBP: "£", CNY: "¥" }
+
+// "$1,234.56" / "¥12.00": grouped the same way Qt.locale("en_US") does, without depending on the
+// QML engine, so the formatter stays a pure function. Tiny nonzero amounts keep four decimals.
+function formatMoney(value, currency) {
+  if (value === null || value === undefined || !isFinite(Number(value))) return "—"
+  var amount = Number(value)
+  var code = String(currency || "USD").toUpperCase()
+  var prefix = Object.prototype.hasOwnProperty.call(CURRENCY_PREFIX, code) ? CURRENCY_PREFIX[code] : code + " "
+  if (Math.abs(amount) > 0 && Math.abs(amount) < 0.01) return (amount < 0 ? "-" : "") + prefix + Math.abs(amount).toFixed(4)
+  var parts = Math.abs(amount).toFixed(2).split(".")
+  var whole = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+  return (amount < 0 ? "-" : "") + prefix + whole + "." + parts[1]
+}
+
+// Currency of a provider's balance; "USD" when it has none.
+function moneyCurrency(provider) {
+  var credits = provider && provider.credits
+  return credits && credits.currency ? String(credits.currency).toUpperCase() : "USD"
+}
+
+// Money a provider can still spend now (OpenRouter, DeepSeek): the backend's `spendable`, the
+// lowest of the balance and every spending limit's allowance. Null for providers measured only in
+// percentages.
 function spendable(provider) {
   var credits = provider && provider.credits
-  if (!credits || String(credits.currency) !== "USD") return null
+  if (!credits) return null
   var amount = Number(credits.spendable)
   if (credits.spendable === null || credits.spendable === undefined || !isFinite(amount)) return null
   return Math.max(0, amount)
@@ -969,7 +1008,8 @@ function spendable(provider) {
 // allowance has spent ("$73.42 used" of a $75.00 balance, or of a key limit); under Remaining, what
 // can still be spent ("$1.58 left"). The allowance that binds is the one `spendable` came from.
 // `share` is the shown side as 0-100 of that allowance, null when its size is unknown.
-// Returns { amount, total, share, unit } or null for providers without money.
+// Returns { amount, total, share, unit, currency, text } or null for providers without money;
+// `text` is the amount already formatted in the balance's currency.
 function moneyView(provider, mode) {
   var left = spendable(provider)
   if (left === null) return null
@@ -990,9 +1030,12 @@ function moneyView(provider, mode) {
     }
   }
   var used = total === null ? null : Math.max(0, total - left)
+  var currency = moneyCurrency(provider)
   if (String(mode) === "Used" && used !== null)
-    return { amount: used, total: total, share: clamp(used / total * 100, 0, 100), unit: "used" }
-  return { amount: left, total: total, share: total === null ? null : clamp(left / total * 100, 0, 100), unit: "left" }
+    return { amount: used, total: total, share: clamp(used / total * 100, 0, 100), unit: "used",
+             currency: currency, text: formatMoney(used, currency) }
+  return { amount: left, total: total, share: total === null ? null : clamp(left / total * 100, 0, 100), unit: "left",
+           currency: currency, text: formatMoney(left, currency) }
 }
 
 // Low-balance severity from dollar thresholds: at or below `critical` is critical, at or below `warning` warns.

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Stage a private management key over stdin; retain it only after commit."""
+"""Stage a private key over stdin and retain it only after commit, or remove saved key files.
+
+Stage:  {"keys": {name: secret}, "previousPaths": {name: path}} → {"paths": {name: path}}, then
+        "commit" or "abort" on stdin; commit also unlinks the previous files.
+Remove: {"remove": {name: path}} → {"removed": [name]}; only files this script created are unlinked.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +25,23 @@ def interrupted(_signum, _frame):
     raise InterruptedError
 
 
+KEY_NAME = re.compile(r"key-[0-9a-f]{32}\.key")
+
+
+def unlink_previous(directory: Path, directory_fd: int, previous: Path) -> bool:
+    """Unlink one earlier key file, only inside our directory, only a regular file we own."""
+    if previous.parent != directory or not KEY_NAME.fullmatch(previous.name):
+        return False
+    try:
+        info = os.stat(previous.name, dir_fd=directory_fd, follow_symlinks=False)
+        if stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid():
+            os.unlink(previous.name, dir_fd=directory_fd)
+            return True
+    except OSError:
+        pass
+    return False
+
+
 def main() -> int:
     directory_fd = None
     filenames = []
@@ -28,11 +50,23 @@ def main() -> int:
     try:
         input_stream = os.fdopen(sys.stdin.fileno(), "rb", buffering=0, closefd=False)
         request = json.loads(input_stream.readline(65537))
+        config_home = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+        directory = config_home / "omarchy" / "model-usage" / "management-keys"
+        if "remove" in request:
+            targets = request["remove"]
+            if not isinstance(targets, dict) or not 1 <= len(targets) <= 4:
+                raise ValueError
+            directory_fd = open_private_directory(directory, create=False)
+            removed = [name for name, path in targets.items()
+                       if isinstance(path, str) and unlink_previous(directory, directory_fd, Path(path).expanduser())]
+            print(json.dumps({"removed": removed}), flush=True)
+            committed = True
+            return 0
         batch = "keys" in request
         keys = request.pop("keys") if batch else {"key": request.pop("key")}
         if not isinstance(keys, dict) or not 1 <= len(keys) <= 4:
             raise ValueError
-        allowed = {"cliproxyKeyFile", "costKeeperPasswordFile", "openrouterKeyFile"} if batch else {"key"}
+        allowed = {"cliproxyKeyFile", "costKeeperPasswordFile", "openrouterKeyFile", "deepseekKeyFile"} if batch else {"key"}
         previous_paths = request.get("previousPaths", {}) if batch else {"key": request.get("previousPath", "")}
         if not isinstance(previous_paths, dict):
             raise ValueError
@@ -43,8 +77,6 @@ def main() -> int:
             if not key or len(key) > 8191 or any(ord(c) < 32 or ord(c) > 126 for c in key):
                 raise ValueError
             keys[name] = key
-        config_home = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
-        directory = config_home / "omarchy" / "model-usage" / "management-keys"
         directory_fd = open_private_directory(directory, create=True)
         paths = {}
         for name, key in keys.items():
@@ -66,14 +98,7 @@ def main() -> int:
             committed = input_stream.readline(32).strip() == b"commit"
         if committed:
             for name in paths:
-                previous = Path(str(previous_paths.get(name, ""))).expanduser()
-                if previous.parent == directory and re.fullmatch(r"key-[0-9a-f]{32}\.key", previous.name):
-                    try:
-                        info = os.stat(previous.name, dir_fd=directory_fd, follow_symlinks=False)
-                        if stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid():
-                            os.unlink(previous.name, dir_fd=directory_fd)
-                    except OSError:
-                        pass
+                unlink_previous(directory, directory_fd, Path(str(previous_paths.get(name, ""))).expanduser())
             return 0
         return 1
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
