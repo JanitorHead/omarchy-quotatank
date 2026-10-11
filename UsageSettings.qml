@@ -620,7 +620,7 @@ Column {
         id: warningField
         objectName: "warningThreshold"
         width: (parent.width - parent.spacing) / 2
-        label: root.quotaMode === "Remaining" ? "Warn at or below (% left)" : "Warn at or above (% used)"
+        label: root.quotaMode === "Remaining" ? "Warn at (% left)" : "Warn at (% used)"
         source: UsageLogic.thresholdInMode(Number(root.value("warningThreshold", 25)), root.quotaMode)
         minimum: UsageLogic.thresholdBounds(1, 100, root.quotaMode)[0]
         maximum: UsageLogic.thresholdBounds(1, 100, root.quotaMode)[1]
@@ -635,7 +635,7 @@ Column {
         id: criticalField
         objectName: "criticalThreshold"
         width: (parent.width - parent.spacing) / 2
-        label: root.quotaMode === "Remaining" ? "Critical at or below (% left)" : "Critical at or above (% used)"
+        label: root.quotaMode === "Remaining" ? "Critical at (% left)" : "Critical at (% used)"
         source: UsageLogic.thresholdInMode(Number(root.value("criticalThreshold", 10)), root.quotaMode)
         minimum: UsageLogic.thresholdBounds(0, 100, root.quotaMode)[0]
         maximum: UsageLogic.thresholdBounds(0, 100, root.quotaMode)[1]
@@ -647,7 +647,7 @@ Column {
         onApplied: function(entered) { root.set("criticalThreshold", UsageLogic.thresholdToLeft(entered, root.quotaMode)) }
       }
     }
-    Hint { text: "Thresholds are stored as what is left, so switching Show limits as keeps the same boundaries." }
+    Hint { text: (root.quotaMode === "Remaining" ? "A limit turns warning at or below the first value and critical at or below the second." : "A limit turns warning at or above the first value and critical at or above the second.") + " The boundaries stay put when Show limits as changes." }
 
     Label { visible: root.moneyMonitored; text: "Low balance"; font.bold: true; topPadding: Style.spacing.md }
     Row {
@@ -1137,6 +1137,7 @@ Column {
   // with the reason underneath; the saved value is untouched until the text is good again.
   component NumberRow: Column {
     id: numberRow
+    width: parent.width
     property string label: ""
     property real source: 0
     property real minimum: 0
@@ -1184,6 +1185,7 @@ Column {
   // Free text that saves when editing finishes (Enter or leaving the field) and is valid.
   component TextRow: Column {
     id: textRow
+    width: parent.width
     property string label: ""
     property string placeholder: ""
     property string source: ""
@@ -1223,6 +1225,7 @@ Column {
   // setting. Saved keys show as saved; Replace opens the editor again, Remove forgets the file.
   component KeyRow: Column {
     id: keyRow
+    width: parent.width
     property string label: "Key"
     property string settingKey: ""
     property string savedPath: String(root.value(settingKey, ""))

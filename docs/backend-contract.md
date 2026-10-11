@@ -22,7 +22,7 @@ This contract covers live subscription limits only. The on-demand transcript/cos
       "windows": [
         {
           "id": "codex-primary",
-          "label": "5 hour limit",
+          "label": "5-hour limit",
           "used": 42.0,
           "remaining": 58.0,
           "resetsAt": 1893474000,

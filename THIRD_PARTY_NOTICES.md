@@ -2,7 +2,7 @@
 
 ## Omarchy
 
-The plugin's architecture and component usage follow Omarchy Quattro. The Claude and Codex SVG assets are redistributed from `basecamp/omarchy` at commit `2c247e390e357ae0fee3f8565b0c816adb705e6a`. Omarchy is distributed under the MIT license:
+The plugin's architecture and component usage follow Omarchy Quattro. The Codex SVG assets are redistributed from `basecamp/omarchy` at commit `2c247e390e357ae0fee3f8565b0c816adb705e6a`. Omarchy is distributed under the MIT license:
 
 > Copyright (c) David Heinemeier Hansson
 >
@@ -66,7 +66,7 @@ Estimated model costs use the public [`model_prices_and_context_window.json`](ht
 
 ## Kimi Code
 
-Current Kimi credential locations, endpoint shapes, fixed-point wallet units, and profile fields were checked against `MoonshotAI/kimi-cli` at commit `d723cc47ee43e5ca3c3c4ec2473f205d44acede2`. The `wire.jsonl` location, recursive subagent event envelope, and `StatusUpdate.token_usage` fields used by the Costs tab were checked again at commit `cbc15c076d17f70fec9f89c90c0502e68657f505`. Kimi CLI is distributed under the MIT license (Copyright (c) 2026 Moonshot AI). No Kimi CLI source or artwork is redistributed. `assets/kimi.svg` is an original, minimal tool glyph created for this plugin.
+Current Kimi credential locations, endpoint shapes, fixed-point wallet units, and profile fields were checked against `MoonshotAI/kimi-cli` at commit `d723cc47ee43e5ca3c3c4ec2473f205d44acede2`. The `wire.jsonl` location, recursive subagent event envelope, and `StatusUpdate.token_usage` fields used by the Costs tab were checked again at commit `cbc15c076d17f70fec9f89c90c0502e68657f505`. Kimi CLI is distributed under the MIT license (Copyright (c) 2026 Moonshot AI). No Kimi CLI source or artwork is redistributed; the Kimi mark comes from Simple Icons (see Provider marks).
 
 ## Provider marks
 
@@ -98,10 +98,12 @@ The account browsing, email privacy, and Antigravity quota-summary protocol were
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
 
-## OpenCode
+## Provider marks
 
-The marks in `assets/opencode.svg` and `assets/opencode-bar.svg` identify the
-service the OpenCode provider reports on. They are the OpenCode brand mark,
-redistributed from the MIT-licensed `markbus-ai/omarchy-opencode-usage` plugin,
-which uses the same mark to identify OpenCode. OpenCode is a trademark of its
-respective owner; the mark is used here only to identify the monitored tool.
+The marks in `assets/<provider>.svg` and `assets/<provider>-bar.svg` identify the
+services each provider reports on. The Claude, Kimi, OpenCode, OpenRouter, and
+DeepSeek paths are taken from [Simple Icons](https://simpleicons.org), released
+under CC0 1.0, so every mark shares the same 24-unit optical frame. The Codex
+mark is redistributed from `basecamp/omarchy` as noted above. Claude, Codex, Kimi,
+OpenCode, OpenRouter, and DeepSeek are trademarks of their respective owners; the
+marks are used here only to identify the monitored services.

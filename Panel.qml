@@ -194,7 +194,7 @@ Ui.Panel {
         + (pressing ? "" : " at this rate"), urgent: pressing }
     }
     if (moneyLine !== "") return { text: moneyLine, urgent: false }
-    if (projected > 0) return { text: projected === rows.length ? "Every limit lasts until reset" : "Projected limits last until reset", urgent: false }
+    if (projected > 0) return { text: projected === rows.length ? "Every limit lasts until it resets" : "No limit is on track to run out", urgent: false }
     return empty
   }
 
@@ -505,13 +505,16 @@ Ui.Panel {
     return parts.join(" · ")
   }
 
+  // What went wrong and what to do. The sign-in command is added once: a backend message that
+  // already quotes it is left alone.
   function errorBody(provider) {
     if (!provider) return ""
     var message = String(provider.message || "Usage data is unavailable.")
     if (!UsageLogic.errorNeedsSignIn(provider.errorKind))
       return message + "\nRetries on the next automatic refresh."
-    return provider.authCommand
-      ? message + "\nTo fix it, run “" + provider.authCommand + "” in a terminal, then refresh."
+    var command = String(provider.authCommand || "")
+    return command !== "" && message.indexOf(command) === -1
+      ? message + "\nTo fix it, run “" + command + "” in a terminal, then refresh."
       : message
   }
 
@@ -744,7 +747,7 @@ Ui.Panel {
             Item {
               id: providerMark
               y: Math.round((parent.height - height) / 2)
-              width: Style.space(providerChip.modelData.id === "codex" ? 13 : 12)
+              width: Style.space(12)
               height: width
 
               Image {

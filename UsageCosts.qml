@@ -254,7 +254,7 @@ Item {
       spacing: Style.spacing.lg
 
       Ui.PanelSectionHeader {
-        text: root.displayedPeriodDays === 1 ? "HOURLY" : "DAILY"
+        text: root.displayedPeriodDays === 1 ? "By hour" : "By day"
         foreground: root.foreground
         fontFamily: root.fontFamily
       }
@@ -403,7 +403,7 @@ Item {
       spacing: Style.spacing.lg
 
       Ui.PanelSectionHeader {
-        text: "BY PROVIDER"
+        text: "By provider"
         foreground: root.foreground
         fontFamily: root.fontFamily
       }

@@ -136,7 +136,7 @@ console.log("UsageLogic.js: all assertions passed");
 
 const codexWindows = [
   {id: "additional-secondary", label: "Code review · Weekly limit", windowSeconds: 604800},
-  {id: "codex-primary", label: "5 hour limit", windowSeconds: 18000},
+  {id: "codex-primary", label: "5-hour limit", windowSeconds: 18000},
   {id: "codex-secondary", label: "Weekly limit", windowSeconds: 604800}
 ];
 assert.equal(context.accountWindows({windows: codexWindows}, false).length, 1);
@@ -222,7 +222,7 @@ context.releaseLive('test'); assert.equal(stopped,1);
 // fallbacks, and the spellings shared with the AI usage widget.
 const windowed = (windows) => ({ id: "opencode", name: "OpenCode Go", status: "ok", windows });
 const opencodeWindows = windowed([
-  { id: "session", label: "5 hour limit", remaining: 100, windowSeconds: 18000 },
+  { id: "session", label: "5-hour limit", remaining: 100, windowSeconds: 18000 },
   { id: "weekly", label: "Weekly limit", remaining: 60, windowSeconds: 604800 },
   { id: "monthly", label: "Monthly limit", remaining: 80, windowSeconds: 2592000 },
 ]);

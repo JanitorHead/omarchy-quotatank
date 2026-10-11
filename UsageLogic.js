@@ -203,7 +203,7 @@ function severity(provider, warningThreshold, criticalThreshold, remaining) {
 // The menu bar can report one chosen limit instead of the most restrictive one.
 // A window is matched by its reported duration first and by its id/label text
 // second, so one choice works across providers that name windows differently
-// (`session` vs `5 hour limit`, `Weekly limit`, and so on). The accepted
+// (`session` vs `5-hour limit`, `Weekly limit`, and so on). The accepted
 // spellings match the AI usage widget's `barWindow` setting, so the same value
 // works for either plugin on the command line.
 var WINDOW_SELECTORS = {

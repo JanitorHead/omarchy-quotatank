@@ -259,7 +259,7 @@ def parse_claude_usage(payload: Any) -> tuple[list[dict[str, Any]], dict[str, An
             windows.append(window)
 
     flat_rows = (
-        ("five_hour", "session", "5 hour limit", FIVE_HOURS),
+        ("five_hour", "session", "5-hour limit", FIVE_HOURS),
         ("seven_day_oauth_apps", "weekly", "Weekly limit", SEVEN_DAYS),
         ("seven_day", "weekly", "Weekly limit", SEVEN_DAYS),
         ("seven_day_opus", "opus-weekly", "Opus weekly", SEVEN_DAYS),
@@ -286,7 +286,7 @@ def parse_claude_usage(payload: Any) -> tuple[list[dict[str, Any]], dict[str, An
             if "session" in kind or "hour" in kind or group == "session":
                 seconds = FIVE_HOURS
                 suffix = "session"
-                label = f"{scope} session" if scope else "5 hour limit"
+                label = f"{scope} session" if scope else "5-hour limit"
             elif "week" in kind or "day" in kind or group == "weekly":
                 seconds = SEVEN_DAYS
                 suffix = "weekly"
@@ -504,11 +504,11 @@ def duration_label(minutes: int | None) -> tuple[str, int | None]:
         return "Weekly limit", seconds
     if minutes % (24 * 60) == 0:
         days = minutes // (24 * 60)
-        return f"{days} day limit", seconds
+        return f"{days}-day limit", seconds
     if minutes % 60 == 0:
         hours = minutes // 60
-        return f"{hours} hour limit", seconds
-    return f"{minutes} minute limit", seconds
+        return f"{hours}-hour limit", seconds
+    return f"{minutes}-minute limit", seconds
 
 
 def parse_codex_rate_limits(
@@ -714,11 +714,11 @@ def friendly_window_label(seconds: int | None) -> str:
     if seconds == SEVEN_DAYS:
         return "Weekly limit"
     if seconds and seconds % (24 * 60 * 60) == 0:
-        return f"{seconds // (24 * 60 * 60)} day limit"
+        return f"{seconds // (24 * 60 * 60)}-day limit"
     if seconds and seconds % (60 * 60) == 0:
-        return f"{seconds // (60 * 60)} hour limit"
+        return f"{seconds // (60 * 60)}-hour limit"
     if seconds and seconds % 60 == 0:
-        return f"{seconds // 60} minute limit"
+        return f"{seconds // 60}-minute limit"
     return "Usage limit"
 
 
@@ -735,7 +735,9 @@ def kimi_usage_row(raw: Any, row_id: str, seconds: int | None, fallback_label: s
         used = 0
     if used is None or limit is None or limit <= 0:
         return None
-    label = str(raw.get("name") or raw.get("title") or fallback_label)
+    # A known period gets the same name as every other provider's window ("5-hour limit");
+    # Kimi's own name is kept only when the period is unknown.
+    label = fallback_label if seconds else str(raw.get("name") or raw.get("title") or fallback_label)
     reset = raw.get("resetTime") or raw.get("reset_time") or raw.get("reset_at") or raw.get("resetAt")
     if epoch_seconds(reset) is None:
         reset_in = number(raw.get("reset_in") or raw.get("resetIn") or raw.get("ttl"))
@@ -759,7 +761,7 @@ def parse_kimi_usage(payload: Any) -> tuple[list[dict[str, Any]], dict[str, Any]
                 continue
             detail = raw.get("detail") if isinstance(raw.get("detail"), dict) else raw
             seconds = kimi_window_seconds(raw.get("window"))
-            fallback = str(raw.get("name") or friendly_window_label(seconds))
+            fallback = friendly_window_label(seconds) if seconds else str(raw.get("name") or friendly_window_label(seconds))
             row = kimi_usage_row(detail, f"limit-{index}", seconds, fallback)
             if row:
                 windows.append(row)
@@ -878,7 +880,7 @@ OPENCODE_USER_AGENT = (
     "omarchy-model-usage/1.2.0 (+https://github.com/JanitorHead/omarchy-quotatank)"
 )
 OPENCODE_WINDOWS = (
-    ("rolling", "session", "5 hour limit", FIVE_HOURS),
+    ("rolling", "session", "5-hour limit", FIVE_HOURS),
     ("weekly", "weekly", "Weekly limit", SEVEN_DAYS),
     ("monthly", "monthly", "Monthly limit", THIRTY_DAYS),
 )
@@ -1551,7 +1553,7 @@ def fetch_rust_account(provider_id: str, entry: dict[str, Any]) -> dict[str, Any
             if reset is not None and reset <= now:
                 continue
             seconds = {"5h": FIVE_HOURS, "week": SEVEN_DAYS, "day": 86400}.get(name)
-            label = {"5h": "5 hour limit", "week": "Weekly limit", "day": "Daily limit"}.get(name, name.title())
+            label = {"5h": "5-hour limit", "week": "Weekly limit", "day": "Daily limit"}.get(name, name.title())
             if model:
                 label = model.title() + " · " + label
             windows.append(make_window(window_id, label, used, reset, seconds))

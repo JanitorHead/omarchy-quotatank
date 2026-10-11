@@ -53,7 +53,7 @@ class NormalizationTests(unittest.TestCase):
         windows = usage.parse_opencode_usage(fixture("opencode-usage.json"))
         self.assertEqual([row["id"] for row in windows], ["session", "weekly", "monthly"])
         self.assertEqual([row["label"] for row in windows],
-                         ["5 hour limit", "Weekly limit", "Monthly limit"])
+                         ["5-hour limit", "Weekly limit", "Monthly limit"])
         self.assertEqual([row["used"] for row in windows], [12.5, 40, 20])
         self.assertEqual([row["remaining"] for row in windows], [87.5, 60, 80])
         self.assertEqual([row["windowSeconds"] for row in windows], [18000, 604800, 2592000])
@@ -79,7 +79,7 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(plan, "ChatGPT Pro")
         self.assertEqual(reached, "")
         self.assertEqual(len(windows), 4)
-        self.assertEqual(windows[0]["label"], "5 hour limit")
+        self.assertEqual(windows[0]["label"], "5-hour limit")
         self.assertEqual(windows[1]["label"], "Weekly limit")
         self.assertIn("Extra Long Context Preview", windows[2]["label"])
         self.assertEqual(windows[3]["detail"], "$12.00 used of $50.00")
@@ -367,7 +367,7 @@ class HistoryAndContractTests(unittest.TestCase):
         provider = usage.base_provider("codex")
         provider["windows"] = [
             usage.make_window("codex-primary", "Weekly limit", 40, None, 604_800),
-            usage.make_window("spark-primary", "Spark · 5 hour limit", 0, None, 18_000),
+            usage.make_window("spark-primary", "Spark · 5-hour limit", 0, None, 18_000),
             usage.make_window("spark-secondary", "Spark · Weekly limit", 0, None, 604_800),
         ]
         self.assertEqual(usage.dynamic_window_used(provider), 40)
@@ -378,9 +378,9 @@ class HistoryAndContractTests(unittest.TestCase):
             state_dir.chmod(0o755)
             now = 2_000_000_000
             provider = usage.base_provider("claude")
-            provider["windows"] = [usage.make_window("session", "5 hour limit", 30, now + 300, 18_000)]
+            provider["windows"] = [usage.make_window("session", "5-hour limit", 30, now + 300, 18_000)]
             usage.update_and_attach_history([provider], state_dir, now - 3600)
-            provider["windows"][0] = usage.make_window("session", "5 hour limit", 95, now + 300, 18_000)
+            provider["windows"][0] = usage.make_window("session", "5-hour limit", 95, now + 300, 18_000)
             usage.update_and_attach_history([provider], state_dir, now)
 
             history_file = state_dir / "history.json"
@@ -404,11 +404,11 @@ class HistoryAndContractTests(unittest.TestCase):
             day = 24 * 3600
             provider = usage.base_provider("opencode")
             provider["windows"] = [
-                usage.make_window("session", "5 hour limit", 10, now + 900, 18_000),
+                usage.make_window("session", "5-hour limit", 10, now + 900, 18_000),
                 usage.make_window("weekly", "Weekly limit", 60, now + 3600, 604_800),
             ]
             usage.update_and_attach_history([provider], state_dir, now - 8 * day)
-            provider["windows"][0] = usage.make_window("session", "5 hour limit", 25, now + 900, 18_000)
+            provider["windows"][0] = usage.make_window("session", "5-hour limit", 25, now + 900, 18_000)
             usage.update_and_attach_history([provider], state_dir, now)
 
             saved = json.loads((state_dir / "history.json").read_text())
