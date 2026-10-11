@@ -26,7 +26,7 @@ Item {
   property var liveConnection: null
   property string liveKey: ""
   property bool ready: false
-  readonly property string liveState: useLive ? (liveConnection ? liveConnection.state : "unavailable") : "off"
+  readonly property string liveState: useLive ? (liveConnection ? liveConnection.connectionState : "unavailable") : "off"
   readonly property var liveAccounts: useLive && liveConnection ? liveConnection.accounts : []
   readonly property string liveNotice: useLive ? (liveConnection ? liveConnection.message : "Live activity unavailable.") : ""
   readonly property string connectionId: JSON.stringify([usageBackend.connectionId, usageBackend.proxyImplementation, keeperUrl, passwordFile, useLive, liveScriptPath])

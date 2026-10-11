@@ -10,14 +10,14 @@ Item {
   required property string keyFile
   property var providers: []
   property var accounts: []
-  property string state: "reconnecting"
+  property string connectionState: "reconnecting"
   property string message: "Connecting to live account activity…"
   property double lastSuccessAt: 0
   property bool stopped: false
 
   function unknown() {
     accounts = []
-    state = "reconnecting"
+    connectionState = "reconnecting"
     message = "Reconnecting to live account activity…"
   }
   function stop() {
@@ -52,9 +52,9 @@ Item {
       if (parsed.heartbeat === true) continue
       providers = parsed.providers
       accounts = parsed.accounts
-      state = parsed.state
+      connectionState = parsed.state
       message = parsed.message
-      if (state === "live") lastSuccessAt = Date.now()
+      if (connectionState === "live") lastSuccessAt = Date.now()
     }
   }
   function fail() { unknown(); process.running = false; restart.restart() }

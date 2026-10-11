@@ -3,7 +3,7 @@
   "id": "janitorhead.quotatank",
   "name": "Quotatank",
   "version": "1.4.0",
-  "author": "DigitalPals",
+  "author": "JanitorHead",
   "license": "MIT",
   "description": "Track Claude Code, OpenAI Codex, Kimi Code, and OpenCode Go subscription limits from your Omarchy menu bar. Connect local CLIs, Fusebox, or CLIProxyAPI to monitor multiple accounts, remaining quotas, reset times, and credits. Explore 24-hour, 7-day, and 30-day token history and estimated API costs from local Codex/Claude transcripts and remote T3 Code servers, with cache-aware pricing, custom model rates, and provider/model breakdowns. Includes private account labels, quota history, and keyboard-friendly settings.",
   "kinds": [
@@ -32,6 +32,7 @@
       "cliproxyKeyFile": "",
       "hideAccountEmails": true,
       "squareUsageCards": true,
+      "providerColors": false,
       "notifyLimitThresholds": true,
       "barDisplayMode": "Percentages",
       "barProviders": [
@@ -97,6 +98,13 @@
         "label": "Square usage cards",
         "defaultValue": true,
         "description": "Use square corners for cards in Limits instead of the theme's corner style."
+      },
+      {
+        "key": "providerColors",
+        "type": "boolean",
+        "label": "Provider colors",
+        "defaultValue": false,
+        "description": "Color each provider's bar chip and limit meters with its brand color instead of the Omarchy theme colors. The cost chart always uses provider colors."
       },
       {
         "key": "notifyLimitThresholds",

@@ -24,9 +24,11 @@ else
   echo "omarchy plugin validate unavailable; manifest contract tests still ran"
 fi
 
-qml_lint=$(command -v qmllint || true)
-if [[ -z $qml_lint && -x /usr/lib/qt6/bin/qmllint ]]; then
+# Qt 6 qmllint understands the flags below; the Qt 5 one on PATH rejects them.
+if [[ -x /usr/lib/qt6/bin/qmllint ]]; then
   qml_lint=/usr/lib/qt6/bin/qmllint
+else
+  qml_lint=$(command -v qmllint || true)
 fi
 
 if [[ -n $qml_lint && -d "$quattro_root/shell/Ui" ]]; then

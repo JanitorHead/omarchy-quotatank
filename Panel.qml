@@ -48,6 +48,7 @@ Ui.Panel {
   readonly property bool hideAccountEmails: setting("hideAccountEmails", true) !== false
   readonly property real usageCardRadius: setting("squareUsageCards", true) === true ? 0 : Style.cornerRadius
   readonly property bool notifyLimitThresholds: setting("notifyLimitThresholds", true) !== false
+  readonly property bool providerColors: setting("providerColors", false) === true
 
   function accountDisplayName(account, index) {
     return hideAccountEmails ? "Account " + index : String(account.account || "Account " + index)
@@ -68,6 +69,8 @@ Ui.Panel {
   readonly property string barWindowSecondary: UsageLogic.normalizeSecondaryBarWindow(setting("barWindowSecondary", "none"))
   readonly property string barProviderLimits: String(setting("barProviderLimits", "{}"))
   readonly property bool barShowResets: setting("barShowResets", false) === true
+  // Clock format for the pace tick's "Now" time: the same reset time setting as the bar.
+  readonly property string tickTimeFormat: UsageLogic.barResetFormat("time", setting("barResetTimeFormat", "24h"), setting("barResetDateFormat", "DD/MM"))
   readonly property var percentageProviders: UsageLogic.barProviders(
     UsageLogic.selectedProviders(providers, setting("barProviders", ["claude", "codex", "kimi", "opencode"])),
     function (provider) { return barLimitsFor(provider.id).top })
@@ -563,9 +566,12 @@ Ui.Panel {
           readonly property bool usingPoolQuota: root.proxyMode && !lastAccount.reading
           readonly property var reading: root.proxyMode && lastAccount.reading ? lastAccount.reading : modelData
           readonly property var limits: root.barLimitsFor(modelData.id)
-          readonly property string topWindow: limits.top
-          readonly property string secondaryWindow: limits.bottom
           readonly property bool failed: String(modelData.status) === "error"
+          readonly property string blocking: failed ? "" : UsageLogic.blockingWindow(
+            limits.top, UsageLogic.exactRemainingForWindow(reading, limits.top),
+            limits.bottom, UsageLogic.exactRemainingForWindow(reading, limits.bottom))
+          readonly property string topWindow: blocking !== "" ? blocking : limits.top
+          readonly property string secondaryWindow: blocking !== "" ? "none" : limits.bottom
           readonly property bool stacked: secondaryWindow !== "none" && !failed
           readonly property var remainingValue: UsageLogic.remainingForWindow(reading, topWindow)
           readonly property var shownValue: root.quotaMode === "Remaining"
@@ -593,8 +599,15 @@ Ui.Panel {
             : UsageLogic.severity(reading, root.warningThreshold, root.criticalThreshold, secondaryRemaining)
           readonly property bool stressed: severity === "warning" || severity === "critical"
             || secondarySeverity === "warning" || secondarySeverity === "critical"
-          readonly property color contentColor: active && useActiveColor
-            ? activeColor : foreground
+          readonly property string brandColor: root.providerColors
+            ? UsageLogic.providerAccent(String(modelData.id), "") : ""
+          readonly property color contentColor: brandColor !== "" ? brandColor
+            : (active && useActiveColor ? activeColor : foreground)
+          readonly property bool topStressed: severity === "warning" || severity === "critical"
+          readonly property bool bottomStressed: secondarySeverity === "warning" || secondarySeverity === "critical"
+          readonly property color stressColor: active && useActiveColor ? activeColor : foreground
+          readonly property color topColor: brandColor !== "" && !failed && topStressed ? stressColor : contentColor
+          readonly property color bottomColor: brandColor !== "" && !failed && bottomStressed ? stressColor : contentColor
 
           bar: root.bar
           text: ""
@@ -666,7 +679,7 @@ Ui.Panel {
               visible: !providerChip.stacked
               y: Math.round((parent.height - height) / 2)
               text: providerChip.topText
-              color: providerChip.contentColor
+              color: providerChip.topColor
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
               font.weight: Font.Medium
@@ -680,7 +693,7 @@ Ui.Panel {
               Text {
                 objectName: "barAccountRemainingTop"
                 text: providerChip.topText
-                color: providerChip.contentColor
+                color: providerChip.topColor
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 font.weight: Font.Medium
@@ -691,7 +704,7 @@ Ui.Panel {
               Text {
                 objectName: "barAccountRemainingBottom"
                 text: providerChip.bottomText
-                color: providerChip.contentColor
+                color: providerChip.bottomColor
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 font.weight: Font.Medium
@@ -1076,10 +1089,12 @@ Ui.Panel {
                 quotaMode: root.quotaMode
                 foreground: root.foreground
                 urgent: root.urgent
+                providerColor: root.providerColors ? UsageLogic.providerAccent(String(root.provider ? root.provider.id : ""), root.foreground) : root.foreground
                 dim: root.dim
                 fontFamily: root.fontFamily
                 cardRadius: root.usageCardRadius
                 nowSeconds: root.nowMs / 1000
+                clockFormat: root.tickTimeFormat
               }
             }
             PacingLegend {

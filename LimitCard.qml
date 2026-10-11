@@ -16,10 +16,12 @@ Ui.BorderSurface {
   property string quotaMode: "Used"
   property color foreground: Color.foreground
   property color urgent: Color.urgent
+  property color providerColor: foreground
   property color dim: Qt.darker(foreground, 1.55)
   property string fontFamily: Style.font.family
   property real cardRadius: 0
   property real nowSeconds: 0
+  property string clockFormat: "HH:mm"
   readonly property var pace: UsageLogic.paceForWindow(root.window, root.nowSeconds)
 
   readonly property bool stressed: severity === "warning" || severity === "critical"
@@ -86,12 +88,15 @@ Ui.BorderSurface {
       visible: UsageLogic.windowUsed(root.window) !== null
       width: parent.width
       value: UsageLogic.windowUsed(root.window) / 100
-      fillColor: root.stressed ? root.urgent : root.foreground
+      fillColor: root.stressed ? root.urgent : root.providerColor
       trackColor: root.alpha(root.foreground, 0.14)
       markValue: UsageLogic.paceShowsMark(root.pace) ? root.pace.expected / 100 : -1
       markAhead: UsageLogic.paceShowsMark(root.pace) && root.pace.used > root.pace.expected
       markColor: root.foreground
-      markTooltip: UsageLogic.paceTickText(root.pace)
+      markTooltip: {
+        var tick = UsageLogic.paceTickText(root.pace)
+        return tick === "" ? "" : "Now " + Qt.formatTime(new Date(root.nowSeconds * 1000), root.clockFormat) + "\n" + tick
+      }
     }
 
     Text {

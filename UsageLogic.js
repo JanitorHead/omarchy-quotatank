@@ -344,6 +344,20 @@ function exactRemainingForWindow(provider, selector) {
   return row === null ? null : clamp(remainingOf(row), 0, 100)
 }
 
+// The longer of a chip's two windows, once exhausted, is the limit that decides
+// whether the provider can be used. Returns that window, or "" when there is no
+// such limit: a window is `auto`/`none`, both windows are the same, or the longer
+// one still has allowance.
+function blockingWindow(topWindow, topRemaining, bottomWindow, bottomRemaining) {
+  var top = normalizeBarWindow(topWindow)
+  var bottom = normalizeSecondaryBarWindow(bottomWindow)
+  if (!WINDOW_SELECTORS[top] || !WINDOW_SELECTORS[bottom] || top === bottom) return ""
+  var longer = WINDOW_SELECTORS[top].seconds >= WINDOW_SELECTORS[bottom].seconds ? top : bottom
+  var remaining = longer === top ? topRemaining : bottomRemaining
+  if (remaining === null || remaining === undefined || !isFinite(Number(remaining))) return ""
+  return Number(remaining) <= 0 ? longer : ""
+}
+
 // The row that supplies a chip's number. With `allowFallback`, a window the provider
 // does not report falls back to its most restrictive row, as remainingForWindow does.
 function windowRowFor(provider, selector, allowFallback) {
@@ -794,6 +808,20 @@ function providerMark(providerId) {
   if (providerId === "codex") return "O"
   if (providerId === "kimi") return "K"
   return String(providerId || "?").charAt(0).toUpperCase()
+}
+
+// Brand colour per provider. The cost chart always uses these; the bar and Limits use them when providerColors is on.
+var PROVIDER_COLORS = {
+  claude: "#d97757",
+  codex: "#10a37f",
+  kimi: "#eab308",
+  opencode: "#a78bfa"
+}
+
+// Brand colour for a provider id; ids without one (T3 servers, local-* sources) get the fallback.
+function providerAccent(providerId, fallback) {
+  var id = String(providerId || "")
+  return Object.prototype.hasOwnProperty.call(PROVIDER_COLORS, id) ? PROVIDER_COLORS[id] : fallback
 }
 
 function accountPlanLabel(account) {

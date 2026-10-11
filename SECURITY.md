@@ -10,7 +10,7 @@
 ## Reporting a vulnerability
 
 Please use a private
-[GitHub security advisory](https://github.com/DigitalPals/omarchy-modelusage/security/advisories/new).
+[GitHub security advisory](https://github.com/JanitorHead/omarchy-quotatank/security/advisories/new).
 Do not include access tokens, refresh tokens, transcript contents, or other
 credentials in a public issue, screenshot, or log.
 

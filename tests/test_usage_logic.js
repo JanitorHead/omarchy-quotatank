@@ -50,6 +50,17 @@ assert.equal(JSON.stringify(context.barLimitsFor(barLimitsText, "opencode", "ses
 assert.equal(JSON.stringify(context.barLimitsFor(barLimitsText, "codex", "weekly", "none")), '{"top":"weekly","bottom":"none"}');
 assert.equal(JSON.stringify(context.barLimitsFor(barLimitsText, "claude", "session", "monthly")), '{"top":"session","bottom":"monthly"}');
 assert.equal(JSON.stringify(context.barLimitsFor("not json", "opencode", "auto", "none")), '{"top":"auto","bottom":"none"}');
+// A chip shows only its longer window when that window is exhausted; otherwise both stay.
+assert.equal(context.blockingWindow("weekly", 40, "monthly", 0), "monthly");
+assert.equal(context.blockingWindow("monthly", 0, "weekly", 40), "monthly");
+assert.equal(context.blockingWindow("session", 0, "weekly", 0), "weekly");
+assert.equal(context.blockingWindow("weekly", 0, "monthly", 40), "");
+assert.equal(context.blockingWindow("monthly", 40, "weekly", 0), "");
+assert.equal(context.blockingWindow("weekly", 40, "monthly", 0.4), "");
+assert.equal(context.blockingWindow("weekly", 40, "monthly", null), "");
+assert.equal(context.blockingWindow("auto", 0, "monthly", 0), "");
+assert.equal(context.blockingWindow("weekly", 0, "none", null), "");
+assert.equal(context.blockingWindow("weekly", 0, "weekly", 0), "");
 assert.equal(JSON.stringify(context.parseBarLimits('{"x":{"top":"daily","bottom":"weekly"}}')), '{"x":{"bottom":"weekly"}}');
 assert.equal(context.serializeBarLimits(context.parseBarLimits('{"x":{}}')), "{}");
 assert.equal(context.setBarLimit('{"opencode":{"top":"monthly"}}', "opencode", "top", "default"), "{}");
@@ -508,3 +519,10 @@ assert.equal(context.barResetFormat("date", "24h", "constructor"), "dd/MM")
 assert.equal(context.normalizeBarResetChoice("date", "12h"), "DD/MM")
 assert.equal(context.normalizeBarResetChoice("time", "12h"), "12h")
 assert.equal(context.normalizeBarResetChoice("time", undefined), "24h")
+
+// Provider colours: distinct per provider; unknown ids fall back, including prototype keys.
+const brandColors = ["claude", "codex", "kimi", "opencode"].map((id) => context.providerAccent(id, "#000000"))
+assert.equal(new Set(brandColors).size, 4)
+assert.equal(context.providerAccent("local-codex", "#ffffff"), "#ffffff")
+assert.equal(context.providerAccent("", "#ffffff"), "#ffffff")
+assert.equal(context.providerAccent("constructor", "#ffffff"), "#ffffff")

@@ -54,9 +54,7 @@ Item {
   }
 
   function providerColor(providerId) {
-    if (providerId === "claude") return "#d97757"
-    if (providerId === "kimi") return "#eab308"
-    return foreground
+    return UsageLogic.providerAccent(providerId, foreground)
   }
 
   function periodValue(period) {

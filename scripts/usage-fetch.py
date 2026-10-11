@@ -872,7 +872,7 @@ def fetch_kimi(timeout: float) -> dict[str, Any]:
 OPENCODE_DEFAULT_API_BASE = "https://opencode.ai"
 OPENCODE_USAGE_PATH = "/zen/go/v1/usage"
 OPENCODE_USER_AGENT = (
-    "omarchy-model-usage/1.2.0 (+https://github.com/DigitalPals/omarchy-modelusage)"
+    "omarchy-model-usage/1.2.0 (+https://github.com/JanitorHead/omarchy-quotatank)"
 )
 OPENCODE_WINDOWS = (
     ("rolling", "session", "5 hour limit", FIVE_HOURS),

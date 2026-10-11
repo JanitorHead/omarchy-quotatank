@@ -25,7 +25,7 @@ class ProjectContractTests(unittest.TestCase):
             "refreshIntervalSec", "enabledProviders", "barDisplayMode", "quotaMode", "barWindow", "barWindowSecondary", "barProviders",
             "barProviderLimits", "barShowResets", "barResetTimeFormat", "barResetDateFormat",
             "warningThreshold", "criticalThreshold", "liveAccountActivity",
-            "usageSource", "cliproxyUrl", "cliproxyKeyFile", "hideAccountEmails", "squareUsageCards", "notifyLimitThresholds", "costPriceOverrides",
+            "usageSource", "cliproxyUrl", "cliproxyKeyFile", "hideAccountEmails", "squareUsageCards", "providerColors", "notifyLimitThresholds", "costPriceOverrides",
             "costLocalProviders", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers",
         })
 

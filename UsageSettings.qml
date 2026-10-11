@@ -95,6 +95,7 @@ Column {
       quotaMode: String(value("quotaMode", "Used")) === "Remaining" ? "Remaining" : "Used",
       hideAccountEmails: value("hideAccountEmails", true) !== false,
       squareUsageCards: value("squareUsageCards", true) === true,
+      providerColors: value("providerColors", false) === true,
       notifyLimitThresholds: value("notifyLimitThresholds", true) !== false,
       barDisplayMode: value("barDisplayMode", "Percentages"),
       refreshIntervalSec: String(value("refreshIntervalSec", 900)),
@@ -510,6 +511,19 @@ Column {
       }
     }
     Hint { text: "Override theme corners for cards in Limits. Turn off to follow the theme." }
+    Row {
+      width: parent.width
+      Label { width: parent.width - providerColorsSwitch.width; text: "Provider colors"; anchors.verticalCenter: parent.verticalCenter }
+      ProviderToggle {
+        id: providerColorsSwitch
+        objectName: "providerColorsToggle"
+        width: Style.space(82)
+        checked: root.draft.providerColors === true
+        Accessible.name: "Provider colors"
+        onToggled: root.setValue("providerColors", !checked)
+      }
+    }
+    Hint { text: "Color each provider's bar chip and limit meters with its brand color. Off uses the Omarchy theme colors. The cost chart always uses provider colors." }
   }
 
   Column {

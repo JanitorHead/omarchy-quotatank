@@ -19,7 +19,7 @@
 7. Install the public repository URL on a clean user checkout:
 
    ```bash
-   omarchy plugin add https://github.com/DigitalPals/omarchy-modelusage.git --enable
+   omarchy plugin add https://github.com/JanitorHead/omarchy-quotatank.git --enable
    ```
 
 8. Confirm update, disable, enable, and remove behavior in an isolated installation.

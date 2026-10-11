@@ -1,6 +1,6 @@
 # Quotatank for Omarchy
 
-[![CI](https://github.com/DigitalPals/omarchy-modelusage/actions/workflows/ci.yml/badge.svg)](https://github.com/DigitalPals/omarchy-modelusage/actions/workflows/ci.yml)
+[![CI](https://github.com/JanitorHead/omarchy-quotatank/actions/workflows/ci.yml/badge.svg)](https://github.com/JanitorHead/omarchy-quotatank/actions/workflows/ci.yml)
 
 AI subscription limits, token activity, and estimated API costs in your Omarchy menu bar. Monitor **Claude Code, OpenAI Codex, Kimi Code, and OpenCode Go** through local CLI sign-ins or accounts managed by [Fusebox](https://github.com/DigitalPals/Fusebox) or [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI).
 
@@ -39,7 +39,7 @@ Requires **Omarchy Quattro with schema-v1 shell plugins**, **Python 3.10+**, and
 Validated on Omarchy **4.0.3**, Quickshell **0.3.1**, and Qt **6.11.2**. See [compatibility](COMPATIBILITY.md) for exact revisions and provider coverage.
 
 ```bash
-omarchy plugin add https://github.com/DigitalPals/omarchy-modelusage.git --enable
+omarchy plugin add https://github.com/JanitorHead/omarchy-quotatank.git --enable
 ```
 
 Update or remove it with:
