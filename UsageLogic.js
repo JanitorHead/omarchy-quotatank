@@ -295,6 +295,21 @@ function windowShortLabel(selector) {
   return ""
 }
 
+// Period tag for the row a chip actually shows. A provider without the chosen window
+// falls back to its most restrictive row; the tag then names that row's period, or
+// nothing when the period cannot be told, so a fallback figure is never tagged wrong.
+function barTagFor(provider, selector, allowFallback) {
+  var want = normalizeBarWindow(selector)
+  if (want === "auto") return ""
+  var row = windowRowFor(provider, want, allowFallback)
+  if (row === null || windowMatches(row, want)) return windowShortLabel(want)
+  var selectors = Object.keys(WINDOW_SELECTORS)
+  for (var i = 0; i < selectors.length; i++) {
+    if (windowMatches(row, selectors[i])) return windowShortLabel(selectors[i])
+  }
+  return ""
+}
+
 // Reset-day formats for the bar. Keys are the values stored in shell.json; values are Qt formats.
 var BAR_RESET_TIME_FORMATS = { "24h": "HH:mm", "12h": "h:mm AP" }
 var BAR_RESET_DATE_FORMATS = { "DD/MM": "dd/MM", "MM/DD": "MM/dd", "D MMM": "d MMM" }

@@ -244,6 +244,15 @@ assert.equal(context.barProviders([{ ...opencodeWindows, status: "error" }], "we
 assert.equal(context.windowShortLabel("session"), "5h");
 assert.equal(context.windowShortLabel("7D"), "7d");
 assert.equal(context.windowShortLabel("monthly"), "30d");
+const noSession = windowed([
+  { id: "weekly", label: "Weekly limit", remaining: 64, windowSeconds: 604800 },
+  { id: "monthly", label: "Monthly limit", remaining: 58, windowSeconds: 2592000 },
+]);
+assert.equal(context.barTagFor(noSession, "session", true), "30d", "a fallback figure is tagged with its own period, not the chosen one");
+assert.equal(context.barTagFor(noSession, "weekly", true), "7d");
+assert.equal(context.barTagFor(noSession, "auto", true), "", "auto has no tag");
+assert.equal(context.barTagFor(windowed([{ id: "quota", label: "Quota", remaining: 30 }]), "session", true), "", "an unknown fallback period gets no tag");
+assert.equal(context.barTagFor({ ...noSession, status: "error" }, "weekly", false), "7d");
 const failedNoWindows = { id: "codex", status: "error", errorKind: "rate_limited", windows: [] };
 const failedBar = context.barProviders([failedNoWindows, provider("claude", null)], "weekly");
 assert.equal(failedBar.length, 1);

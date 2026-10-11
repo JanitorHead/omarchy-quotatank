@@ -583,7 +583,7 @@ Ui.Panel {
           readonly property string secondaryText: secondaryRemaining === null ? "—"
             : UsageLogic.formatPercent(root.quotaMode === "Remaining"
               ? secondaryRemaining : UsageLogic.usedFromRemaining(secondaryRemaining)) + "%"
-          readonly property string topTag: UsageLogic.windowShortLabel(topWindow)
+          readonly property string topTag: UsageLogic.barTagFor(reading, topWindow, true)
           readonly property string bottomTag: UsageLogic.windowShortLabel(secondaryWindow)
           readonly property string topReset: root.barShowResets
             ? root.barResetText(UsageLogic.windowRowFor(reading, topWindow, true)) : ""
