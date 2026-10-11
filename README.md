@@ -2,29 +2,28 @@
 
 # Quotatank
 
-**Your AI coding limits in the Omarchy menu bar, each with a pace tick and a run-out time.**
+**Every AI coding limit you pay for, in the Omarchy menu bar: how much is left, when it comes back, and how long it lasts at your pace.**
 
 [![Release](https://img.shields.io/github/v/release/JanitorHead/omarchy-quotatank?label=release)](https://github.com/JanitorHead/omarchy-quotatank/releases) [![License: MIT](https://img.shields.io/github/license/JanitorHead/omarchy-quotatank)](LICENSE)
 
-[Install](#install) · [Limits and pace](#limits-and-pace) · [Accounts](#one-card-per-account) · [Menu bar](#menu-bar) · [Costs](#costs) · [Settings](#settings-and-privacy)
+[Install](#install) · [Limits and pace](#limits-and-pace) · [Balances](#balances-not-just-percentages) · [Menu bar](#menu-bar) · [Accounts](#one-card-per-account) · [Costs](#costs) · [Settings](#settings-that-apply-as-you-go)
 
 </div>
 
-![The Limits panel for Claude Code with three limit cards, beside the Costs tab with a 30-day chart, each opened from the same four menu bar chips](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/hero.png)
+![Six provider chips in the menu bar with the Limits panel open below: Claude, Codex, Kimi, OpenCode, OpenRouter, and DeepSeek tiles, a headline that reads 5-hour limit runs out in 1h 9m, and three limit cards; beside it the Costs tab with a 30-day chart and the model breakdown](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/hero.png)
 
-Quotatank reads the plan limits of Claude Code, OpenAI Codex, Kimi Code, and OpenCode Go from the CLIs you already signed in with, or from every account behind a Fusebox or CLIProxyAPI server. A second tab estimates what your recorded tokens would cost at API rates.
+Quotatank reads the plan limits of **Claude Code, OpenAI Codex, Kimi Code, and OpenCode Go** from the CLIs you already signed in with, the prepaid balances of **OpenRouter and DeepSeek** from an API key, or every account behind a **Fusebox or CLIProxyAPI** server. A second tab estimates what your recorded tokens would cost at API rates.
 
 <sub>Screenshots use fixture data in the Tokyo Night theme unless noted.</sub>
 
-## What sets it apart
+## Why it is different
 
-- **A run-out time, not just a percentage.** Each limit card projects from your recent rate: `Runs out in 1h 9m` when the limit would empty before it resets, `Lasts until reset` when it would not.
-- **A pace tick on the meter.** Once a card has enough recent samples, a tick marks where even use would put you by now. Use beyond the tick is shaded.
-- **Two limits and their reset times in each chip.** Stack a second limit under the first and show when each one resets.
-- **One card per account.** With Fusebox or CLIProxyAPI, each managed account gets its own card, with its own plan, percentage, and reset time.
-- **Used or remaining.** Read cards and chips as percent used or percent left. Alert thresholds keep their meaning either way.
-- **Alerts that re-arm.** A desktop notification fires when a limit crosses your warning or critical threshold, and again after it recovers or resets.
-- **API cost estimates by model.** Totals for 24 hours, 7 days, or 30 days from local Claude Code, Codex, and OpenCode history and up to four T3 Code servers.
+- **A run-out time, not just a percentage.** Each limit card projects from your recent rate: `Runs out in 1h 9m` when the limit would empty before it resets, `Lasts until reset` when it would not. One headline above the cards gives the answer for the whole provider.
+- **A pace tick on the meter.** A tick marks where even use would have put you by now; blocks past it are use ahead of pace, and a badge counts the points ahead or behind.
+- **Money where money is the limit.** OpenRouter and DeepSeek lead with what you can still spend, in their own currency, with low-balance alerts in amounts rather than percentages.
+- **Two limits and their reset times in each chip.** Stack a second limit under the first, show when each one resets, or hide a provider from the bar while its weekly limit is used up.
+- **Settings that apply as you make them.** No Save button: flip a switch and watch the bar change, then flip it back.
+- **Alerts that re-arm.** A desktop notification fires when a limit or a balance crosses your warning or critical threshold, and again after it recovers or resets.
 - **Private by default.** Accounts appear as Account 1, Account 2, and so on. Keys and tokens stay in private files, never in widget settings.
 
 ## Install
@@ -40,7 +39,7 @@ omarchy plugin update janitorhead.quotatank
 omarchy plugin remove janitorhead.quotatank
 ```
 
-The built-in `omarchy.agents` widget can run alongside Quotatank. To keep only Quotatank, run `omarchy plugin disable omarchy.agents`.
+The built-in `omarchy.agents` widget can run alongside Quotatank. To keep only Quotatank, run `omarchy plugin disable omarchy.agents`. To put the chips somewhere else in the bar, use `omarchy bar move janitorhead.quotatank left`.
 
 <details>
 <summary>Requirements</summary>
@@ -56,129 +55,141 @@ The built-in `omarchy.agents` widget can run alongside Quotatank. To keep only Q
 
 ![A 5-hour limit card with labels for usage so far, the pace tick, use ahead of pace, the reset countdown, and the projection](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/card-anatomy.png)
 
-The tick marks where even use would be by now, so blocks past it are use ahead of pace. The status line projects from the recent rate, which weighs the newest samples most (a two-hour half-life), so use from days earlier does not count. Here the limit runs out in 1h 9m, before its window resets in 2h 4m.
+The tick marks where even use would be by now, so blocks past it are use ahead of pace. The status line projects from the recent rate, which weighs the newest samples most (a two-hour half-life), so use from days earlier does not count. Here the limit runs out in 1h 9m, before its window resets in 2h 4m. Cards are ordered shortest window first, and every provider names its windows the same way: `5-hour limit`, `Weekly limit`, `Monthly limit`.
 
 <details>
 <summary>Every status line</summary>
 
 | Status line | Meaning |
 |---|---|
-| `Runs out in 1h 9m · expected 58%` | At the recent rate, the limit empties before the window resets |
-| `Lasts until reset · expected 55%` | At the recent rate, the limit lasts until the window resets |
-| `Idle 1h 2m · expected 40%` | Usage has not risen for an hour, so no projection is made |
+| `Runs out in 1h 9m · pace 58%` | At the recent rate, the limit empties before the window resets |
+| `Lasts until reset · pace 55%` | At the recent rate, the limit lasts until the window resets |
+| `Idle 1h 2m · pace 40%` | Usage has not risen for an hour, so no projection is made |
 | `Collecting data` | Less than ten minutes of samples so far |
 | `No recent data` | The newest sample is more than an hour old |
-| `starts after 2% of the window` | Less than 2% of the window has passed |
-| `no usage yet` | Nothing has been used in this window |
+| `Pace starts after 2% of the window` | Less than 2% of the window has passed |
+| `No usage yet` | Nothing has been used in this window |
 | `Limit reached` | The limit is 100% used |
-| `not reported` | The provider reports no window length or reset time, so there is no pace |
+| `No pace for this limit` | The provider reports no window length or reset time |
 
 </details>
 
 ![The same three limit cards read as percent used on the left and as percent left on the right](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/used-remaining.png)
 
-**Show limits as** flips every card and chip between percent used and percent left. The meter, the tick, and the expected share follow the setting. Warning and critical thresholds are stored as percent left, 25% and 10% by default, so the Opus limit is critical at 9% left whichever way you read it.
+**Show limits as** flips every card, chip, and balance between used and left. The meter, the tick, and the pace share follow the setting. Warning and critical thresholds are stored as percent left, 25% and 10% by default, so the Opus limit is critical at 9% left whichever way you read it.
 
-**Alerts.** With **Notify when limits run low** on, a desktop notification fires once when a limit moves into warning or critical; critical alerts use critical urgency. When the limit recovers or its window resets, the next crossing notifies again.
+![Three panels: Codex with the headline Weekly limit is used up, back in 5d 10h; OpenCode Go with a sign-in expired card that quotes the command to run; DeepSeek with a drained balance and the notice that the platform is refusing calls](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/states.png)
+
+When something is wrong, the panel says what and what to do: a used-up limit names when it comes back, a failed refresh names the command to run, and a drained balance says it needs topping up. The chip in the bar shows a short reason instead of a figure (`sign in`, `rate limited`, `offline`), and hovering it gives the full message.
+
+## Balances, not just percentages
+
+![OpenRouter's panel with a $74.00 left headline, a Balance card listing purchased, used, and this week's spend, and a monthly key limit card; beside it DeepSeek's panel with a $12.50 balance and its granted and topped-up amounts](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/balance.png)
+
+OpenRouter and DeepSeek are prepaid, so their figure is money: what the account can still spend, which for OpenRouter is the lowest of the balance and every spending limit's allowance. The headline adds how long it lasts at this week's rate (`$74.00 left · lasts about 8 weeks`), OpenRouter's limits that reset become ordinary limit cards with a pace, and a CNY-only DeepSeek account shows yuan. **Low balance** alerts are amounts in the balance's currency, `5` and `1` by default.
+
+## Menu bar
+
+![Six rows of the same six menu bar chips: most constrained, pinned to 7 days, two stacked limits, two limits with reset times and dates, provider brand colors, and the row with Codex hidden because its weekly limit is used up](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/menu-bar.png)
+
+- **Limit shown** picks the window every chip shows. The default is each provider's most constrained limit; 5-hour, 7-day, and monthly pin one window. Every line is tagged with the period of the limit it shows (`7d 91%`), so the tag never lies about what is behind the number.
+- **Second limit below** stacks a second limit under the first.
+- **Show when limits reset** appends when each line resets: a time for limits that reset within a day, a date for weekly and monthly ones, in the formats you choose.
+- **Hide providers that are used up** takes a provider out of the bar while one of its weekly or monthly limits is used up; it returns when the limit resets, and Limits keeps showing it.
+- **Provider colors** paints each chip and limit meter in the provider's brand color.
+
+Money providers lead with their balance and stack their tightest limit below. The top and bottom limits can also be set for a single provider under **Menu bar → Per provider**. Clicking a chip opens that provider.
+
+A chip switches to the Omarchy theme's alert color when either of its lines is at warning or critical, and keeps it with provider colors on, so a brand color never hides an alert. Quotatank has no red of its own: the color comes from the theme.
 
 ## One card per account
 
 ![Three OpenAI Codex accounts from CLIProxyAPI, each on its own card with plan, weekly limit, reset time, and banked resets; an arrow leads from the first account's 2 banked resets badge to the confirmation it opens](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/accounts.png)
 
-With Fusebox or CLIProxyAPI as the quota source, every managed account gets its own card with its own plan, percentage, and reset time. Each card shows the account's weekly limit when it reports one; **Additional limits** opens the others.
+With Fusebox or CLIProxyAPI as the source, every managed account gets its own card with its own plan, percentage, and reset time. Each card shows the account's weekly limit when it reports one; **Additional limits** opens the others.
 
 In CLIProxyAPI mode, Codex cards show how many banked resets the account holds. A banked reset resets that account's current Codex usage limits and is spent once applied, so clicking a nonzero badge opens a confirmation first. It lists each reset with its expiry, selects the one expiring soonest, and applies nothing until you choose **Apply reset**.
-
-## Menu bar
-
-![Five rows of the same four menu bar chips: most constrained, pinned to 7 days, two stacked limits, two limits with reset times and dates, and provider brand colors](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/menu-bar.png)
-
-- **Menu bar limit** picks the window every chip shows. The default is each provider's most constrained limit; 5-hour, 7-day, and monthly pin one window and tag the chip with its period. A provider that does not report the pinned window shows its most constrained limit, tagged with that limit's own period.
-- **Menu bar limit (bottom)** stacks a second limit under the first.
-- **Show reset day in menu bar** appends when each line resets: a time for limits that reset within a day, a date for weekly and monthly ones. Both formats are configurable.
-- **Provider colors** paints each chip and limit meter in the provider's brand color.
-
-The top and bottom limits can also be set for a single provider under **Menu bar limits per provider**. Clicking a chip opens that provider.
-
-A chip switches to the Omarchy theme's alert color when either of its lines is at warning or critical, and keeps it with provider colors on, so a brand color never hides an alert. Quotatank has no red of its own: the color comes from the theme (its `red` entry by default), so it is red in the themes shown here and follows whatever color your theme uses.
 
 ## Follows your theme
 
 ![The top of the Limits panel and its menu bar chips in the Gruvbox, Nord, Kanagawa, and Catppuccin Latte themes](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/themes.png)
 
-Colors and control borders come from the active Omarchy theme and change with it; text uses your Omarchy font. Cards are square by default; turn off **Square usage cards** to follow the theme's corners.
+Colors and control borders come from the active Omarchy theme and change with it; text uses your Omarchy font, and every provider mark is the real brand mark at one size. Cards are square by default; turn off **Square cards** to follow the theme's corners.
 
 ## Costs
 
-![The Costs tab with a 30-day chart, totals by provider, and the model breakdown, beside Costs settings with local history, two T3 servers, and a custom price for one model](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/costs.png)
+![The Costs tab with a 30-day chart, totals by provider, and the model breakdown, beside the Costs settings page with local history, two T3 servers, and custom prices](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/costs.png)
 
 Costs estimates what your recorded tokens would cost at API rates. It is not a bill, a subscription charge, or a credit balance. Pick 24 hours, 7 days, or 30 days, then open token details or the model breakdown, which lists every model with its provider, tokens, and estimate.
 
 Local Claude Code and Codex history are on by default, OpenCode can be added, and up to four T3 Code servers bring in history from other computers. Prices come from the public LiteLLM table. Under **Custom prices**, set input, output, and optional cache prices in USD per million tokens for an exact model ID.
 
-## Settings and privacy
+## Settings that apply as you go
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/settings.png" width="512" alt="Provider switches with OpenCode Go monitored but kept out of the menu bar, so the bar above shows three chips">
-</p>
+![The settings index with six rows and what each is set to, beside the Providers page with Monitor and Menu bar switches and the saved API keys for OpenRouter and DeepSeek, and the Menu bar page](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/settings.png)
 
-Each provider has two switches: **Monitor** fetches it and shows it in Limits, **Menu bar** shows its chip. Here OpenCode Go stays in the panel and out of the bar. In Fusebox or CLIProxyAPI mode every discovered provider is monitored, and only the **Menu bar** column remains.
+The gear opens an index of six pages, and each row already says what the page is set to. There is no Save button: every switch, selector, and valid number applies the moment it changes, so you can compare the bar with the setting still in front of you. Keys and tokens are the exception, with an explicit **Save** that writes a private file, after which the page shows **Replace** and **Remove**.
 
-<details>
-<summary>Main settings</summary>
-
-| Setting | Default | What it controls |
-|---|---|---|
-| Refresh interval (`refreshIntervalSec`) | 15 minutes | Automatic refresh, from 1 to 60 minutes. Manual refresh is always available |
-| Show limits as (`quotaMode`) | Used | Whether cards and chips report percent used or percent left. Alerts follow the same choice |
-| Warning and critical thresholds | 25% and 10% left | Stored as percent left; the settings show percent used under Used |
-| Notify when limits run low (`notifyLimitThresholds`) | On | Desktop notifications when a limit reaches a threshold |
-| Hide account emails (`hideAccountEmails`) | On | Numbered labels (Account 1, Account 2) on cards and tooltips; identities are also omitted from settings |
-| Square usage cards (`squareUsageCards`) | On | Square corners. Off follows the theme's corners |
-| Provider colors (`providerColors`) | Off | Brand colors on chips and limit meters |
-| Menu bar limit (`barWindow`) | Most constrained | The window a chip shows: most constrained, 5-hour, 7-day, or monthly |
-| Menu bar limit, bottom (`barWindowSecondary`) | None | Stacks a second limit under the first in each chip |
-| Show reset day in menu bar (`barShowResets`) | Off | Shows the reset time for limits that reset within a day and the date for weekly and monthly limits |
-| Local cost sources (`costLocalProviders`) | Claude Code, Codex | Local transcript history for Costs. OpenCode is also available |
-| T3 servers (`costT3Servers`) | None | Up to four servers, configured under Costs settings |
+| Page | What lives there |
+|---|---|
+| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server), one row per provider with **Monitor** and **Menu bar** switches, and the API key editor under OpenRouter and DeepSeek |
+| **Menu bar** | Chips or the widget icon, the limit each chip shows, a second limit, reset times and formats, hiding used-up providers, per-provider overrides |
+| **Alerts** | Desktop notifications, the percentage thresholds, and the low-balance amounts |
+| **Display** | Used or left, provider colors, square cards, hidden account emails |
+| **Costs** | Local history, T3 servers, custom prices, and the last scan |
+| **Advanced** | Refresh interval (1 to 60 minutes) and diagnostics |
 
 Every key is listed in the [settings reference](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#settings).
-
-</details>
 
 Privacy:
 
 - Quotatank reads existing CLI sign-ins and does not write authentication state. Quota checks are read-only.
 - Applying a banked Codex reset is a separate action in CLIProxyAPI mode, and it asks for confirmation first.
-- Management keys and T3 tokens are saved in private files (`0600`, in a `0700` directory), never in widget settings or command-line arguments.
+- API keys, management keys, and T3 tokens are saved in private files (`0600`, in a `0700` directory), never in widget settings or command-line arguments. **Remove** deletes the file.
 - Cost history stores token counts, timestamps, model names, and hashed transcript identifiers. It never stores prompts, responses, or tool output.
-- HTTPS certificates are verified for the CLIProxyAPI server, and redirects are rejected.
+- HTTPS certificates are verified, and redirects are rejected.
 
 ## Connect a source
 
 Limits and Costs have separate sources. A proxy can supply Limits while local transcripts supply Costs.
 
+```mermaid
+flowchart LR
+  subgraph Limits
+    cli["CLI sign-ins<br/>claude · codex · kimi · opencode"] --> uf["usage-fetch.py"]
+    keys["API keys<br/>OpenRouter · DeepSeek"] --> uf
+    proxy["Fusebox / CLIProxyAPI<br/>one card per account"] --> uf
+    uf --> chips["Menu bar chips"]
+    uf --> panel["Limits tab"]
+  end
+  subgraph Costs
+    logs["Local transcripts<br/>Claude Code · Codex · OpenCode"] --> cf["cost-fetch.py"]
+    t3["T3 Code servers"] --> cf
+    cf --> costs["Costs tab"]
+  end
+```
+
 ### Local CLI sign-ins
 
-Sign in with each provider's CLI. Then open **Limits → gear**, keep **Local CLIs** as the quota source, choose the providers to monitor, and save.
+Sign in with each provider's CLI. Then open **Settings → Providers**, keep **Local sign-ins** as the source, and turn on **Monitor** for the providers you use.
 
-| Provider | Sign in | Quota source |
+| Provider | Connect with | Read from |
 |---|---|---|
 | Claude Code | `claude auth login` | Claude OAuth usage endpoint |
 | OpenAI Codex | `codex login` | Codex app-server rate-limit RPC |
 | Kimi Code | `kimi login` | Kimi usage endpoint |
 | OpenCode Go | `opencode auth login` | OpenCode Go usage endpoint, using `OPENCODE_GO_API_KEY` or the key the OpenCode CLI stored |
+| OpenRouter | An API key saved under its switch, or `OPENROUTER_API_KEY` | `GET /api/v1/key` and `GET /api/v1/credits`: the key's limits, the balance, and spend |
+| DeepSeek | An API key saved under its switch, or `DEEPSEEK_API_KEY` | `GET /user/balance`: the platform balance per currency |
 
 Quotatank reads existing CLI credentials and does not write authentication state. Sign-in stays with the CLI. See the [configuration reference](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#providers-and-authentication) for details.
 
-When a provider's refresh fails, its chip shows a short reason instead of a figure: `rate limited`, `sign in`, `timeout`, `offline`, `bad data`, or `error`. Hover the chip for the full message and the next step.
-
 ### Fusebox or CLIProxyAPI
 
-1. Open **Limits → gear** and choose the Fusebox or CLIProxyAPI option under **Quota source**.
-2. Enter the server URL, for example `http://127.0.0.1:8317`.
-3. Enter the Management API key that the server's management panel accepts. Client API keys and bcrypt hashes do not work.
-4. Save. Managed accounts are discovered automatically, one card each.
+1. Open **Settings → Providers** and choose **Fusebox / CLIProxyAPI** under **Source**.
+2. Enter the server URL, for example `http://127.0.0.1:8317`, and leave the field.
+3. Enter the Management API key that the server's management panel accepts and press **Save**. Client API keys and bcrypt hashes do not work.
+4. Managed accounts are discovered automatically, one card each.
 
 The key is saved to a private file (`0600`) and is never loaded back into the form. Remote servers must allow remote management. Quota lookups cover Claude, Codex, Kimi, and Antigravity accounts; other providers show an unsupported notice.
 
@@ -186,7 +197,7 @@ For CLIProxyAPI, the optional CPA Usage Keeper adds the last-used account to the
 
 ### Cost history
 
-Open **Costs → gear**. Local Codex CLI and Claude Code history are on by default. Add up to four T3 Code servers, each with a name, base URL, and connection token. Servers must use usage contract version 4 or 5. Custom model prices are set in the same panel, by exact model ID.
+Open **Settings → Costs**. Local Codex CLI and Claude Code history are on by default. Add up to four T3 Code servers, each with a name, base URL, and connection token. Servers must use usage contract version 4 or 5. Custom model prices are set on the same page, by exact model ID.
 
 ## Controls
 
@@ -198,7 +209,7 @@ Open **Costs → gear**. Local Codex CLI and Claude Code history are on by defau
 | Refresh | `r` |
 | Costs metric, token details, model breakdown | `m`, `d`, `b` |
 | Settings | `s` |
-| Cancel an edit or close a confirmation | Escape |
+| Back to the settings index, then close | Escape |
 
 Scripts and keybindings can use the shell IPC:
 
