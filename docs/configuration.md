@@ -12,7 +12,8 @@ Quotatank is a monitor, not an authentication manager. Its backend code reads cr
 | OpenAI Codex | `codex app-server` account/rate-limit RPC in a read-only sandbox | `codex login` |
 | Kimi Code | Kimi's current `/usages` and optional `/me` endpoints | `kimi login` |
 | OpenCode Go | OpenCode's Go usage endpoint (`https://opencode.ai/zen/go/v1/usage`), read-only | `opencode auth login` (or `OPENCODE_GO_API_KEY`) |
-| OpenRouter | OpenRouter's `GET /api/v1/key` and `GET /api/v1/credits`, read-only | Key saved under **Limits → gear → OpenRouter** (or `OPENROUTER_API_KEY`) |
+| OpenRouter | OpenRouter's `GET /api/v1/key` and `GET /api/v1/credits`, read-only | Key saved under **Settings → Providers** (or `OPENROUTER_API_KEY`) |
+| DeepSeek | DeepSeek's `GET /user/balance`, read-only | Key saved under **Settings → Providers** (or `DEEPSEEK_API_KEY`) |
 
 Environment overrides owned by the CLIs are honored: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`, `KIMI_CODE_BASE_URL`, and `KIMI_SHARE_DIR`.
 
@@ -20,7 +21,7 @@ The OpenCode provider reads the key the CLI stored in `$XDG_DATA_HOME/opencode/a
 
 ### OpenRouter
 
-OpenRouter has no CLI sign-in and is off by default. Turn on its **Monitor** switch under **Providers**, then paste a key in the **OpenRouter** section and save; the key is written to a private file (`0600`, in a `0700` directory) and never loaded back into the form. `OPENROUTER_API_KEY` in the environment takes precedence, and `OPENROUTER_API_KEY_FILE` points at an existing private key file. OpenRouter is read only in local mode; Fusebox and CLIProxyAPI do not report it.
+OpenRouter has no CLI sign-in and is off by default. Turn on its **Monitor** switch under **Settings → Providers**, then paste a key in the **API key** editor that appears under it and press **Save**; the key is written to a private file (`0600`, in a `0700` directory) and never loaded back into the form. `OPENROUTER_API_KEY` in the environment takes precedence, and `OPENROUTER_API_KEY_FILE` points at an existing private key file. OpenRouter is read only in local mode; Fusebox and CLIProxyAPI do not report it.
 
 OpenRouter is measured in money as well as limits:
 
@@ -28,11 +29,15 @@ OpenRouter is measured in money as well as limits:
 - **Can spend now** is the lowest of the account balance and every limit's remaining allowance. It leads the OpenRouter tile, its chip (with the tightest limit's percentage stacked below), and the headline (`$74.00 left · lasts about 8 weeks`, at this UTC week's average daily spend), shown as used or left per **Show limits as**.
 - **Balance** comes from `GET /api/v1/credits`. OpenRouter documents it for management keys, but regular API keys can read it as well; if OpenRouter refuses a key, the card says **Can spend** and shows the key limit's allowance, and an unlimited key explains that a management key adds the balance. Today's, this week's, and this month's spend come from either key.
 
-**Low balance** alerts use dollars, not percentages: **Alerts → Warn at or below ($)** (default `$5`) and **Critical at or below ($)** (default `$1`) color the chip, tile, and card and send a desktop notification when the amount crosses them. Money follows **Show limits as** like every percentage: under `Used`, the tile, chip, headline, and **Balance** card show what the binding allowance has spent (`$73.42 of $75.00 used`, against the purchased balance or the key limit, whichever holds back spending); under `Remaining`, what can still be spent (`$1.58 left`). Low-balance thresholds are always amounts left, and the chip tooltip gives both.
+**Low balance** alerts use amounts, not percentages: **Alerts → Warn at or below** (default `5`) and **Critical at or below** (default `1`), in the balance's currency, color the chip, tile, and card and send a desktop notification when the amount crosses them. Money follows **Show limits as** like every percentage: under `Used`, the tile, chip, headline, and **Balance** card show what the binding allowance has spent (`$73.42 of $75.00 used`, against the purchased balance or the key limit, whichever holds back spending); under `Remaining`, what can still be spent (`$1.58 left`). Low-balance thresholds are always amounts left, and the chip tooltip gives both.
+
+### DeepSeek
+
+DeepSeek's platform is prepaid, so it is measured in money only. Turn on its **Monitor** switch under **Settings → Providers** and save an API key the same way as for OpenRouter (`DEEPSEEK_API_KEY` and `DEEPSEEK_API_KEY_FILE` are honored). The widget reads `GET /user/balance`: the total balance becomes **Can spend now** and leads the tile, chip, headline, and **Balance** card, which also lists the granted and topped-up amounts. DeepSeek reports a balance per currency; the USD one is preferred and a CNY-only account shows yuan (`¥80.00`). DeepSeek has no limits that reset and no spend history, so there is no limit card and no runway line; when the platform reports that calls are refused, a notice under the headline says the balance needs topping up. Low-balance alerts apply to the balance as it is reported.
 
 ### CLIProxyAPI
 
-Open the Quotatank popup and click the **gear icon** in its upper-right corner. Select **CLIProxyAPI** under **Quota source** to discover all providers and accounts managed by [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) or [CLIProxyAPI-Rust](https://github.com/IuCC123/CLIProxyAPI-Rust). The implementation is detected automatically with the same management key. Local CLI sign-ins are not needed for this source. The default `direct` source retains the existing behavior. Click **Save** to apply your configuration.
+Open the Quotatank popup, click the **gear**, and open **Providers**. Select **Fusebox / CLIProxyAPI** under **Source** to discover all providers and accounts managed by [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) or [CLIProxyAPI-Rust](https://github.com/IuCC123/CLIProxyAPI-Rust). The implementation is detected automatically with the same management key. Local CLI sign-ins are not needed for this source. The default `direct` source retains the existing behavior. The source applies as soon as it is chosen; the server URL saves when you finish editing it, and the management key when you press its **Save**.
 
 Set **CLIProxyAPI server URL** to your server address (default `http://127.0.0.1:8317`). Dashboard URLs ending in `/management.html`, management API URLs ending in `/v0/management` or `/v0/management/auth-files`, and reverse-proxy path prefixes are accepted. HTTPS certificates are verified; redirects are rejected.
 
@@ -61,7 +66,7 @@ In CLIProxyAPI mode, click a nonzero **banked resets** badge to review that acco
 
 Provider buttons wrap to fit the panel. Failed refreshes preserve the last known reading in memory with a stale-data notice; switching servers clears those readings. At most 32 accounts per provider are checked, with four concurrent checks per provider and a shared deadline. In **Percentages** menubar mode, each provider shows only its icon and the quota figure chosen under **Show limits as**; account names appear in the tooltip. When the last-used account is known, the percentage belongs to that account. Account activity refreshes every 15 seconds through the configured CPA Usage Keeper, independently of quota refreshes and the Costs source. Configure the Keeper URL and password in settings for the same proxy. Hover for the last recorded request time. Round-robin and concurrent requests can use different accounts, so this identifies the most recently recorded request, not a guaranteed account for the next request. Without matching activity, or when account timestamps are tied, the bar still shows the best-capacity account’s quota. The tooltip identifies this pool summary and explains that the last-used account is unknown. Failed activity refreshes retain the last-known account with a tooltip notice. Icon mode includes last-used details in its tooltip.
 
-**Hide account emails** is enabled by default in widget settings. Account cards and menubar tooltips use numbered labels (Account 1, Account 2, …), and account identities are omitted from the settings details. Turn it off and Save to show usernames/email addresses. This is a display preference; quota collection continues normally.
+**Hide account emails** is enabled by default. Account cards and menubar tooltips use numbered labels (Account 1, Account 2, …), and account identities are omitted from the settings details. Turn it off under **Settings → Display** to show usernames/email addresses. This is a display preference; quota collection continues normally.
 
 Proxy quota history continues to record the best-capacity pool summary and is stored separately for each server under `cliproxy-<server-hash>/history.json` in the normal state directory. It never mixes with direct-CLI history. Costs sources are configured separately using the gear on Costs.
 
@@ -109,19 +114,13 @@ ${XDG_STATE_HOME:-~/.local/state}/omarchy/model-usage/cost-model-rates.json
 
 ## Settings
 
-Open the popup and click the **gear icon** beside Refresh to configure Quotatank. The Limits gear configures quotas and appearance; the Costs gear configures history sources and model prices. Both remain available when no providers are enabled. The fixed footer keeps **Cancel** and **Save changes** visible while scrolling. Saving writes your changes to the widget's entry in `~/.config/omarchy/shell.json` and applies them immediately; **Cancel** or Escape discards the draft.
+Open the popup and click the **gear** beside Refresh. Settings is an index of six pages: **Providers**, **Menu bar**, **Alerts**, **Display**, **Costs**, and **Advanced**. Each index row shows what that page is set to, so most questions are answered before opening it. The gear in the Costs tab opens the **Costs** page directly. Settings stay available when no providers are enabled.
 
-Under **Limits → gear → Display**, **Square usage cards** is enabled by default for account, limit, credit, and error cards. Turn it off to follow the theme's corners. Click **Save changes** to apply it.
+There is no Save button. Every switch, selector, and valid number writes to the widget's entry in `~/.config/omarchy/shell.json` the moment it changes and applies immediately, so the bar and Limits can be compared without leaving the page. An out-of-range or malformed number stays in its field with the reason underneath and leaves the saved value untouched; free text such as a server URL saves when editing finishes (Enter or leaving the field) and is valid. Keys and tokens are the exception: they have an explicit **Save** that writes the secret to a private file, after which the page shows **Saved on this device** with **Replace** and **Remove**. **‹ Settings** returns to the index; Escape goes back, then closes.
 
-In local CLI mode, each provider has two controls: **Monitor** enables quota checks and includes it in the popup; **Menu bar** allows its percentage chip in the bar. Choose **Provider percentages** under **Menu bar → Menu bar shows** to show those chips. Hiding a provider from the bar keeps it available in the popup. The widget icon remains accessible when all chips are hidden, on vertical bars, or when no selected provider has quota data.
+**Providers** holds the source (local sign-ins or a Fusebox / CLIProxyAPI server with its connection and account activity), one row per provider with **Monitor** (read it and show it in Limits) and **Menu bar** (give it a chip), and the API key editor right under OpenRouter and DeepSeek once they are monitored. In CLIProxyAPI mode every discovered provider is monitored and only the **Menu bar** column remains. **Menu bar** chooses chips or the widget icon, which limit each chip shows, reset times and their formats, hiding used-up providers, and **Per provider** overrides. **Alerts** holds notifications, the percentage thresholds, and the low-balance amounts shown once a money provider is monitored. **Display** holds used or left, provider colors, square cards, and hidden account emails. **Costs** holds local history switches, **Remote T3 servers**, **Custom prices**, and **Last scan**. **Advanced** holds the refresh interval and diagnostics.
 
-In CLIProxyAPI mode, all discovered providers are monitored automatically; the provider list controls their menu-bar visibility. The Monitor column is hidden in this mode and only the **Menu bar** column remains. Choosing **Widget icon** hides the menu-bar provider controls while preserving your selections.
-
-Limits settings have six groups, in the order you set things up: **Source** (local CLI sign-ins or a Fusebox / CLIProxyAPI server, with its connection and account activity), **Providers** (which to monitor and which get a menu bar chip; the **OpenRouter key** appears here once OpenRouter is monitored), **Menu bar** (what each chip shows, reset times, hiding used-up providers, and **Per provider** limits), **Display** (used or left, provider colors, square cards, hidden account emails), **Alerts** (notifications, percentage thresholds, and the OpenRouter low-balance amounts), and **Advanced** (refresh interval and diagnostics). **Providers** opens by default; **Source** opens when a server key is missing, and **OpenRouter key** when OpenRouter has no key. Every collapsed header shows its current values, such as `5 monitored · 4 in menu bar` or `75 / 90% used · $5 / $1`, and a validation error opens the sections around the field it names. Refresh intervals are entered in minutes (1–60). Saved credentials show a **Change** action; blank replacements retain the existing secret, which is never loaded into the form. Non-secret settings are also declared in `manifest.json` and can be changed using `omarchy bar set`.
-
-Costs settings keeps local history switches visible and collapses **Remote T3 servers**, **Custom prices**, and **Last scan**. Adding a server or price opens and focuses its editor; validation opens the relevant section and focuses the field needing attention.
-
-In **Costs → gear → Custom prices**, add the exact model ID and its input/output prices in **USD per million tokens**. Model IDs in the Costs breakdown are selectable for copying. Matching preserves case, provider prefixes, and bracketed variants. Cache-read and cache-write prices are optional; blank fields use the input price, while `0` explicitly means free. Save applies the prices immediately to recorded activity, including offline or otherwise unknown models. Remove a price row and Save to restore automatic pricing. Cancel discards edits.
+In **Settings → Costs → Custom prices**, add the exact model ID and its input/output prices in **USD per million tokens**. Model IDs in the Costs breakdown are selectable for copying. Matching preserves case, provider prefixes, and bracketed variants. Cache-read and cache-write prices are optional; blank fields use the input price, while `0` explicitly means free. A complete row applies at once to recorded activity, including offline or otherwise unknown models; an incomplete row is explained underneath and not saved. Remove a row to restore automatic pricing. A T3 server is saved once it has a name and a URL; its token can be saved after that.
 
 | Key | Default | Meaning |
 |---|---:|---|
@@ -131,6 +130,7 @@ In **Costs → gear → Custom prices**, add the exact model ID and its input/ou
 | `cliproxyUrl` | `http://127.0.0.1:8317` | CLIProxyAPI server or management URL |
 | `cliproxyKeyFile` | empty | Set automatically when saving a key in the GUI; can also point to an existing private key file |
 | `openrouterKeyFile` | empty | Private OpenRouter key file, set when saving a key in the GUI. `OPENROUTER_API_KEY` takes precedence |
+| `deepseekKeyFile` | empty | Private DeepSeek key file, set when saving a key in the GUI. `DEEPSEEK_API_KEY` takes precedence |
 | `hideAccountEmails` | `true` | Replace account identities with numbered labels and hide them in settings |
 | `squareUsageCards` | `true` | Use square corners for cards in Limits; otherwise follow the theme |
 | `providerColors` | `false` | Color each provider's bar chip logo and limit meters with its brand colour instead of the Omarchy theme colour. A line that is warning or critical keeps its figure in the alert colour, so the brand colour does not hide the alert. The cost chart always uses provider colours |
@@ -147,8 +147,8 @@ In **Costs → gear → Custom prices**, add the exact model ID and its input/ou
 | `barProviders` | all three | Enabled providers allowed to show percentage chips; independent of popup visibility |
 | `warningThreshold` | `25` | Warn when a limit has this much or less left. Stored as % left; Settings show it as % used under `Used` (25 left is 75 used) |
 | `criticalThreshold` | `10` | Critical when this much or less is left. Stored as % left; must not be looser than `warningThreshold` |
-| `creditWarningUsd` | `5` | Low-balance warning for OpenRouter: what can still be spent, in USD, at or below this amount |
-| `creditCriticalUsd` | `1` | Low-balance critical amount in USD; must not be above `creditWarningUsd` |
+| `creditWarningUsd` | `5` | Low-balance warning for OpenRouter and DeepSeek: what can still be spent, in the balance's currency, at or below this amount |
+| `creditCriticalUsd` | `1` | Low-balance critical amount; must not be above `creditWarningUsd` |
 | `costPriceOverrides` | `"{}"` | JSON string managed by Custom model prices; exact IDs mapped to USD-per-million rates |
 | `costLocalProviders` | `["claude", "codex"]` | Local cost sources (`claude`, `codex`, `opencode`), independent of quota providers |
 | `costKeeperUrl` | empty | Optional Keeper URL for last-used quota account activity |

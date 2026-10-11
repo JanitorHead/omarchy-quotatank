@@ -1127,7 +1127,7 @@ def fetch_openrouter(timeout: float, key_file: Path | None = None) -> dict[str, 
         return error_provider(provider_id, exc.kind, exc.message)
     if not token:
         return error_provider(provider_id, "no_credentials",
-                              "No OpenRouter key was found. Add one under Limits → gear → OpenRouter.")
+                              "No OpenRouter key was found. Add one under Settings → Providers.")
     headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
     key_payload = credits_payload = None
     try:
@@ -1148,7 +1148,7 @@ def fetch_openrouter(timeout: float, key_file: Path | None = None) -> dict[str, 
         windows, credits, plan = parse_openrouter(key_payload, credits_payload, time.time())
     except ProviderFailure as exc:
         if exc.kind == "expired":
-            return error_provider(provider_id, "expired", "OpenRouter rejected the saved key. Enter a new one in Limits settings.")
+            return error_provider(provider_id, "expired", "OpenRouter rejected the saved key. Enter a new one under Settings → Providers.")
         return error_provider(provider_id, exc.kind, exc.message)
 
     result = base_provider(provider_id)
@@ -1258,7 +1258,7 @@ def read_private_key(path: Path, name: str = "Proxy management key") -> str:
         finally:
             os.close(fd)
     except OSError:
-        raise ProviderFailure("config", f"{name} could not be read. Enter it again in widget settings.") from None
+        raise ProviderFailure("config", f"{name} could not be read. Enter it again under Settings → Providers.") from None
     try:
         key = raw.decode("utf-8").strip()
     except UnicodeDecodeError:

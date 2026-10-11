@@ -1706,7 +1706,7 @@ def build_payload(
             try:
                 summary, state, error = future.result()
             except (ValueError, OSError):
-                summary, state, error = None, "unavailable", "Check this server’s connection and credential in Costs settings."
+                summary, state, error = None, "unavailable", "Check this server’s connection and token under Settings → Costs."
             if summary is None:
                 sources.append({"id": server["id"], "name": server["name"], "kind": "t3",
                     "status": "unavailable", "included": False, "updatedAt": None, "message": error})

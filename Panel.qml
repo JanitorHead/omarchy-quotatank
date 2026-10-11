@@ -945,7 +945,7 @@ Ui.Panel {
                 Ui.PanelActionButton {
                   objectName: root.viewMode === "costs" ? "costSettingsButton" : "usageSettingsButton"
                   iconText: "󰒓"
-                  tooltipText: root.viewMode === "costs" ? "Cost sources and prices" : "Quotatank settings"
+                  tooltipText: root.viewMode === "costs" ? "Settings · Costs" : "Settings"
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   fontSize: Style.font.body
@@ -1081,9 +1081,9 @@ Ui.Panel {
             topPadding: Style.spacing.huge
             bottomPadding: Style.spacing.huge
             text: backend.loading
-              ? "Loading AI subscription usage…"
+              ? "Reading your limits…"
               : root.proxyMode ? "No enabled managed accounts found. Check the accounts configured in " + UsageLogic.proxyName(backend.proxyImplementation) + "."
-              : "No connected providers found. Enable a provider in the widget settings and sign in to its CLI."
+              : "Nothing to show yet. Turn on a provider under Settings → Providers, then sign in to its CLI or save its API key."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -1757,13 +1757,12 @@ Ui.Panel {
         visible: creditsCard.hasMeter
         width: parent.width
         text: creditsCard.hasMeter
-          ? "MONTHLY ALLOWANCE · " + Math.round(UsageLogic.sideOfUsed(Number(creditsCard.credits.used) / Number(creditsCard.credits.limit) * 100, root.quotaMode))
-            + (root.quotaMode === "Remaining" ? "% LEFT" : "% USED")
+          ? "Monthly allowance · " + Math.round(UsageLogic.sideOfUsed(Number(creditsCard.credits.used) / Number(creditsCard.credits.limit) * 100, root.quotaMode))
+            + (root.quotaMode === "Remaining" ? "% left" : "% used")
           : ""
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
-        font.capitalization: Font.AllUppercase
         elide: Text.ElideRight
       }
 

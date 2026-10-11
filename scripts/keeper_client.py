@@ -35,7 +35,7 @@ def normalize_url(value: str) -> str:
             raise ValueError
         return urllib.parse.urlunsplit((url.scheme, url.netloc, path, "", ""))
     except (ValueError, TypeError, AttributeError):
-        raise KeeperError("Set the CPA Usage Keeper HTTP(S) URL in widget settings.") from None
+        raise KeeperError("Set the CPA Usage Keeper HTTP(S) URL under Settings → Providers.") from None
 
 
 def read_password(path: Path) -> str:
@@ -99,7 +99,7 @@ class Client:
             code = exc.code
             exc.close()
             if code in (401, 403):
-                raise KeeperError("Keeper rejected the login. Check its password in widget settings.") from None
+                raise KeeperError("Keeper rejected the login. Check its password under Settings → Providers.") from None
             if code == 404:
                 raise KeeperError("Keeper activity endpoint was not found. Use the Keeper URL, not the CLIProxyAPI URL.") from None
             raise KeeperError(f"Keeper activity returned HTTP {code}.") from None
