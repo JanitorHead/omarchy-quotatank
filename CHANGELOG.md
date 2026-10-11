@@ -4,7 +4,7 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 1.5.0
 
 ### Added
 
@@ -33,6 +33,10 @@ All notable changes to this project will be documented here. The format follows
 - The footer countdown reads `Next refresh in 14 min` instead of `Next refresh 14:44`, which looked like a clock time.
 - A projected run-out in the headline uses the alert color only when the limit is at a threshold or would run out within a day; otherwise it adds `at this rate`.
 - QML references the palette as `Commons.Color`, as the Omarchy shell guide requires for Qt 6.12, where an unqualified `Color` resolves to Qt's own type.
+
+### Notes
+
+- DeepSeek was verified against the documented `GET /user/balance` shape with fixtures and unit tests only; OpenRouter, Claude Code, Codex, and OpenCode Go were smoke-tested against live accounts.
 
 ## 1.4.2
 
@@ -268,7 +272,7 @@ All notable changes to this project will be documented here. The format follows
   for horizontal and vertical bars.
 - Fixture, contract, QML lint, and live Quickshell runtime tests.
 
-[Unreleased]: https://github.com/JanitorHead/omarchy-quotatank/compare/v1.1.1...HEAD
+[1.5.0]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.0
 [1.1.1]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.1.1
 [1.1.0]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.1.0
 [1.0.0]: https://github.com/JanitorHead/omarchy-quotatank/commit/1ac7f411a75fd84bf63d8005fdefbb8867d642f4
