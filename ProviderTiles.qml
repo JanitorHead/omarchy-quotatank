@@ -141,13 +141,6 @@ Flow {
           // Same height whether the tile shows a figure or a failure reason, so tiles line up.
           implicitHeight: figureMetrics.height
 
-          FontMetrics {
-            id: figureMetrics
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.heading
-            font.bold: true
-          }
-
           // The figure shrinks to fit a narrow tile; the unit shows only when there is room beside it.
           Text {
             id: figureText
