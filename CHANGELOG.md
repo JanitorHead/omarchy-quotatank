@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.4.2
+
+### Fixed
+
+- A chip pinned to a window its provider does not report (for example 5-hour on OpenCode Go, which reports weekly and monthly limits) showed the provider's most constrained limit under the pinned tag, such as `5h 42%` for a monthly figure. The tag now names the period of the limit actually shown (`30d 42%`), or is left out when that period is unknown.
+
+### Changed
+
+- README and marketplace preview redesigned: one framed style for every image, a single menu bar image covering every chip option, accounts and the banked reset confirmation side by side, the full Costs tab with its model breakdown, and theme names on the theme gallery.
+
 ## 1.4.1
 
 ### Fixed

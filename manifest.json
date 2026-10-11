@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "janitorhead.quotatank",
   "name": "Quotatank",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "author": "JanitorHead",
   "license": "MIT",
   "description": "Menu-bar quota monitor for Claude Code, OpenAI Codex, Kimi Code, and OpenCode Go. Shows used or remaining percentages per limit, a pacing tick, and a projected run-out time. Fusebox and CLIProxyAPI accounts get one card each. Desktop alerts at your warning and critical thresholds. Estimated API cost history from local Codex and Claude Code transcripts and T3 Code servers, by model.",
