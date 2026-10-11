@@ -1748,8 +1748,10 @@ Ui.Panel {
       Text {
         visible: text !== ""
         width: parent.width
-        text: moneyCard.runway !== "" ? "Lasts " + moneyCard.runway + " at this week's rate"
-          : moneyCard.stressed ? "At or below your " + UsageLogic.formatUsd(moneyCard.level === "critical" ? root.creditCriticalUsd : root.creditWarningUsd) + " alert" : ""
+        text: (moneyCard.stressed ? UsageLogic.formatUsd(moneyCard.amount) + " left, at or below your "
+            + UsageLogic.formatUsd(moneyCard.level === "critical" ? root.creditCriticalUsd : root.creditWarningUsd) + " alert"
+            + (moneyCard.runway !== "" ? " · " : "") : "")
+          + (moneyCard.runway !== "" ? (moneyCard.stressed ? "lasts " : "Lasts ") + moneyCard.runway + " at this week's rate" : "")
         color: moneyCard.stressed ? root.urgent : root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
