@@ -20,10 +20,10 @@ Column {
   property alias connectionExpanded: connectionSection.expanded
   property alias activityExpanded: activitySection.expanded
   property alias alertsExpanded: alertsSection.expanded
-  property alias refreshExpanded: refreshSection.expanded
+  property alias refreshExpanded: advancedSection.expanded
   readonly property bool percentageDisplay: draft.barDisplayMode === "Percentages"
   readonly property string thresholdUnit: draft.quotaMode === "Remaining" ? "% left" : "% used"
-  onProxyModeChanged: if (proxyMode && !draft.cliproxyKeyFile) connectionSection.expanded = true
+  onProxyModeChanged: if (proxyMode && !draft.cliproxyKeyFile) { sourceSection.expanded = true; connectionSection.expanded = true }
   property var draft: ({})
   property alias managementKey: managementCredential.text
   property alias keeperPassword: keeperCredential.text
@@ -115,15 +115,15 @@ Column {
       criticalThreshold: String(UsageLogic.thresholdInMode(value("criticalThreshold", 10), mode))
     }
     refreshMinutes = String(Number(draft.refreshIntervalSec) / 60)
+    sourceSection.expanded = proxyMode && !draft.cliproxyKeyFile
     connectionSection.expanded = proxyMode && !draft.cliproxyKeyFile
     activitySection.expanded = false
     providerSection.expanded = true
-    menuBarSection.expanded = true
+    menuBarSection.expanded = false
     barLimitsSection.expanded = false
     displaySection.expanded = false
     alertsSection.expanded = false
-    refreshSection.expanded = false
-    privacySection.expanded = false
+    advancedSection.expanded = false
     openrouterSection.expanded = !proxyMode && UsageLogic.contains(draft.enabledProviders, "openrouter") && !draft.openrouterKeyFile
     diagnosticsSection.expanded = false
     errorText = ""
@@ -177,6 +177,11 @@ Column {
     return proxyMode ? shown + " in menu bar" : monitored + " monitored · " + shown + " in menu bar"
   }
 
+  function sourceSummary() {
+    if (!proxyMode) return "Local CLI sign-ins"
+    return proxyName + (draft.cliproxyKeyFile ? " · connected" : " · needs a key")
+  }
+
   function menuBarSummary() {
     if (!percentageDisplay) return "Widget icon"
     var text = UsageLogic.windowSelectorLabel(draft.barWindow)
@@ -201,7 +206,9 @@ Column {
 
   function fail(message, section, item) {
     errorText = message
-    if (section) section.expanded = true
+    // Open the section and every section around it, so a nested field is visible.
+    for (var node = section; node; node = node.parent)
+      if (node.expanded !== undefined) node.expanded = true
     Qt.callLater(function() {
       if (!root.visible || root.errorText !== message) return
       if (item.focusEditor) item.focusEditor()
@@ -215,7 +222,7 @@ Column {
     var next = Object.assign({}, draft)
     var minutes = Number(refreshMinutes)
     if (refreshMinutes.trim() === "" || !isFinite(minutes) || minutes < 1 || minutes > 60)
-      return fail("Enter a refresh interval from 1 to 60 minutes.", refreshSection, refreshField)
+      return fail("Enter a refresh interval from 1 to 60 minutes.", advancedSection, refreshField)
     next.refreshIntervalSec = Math.round(minutes * 60)
     var warningBounds = UsageLogic.thresholdBounds(1, 100, next.quotaMode)
     var criticalBounds = UsageLogic.thresholdBounds(0, 100, next.quotaMode)
@@ -231,7 +238,7 @@ Column {
       if (raw === "" || !isFinite(value) || Math.floor(value) !== value
           || value < range[2] || value > range[3]) {
         return fail(range[1] + " must be a whole number from " + range[2] + " to " + range[3] + ".",
-          range[0] === "refreshIntervalSec" ? refreshSection : alertsSection, range[0] === "warningThreshold" ? warningField : range[0] === "criticalThreshold" ? criticalField : refreshField)
+          range[0] === "refreshIntervalSec" ? advancedSection : alertsSection, range[0] === "warningThreshold" ? warningField : range[0] === "criticalThreshold" ? criticalField : refreshField)
       }
       next[range[0]] = value
     }
@@ -334,119 +341,124 @@ Column {
     onRevealRequested: function(item) { root.revealRequested(item) }
   }
 
-  Row {
-    width: parent.width
-    Label {
-      width: parent.width - sourceControl.width
-      text: "Quota source"
-      anchors.verticalCenter: parent.verticalCenter
-    }
-    UsageSelect {
-      id: sourceControl
-      objectName: "usageSourceControl"
-      width: Math.min(implicitWidth, parent.width * 0.6)
-      label: "Quota source"
-      options: [{ value: "direct", label: "Local CLIs" }, { value: "cliproxy", label: root.proxyName }]
-      value: String(root.draft.usageSource || "direct")
-      foreground: root.foreground
-      surface: root.surface
-      fontFamily: root.fontFamily
-      alignPopupRight: true
-      onChanged: function(value) { root.setValue("usageSource", value) }
-      onMenuClosed: if (root.visible) sourceControl.forceActiveFocus()
-      onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-    }
-  }
-
-  Ui.Button {
-    objectName: "fuseboxRepositoryLink"
-    visible: root.proxyMode
-    text: "Fusebox on GitHub ↗"
-    tooltipText: root.fuseboxRepositoryUrl
-    foreground: root.foreground
-    fontFamily: root.fontFamily
-    fontSize: Style.font.caption
-    horizontalPadding: Style.spacing.sm
-    verticalPadding: Style.spacing.xs
-    focusable: true
-    Accessible.name: "Open the Fusebox repository on GitHub"
-    onClicked: Qt.openUrlExternally(root.fuseboxRepositoryUrl)
-    onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-  }
-
   Section {
-    id: connectionSection
-    objectName: "quotaConnectionSection"
-    visible: root.proxyMode
-    title: "Connection details"
-    summary: root.draft.cliproxyKeyFile ? "Configured" : "Setup"
-    Label { text: root.proxyName + " server URL" }
-    Field {
-      id: proxyUrlField
-      objectName: "cliproxyUrlField"
-      settingKey: "cliproxyUrl"
-      placeholderText: "http://127.0.0.1:8317"
-      Accessible.name: root.proxyName + " server URL"
-    }
-    SettingsCredential {
-      id: managementCredential
-      width: parent.width
-      label: "Management API key"
-      editorObjectName: "managementKeyField"
-      saved: !!root.draft.cliproxyKeyFile
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      onEdited: root.errorText = ""
-      onRevealRequested: function(item) { root.revealRequested(item) }
-    }
-    Hint { text: "Save to discover the proxy’s providers and accounts." }
-    Section {
-      title: "Learn more"
-      Hint { text: "Use the management key for Fusebox or CLIProxyAPI. The implementation is detected automatically. The key is saved privately on this device. Quota limits and estimated costs use separate data sources." }
-    }
-  }
-  Section {
-    id: activitySection
-    objectName: "accountActivitySection"
-    visible: root.proxyMode
-    title: "Account activity"
-    summary: root.draft.liveAccountActivity !== false ? "Live on Fusebox" : "Last used"
+    id: sourceSection
+    objectName: "sourceSection"
+    title: "Source"
+    summary: root.sourceSummary()
     Row {
       width: parent.width
-      Label { width: parent.width - liveAccountActivitySwitch.width; text: "Live account activity"; anchors.verticalCenter: parent.verticalCenter }
-      ProviderToggle {
-        id: liveAccountActivitySwitch
-        objectName: "liveAccountActivityToggle"
-        width: Style.space(82)
-        checked: root.draft.liveAccountActivity !== false
-        Accessible.name: "Live account activity"
-        onToggled: root.setValue("liveAccountActivity", !checked)
+      Label {
+        width: parent.width - sourceControl.width
+        text: "Quota source"
+        anchors.verticalCenter: parent.verticalCenter
+      }
+      UsageSelect {
+        id: sourceControl
+        objectName: "usageSourceControl"
+        width: Math.min(implicitWidth, parent.width * 0.6)
+        label: "Quota source"
+        options: [{ value: "direct", label: "Local CLIs" }, { value: "cliproxy", label: root.proxyName }]
+        value: String(root.draft.usageSource || "direct")
+        foreground: root.foreground
+        surface: root.surface
+        fontFamily: root.fontFamily
+        alignPopupRight: true
+        onChanged: function(value) { root.setValue("usageSource", value) }
+        onMenuClosed: if (root.visible) sourceControl.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
       }
     }
-    Hint { text: "Fusebox session counts appear beside the subscription title. Sessions may remain assigned after requests finish." }
-    Label { text: "CPA Usage Keeper URL" }
-    Field {
-      id: keeperUrlField
-      objectName: "costKeeperUrlField"
-      settingKey: "costKeeperUrl"
-      placeholderText: "https://proxy.example.com/keeper"
-      Accessible.name: "CPA Usage Keeper URL"
-    }
-    SettingsCredential {
-      id: keeperCredential
-      width: parent.width
-      label: "Keeper login password"
-      editorObjectName: "keeperPasswordField"
-      saved: !!root.draft.costKeeperPasswordFile
+    Hint { text: root.proxyMode ? "Limits come from every account on your " + root.proxyName + " server." : "Limits come from the CLIs you are signed in to on this computer." }
+    Ui.Button {
+      objectName: "fuseboxRepositoryLink"
+      visible: root.proxyMode
+      text: "Fusebox on GitHub ↗"
+      tooltipText: root.fuseboxRepositoryUrl
       foreground: root.foreground
       fontFamily: root.fontFamily
-      onEdited: root.errorText = ""
-      onRevealRequested: function(item) { root.revealRequested(item) }
+      fontSize: Style.font.caption
+      horizontalPadding: Style.spacing.sm
+      verticalPadding: Style.spacing.xs
+      focusable: true
+      Accessible.name: "Open the Fusebox repository on GitHub"
+      onClicked: Qt.openUrlExternally(root.fuseboxRepositoryUrl)
+      onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
     }
-    Hint { text: "Show the last-used account in the percentage menu bar." }
     Section {
-      title: "Learn more"
-      Hint { text: "CLIProxyAPI uses Keeper for account activity. Fusebox streams live activity without Keeper. One connection is shared by all panels. With live activity off, last-used accounts update independently of Costs." }
+      id: connectionSection
+      objectName: "quotaConnectionSection"
+      visible: root.proxyMode
+      title: "Connection details"
+      summary: root.draft.cliproxyKeyFile ? "Configured" : "Setup"
+      Label { text: root.proxyName + " server URL" }
+      Field {
+        id: proxyUrlField
+        objectName: "cliproxyUrlField"
+        settingKey: "cliproxyUrl"
+        placeholderText: "http://127.0.0.1:8317"
+        Accessible.name: root.proxyName + " server URL"
+      }
+      SettingsCredential {
+        id: managementCredential
+        width: parent.width
+        label: "Management API key"
+        editorObjectName: "managementKeyField"
+        saved: !!root.draft.cliproxyKeyFile
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onEdited: root.errorText = ""
+        onRevealRequested: function(item) { root.revealRequested(item) }
+      }
+      Hint { text: "Save to discover the proxy’s providers and accounts." }
+      Section {
+        title: "Learn more"
+        Hint { text: "Use the management key for Fusebox or CLIProxyAPI. The implementation is detected automatically. The key is saved privately on this device. Quota limits and estimated costs use separate data sources." }
+      }
+    }
+    Section {
+      id: activitySection
+      objectName: "accountActivitySection"
+      visible: root.proxyMode
+      title: "Account activity"
+      summary: root.draft.liveAccountActivity !== false ? "Live on Fusebox" : "Last used"
+      Row {
+        width: parent.width
+        Label { width: parent.width - liveAccountActivitySwitch.width; text: "Live account activity"; anchors.verticalCenter: parent.verticalCenter }
+        ProviderToggle {
+          id: liveAccountActivitySwitch
+          objectName: "liveAccountActivityToggle"
+          width: Style.space(82)
+          checked: root.draft.liveAccountActivity !== false
+          Accessible.name: "Live account activity"
+          onToggled: root.setValue("liveAccountActivity", !checked)
+        }
+      }
+      Hint { text: "Fusebox session counts appear beside the subscription title. Sessions may remain assigned after requests finish." }
+      Label { text: "CPA Usage Keeper URL" }
+      Field {
+        id: keeperUrlField
+        objectName: "costKeeperUrlField"
+        settingKey: "costKeeperUrl"
+        placeholderText: "https://proxy.example.com/keeper"
+        Accessible.name: "CPA Usage Keeper URL"
+      }
+      SettingsCredential {
+        id: keeperCredential
+        width: parent.width
+        label: "Keeper login password"
+        editorObjectName: "keeperPasswordField"
+        saved: !!root.draft.costKeeperPasswordFile
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onEdited: root.errorText = ""
+        onRevealRequested: function(item) { root.revealRequested(item) }
+      }
+      Hint { text: "Show the last-used account in the percentage menu bar." }
+      Section {
+        title: "Learn more"
+        Hint { text: "CLIProxyAPI uses Keeper for account activity. Fusebox streams live activity without Keeper. One connection is shared by all panels. With live activity off, last-used accounts update independently of Costs." }
+      }
     }
   }
 
@@ -498,39 +510,38 @@ Column {
       }
     }
     Hint { text: root.proxyMode ? "Every provider on the server is monitored. Choose which ones get a menu bar chip." : "Monitor fetches a provider and shows it in Limits. Menu bar adds its chip to the bar." }
-  }
-
-  Section {
-    id: openrouterSection
-    objectName: "openrouterSection"
-    visible: root.openrouterMonitored
-    title: "OpenRouter"
-    summary: root.draft.openrouterKeyFile ? "Key saved" : "Add a key"
-    SettingsCredential {
-      id: openrouterCredential
-      width: parent.width
-      label: "OpenRouter key"
-      editorObjectName: "openrouterKeyField"
-      saved: !!root.draft.openrouterKeyFile
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      onEdited: root.errorText = ""
-      onRevealRequested: function(item) { root.revealRequested(item) }
-    }
-    Hint { text: "Any OpenRouter API key shows the account balance, the key's spending limit, and spend. The key is saved privately on this device; OPENROUTER_API_KEY in the environment takes precedence." }
-    Ui.Button {
-      objectName: "openrouterKeysLink"
-      text: "Create a key on OpenRouter ↗"
-      tooltipText: root.openrouterKeysUrl
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      fontSize: Style.font.caption
-      horizontalPadding: Style.spacing.sm
-      verticalPadding: Style.spacing.xs
-      focusable: true
-      Accessible.name: "Open OpenRouter key settings"
-      onClicked: Qt.openUrlExternally(root.openrouterKeysUrl)
-      onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+    Section {
+      id: openrouterSection
+      objectName: "openrouterSection"
+      visible: root.openrouterMonitored
+      title: "OpenRouter key"
+      summary: root.draft.openrouterKeyFile ? "Key saved" : "Add a key"
+      SettingsCredential {
+        id: openrouterCredential
+        width: parent.width
+        label: "OpenRouter key"
+        editorObjectName: "openrouterKeyField"
+        saved: !!root.draft.openrouterKeyFile
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onEdited: root.errorText = ""
+        onRevealRequested: function(item) { root.revealRequested(item) }
+      }
+      Hint { text: "Any OpenRouter API key shows the account balance, the key's spending limit, and spend. The key is saved privately on this device; OPENROUTER_API_KEY in the environment takes precedence." }
+      Ui.Button {
+        objectName: "openrouterKeysLink"
+        text: "Create a key on OpenRouter ↗"
+        tooltipText: root.openrouterKeysUrl
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        fontSize: Style.font.caption
+        horizontalPadding: Style.spacing.sm
+        verticalPadding: Style.spacing.xs
+        focusable: true
+        Accessible.name: "Open OpenRouter key settings"
+        onClicked: Qt.openUrlExternally(root.openrouterKeysUrl)
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
     }
   }
 
@@ -774,6 +785,7 @@ Column {
     objectName: "displaySection"
     title: "Display"
     summary: (root.draft.quotaMode === "Remaining" ? "% left" : "% used") + " · " + (root.draft.providerColors === true ? "Brand colors" : "Theme colors")
+      + (root.draft.hideAccountEmails !== false ? " · Emails hidden" : "")
     Row {
       width: parent.width
       Label { width: parent.width - quotaModeSelect.width; text: "Show limits as"; anchors.verticalCenter: parent.verticalCenter }
@@ -823,14 +835,28 @@ Column {
       }
     }
     Hint { text: "Off follows the theme's corners." }
+    Row {
+      width: parent.width
+      Label { width: parent.width - hideEmailSwitch.width; text: "Hide account emails"; anchors.verticalCenter: parent.verticalCenter }
+      ProviderToggle {
+        id: hideEmailSwitch
+        objectName: "hideAccountEmailsToggle"
+        width: Style.space(82)
+        checked: root.draft.hideAccountEmails !== false
+        Accessible.name: "Hide account emails"
+        onToggled: root.setValue("hideAccountEmails", !checked)
+      }
+    }
+    Hint { text: "Shows Account 1, Account 2, … instead of account identities, on screen and in exports." }
   }
 
   Section {
     id: alertsSection
     objectName: "alertsSection"
     title: "Alerts"
-    summary: root.draft.notifyLimitThresholds === false ? "Off" : "Warning at " + root.draft.warningThreshold + root.thresholdUnit + " · Critical at " + root.draft.criticalThreshold + root.thresholdUnit
-      + (root.openrouterMonitored ? " · Balance at $" + root.draft.creditWarningUsd : "")
+    summary: root.draft.notifyLimitThresholds === false ? "Notifications off"
+      : root.draft.warningThreshold + " / " + root.draft.criticalThreshold + root.thresholdUnit
+        + (root.openrouterMonitored ? " · $" + root.draft.creditWarningUsd + " / $" + root.draft.creditCriticalUsd : "")
     Row {
       width: parent.width
       Label { width: parent.width - notifySwitch.width; text: "Notify when limits run low"; anchors.verticalCenter: parent.verticalCenter }
@@ -885,10 +911,10 @@ Column {
   }
 
   Section {
-    id: refreshSection
-    objectName: "refreshSection"
-    title: "Refresh"
-    summary: "Every " + (root.refreshMinutes || "—") + " min"
+    id: advancedSection
+    objectName: "advancedSection"
+    title: "Advanced"
+    summary: "Refresh every " + (root.refreshMinutes || "—") + " min"
     Label { text: "Refresh interval (minutes)" }
     SettingsField {
       id: refreshField
@@ -903,32 +929,11 @@ Column {
       onTextEdited: { root.refreshMinutes = text; root.errorText = "" }
       onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
     }
-  }
-
-  Section {
-    id: privacySection
-    objectName: "privacySection"
-    title: "Privacy"
-    summary: root.draft.hideAccountEmails !== false ? "Emails hidden" : "Emails shown"
-    Row {
-      width: parent.width
-      Label { width: parent.width - hideEmailSwitch.width; text: "Hide account emails"; anchors.verticalCenter: parent.verticalCenter }
-      ProviderToggle {
-        id: hideEmailSwitch
-        objectName: "hideAccountEmailsToggle"
-        width: Style.space(82)
-        checked: root.draft.hideAccountEmails !== false
-        Accessible.name: "Hide account emails"
-        onToggled: root.setValue("hideAccountEmails", !checked)
-      }
+    Section {
+      id: diagnosticsSection
+      title: "Diagnostics"
+      Hint { text: root.draft.hideAccountEmails !== false ? root.accountDetails.replace(/^Account:.*(?:\n|$)/m, "") : root.accountDetails }
     }
-    Hint { text: "Shows Account 1, Account 2, … instead of account identities, on screen and in exports." }
-  }
-
-  Section {
-    id: diagnosticsSection
-    title: "Diagnostics"
-    Hint { text: root.draft.hideAccountEmails !== false ? root.accountDetails.replace(/^Account:.*(?:\n|$)/m, "") : root.accountDetails }
   }
 
   component Section: SettingsSection {
