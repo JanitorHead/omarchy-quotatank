@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- Fixed pacing and run-out estimates showing "No recent data" on Quickshell builds where widget data fails `Array.isArray`.
+
 ## 1.4.0
 
 ### Added

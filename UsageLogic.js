@@ -447,13 +447,15 @@ function finiteOrNull(value) {
 // the last increase (or since observation began, when no increase was seen).
 function recentBurn(samples, used, nowSeconds, windowStart) {
   var points = []
-  var list = Array.isArray(samples) ? samples : []
-  list.forEach(function (row) {
-    var stamp = Array.isArray(row) ? finiteOrNull(row[0]) : null
-    var value = Array.isArray(row) ? finiteOrNull(row[1]) : null
-    if (stamp === null || value === null || stamp > nowSeconds) return
+  var list = listOrEmpty(samples)
+  // Index loop, not forEach: Quickshell lists may lack forEach but keep length and indexing.
+  for (var r = 0; r < list.length; r++) {
+    var row = list[r]
+    var stamp = isListLike(row) ? finiteOrNull(row[0]) : null
+    var value = isListLike(row) ? finiteOrNull(row[1]) : null
+    if (stamp === null || value === null || stamp > nowSeconds) continue
     points.push([stamp, clamp(value, 0, 100)])
-  })
+  }
   points.sort(function (a, b) { return a[0] - b[0] })
   if (points.length === 0 || nowSeconds - points[points.length - 1][0] > PACE_MAX_GAP_SECONDS) return null
 

@@ -5,7 +5,7 @@
   "version": "1.4.0",
   "author": "JanitorHead",
   "license": "MIT",
-  "description": "Menu bar quota monitor for Claude Code, OpenAI Codex, Kimi Code, and OpenCode Go. Each limit has a pace tick showing the expected use at this point in the window, with a projection such as 'Runs out in 2h 5m' based on recent use. Per-provider bar limits, reset times in each chip, provider brand colors, and failed providers that stay visible with the reason. Desktop alerts at your thresholds, plus token and cost history from local transcripts.",
+  "description": "Menu-bar quota monitor for Claude Code, OpenAI Codex, Kimi Code, and OpenCode Go. Shows used or remaining percentages per limit, a pacing tick, and a projected run-out time. Fusebox and CLIProxyAPI accounts get one card each. Desktop alerts at your warning and critical thresholds. Estimated API cost history from local Codex and Claude Code transcripts and T3 Code servers, by model.",
   "kinds": [
     "bar-widget"
   ],

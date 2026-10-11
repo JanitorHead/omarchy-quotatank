@@ -443,6 +443,22 @@ const previous = context.paceForWindow(weekly(5, [[weekStart - HOUR, 90], ...hol
 assert.equal(previous.state, "idle", "the earlier window's 90% does not start a burn");
 assert.equal(previous.runsOut, false);
 
+// Quickshell can hand over lists with length and index access that fail Array.isArray(). They must read
+// exactly like plain arrays; a sample list that looks empty to the reader would show "No recent data".
+const asArrayLike = (items) => Object.assign({ length: items.length }, items);
+const steadySamples = linear(weekStart, NOW, 40);
+const listSamples = asArrayLike(steadySamples.map(asArrayLike));
+assert.equal(Array.isArray(listSamples), false);
+assert.equal(Array.isArray(listSamples[0]), false);
+const plainBurn = context.recentBurn(steadySamples, 40, NOW, weekStart);
+const listBurn = context.recentBurn(listSamples, 40, NOW, weekStart);
+assert.notEqual(listBurn, null, "array-like samples are read, not treated as missing");
+assert.ok(listBurn.percentPerSecond > 0, "array-like samples carry the same burn");
+assert.deepEqual(listBurn, plainBurn);
+const listPace = context.paceForWindow({ used: 40, windowSeconds: WEEK, resetsAt: NOW + WEEK / 2, samples: listSamples }, NOW);
+assert.equal(listPace.state, "projecting", "array-like samples project a run-out or a steady burn");
+assert.deepEqual(listPace, context.paceForWindow(weekly(40, steadySamples), NOW));
+
 const exhausted = context.paceForWindow(weekly(140, holding(weekStart, NOW, 100)), NOW);
 assert.equal(exhausted.used, 100, "used clamps before projecting");
 assert.equal(exhausted.state, "exhausted");
