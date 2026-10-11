@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "janitorhead.quotatank",
   "name": "Quotatank",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "author": "JanitorHead",
   "license": "MIT",
   "description": "Menu-bar quota monitor for Claude Code, OpenAI Codex, Kimi Code, OpenCode Go, OpenRouter, and DeepSeek. Shows used or remaining per limit, a pacing tick, a projected run-out time, and prepaid balances with low-balance alerts. Fusebox and CLIProxyAPI accounts get one card each. Settings apply as you change them. Estimated API cost history from local Codex, Claude Code, and OpenCode transcripts and T3 Code servers, by model.",
@@ -37,6 +37,7 @@
       "notifyLimitThresholds": true,
       "barDisplayMode": "Percentages",
       "quotaMode": "Used",
+      "providerQuotaModes": "{}",
       "barProviders": [
         "claude",
         "codex",
@@ -202,7 +203,14 @@
           "Remaining"
         ],
         "defaultValue": "Used",
-        "description": "Whether limit cards and menu bar chips report the percentage used or the percentage left. The warning thresholds always apply to what is left."
+        "description": "Whether limit cards and menu bar chips report the percentage used or the percentage left; balances follow it too. The warning thresholds always apply to what is left. One provider can be read the other way under Display → Per provider."
+      },
+      {
+        "key": "providerQuotaModes",
+        "type": "string",
+        "label": "Show limits as, per provider",
+        "defaultValue": "{}",
+        "description": "Managed under Display → Per provider in settings. JSON object mapping provider IDs to Used or Remaining; missing providers follow Show limits as."
       },
       {
         "key": "barWindow",
@@ -271,7 +279,7 @@
         "key": "barProviderLimits",
         "type": "string",
         "label": "Menu bar: per-provider limits",
-        "description": "Managed under Menu bar → Per provider in settings. JSON object mapping provider IDs to top and bottom bar limits; missing slots use the limits chosen for all providers.",
+        "description": "Managed under Providers → Customize in settings. JSON object mapping provider IDs to top and bottom bar limits; missing slots use the limits chosen for all providers.",
         "defaultValue": "{}"
       },
       {

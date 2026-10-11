@@ -640,3 +640,16 @@ assert.equal(context.providerShortName({ id: "claude", name: "Claude Code" }), "
 assert.equal(context.providerShortName({ id: "gemini-cli", name: "Gemini CLI" }), "Gemini CLI", "proxy providers keep their name");
 
 console.log("UsageLogic.js: all assertions passed");
+
+// Per-provider "Show limits as" overrides follow the global choice unless set.
+assert.equal(context.quotaModeFor("{}", "claude", "Used"), "Used");
+assert.equal(context.quotaModeFor("{}", "claude", "Remaining"), "Remaining");
+const modes = context.setQuotaMode("{}", "claude", "Remaining");
+assert.equal(context.quotaModeFor(modes, "claude", "Used"), "Remaining", "an override wins over the global choice");
+assert.equal(context.quotaModeFor(modes, "codex", "Used"), "Used", "other providers keep the global choice");
+assert.equal(context.setQuotaMode(modes, "claude", "default"), "{}", "default removes the override");
+assert.equal(context.setQuotaMode(modes, "claude", "bogus"), modes, "unknown values change nothing");
+assert.deepEqual(Object.keys(context.parseQuotaModes('{"claude":"Remaining","kimi":"nope","x":1}')), ["claude"], "only canonical values are kept");
+assert.equal(context.quotaModeFor("not json", "claude", "Remaining"), "Remaining", "unreadable overrides fall back to the global choice");
+assert.equal(context.quotaModeLabel("Remaining"), "Left (%)");
+console.log("Per-provider quota modes: passed");

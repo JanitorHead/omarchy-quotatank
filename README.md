@@ -76,7 +76,7 @@ The tick marks where even use would be by now, so blocks past it are use ahead o
 
 ![The same three limit cards read as percent used on the left and as percent left on the right](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/used-remaining.png)
 
-**Show limits as** flips every card, chip, and balance between used and left. The meter, the tick, and the pace share follow the setting. Warning and critical thresholds are stored as percent left, 25% and 10% by default, so the Opus limit is critical at 9% left whichever way you read it.
+**Show limits as** flips every card, chip, and balance between used and left; **Providers → Customize** reads a single provider the other way. The meter, the tick, and the pace share follow the setting. Warning and critical thresholds are stored as percent left, 25% and 10% by default, so the Opus limit is critical at 9% left whichever way you read it.
 
 ![Three panels: Codex with the headline Weekly limit is used up, back in 5d 10h; OpenCode Go with a sign-in expired card that quotes the command to run; DeepSeek with a drained balance and the notice that the platform is refusing calls](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/states.png)
 
@@ -98,7 +98,7 @@ OpenRouter and DeepSeek are prepaid, so their figure is money: what the account 
 - **Hide providers that are used up** takes a provider out of the bar while one of its weekly or monthly limits is used up; it returns when the limit resets, and Limits keeps showing it.
 - **Provider colors** paints each chip and limit meter in the provider's brand color.
 
-Money providers lead with their balance and stack their tightest limit below. The top and bottom limits can also be set for a single provider under **Menu bar → Per provider**. Clicking a chip opens that provider.
+Money providers lead with their balance and stack their tightest limit below. Clicking a chip opens that provider.
 
 A chip switches to the Omarchy theme's alert color when either of its lines is at warning or critical, and keeps it with provider colors on, so a brand color never hides an alert. Quotatank has no red of its own: the color comes from the theme.
 
@@ -126,14 +126,14 @@ Local Claude Code and Codex history are on by default, OpenCode can be added, an
 
 ## Settings that apply as you go
 
-![The settings index with six rows and what each is set to, beside the Providers page with Monitor and Menu bar switches and the saved API keys for OpenRouter and DeepSeek, and the Menu bar page](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/settings.png)
+![The settings index with six rows and what each is set to, beside the Providers page with Monitor and Menu bar switches, Codex customized to read as left with its 5-hour limit pinned, the saved OpenRouter key, and the Menu bar page](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/settings.png)
 
 The gear opens an index of six pages, and each row already says what the page is set to. There is no Save button: every switch, selector, and valid number applies the moment it changes, so you can compare the bar with the setting still in front of you. Keys and tokens are the exception, with an explicit **Save** that writes a private file, after which the page shows **Replace** and **Remove**.
 
 | Page | What lives there |
 |---|---|
-| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server), one row per provider with **Monitor** and **Menu bar** switches, and the API key editor under OpenRouter and DeepSeek |
-| **Menu bar** | Chips or the widget icon, the limit each chip shows, a second limit, reset times and formats, hiding used-up providers, per-provider overrides |
+| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server), one row per provider with **Monitor** and **Menu bar** switches, the API key editor under OpenRouter and DeepSeek, and **Customize** under each provider to override the defaults for that one: read it as used or left, pin the limit its chip shows and the second one below |
+| **Menu bar** | Chips or the widget icon, the limit each chip shows, a second limit, reset times and formats, hiding used-up providers |
 | **Alerts** | Desktop notifications, the percentage thresholds, and the low-balance amounts |
 | **Display** | Used or left, provider colors, square cards, hidden account emails |
 | **Costs** | Local history, T3 servers, custom prices, and the last scan |

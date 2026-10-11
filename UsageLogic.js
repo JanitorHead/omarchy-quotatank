@@ -300,6 +300,37 @@ function inheritedBarLimitLabel(slot, globalSelector) {
   return "Default (" + (normalized === "none" ? "None" : windowSelectorLabel(normalized)) + ")"
 }
 
+// Per-provider "Show limits as" overrides (`providerQuotaModes`, a JSON object of provider id →
+// "Used" | "Remaining"); a provider without one follows the global `quotaMode`.
+function parseQuotaModes(text) {
+  var parsed
+  try { parsed = JSON.parse(String(text === undefined || text === null ? "{}" : text)) }
+  catch (error) { return {} }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
+  var result = {}
+  var ids = Object.keys(parsed)
+  for (var i = 0; i < ids.length; i++)
+    if (parsed[ids[i]] === "Used" || parsed[ids[i]] === "Remaining") result[ids[i]] = parsed[ids[i]]
+  return result
+}
+
+// `value` is "default" to follow the global choice again.
+function setQuotaMode(text, providerId, value) {
+  var modes = parseQuotaModes(text)
+  if (value === "default") delete modes[providerId]
+  else if (value === "Used" || value === "Remaining") modes[providerId] = value
+  return JSON.stringify(modes)
+}
+
+function quotaModeFor(text, providerId, globalMode) {
+  var mode = parseQuotaModes(text)[String(providerId)]
+  return mode || (String(globalMode) === "Remaining" ? "Remaining" : "Used")
+}
+
+function quotaModeLabel(mode) {
+  return String(mode) === "Remaining" ? "Left (%)" : "Used (%)"
+}
+
 // Short period tag for stacked chips. Auto has no single period, so it has no tag.
 function windowShortLabel(selector) {
   var normalized = normalizeBarWindow(selector)

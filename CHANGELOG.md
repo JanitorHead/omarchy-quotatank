@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.5.1
+
+### Added
+
+- **Customize under each provider** (Settings → Providers): the one place where a provider overrides the defaults. **Show limits as** reads that provider as used or left while the others follow Display (`providerQuotaModes`); **Limit shown** and **Second limit below** pin its chip's limits while the others follow Menu bar. The header summarizes the overrides (`Left (%) · 5-hour`) and the index counts customized providers. The override follows the provider everywhere: tile, chip, cards, balance, tooltips, and notifications.
+
+### Changed
+
+- The **Per provider** sections under Menu bar and Display moved into Providers → Customize; both pages now point there.
+
 ## 1.5.0
 
 ### Added
@@ -272,6 +282,7 @@ All notable changes to this project will be documented here. The format follows
   for horizontal and vertical bars.
 - Fixture, contract, QML lint, and live Quickshell runtime tests.
 
+[1.5.1]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.1
 [1.5.0]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.0
 [1.1.1]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.1.1
 [1.1.0]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.1.0

@@ -59,9 +59,15 @@ Ui.Panel {
     setting("warningThreshold", 25), 0, 100))
   readonly property string displayMode: String(setting("barDisplayMode", "Percentages"))
   // Which side of the allowance cards and chips report. Dashboards show usage;
-  // the warning thresholds always gate on what is left.
+  // the warning thresholds always gate on what is left. One provider can override the choice.
   readonly property string quotaMode: String(setting("quotaMode", "Used")) === "Remaining"
     ? "Remaining" : "Used"
+  readonly property string providerQuotaModes: String(setting("providerQuotaModes", "{}"))
+  function quotaModeFor(providerId) {
+    return UsageLogic.quotaModeFor(providerQuotaModes, providerId, quotaMode)
+  }
+  // The side the selected provider's cards show.
+  readonly property string selectedQuotaMode: quotaModeFor(provider ? provider.id : "")
   // Pins which reported limit supplies the bar percentage, its severity colour
   // and its echoes. Values match the AI usage widget's setting of the same name.
   readonly property string barWindow: UsageLogic.normalizeBarWindow(setting("barWindow", "auto"))
@@ -118,9 +124,10 @@ Ui.Panel {
   function providerTile(provider) {
     var id = String(provider.id)
     var failed = String(provider.status) === "error"
-    var money = failed ? null : UsageLogic.moneyView(provider, quotaMode)
+    var mode = quotaModeFor(id)
+    var money = failed ? null : UsageLogic.moneyView(provider, mode)
     var remaining = failed ? null : UsageLogic.minRemaining(provider)
-    var shown = remaining === null ? null : (quotaMode === "Remaining" ? remaining : UsageLogic.usedFromRemaining(remaining))
+    var shown = remaining === null ? null : (mode === "Remaining" ? remaining : UsageLogic.usedFromRemaining(remaining))
     return {
       value: id,
       label: UsageLogic.providerShortName(provider),
@@ -129,7 +136,7 @@ Ui.Panel {
       figure: failed ? UsageLogic.errorReasonLabel(provider.errorKind)
         : money !== null ? money.text
         : (shown === null ? "—" : UsageLogic.formatPercent(shown) + "%"),
-      unit: money !== null ? money.unit : shown === null ? "" : (quotaMode === "Remaining" ? "left" : "used"),
+      unit: money !== null ? money.unit : shown === null ? "" : (mode === "Remaining" ? "left" : "used"),
       fill: money !== null ? (money.share === null ? 0 : money.share / 100) : shown === null ? 0 : shown / 100,
       alert: providerNeedsAttention(provider),
       failed: failed
@@ -180,7 +187,7 @@ Ui.Panel {
       var runway = UsageLogic.moneyRunway(money, spend.weekly, nowMs / 1000)
       var level = moneySeverityOf(provider)
       moneyLow = level === "warning" || level === "critical"
-      var view = UsageLogic.moneyView(provider, quotaMode)
+      var view = UsageLogic.moneyView(provider, quotaModeFor(provider.id))
       moneyLine = (view.unit === "used"
         ? view.text + " of " + UsageLogic.formatMoney(view.total, view.currency) + " used"
         : view.text + " left") + (runway ? " · lasts " + runway : "")
@@ -356,7 +363,8 @@ Ui.Panel {
           key: String(provider.id) + "|" + String(row.label || j),
           severity: windowSeverity(row),
           title: String(provider.name || provider.id) + " · " + String(row.label || "Usage limit"),
-          remaining: UsageLogic.windowRemaining(row)
+          remaining: UsageLogic.windowRemaining(row),
+          mode: quotaModeFor(provider.id)
         })
       }
       var money = UsageLogic.spendable(provider)
@@ -377,7 +385,7 @@ Ui.Panel {
       var crossing = result.crossings[k]
       var critical = crossing.severity === "critical"
       Util.execArgv(["notify-send", "--app-name=Quotatank", "--urgency=" + (critical ? "critical" : "normal"),
-        crossing.title, crossing.body || UsageLogic.alertText(crossing.severity, crossing.remaining, quotaMode)])
+        crossing.title, crossing.body || UsageLogic.alertText(crossing.severity, crossing.remaining, crossing.mode)])
     }
   }
 
@@ -661,6 +669,7 @@ Ui.Panel {
           readonly property bool usingPoolQuota: root.proxyMode && !lastAccount.reading
           readonly property var reading: root.proxyMode && lastAccount.reading ? lastAccount.reading : modelData
           readonly property var limits: root.barLimitsFor(modelData.id)
+          readonly property string quotaMode: root.quotaModeFor(modelData.id)
           readonly property bool failed: String(modelData.status) === "error"
           readonly property string blocking: failed ? "" : UsageLogic.blockingWindow(
             limits.top, UsageLogic.exactRemainingForWindow(reading, limits.top),
@@ -669,11 +678,11 @@ Ui.Panel {
           readonly property string secondaryWindow: blocking !== "" ? "none" : limits.bottom
           // Money providers (OpenRouter, DeepSeek) lead with the balance on the chosen side; their tightest limit, if any, sits below.
           readonly property var money: failed ? null : UsageLogic.spendable(reading)
-          readonly property var moneyShown: money === null ? null : UsageLogic.moneyView(reading, root.quotaMode)
+          readonly property var moneyShown: money === null ? null : UsageLogic.moneyView(reading, providerChip.quotaMode)
           readonly property bool moneyChip: money !== null
           readonly property bool windowStacked: secondaryWindow !== "none" && !failed && !moneyChip
           readonly property var remainingValue: UsageLogic.remainingForWindow(reading, topWindow)
-          readonly property var shownValue: root.quotaMode === "Remaining"
+          readonly property var shownValue: providerChip.quotaMode === "Remaining"
             ? remainingValue : UsageLogic.usedForWindow(reading, topWindow)
           readonly property bool stacked: windowStacked || (moneyChip && shownValue !== null)
           readonly property string shownText: shownValue === null
@@ -684,7 +693,7 @@ Ui.Panel {
           readonly property var secondaryRemaining: windowStacked
             ? UsageLogic.exactRemainingForWindow(reading, secondaryWindow) : null
           readonly property string secondaryText: secondaryRemaining === null ? "—"
-            : UsageLogic.formatPercent(root.quotaMode === "Remaining"
+            : UsageLogic.formatPercent(providerChip.quotaMode === "Remaining"
               ? secondaryRemaining : UsageLogic.usedFromRemaining(secondaryRemaining)) + "%"
           readonly property string topTag: UsageLogic.barTagFor(reading, topWindow, true)
           readonly property string bottomTag: UsageLogic.windowShortLabel(secondaryWindow)
@@ -728,11 +737,11 @@ Ui.Panel {
               + "\nCan spend now: " + UsageLogic.formatMoney(money, moneyShown.currency) : "")
             + (shownValue === null ? (moneyChip ? "" : " usage unavailable")
               : "\n" + root.limitName(UsageLogic.windowRowFor(reading, topWindow, true), topWindow)
-                + ": " + UsageLogic.quotaText(shownValue, root.quotaMode))
+                + ": " + UsageLogic.quotaText(shownValue, providerChip.quotaMode))
             + (windowStacked ? "\n" + root.limitName(UsageLogic.windowRowFor(reading, secondaryWindow, false), secondaryWindow)
               + (secondaryRemaining === null ? ": not reported"
-                : ": " + UsageLogic.quotaText(root.quotaMode === "Remaining"
-                  ? secondaryRemaining : UsageLogic.usedFromRemaining(secondaryRemaining), root.quotaMode)) : "")
+                : ": " + UsageLogic.quotaText(providerChip.quotaMode === "Remaining"
+                  ? secondaryRemaining : UsageLogic.usedFromRemaining(secondaryRemaining), providerChip.quotaMode)) : "")
             + (root.proxyMode ? "\n" + root.lastAccountTooltip(lastAccount) : "")
             + (usingPoolQuota ? "\nQuota shown: account with the most remaining capacity." : "")
           onPressed: function(buttonCode) {
@@ -1173,7 +1182,7 @@ Ui.Panel {
                 window: modelData
                 severity: root.windowSeverity(modelData)
                 resetLabel: root.resetText(modelData)
-                quotaMode: root.quotaMode
+                quotaMode: root.selectedQuotaMode
                 foreground: root.foreground
                 urgent: root.urgent
                 providerColor: root.providerColors ? UsageLogic.providerAccent(String(root.provider ? root.provider.id : ""), root.foreground) : root.foreground
@@ -1505,7 +1514,7 @@ Ui.Panel {
           Item {
             width: parent.width
             implicitHeight: accountFigure.implicitHeight
-            readonly property var shown: root.quotaMode === "Remaining"
+            readonly property var shown: root.selectedQuotaMode === "Remaining"
               ? UsageLogic.windowRemaining(accountWindow.modelData)
               : UsageLogic.windowUsed(accountWindow.modelData)
             Text {
@@ -1535,7 +1544,7 @@ Ui.Panel {
               visible: accountWindow.known
               anchors.right: parent.right
               anchors.baseline: accountFigure.baseline
-              text: !accountWindow.known ? "" : root.quotaMode === "Remaining" ? "left" : "used"
+              text: !accountWindow.known ? "" : root.selectedQuotaMode === "Remaining" ? "left" : "used"
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -1545,7 +1554,7 @@ Ui.Panel {
             visible: accountWindow.known
             width: parent.width
             height: Style.space(10)
-            value: UsageLogic.meterFill(accountWindow.modelData, root.quotaMode) || 0
+            value: UsageLogic.meterFill(accountWindow.modelData, root.selectedQuotaMode) || 0
             fillColor: accountWindow.stressed ? root.urgent : root.foreground
             trackColor: root.alpha(root.foreground, 0.14)
           }
@@ -1583,7 +1592,7 @@ Ui.Panel {
     property var provider: null
     readonly property var credits: provider ? provider.credits : null
     readonly property var amount: UsageLogic.spendable(provider)
-    readonly property var view: UsageLogic.moneyView(provider, root.quotaMode)
+    readonly property var view: UsageLogic.moneyView(provider, root.selectedQuotaMode)
     readonly property var share: view ? view.share : null
     readonly property string level: provider ? root.moneySeverityOf(provider) : "none"
     readonly property bool stressed: level === "warning" || level === "critical"
@@ -1757,8 +1766,8 @@ Ui.Panel {
         visible: creditsCard.hasMeter
         width: parent.width
         text: creditsCard.hasMeter
-          ? "Monthly allowance · " + Math.round(UsageLogic.sideOfUsed(Number(creditsCard.credits.used) / Number(creditsCard.credits.limit) * 100, root.quotaMode))
-            + (root.quotaMode === "Remaining" ? "% left" : "% used")
+          ? "Monthly allowance · " + Math.round(UsageLogic.sideOfUsed(Number(creditsCard.credits.used) / Number(creditsCard.credits.limit) * 100, root.selectedQuotaMode))
+            + (root.selectedQuotaMode === "Remaining" ? "% left" : "% used")
           : ""
         color: root.dim
         font.family: root.fontFamily
@@ -1770,7 +1779,7 @@ Ui.Panel {
         visible: creditsCard.hasMeter
         width: parent.width
         value: creditsCard.hasMeter
-          ? UsageLogic.sideOfUsed(Number(creditsCard.credits.used) / Number(creditsCard.credits.limit) * 100, root.quotaMode) / 100 : 0
+          ? UsageLogic.sideOfUsed(Number(creditsCard.credits.used) / Number(creditsCard.credits.limit) * 100, root.selectedQuotaMode) / 100 : 0
         fillColor: root.foreground
         trackColor: root.alpha(root.foreground, 0.14)
       }

@@ -438,9 +438,67 @@ Column {
             url: providerRow.providerId === "openrouter" ? root.openrouterKeysUrl : root.deepseekKeysUrl
           }
         }
+
+        // Overrides: the defaults from Menu bar and Display, changed for this provider only.
+        Column {
+          visible: providerRow.on
+          width: parent.width
+          leftPadding: Style.spacing.xl
+        SettingsSection {
+          id: customizeSection
+          objectName: "customize-" + providerRow.providerId
+          width: parent.width - parent.leftPadding
+          title: "Customize"
+          summary: root.overrideSummary(providerRow.providerId)
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onRevealRequested: function(item) { root.revealRequested(item) }
+
+          SelectRow {
+            objectName: "quotaMode-" + providerRow.providerId
+            label: "Show limits as"
+            options: [
+              { value: "default", label: "Default (" + UsageLogic.quotaModeLabel(root.quotaMode) + ")" },
+              { value: "Used", label: "Used (%)" },
+              { value: "Remaining", label: "Left (%)" }
+            ]
+            value: UsageLogic.parseQuotaModes(root.value("providerQuotaModes", "{}"))[providerRow.providerId] || "default"
+            onChanged: function(next) { root.set("providerQuotaModes", UsageLogic.setQuotaMode(root.value("providerQuotaModes", "{}"), providerRow.providerId, next)) }
+          }
+          SelectRow {
+            objectName: "barLimitTop-" + providerRow.providerId
+            visible: root.percentageDisplay && !providerRow.money
+            label: "Limit shown"
+            options: [
+              { value: "default", label: UsageLogic.inheritedBarLimitLabel("top", root.value("barWindow", "auto")) },
+              { value: "auto", label: "Most constrained" },
+              { value: "session", label: "5-hour" },
+              { value: "weekly", label: "7-day" },
+              { value: "monthly", label: "Monthly" }
+            ]
+            value: root.barLimitValue(providerRow.providerId, "top")
+            onChanged: function(next) { root.set("barProviderLimits", UsageLogic.setBarLimit(root.value("barProviderLimits", "{}"), providerRow.providerId, "top", next)) }
+          }
+          SelectRow {
+            objectName: "barLimitBottom-" + providerRow.providerId
+            visible: root.percentageDisplay && !providerRow.money
+            label: "Second limit below"
+            options: [
+              { value: "default", label: UsageLogic.inheritedBarLimitLabel("bottom", root.value("barWindowSecondary", "none")) },
+              { value: "none", label: "None" },
+              { value: "session", label: "5-hour" },
+              { value: "weekly", label: "7-day" },
+              { value: "monthly", label: "Monthly" }
+            ]
+            value: root.barLimitValue(providerRow.providerId, "bottom")
+            onChanged: function(next) { root.set("barProviderLimits", UsageLogic.setBarLimit(root.value("barProviderLimits", "{}"), providerRow.providerId, "bottom", next)) }
+          }
+          Hint { text: "Default follows the choices under Menu bar and Display." }
+        }
+        }
       }
     }
-    Hint { text: root.proxyMode ? "Every provider on the server is monitored. Choose which ones get a menu bar chip." : "Monitor reads a provider and shows it in Limits. Menu bar adds its chip to the bar." }
+    Hint { text: root.proxyMode ? "Every provider on the server is monitored. Choose which ones get a menu bar chip, and open Customize to read one differently." : "Monitor reads a provider and shows it in Limits. Menu bar adds its chip to the bar. Customize overrides the defaults for one provider." }
   }
 
   // ---- Menu bar
@@ -521,81 +579,7 @@ Column {
       }
       Hint { text: "Removes a chip while one of its weekly or monthly limits is used up. It returns when that limit resets; Limits still shows the provider." }
 
-      SettingsSection {
-        id: barLimitsSection
-        objectName: "barLimitsSection"
-        width: parent.width
-        title: "Per provider"
-        summary: Object.keys(UsageLogic.parseBarLimits(root.value("barProviderLimits", "{}"))).length === 0
-          ? "Same for all" : Object.keys(UsageLogic.parseBarLimits(root.value("barProviderLimits", "{}"))).length + " customized"
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        onRevealRequested: function(item) { root.revealRequested(item) }
-        Hint { text: "Pick different limits for one provider. Default follows the choices above." }
-        Repeater {
-          model: root.providerOptions
-          delegate: Column {
-            id: limitRow
-            required property var modelData
-            readonly property string providerId: String(modelData.id)
-            readonly property var entry: UsageLogic.parseBarLimits(root.value("barProviderLimits", "{}"))[providerId] || ({})
-            visible: !(modelData.money === true)
-            width: parent.width
-            spacing: Style.spacing.sm
-            Label { text: limitRow.modelData.name }
-            Row {
-              width: parent.width
-              spacing: Style.spacing.lg
-              Column {
-                width: (parent.width - parent.spacing) / 2
-                spacing: Style.spacing.sm
-                Label { text: "Limit shown" }
-                UsageSelect {
-                  objectName: "barLimitTop-" + limitRow.providerId
-                  width: parent.width
-                  label: limitRow.modelData.name + " limit shown"
-                  options: [
-                    { value: "default", label: UsageLogic.inheritedBarLimitLabel("top", root.value("barWindow", "auto")) },
-                    { value: "auto", label: "Most constrained" },
-                    { value: "session", label: "5-hour" },
-                    { value: "weekly", label: "7-day" },
-                    { value: "monthly", label: "Monthly" }
-                  ]
-                  value: limitRow.entry.top === undefined ? "default" : String(limitRow.entry.top)
-                  foreground: root.foreground
-                  surface: root.surface
-                  fontFamily: root.fontFamily
-                  onChanged: function(next) { root.set("barProviderLimits", UsageLogic.setBarLimit(root.value("barProviderLimits", "{}"), limitRow.providerId, "top", next)) }
-                  onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-                }
-              }
-              Column {
-                width: (parent.width - parent.spacing) / 2
-                spacing: Style.spacing.sm
-                Label { text: "Second limit below" }
-                UsageSelect {
-                  objectName: "barLimitBottom-" + limitRow.providerId
-                  width: parent.width
-                  label: limitRow.modelData.name + " second limit below"
-                  options: [
-                    { value: "default", label: UsageLogic.inheritedBarLimitLabel("bottom", root.value("barWindowSecondary", "none")) },
-                    { value: "none", label: "None" },
-                    { value: "session", label: "5-hour" },
-                    { value: "weekly", label: "7-day" },
-                    { value: "monthly", label: "Monthly" }
-                  ]
-                  value: limitRow.entry.bottom === undefined ? "default" : String(limitRow.entry.bottom)
-                  foreground: root.foreground
-                  surface: root.surface
-                  fontFamily: root.fontFamily
-                  onChanged: function(next) { root.set("barProviderLimits", UsageLogic.setBarLimit(root.value("barProviderLimits", "{}"), limitRow.providerId, "bottom", next)) }
-                  onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-                }
-              }
-            }
-          }
-        }
-      }
+      Hint { text: "To pin different limits for one provider, open Providers → Customize." }
     }
   }
 
@@ -693,7 +677,8 @@ Column {
       value: root.quotaMode
       onChanged: function(next) { root.set("quotaMode", next) }
     }
-    Hint { text: "Applies to cards, chips, balances, and alerts." }
+    Hint { text: "Applies to cards, chips, balances, and alerts. Thresholds keep their meaning either way." }
+    Hint { text: "To read one provider the other way round, open Providers → Customize." }
     SwitchRow {
       objectName: "providerColorsToggle"
       label: "Provider colors"
@@ -1350,7 +1335,36 @@ Column {
     }
     if (names.length === 0) return proxyMode ? proxyName + " · no providers yet" : "Nothing monitored"
     var list = names.length <= 3 ? names.join(", ") : names.slice(0, 2).join(", ") + " +" + (names.length - 2)
+    var customized = customizedCount()
     return (proxyMode ? proxyName + " · " : "") + list + (percentageDisplay ? " · " + shown + " in menu bar" : "")
+      + (customized > 0 ? " · " + customized + " customized" : "")
+  }
+
+  // ---- per-provider overrides: Show limits as, Limit shown, Second limit below
+  function barLimitValue(providerId, slot) {
+    var entry = UsageLogic.parseBarLimits(value("barProviderLimits", "{}"))[providerId]
+    return entry && entry[slot] !== undefined ? entry[slot] : "default"
+  }
+
+  // What one provider overrides, for its Customize header: "Default" when nothing.
+  function overrideSummary(providerId) {
+    var parts = []
+    var mode = UsageLogic.parseQuotaModes(value("providerQuotaModes", "{}"))[providerId]
+    if (mode) parts.push(UsageLogic.quotaModeLabel(mode))
+    var top = barLimitValue(providerId, "top")
+    if (top !== "default") parts.push(UsageLogic.windowSelectorLabel(top))
+    var bottom = barLimitValue(providerId, "bottom")
+    if (bottom !== "default") parts.push("+ " + (bottom === "none" ? "none" : UsageLogic.windowSelectorLabel(bottom)))
+    return parts.length ? parts.join(" · ") : "Default"
+  }
+
+  function customizedCount() {
+    var ids = {}
+    var modes = UsageLogic.parseQuotaModes(value("providerQuotaModes", "{}"))
+    var limits = UsageLogic.parseBarLimits(value("barProviderLimits", "{}"))
+    for (var id in modes) ids[id] = true
+    for (var other in limits) ids[other] = true
+    return Object.keys(ids).length
   }
 
   function menuBarSummary() {
