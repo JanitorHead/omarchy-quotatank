@@ -82,7 +82,7 @@ Ui.Panel {
   // resets. Limits still shows them, marked used up, with the reset time.
   readonly property bool hideUsedUpProviders: setting("hideExhaustedProviders", false) === true
   readonly property var percentageProviders: UsageLogic.barProviders(
-    UsageLogic.selectedProviders(providers, setting("barProviders", ["claude", "codex", "kimi", "opencode"])),
+    UsageLogic.selectedProviders(providers, setting("barProviders", UsageLogic.DEFAULT_SETTINGS.barProviders)),
     function (provider) { return barLimitsFor(provider.id).top })
     .filter(function (provider) { return !hideUsedUpProviders || UsageLogic.usedUpLongWindow(provider) === null })
   function barLimitsFor(providerId) {

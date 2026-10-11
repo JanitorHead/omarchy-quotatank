@@ -55,18 +55,18 @@ The built-in `omarchy.agents` widget can run alongside Quotatank. To keep only Q
 
 ![A 5-hour limit card with labels for usage so far, the pace tick, use ahead of pace, the reset countdown, and the projection](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/card-anatomy.png)
 
-The tick marks where even use would be by now, so blocks past it are use ahead of pace. The status line projects from the recent rate, which weighs the newest samples most (a two-hour half-life), so use from days earlier does not count. Here the limit runs out in 1h 9m, before its window resets in 2h 4m. Cards are ordered shortest window first, and every provider names its windows the same way: `5-hour limit`, `Weekly limit`, `Monthly limit`.
+The tick marks where even use would be by now, so blocks past it are use ahead of pace. The status line projects when the limit would run out: a 5-hour limit from its recent rate, newest samples weighing most; weekly and monthly limits from this window's average blended with the last 24 hours, so one busy hour does not predict a weekly run-out and a quiet weekend does not hide a heavy week. Here the limit runs out in 1h 9m, before its window resets in 2h 4m. Cards are ordered shortest window first, and every provider names its windows the same way: `5-hour limit`, `Weekly limit`, `Monthly limit`.
 
 <details>
 <summary>Every status line</summary>
 
 | Status line | Meaning |
 |---|---|
-| `Runs out in 1h 9m · pace 58%` | At the recent rate, the limit empties before the window resets |
-| `Lasts until reset · pace 55%` | At the recent rate, the limit lasts until the window resets |
-| `Idle 1h 2m · pace 40%` | Usage has not risen for an hour, so no projection is made |
-| `Collecting data` | Less than ten minutes of samples so far |
-| `No recent data` | The newest sample is more than an hour old |
+| `Runs out in 1h 9m · pace 58%` | At the projected rate, the limit empties before the window resets |
+| `Lasts until reset · pace 55%` | At the projected rate, the limit lasts until the window resets |
+| `Idle 1h 2m · pace 40%` | A 5-hour limit has not risen for an hour, so no projection is made |
+| `Collecting data · pace 12%` | A 5-hour limit has less than ten minutes of samples so far |
+| `No recent data · pace 30%` | A 5-hour limit's newest sample is more than an hour old |
 | `Pace starts after 2% of the window` | Less than 2% of the window has passed |
 | `No usage yet` | Nothing has been used in this window |
 | `Limit reached` | The limit is 100% used |
@@ -122,7 +122,7 @@ Colors and control borders come from the active Omarchy theme and change with it
 
 Costs estimates what your recorded tokens would cost at API rates. It is not a bill, a subscription charge, or a credit balance. Pick 24 hours, 7 days, or 30 days, then open token details or the model breakdown, which lists every model with its provider, tokens, and estimate.
 
-Local Claude Code and Codex history are on by default, OpenCode can be added, and up to four T3 Code servers bring in history from other computers. Prices come from the public LiteLLM table. Under **Custom prices**, set input, output, and optional cache prices in USD per million tokens for an exact model ID.
+Local Claude Code, Codex, and OpenCode history are on by default, and up to four T3 Code servers bring in history from other computers. Prices come from the public LiteLLM table. Under **Custom prices**, set input, output, and optional cache prices in USD per million tokens for an exact model ID.
 
 ## Settings that apply as you go
 
@@ -132,12 +132,12 @@ The gear opens an index of six pages, and each row already says what the page is
 
 | Page | What lives there |
 |---|---|
-| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server), one row per provider with ▲ ▼ to set the order tiles and chips follow, **Monitor** and **Menu bar** switches, the API key editor under OpenRouter and DeepSeek, and **Customize** under each provider to override the defaults for that one: read it as used or left, pin the limit its chip shows and the second one below |
+| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server), one row per provider with a grip to drag it into the order tiles and chips follow, **Monitor** and **Menu bar** switches, the API key editor under OpenRouter and DeepSeek, and **Customize** under each provider to override the defaults for that one: read it as used or left, pin the limit its chip shows and the second one below |
 | **Menu bar** | Chips or the widget icon, the limit each chip shows, a second limit, reset times and formats, hiding used-up providers |
 | **Alerts** | Desktop notifications, the percentage thresholds, and the low-balance amounts |
 | **Display** | Used or left, provider colors, square cards, hidden account emails |
 | **Costs** | Local history, T3 servers, custom prices, and the last scan |
-| **Advanced** | Refresh interval (1 to 60 minutes) and diagnostics |
+| **Advanced** | Refresh interval (1 to 60 minutes), diagnostics, and **Reset to defaults**, which keeps your source, keys, T3 servers, and custom prices |
 
 Every key is listed in the [settings reference](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#settings).
 
@@ -197,7 +197,7 @@ For CLIProxyAPI, the optional CPA Usage Keeper adds the last-used account to the
 
 ### Cost history
 
-Open **Settings → Costs**. Local Codex CLI and Claude Code history are on by default. Add up to four T3 Code servers, each with a name, base URL, and connection token. Servers must use usage contract version 4 or 5. Custom model prices are set on the same page, by exact model ID.
+Open **Settings → Costs**. Local Codex CLI, Claude Code, and OpenCode history are on by default. Add up to four T3 Code servers, each with a name, base URL, and connection token. Servers must use usage contract version 4 or 5. Custom model prices are set on the same page, by exact model ID.
 
 ## Controls
 

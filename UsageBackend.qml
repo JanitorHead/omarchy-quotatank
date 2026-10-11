@@ -20,7 +20,7 @@ Item {
   readonly property int refreshIntervalSec: Math.max(60, Math.min(3600,
     Math.round(Number(setting("refreshIntervalSec", 900)) || 900)))
   readonly property var enabledProviderIds: normalizedProviderIds(setting(
-    "enabledProviders", ["claude", "codex", "kimi", "opencode"]))
+    "enabledProviders", UsageLogic.DEFAULT_SETTINGS.enabledProviders))
   readonly property string usageSource: String(setting("usageSource", "direct")) === "cliproxy" ? "cliproxy" : "direct"
   readonly property string cliproxyUrl: String(setting("cliproxyUrl", "http://127.0.0.1:8317"))
   readonly property string cliproxyKeyFile: String(setting("cliproxyKeyFile", ""))

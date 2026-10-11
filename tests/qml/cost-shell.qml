@@ -100,6 +100,17 @@ ShellRoot {
     onTriggered: {
       if (root.phase === 0) {
         root.check(root.form.page === "costs", "the gear in Costs opens the Costs page directly")
+        root.form.moveProvider("codex", -1)
+        root.check(root.saved.providerOrder === '["codex","claude","kimi","opencode","openrouter","deepseek"]', "moving a provider saves the whole order")
+        root.check(root.form.providerOptions[0].id === "codex", "the saved order drives the provider list")
+        root.form.moveProvider("codex", -1)
+        root.check(root.saves === 1, "moving past the top changes nothing")
+        root.form.set("quotaMode", "Remaining")
+        root.form.resetToDefaults()
+        root.check(root.saved.providerOrder === "[]" && root.saved.quotaMode === "Used", "reset restores order and preferences")
+        root.check(root.saved.costPriceOverrides === root.custom, "reset keeps custom prices")
+        root.form.settings = { costPriceOverrides: root.custom }
+        root.saves = 0
         root.check(!root.find(root.overview, "costModelDetails").visible, "model breakdown starts collapsed")
         root.check(!root.find(root.overview, "costTokenDetails").visible, "cost overview starts without token details")
         root.check(root.find(root.overview, "costModel-0") === null, "collapsed models are not instantiated")
@@ -148,8 +159,24 @@ ShellRoot {
         root.check(root.form.priceEditor.serialize() === root.custom, "a change saved elsewhere replaces the editor contents")
         root.savesBeforeBlankRow = root.saves
         root.form.priceEditor.addPrice()
+        root.form.page = "providers"
         root.phase++
       } else if (root.phase === 1) {
+        var list = root.find(root.form, "providerList")
+        list.forceLayout()
+        var kimi = list.itemAtIndex(2), opencode = list.itemAtIndex(3)
+        root.check(kimi && kimi.providerId === "kimi" && opencode, "provider rows are laid out for dragging")
+        var dragSaves = root.saves
+        list.draggingId = "kimi"
+        root.form.dragProviderTo(kimi, opencode.y + 2)
+        root.check(list.itemAtIndex(2).providerId === "kimi", "a drag that has not passed the next row's middle keeps the order")
+        root.form.dragProviderTo(kimi, opencode.y + opencode.height - 2)
+        root.check(list.itemAtIndex(3).providerId === "kimi", "past the middle the row moves")
+        root.check(root.saves === dragSaves, "a drag does not save until it ends")
+        root.form.finishProviderDrag()
+        root.check(JSON.parse(root.saved.providerOrder).join(",") === "claude,codex,opencode,kimi,openrouter,deepseek", "releasing saves the dragged order")
+        root.form.page = "costs"
+        root.savesBeforeBlankRow = root.saves
         root.check(root.find(root.overview, "costModel-9") !== null, "expanded breakdown includes models beyond the former top eight")
         root.check(root.find(root.overview, "costModelDetails").visible, "expanded models render")
         root.overview.modelsExpanded = false

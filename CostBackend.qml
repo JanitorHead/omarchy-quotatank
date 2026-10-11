@@ -31,7 +31,7 @@ Item {
   property bool requested: false
 
   readonly property var enabledProviderIds: normalizedProviderIds(setting(
-    "costLocalProviders", ["claude", "codex"]))
+    "costLocalProviders", UsageLogic.DEFAULT_SETTINGS.costLocalProviders))
   readonly property string scriptPath: localPath(Qt.resolvedUrl("scripts/cost-fetch.py"))
   readonly property int staleAfterMs: Math.max(60, Math.min(3600,
     Math.round(Number(setting("refreshIntervalSec", 900)) || 900))) * 1000

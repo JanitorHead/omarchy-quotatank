@@ -31,8 +31,8 @@ Column {
   readonly property bool proxyMode: value("usageSource", "direct") === "cliproxy"
   readonly property string quotaMode: String(value("quotaMode", "Used")) === "Remaining" ? "Remaining" : "Used"
   readonly property bool percentageDisplay: String(value("barDisplayMode", "Percentages")) === "Percentages"
-  readonly property var enabledProviders: UsageLogic.listOrEmpty(value("enabledProviders", ["claude", "codex", "kimi", "opencode"]))
-  readonly property var barProviders: UsageLogic.listOrEmpty(value("barProviders", ["claude", "codex", "kimi", "opencode"]))
+  readonly property var enabledProviders: UsageLogic.listOrEmpty(value("enabledProviders", UsageLogic.DEFAULT_SETTINGS.enabledProviders))
+  readonly property var barProviders: UsageLogic.listOrEmpty(value("barProviders", UsageLogic.DEFAULT_SETTINGS.barProviders))
   readonly property bool moneyMonitored: !proxyMode && (monitored("openrouter") || monitored("deepseek"))
   readonly property var providerOptions: UsageLogic.orderProviders(proxyMode ? UsageLogic.listOrEmpty(proxyProviders) : UsageLogic.LOCAL_PROVIDERS, value("providerOrder", "[]"))
   readonly property var allProviderIds: {
@@ -103,10 +103,63 @@ Column {
     set(key, result)
   }
 
-  // Saves the full current order with `id` moved by `delta`, so later providers keep their place.
+  // ---- provider order: the list model moves rows in place (delegates survive the move), and the
+  // full order is saved when a drag ends or a key moves a row.
+  ListModel { id: providerListModel }
+
+  function providerListIds() {
+    var ids = []
+    for (var i = 0; i < providerListModel.count; i++) ids.push(providerListModel.get(i).providerId)
+    return ids
+  }
+
+  // Rebuilds the rows from settings, unless they already show that order (or a drag is under way).
+  function syncProviderList() {
+    if (providerList.draggingId !== "") return
+    var options = providerOptions
+    var ids = options.map(function (option) { return String(option.id) })
+    if (ids.join(",") === providerListIds().join(",")) return
+    providerListModel.clear()
+    for (var i = 0; i < options.length; i++)
+      providerListModel.append({ providerId: String(options[i].id), name: String(options[i].name || options[i].id), money: options[i].money === true })
+  }
+  onProviderOptionsChanged: syncProviderList()
+  Component.onCompleted: syncProviderList()
+
+  function saveProviderOrder() {
+    set("providerOrder", JSON.stringify(providerListIds()))
+  }
+
+  // Keyboard move on a focused grip: one place up or down.
   function moveProvider(id, delta) {
-    var ids = providerOptions.map(function (option) { return String(option.id) })
-    set("providerOrder", UsageLogic.moveProvider(value("providerOrder", "[]"), ids, id, delta))
+    var from = providerListIds().indexOf(String(id))
+    var to = from + delta
+    if (from === -1 || to < 0 || to >= providerListModel.count) return
+    providerListModel.move(from, to, 1)
+    providerList.forceLayout()
+    saveProviderOrder()
+  }
+
+  // Mouse drag: the row takes the slot under the pointer once the pointer passes that row's middle,
+  // so rows of different heights do not swap back and forth.
+  function dragProviderTo(row, y) {
+    var target = providerList.indexAt(Style.spacing.lg, y)
+    if (target === -1) target = y < 0 ? 0 : (y > providerList.contentHeight ? providerListModel.count - 1 : -1)
+    if (target === -1 || target === row.index) return
+    var item = providerList.itemAtIndex(target)
+    if (item) {
+      var middle = item.y + item.height / 2
+      if ((target > row.index && y < middle) || (target < row.index && y > middle)) return
+    }
+    providerListModel.move(row.index, target, 1)
+    providerList.forceLayout()
+  }
+
+  function finishProviderDrag() {
+    if (providerList.draggingId === "") return
+    providerList.draggingId = ""
+    var current = providerOptions.map(function (option) { return String(option.id) }).join(",")
+    if (providerListIds().join(",") !== current) saveProviderOrder()
   }
 
   function open(pageId) {
@@ -382,144 +435,207 @@ Column {
       Label { id: barHeading; visible: root.percentageDisplay; width: visible ? Style.space(82) : 0; text: "Menu bar"; horizontalAlignment: Text.AlignHCenter }
     }
 
-    Repeater {
-      model: root.providerOptions
-      delegate: Column {
+    // Rows reorder by dragging their grip (or arrow keys on a focused grip). The order is the one
+    // the tiles, chips, and provider cycling use. A ListView keeps each delegate alive while it moves.
+    ListView {
+      id: providerList
+      objectName: "providerList"
+      property string draggingId: ""
+      width: parent.width
+      height: contentHeight
+      interactive: false
+      spacing: Style.spacing.md
+      cacheBuffer: 100000
+      model: providerListModel
+      moveDisplaced: Transition { NumberAnimation { properties: "y"; duration: 150; easing.type: Easing.OutCubic } }
+      move: Transition { NumberAnimation { properties: "y"; duration: 150; easing.type: Easing.OutCubic } }
+
+      delegate: Rectangle {
         id: providerRow
-        required property var modelData
+        required property string providerId
+        required property string name
+        required property bool money
         required property int index
-        readonly property string providerId: String(modelData.id)
-        readonly property bool money: modelData.money === true
         readonly property bool on: root.proxyMode || UsageLogic.contains(root.enabledProviders, providerId)
-        width: parent.width
-        spacing: Style.spacing.md
+        readonly property bool dragging: providerList.draggingId === providerId
+        width: providerList.width
+        height: rowContent.implicitHeight
+        z: dragging ? 2 : 1
+        radius: Style.cornerRadius
+        color: dragging ? Style.hoverFillFor(root.foreground, Commons.Color.accent, root.urgent) : "transparent"
+        border.width: dragging ? Style.spacing.hairline : 0
+        border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.25)
 
-        Row {
-          width: parent.width
-          spacing: Style.spacing.sm
-          // Order controls: the same order the tiles, chips, and provider cycling use.
-          OrderButton {
-            id: upButton
-            objectName: "moveUp-" + providerRow.providerId
-            text: "▲"
-            enabled: providerRow.index > 0
-            Accessible.name: "Move " + providerRow.modelData.name + " up"
-            onClicked: root.moveProvider(providerRow.providerId, -1)
-          }
-          OrderButton {
-            id: downButton
-            objectName: "moveDown-" + providerRow.providerId
-            text: "▼"
-            enabled: providerRow.index < root.providerOptions.length - 1
-            Accessible.name: "Move " + providerRow.modelData.name + " down"
-            onClicked: root.moveProvider(providerRow.providerId, 1)
-          }
-          Label {
-            width: parent.width - upButton.width - downButton.width - monitorSwitch.width - barSwitch.width - parent.spacing * 4
-            anchors.verticalCenter: parent.verticalCenter
-            text: providerRow.modelData.name
-          }
-          Toggle {
-            id: monitorSwitch
-            visible: !root.proxyMode
-            width: visible ? Style.space(82) : 0
-            objectName: "monitor-" + providerRow.providerId
-            Accessible.name: "Monitor " + providerRow.modelData.name
-            checked: providerRow.on
-            onToggled: root.toggleProvider("enabledProviders", providerRow.providerId)
-          }
-          Toggle {
-            id: barSwitch
-            visible: root.percentageDisplay
-            width: visible ? Style.space(82) : 0
-            objectName: "bar-" + providerRow.providerId
-            Accessible.name: "Show " + providerRow.modelData.name + " in the menu bar"
-            enabled: providerRow.on
-            checked: providerRow.on && UsageLogic.contains(root.barProviders, providerRow.providerId)
-            opacity: enabled ? 1 : 0.4
-            onToggled: root.toggleProvider("barProviders", providerRow.providerId)
-          }
-        }
-
-        // API-key providers: the key editor sits right under the switch that needs it.
         Column {
-          visible: providerRow.money && providerRow.on && !root.proxyMode
+          id: rowContent
           width: parent.width
-          leftPadding: Style.spacing.xl
           spacing: Style.spacing.md
 
-          KeyRow {
-            width: parent.width - parent.leftPadding
-            objectName: providerRow.providerId + "KeyRow"
-            label: "API key"
-            settingKey: providerRow.providerId + "KeyFile"
-            hint: providerRow.providerId === "openrouter"
-              ? "Any OpenRouter key shows the balance, the key's spending limit, and spend. OPENROUTER_API_KEY in the environment takes precedence."
-              : "Shows the DeepSeek platform balance. DEEPSEEK_API_KEY in the environment takes precedence."
-          }
-          LinkButton {
-            objectName: providerRow.providerId + "KeysLink"
-            text: "Create a key on " + providerRow.modelData.name + " ↗"
-            url: providerRow.providerId === "openrouter" ? root.openrouterKeysUrl : root.deepseekKeysUrl
-          }
-        }
+          Row {
+            width: parent.width
+            spacing: Style.spacing.sm
 
-        // Overrides: the defaults from Menu bar and Display, changed for this provider only.
-        Column {
-          visible: providerRow.on
-          width: parent.width
-          leftPadding: Style.spacing.xl
-        SettingsSection {
-          id: customizeSection
-          objectName: "customize-" + providerRow.providerId
-          width: parent.width - parent.leftPadding
-          title: "Customize"
-          summary: root.overrideSummary(providerRow.providerId)
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          onRevealRequested: function(item) { root.revealRequested(item) }
+            Item {
+              id: grip
+              objectName: "dragHandle-" + providerRow.providerId
+              readonly property bool hot: gripArea.containsMouse || gripArea.pressed || activeFocus
+              width: Style.space(16)
+              height: Style.space(24)
+              anchors.verticalCenter: parent.verticalCenter
+              activeFocusOnTab: true
+              Accessible.role: Accessible.Button
+              Accessible.name: "Reorder " + providerRow.name + ". Drag, or use the up and down arrow keys."
+              Keys.onUpPressed: root.moveProvider(providerRow.providerId, -1)
+              Keys.onDownPressed: root.moveProvider(providerRow.providerId, 1)
+              onActiveFocusChanged: if (activeFocus) root.revealRequested(grip)
 
-          SelectRow {
-            objectName: "quotaMode-" + providerRow.providerId
-            label: "Show limits as"
-            options: [
-              { value: "default", label: "Default (" + UsageLogic.quotaModeLabel(root.quotaMode) + ")" },
-              { value: "Used", label: "Used (%)" },
-              { value: "Remaining", label: "Left (%)" }
-            ]
-            value: UsageLogic.parseQuotaModes(root.value("providerQuotaModes", "{}"))[providerRow.providerId] || "default"
-            onChanged: function(next) { root.set("providerQuotaModes", UsageLogic.setQuotaMode(root.value("providerQuotaModes", "{}"), providerRow.providerId, next)) }
+              Rectangle {
+                anchors.fill: parent
+                visible: grip.activeFocus
+                color: "transparent"
+                radius: Style.space(4)
+                border.width: Style.spacing.hairline
+                border.color: root.foreground
+              }
+
+              // Six dots: the usual drag grip.
+              Grid {
+                anchors.centerIn: parent
+                columns: 2
+                spacing: Style.space(3)
+                Repeater {
+                  model: 6
+                  Rectangle {
+                    width: Style.space(3)
+                    height: width
+                    radius: width / 2
+                    color: grip.hot ? root.foreground : Qt.darker(root.foreground, 1.7)
+                  }
+                }
+              }
+
+              MouseArea {
+                id: gripArea
+                anchors.fill: parent
+                anchors.margins: -Style.spacing.xs
+                hoverEnabled: true
+                preventStealing: true
+                cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                onPressed: providerList.draggingId = providerRow.providerId
+                onPositionChanged: function(mouse) {
+                  if (pressed) root.dragProviderTo(providerRow, mapToItem(providerList.contentItem, mouse.x, mouse.y).y)
+                }
+                onReleased: root.finishProviderDrag()
+                onCanceled: root.finishProviderDrag()
+              }
+            }
+            Label {
+              width: parent.width - grip.width - monitorSwitch.width - barSwitch.width - parent.spacing * 3
+              anchors.verticalCenter: parent.verticalCenter
+              text: providerRow.name
+            }
+            Toggle {
+              id: monitorSwitch
+              visible: !root.proxyMode
+              width: visible ? Style.space(82) : 0
+              objectName: "monitor-" + providerRow.providerId
+              Accessible.name: "Monitor " + providerRow.name
+              checked: providerRow.on
+              onToggled: root.toggleProvider("enabledProviders", providerRow.providerId)
+            }
+            Toggle {
+              id: barSwitch
+              visible: root.percentageDisplay
+              width: visible ? Style.space(82) : 0
+              objectName: "bar-" + providerRow.providerId
+              Accessible.name: "Show " + providerRow.name + " in the menu bar"
+              enabled: providerRow.on
+              checked: providerRow.on && UsageLogic.contains(root.barProviders, providerRow.providerId)
+              opacity: enabled ? 1 : 0.4
+              onToggled: root.toggleProvider("barProviders", providerRow.providerId)
+            }
           }
-          SelectRow {
-            objectName: "barLimitTop-" + providerRow.providerId
-            visible: root.percentageDisplay && !providerRow.money
-            label: "Limit shown"
-            options: [
-              { value: "default", label: UsageLogic.inheritedBarLimitLabel("top", root.value("barWindow", "auto")) },
-              { value: "auto", label: "Most constrained" },
-              { value: "session", label: "5-hour" },
-              { value: "weekly", label: "7-day" },
-              { value: "monthly", label: "Monthly" }
-            ]
-            value: root.barLimitValue(providerRow.providerId, "top")
-            onChanged: function(next) { root.set("barProviderLimits", UsageLogic.setBarLimit(root.value("barProviderLimits", "{}"), providerRow.providerId, "top", next)) }
+
+          // API-key providers: the key editor sits right under the switch that needs it.
+          Column {
+            visible: providerRow.money && providerRow.on && !root.proxyMode
+            width: parent.width
+            leftPadding: Style.spacing.xl
+            spacing: Style.spacing.md
+
+            KeyRow {
+              width: parent.width - parent.leftPadding
+              objectName: providerRow.providerId + "KeyRow"
+              label: "API key"
+              settingKey: providerRow.providerId + "KeyFile"
+              hint: providerRow.providerId === "openrouter"
+                ? "Any OpenRouter key shows the balance, the key's spending limit, and spend. OPENROUTER_API_KEY in the environment takes precedence."
+                : "Shows the DeepSeek platform balance. DEEPSEEK_API_KEY in the environment takes precedence."
+            }
+            LinkButton {
+              objectName: providerRow.providerId + "KeysLink"
+              text: "Create a key on " + providerRow.name + " ↗"
+              url: providerRow.providerId === "openrouter" ? root.openrouterKeysUrl : root.deepseekKeysUrl
+            }
           }
-          SelectRow {
-            objectName: "barLimitBottom-" + providerRow.providerId
-            visible: root.percentageDisplay && !providerRow.money
-            label: "Second limit below"
-            options: [
-              { value: "default", label: UsageLogic.inheritedBarLimitLabel("bottom", root.value("barWindowSecondary", "none")) },
-              { value: "none", label: "None" },
-              { value: "session", label: "5-hour" },
-              { value: "weekly", label: "7-day" },
-              { value: "monthly", label: "Monthly" }
-            ]
-            value: root.barLimitValue(providerRow.providerId, "bottom")
-            onChanged: function(next) { root.set("barProviderLimits", UsageLogic.setBarLimit(root.value("barProviderLimits", "{}"), providerRow.providerId, "bottom", next)) }
+
+          // Overrides: the defaults from Menu bar and Display, changed for this provider only.
+          Column {
+            visible: providerRow.on
+            width: parent.width
+            leftPadding: Style.spacing.xl
+            SettingsSection {
+              id: customizeSection
+              objectName: "customize-" + providerRow.providerId
+              width: parent.width - parent.leftPadding
+              title: "Customize"
+              summary: root.overrideSummary(providerRow.providerId)
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onRevealRequested: function(item) { root.revealRequested(item) }
+
+              SelectRow {
+                objectName: "quotaMode-" + providerRow.providerId
+                label: "Show limits as"
+                options: [
+                  { value: "default", label: "Default (" + UsageLogic.quotaModeLabel(root.quotaMode) + ")" },
+                  { value: "Used", label: "Used (%)" },
+                  { value: "Remaining", label: "Left (%)" }
+                ]
+                value: UsageLogic.parseQuotaModes(root.value("providerQuotaModes", "{}"))[providerRow.providerId] || "default"
+                onChanged: function(next) { root.set("providerQuotaModes", UsageLogic.setQuotaMode(root.value("providerQuotaModes", "{}"), providerRow.providerId, next)) }
+              }
+              SelectRow {
+                objectName: "barLimitTop-" + providerRow.providerId
+                visible: root.percentageDisplay && !providerRow.money
+                label: "Limit shown"
+                options: [
+                  { value: "default", label: UsageLogic.inheritedBarLimitLabel("top", root.value("barWindow", "auto")) },
+                  { value: "auto", label: "Most constrained" },
+                  { value: "session", label: "5-hour" },
+                  { value: "weekly", label: "7-day" },
+                  { value: "monthly", label: "Monthly" }
+                ]
+                value: root.barLimitValue(providerRow.providerId, "top")
+                onChanged: function(next) { root.set("barProviderLimits", UsageLogic.setBarLimit(root.value("barProviderLimits", "{}"), providerRow.providerId, "top", next)) }
+              }
+              SelectRow {
+                objectName: "barLimitBottom-" + providerRow.providerId
+                visible: root.percentageDisplay && !providerRow.money
+                label: "Second limit below"
+                options: [
+                  { value: "default", label: UsageLogic.inheritedBarLimitLabel("bottom", root.value("barWindowSecondary", "none")) },
+                  { value: "none", label: "None" },
+                  { value: "session", label: "5-hour" },
+                  { value: "weekly", label: "7-day" },
+                  { value: "monthly", label: "Monthly" }
+                ]
+                value: root.barLimitValue(providerRow.providerId, "bottom")
+                onChanged: function(next) { root.set("barProviderLimits", UsageLogic.setBarLimit(root.value("barProviderLimits", "{}"), providerRow.providerId, "bottom", next)) }
+              }
+              Hint { text: "Default follows the choices under Menu bar and Display." }
+            }
           }
-          Hint { text: "Default follows the choices under Menu bar and Display." }
-        }
         }
       }
     }
@@ -740,9 +856,9 @@ Column {
         required property var modelData
         objectName: "costLocal-" + modelData.id
         label: modelData.name
-        checked: UsageLogic.contains(root.value("costLocalProviders", ["claude", "codex"]), modelData.id)
+        checked: UsageLogic.contains(root.value("costLocalProviders", UsageLogic.DEFAULT_SETTINGS.costLocalProviders), modelData.id)
         onToggled: {
-          var current = UsageLogic.listOrEmpty(root.value("costLocalProviders", ["claude", "codex"]))
+          var current = UsageLogic.listOrEmpty(root.value("costLocalProviders", UsageLogic.DEFAULT_SETTINGS.costLocalProviders))
           var next = []
           var allowed = ["claude", "codex", "opencode"]
           for (var i = 0; i < allowed.length; i++)
@@ -940,6 +1056,86 @@ Column {
           ? root.accountDetails.replace(/^Account:.*(?:\n|$)/m, "") : root.accountDetails) || "Nothing to report yet."
       }
     }
+
+    Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
+
+    // Reset asks once, in place: the button turns into a confirmation that names what is kept.
+    Column {
+      id: resetBlock
+      objectName: "resetDefaults"
+      property bool confirming: false
+      readonly property int changedCount: UsageLogic.changedFromDefaults(root.settings).length
+      width: parent.width
+      spacing: Style.spacing.md
+
+      Row {
+        width: parent.width
+        visible: !resetBlock.confirming
+        Column {
+          width: parent.width - resetButton.width
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.spacing.xxs
+          Label { text: "Reset to defaults" }
+          Hint {
+            text: resetBlock.changedCount === 0 ? "Everything is at its default."
+              : resetBlock.changedCount + (resetBlock.changedCount === 1 ? " setting differs" : " settings differ") + " from the default."
+          }
+        }
+        Ui.Button {
+          id: resetButton
+          objectName: "resetDefaultsButton"
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Reset…"
+          enabled: resetBlock.changedCount > 0
+          bordered: true
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          fontSize: Style.font.bodySmall
+          focusable: true
+          onClicked: { resetBlock.confirming = true; Qt.callLater(function() { cancelResetButton.forceActiveFocus() }) }
+          onActiveFocusChanged: if (activeFocus) root.revealRequested(resetButton)
+        }
+      }
+
+      Column {
+        visible: resetBlock.confirming
+        width: parent.width
+        spacing: Style.spacing.md
+        Label { text: "Reset every setting to its default?"; font.bold: true }
+        Hint { text: "Providers, menu bar, alerts, display, refresh, and cost sources go back to their defaults, including provider order and Customize overrides. Your source, server URLs, saved keys and tokens, T3 servers, and custom prices are kept." }
+        Row {
+          spacing: Style.spacing.md
+          Ui.Button {
+            id: cancelResetButton
+            objectName: "cancelResetButton"
+            text: "Cancel"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            focusable: true
+            onClicked: resetBlock.confirming = false
+            onActiveFocusChanged: if (activeFocus) root.revealRequested(cancelResetButton)
+          }
+          Ui.Button {
+            id: confirmResetButton
+            objectName: "confirmResetButton"
+            text: "Reset"
+            bordered: true
+            selected: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            focusable: true
+            onClicked: { root.resetToDefaults(); resetBlock.confirming = false }
+            onActiveFocusChanged: if (activeFocus) root.revealRequested(confirmResetButton)
+          }
+        }
+      }
+    }
+  }
+
+  function resetToDefaults() {
+    setMany(JSON.parse(JSON.stringify(UsageLogic.DEFAULT_SETTINGS)))
   }
 
   // ---- prices
@@ -1348,20 +1544,6 @@ Column {
     onActiveFocusChanged: if (activeFocus) root.revealRequested(linkButton)
   }
 
-  // ▲ / ▼ beside a provider: small, quiet, disabled at the ends of the list.
-  component OrderButton: Ui.Button {
-    id: orderButton
-    anchors.verticalCenter: parent.verticalCenter
-    foreground: root.foreground
-    fontFamily: root.fontFamily
-    fontSize: Style.font.caption
-    horizontalPadding: Style.spacing.xs
-    verticalPadding: Style.spacing.xxs
-    opacity: enabled ? 1 : 0.3
-    focusable: true
-    onActiveFocusChanged: if (activeFocus) root.revealRequested(orderButton)
-  }
-
   // ---- index summaries: what each page is set to, so the index already answers most questions
   function providersSummary() {
     var names = []
@@ -1431,7 +1613,7 @@ Column {
   }
 
   function costsSummary() {
-    var local = UsageLogic.listOrEmpty(value("costLocalProviders", ["claude", "codex"]))
+    var local = UsageLogic.listOrEmpty(value("costLocalProviders", UsageLogic.DEFAULT_SETTINGS.costLocalProviders))
     var names = { codex: "Codex", claude: "Claude", opencode: "OpenCode" }
     var parts = []
     for (var i = 0; i < local.length; i++) if (names[local[i]]) parts.push(names[local[i]])

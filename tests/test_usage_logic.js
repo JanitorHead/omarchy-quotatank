@@ -342,15 +342,19 @@ assert.ok(context.alertText("warning", 20, "Used").includes("80"), "a Used alert
 assert.ok(!context.alertText("warning", 20, "Used").includes("20"), "a Used alert never names the left figure");
 assert.ok(context.alertText("critical", 5, "Remaining").includes("5"), "a Remaining alert names what is left");
 
-// Pace: the projection rests on each window's own recent samples, not on its average since reset.
+// Pace: the tick is elapsed time; the projection follows the recent rate for short limits and the
+// window's average blended with the last day for weekly and monthly ones.
 // `NOW` is injected so results are fixed. Samples are [epoch, used] pairs, each holding until the next.
 const NOW = 1000000;
 const HOUR = 3600;
 const DAY = 24 * HOUR;
 const WEEK = 604800;
+const SESSION = 5 * HOUR;
 const weekStart = NOW - WEEK / 2; // a weekly window, half elapsed
+const sessionStart = NOW - SESSION / 2; // a 5-hour window, half elapsed
 const weekly = (used, samples, untilReset = WEEK / 2) =>
   ({ used, windowSeconds: WEEK, resetsAt: NOW + untilReset, samples });
+const session = (used, samples) => ({ used, windowSeconds: SESSION, resetsAt: NOW + SESSION / 2, samples });
 // Samples every `step` seconds from `from` through `to`, all holding `used`.
 const holding = (from, to, used, step = 900) => {
   const rows = [];
@@ -374,39 +378,66 @@ const remainingOnly = context.paceForWindow({ remaining: 40, windowSeconds: WEEK
 assert.equal(remainingOnly.used, 60, "a remaining-only row reads used through windowUsed");
 
 const early = context.paceForWindow(weekly(30, [[NOW - 60, 30]], WEEK - 1000), NOW);
-assert.equal(early.known, false, "under 2% elapsed there is no projection");
+assert.equal(early.known, false, "under 2% elapsed there is no pace");
+assert.equal(context.paceStatusText(early), "Pace starts after 2% of the window");
 
 const unused = context.paceForWindow(weekly(0, holding(weekStart, NOW, 0)), NOW);
 assert.equal(unused.state, "no-usage");
 assert.equal(unused.runsOut, false);
 assert.equal(context.paceText(unused), "");
-assert.equal(context.paceTickText(unused), "", "no tick, no tooltip");
+assert.equal(context.paceTickText(unused), "", "no usage, no tick");
+assert.equal(context.paceStatusText(unused), "No usage yet");
 
-const noSamples = context.paceForWindow({ used: 60, windowSeconds: WEEK, resetsAt: NOW + WEEK / 2 }, NOW);
-assert.equal(noSamples.state, "stale", "a row without samples is never projected from an average");
+// Weekly limits: the window's average blended with the last day.
+const noHistory = context.paceForWindow({ used: 60, windowSeconds: WEEK, resetsAt: NOW + WEEK / 2 }, NOW);
+assert.equal(noHistory.method, "average");
+assert.equal(noHistory.state, "projecting", "a weekly limit projects from its own average, even on the first refresh");
+assert.equal(noHistory.runsOut, true, "60% used halfway through the week runs out before reset at that average");
 
-// The bug this guards: used early, then quiet for days. The since-reset average (60% in half a week)
-// would say it runs out before reset; the recent burn is zero, so there is no projection.
+// Used early, then quiet for three days: the quiet last day halves the rate, so it lasts.
 const quietSince = NOW - 3 * DAY;
 const dormant = context.paceForWindow(weekly(60, [
-  ...holding(weekStart, quietSince, 0),
+  ...linear(weekStart, quietSince, 60),
   ...holding(quietSince + 900, NOW, 60),
 ]), NOW);
-assert.equal(dormant.state, "idle");
-assert.equal(dormant.runsOut, false);
-assert.equal(dormant.etaSeconds, null);
-assert.ok(dormant.idleSeconds >= 3 * DAY - 900, "idle time runs from the last increase");
-assert.equal(context.paceShowsMark(dormant), true, "an idle window keeps its tick: used against expected");
+assert.equal(dormant.state, "projecting");
+assert.equal(dormant.runsOut, false, "a quiet last day pulls a heavy start back under the reset");
 
-// A calm window with a burst in its last hour projects a run-out; its since-reset average (20% in half a week) does not.
-const burst = context.paceForWindow(weekly(20, [
+// One busy hour in a calm week does not predict a weekly run-out.
+const busyHour = context.paceForWindow(weekly(20, [
   ...holding(weekStart, NOW - HOUR, 10),
   [NOW - 2700, 12.5], [NOW - 1800, 15], [NOW - 900, 17.5], [NOW, 20],
 ]), NOW);
+assert.equal(busyHour.state, "projecting");
+assert.equal(busyHour.runsOut, false, "a single burst is not a weekly trend");
+
+// A heavy, steady week does run out, and the badge agrees: ahead of pace.
+const heavy = context.paceForWindow(weekly(70, linear(weekStart, NOW, 70)), NOW);
+assert.equal(heavy.runsOut, true);
+assert.ok(heavy.etaSeconds > DAY && heavy.etaSeconds < 2 * DAY, "70% in 3.5 days leaves about a day and a half");
+assert.ok(context.paceBadgeText(heavy).endsWith("ahead"));
+assert.ok(context.paceTickText(heavy).includes("At this window's pace: runs out in"));
+
+// A steady burn that empties the window exactly at reset is not a run-out.
+const steady = context.paceForWindow(weekly(40, linear(weekStart, NOW, 40)), NOW);
+assert.equal(steady.state, "projecting");
+assert.equal(steady.runsOut, false, "a steady burn that lasts until reset is not a run-out");
+
+// The first day of a week averages over a whole day, so an early session does not alarm.
+const firstHours = context.paceForWindow(weekly(8, [], WEEK - 4 * HOUR), NOW);
+assert.equal(firstHours.runsOut, false, "8% in the first four hours is a day's use, not a run-out");
+
+// Five-hour limits: the recent rate of the window's own samples.
+const burst = context.paceForWindow(session(50, [
+  ...holding(sessionStart, NOW - HOUR, 10, 300),
+  [NOW - 2700, 20], [NOW - 1800, 30], [NOW - 900, 40], [NOW, 50],
+]), NOW);
+assert.equal(burst.method, "recent");
 assert.equal(burst.state, "projecting");
-assert.equal(burst.runsOut, true, "the recent rate decides the run-out, not the calm average");
-assert.ok(burst.etaSeconds > 0 && burst.etaSeconds < WEEK / 2);
+assert.equal(burst.runsOut, true, "a session follows its recent rate");
+assert.ok(burst.etaSeconds > 0 && burst.etaSeconds < SESSION / 2);
 assert.equal(context.paceStatusText(burst), context.paceText(burst), "a drawn tick reports the same line as paceText");
+assert.ok(context.paceTickText(burst).includes("At your recent rate: runs out in"));
 
 // The meter, tick, and pace tooltip follow the chosen side; the ahead/behind verdict is the same on either side.
 assert.equal(context.meterFill({ used: 20 }, "Used"), 0.2);
@@ -416,57 +447,60 @@ assert.equal(context.meterFill(null, "Remaining"), null);
 assert.equal(context.meterMark(burst, "Used"), burst.expected / 100);
 assert.equal(context.meterMark(burst, "Remaining"), (100 - burst.expected) / 100);
 assert.equal(context.meterMark(null, "Remaining"), -1, "no pace, no tick on either side");
-assert.ok(context.paceTickText(burst, "Remaining").startsWith("Left 80%"), "the tooltip names the side it shows");
+assert.ok(context.paceTickText(burst, "Remaining").startsWith("Left 50%"), "the tooltip names the side it shows");
 assert.ok(context.paceText(burst, "Remaining").endsWith("% left"), "the expected share names its side");
 assert.equal(context.paceText(burst, "Used").endsWith("% left"), false);
-const burstAhead = burst.used > burst.expected;
-assert.equal(context.meterFill({ used: burst.used }, "Used") > context.meterMark(burst, "Used"), burstAhead, "ahead means the fill runs past the tick under Used");
-assert.equal(context.meterFill({ used: burst.used }, "Remaining") < context.meterMark(burst, "Remaining"), burstAhead, "ahead means the fill stops short of the tick under Remaining");
 
-// A steady burn that empties the window exactly at reset is not a run-out (40% used, 60% left at 40%/half week).
-const steady = context.paceForWindow(weekly(40, linear(weekStart, NOW, 40)), NOW);
-assert.equal(steady.state, "projecting");
-assert.equal(steady.runsOut, false, "a steady burn that lasts until reset is not a run-out");
+// A session that has gone quiet is idle: tick, no projection.
+const quietSession = context.paceForWindow(session(30, [
+  ...linear(sessionStart, NOW - 75 * 60, 30, 300),
+  ...holding(NOW - 70 * 60, NOW, 30, 300),
+]), NOW);
+assert.equal(quietSession.state, "idle");
+assert.equal(quietSession.runsOut, false);
+assert.equal(context.paceShowsMark(quietSession), true, "an idle window keeps its tick");
+assert.ok(context.paceText(quietSession).startsWith("Idle "));
 
-// Too little observed time is no basis for a projection.
-const fresh = context.paceForWindow(weekly(20, [[NOW - 300, 20], [NOW, 20]]), NOW);
+// Too little observed time: the tick and badge stay (they need only the clock); the projection waits.
+const fresh = context.paceForWindow(session(20, [[NOW - 300, 20], [NOW, 20]]), NOW);
 assert.equal(fresh.state, "collecting");
-assert.equal(context.paceShowsMark(fresh), false, "no rate yet, so no tick and no Ahead/Behind");
-assert.equal(context.paceTickText(fresh), "");
-assert.equal(context.paceStatusText(fresh), "Collecting data");
+assert.equal(context.paceShowsMark(fresh), true, "collecting keeps the tick and the ahead/behind badge");
+assert.ok(context.paceText(fresh).startsWith("Collecting data · pace "));
+assert.ok(context.paceTickText(fresh).includes("Collecting samples"));
 
 // A gap longer than an hour is unobserved: the rise across it is neither a rate nor idle time.
-const gapped = context.paceForWindow(weekly(20, [[NOW - 4000, 10], [NOW - 100, 20]]), NOW);
+const gapped = context.paceForWindow(session(20, [[NOW - 4000, 10], [NOW - 100, 20]]), NOW);
 assert.equal(gapped.state, "collecting");
 assert.equal(gapped.observedSeconds, 100);
 
-// Newest sample older than an hour: the data is stale, not idle. No rate is trusted, so no tick and no Ahead/Behind.
-const silent = context.paceForWindow(weekly(60, holding(weekStart, NOW - 2 * HOUR, 60)), NOW);
+// Newest sample older than an hour: stale, not idle. The tick stays; no projection is trusted.
+const silent = context.paceForWindow(session(60, holding(sessionStart, NOW - 2 * HOUR, 60, 300)), NOW);
 assert.equal(silent.state, "stale");
-assert.equal(context.paceShowsMark(silent), false, "stale data draws no tick");
-assert.equal(context.paceTickText(silent), "");
-assert.equal(context.paceStatusText(silent), "No recent data");
+assert.equal(context.paceShowsMark(silent), true);
+assert.ok(context.paceText(silent).startsWith("No recent data · pace "));
 
 // Usage recorded before the window started is not a rise inside it.
-const previous = context.paceForWindow(weekly(5, [[weekStart - HOUR, 90], ...holding(weekStart, NOW, 5)]), NOW);
+const previous = context.paceForWindow(session(5, [[sessionStart - HOUR, 90], ...holding(sessionStart, NOW, 5, 300)]), NOW);
 assert.equal(previous.state, "idle", "the earlier window's 90% does not start a burn");
 assert.equal(previous.runsOut, false);
 
 // Quickshell can hand over lists with length and index access that fail Array.isArray(). They must read
 // exactly like plain arrays; a sample list that looks empty to the reader would show "No recent data".
 const asArrayLike = (items) => Object.assign({ length: items.length }, items);
-const steadySamples = linear(weekStart, NOW, 40);
+const steadySamples = linear(sessionStart, NOW, 40, 300);
 const listSamples = asArrayLike(steadySamples.map(asArrayLike));
 assert.equal(Array.isArray(listSamples), false);
 assert.equal(Array.isArray(listSamples[0]), false);
-const plainBurn = context.recentBurn(steadySamples, 40, NOW, weekStart);
-const listBurn = context.recentBurn(listSamples, 40, NOW, weekStart);
+const plainBurn = context.recentBurn(steadySamples, 40, NOW, sessionStart);
+const listBurn = context.recentBurn(listSamples, 40, NOW, sessionStart);
 assert.notEqual(listBurn, null, "array-like samples are read, not treated as missing");
 assert.ok(listBurn.percentPerSecond > 0, "array-like samples carry the same burn");
 assert.deepEqual(listBurn, plainBurn);
-const listPace = context.paceForWindow({ used: 40, windowSeconds: WEEK, resetsAt: NOW + WEEK / 2, samples: listSamples }, NOW);
+const listPace = context.paceForWindow(session(40, listSamples), NOW);
 assert.equal(listPace.state, "projecting", "array-like samples project a run-out or a steady burn");
-assert.deepEqual(listPace, context.paceForWindow(weekly(40, steadySamples), NOW));
+assert.deepEqual(listPace, context.paceForWindow(session(40, steadySamples), NOW));
+const weeklyList = context.paceForWindow(weekly(40, asArrayLike(linear(weekStart, NOW, 40).map(asArrayLike))), NOW);
+assert.deepEqual(weeklyList, context.paceForWindow(weekly(40, linear(weekStart, NOW, 40)), NOW), "the last-day rate reads array-like samples too");
 
 const exhausted = context.paceForWindow(weekly(140, holding(weekStart, NOW, 100)), NOW);
 assert.equal(exhausted.used, 100, "used clamps before projecting");
@@ -639,7 +673,6 @@ assert.equal(context.providerShortName({ id: "openrouter", name: "OpenRouter" })
 assert.equal(context.providerShortName({ id: "claude", name: "Claude Code" }), "Claude");
 assert.equal(context.providerShortName({ id: "gemini-cli", name: "Gemini CLI" }), "Gemini CLI", "proxy providers keep their name");
 
-console.log("UsageLogic.js: all assertions passed");
 
 // Per-provider "Show limits as" overrides follow the global choice unless set.
 assert.equal(context.quotaModeFor("{}", "claude", "Used"), "Used");
@@ -660,10 +693,18 @@ assert.equal(context.orderProviders(sample, "[]").map(p => p.id).join(","), "cla
 assert.equal(context.orderProviders(sample, '["kimi","claude"]').map(p => p.id).join(","), "kimi,claude,codex,opencode", "unlisted providers follow the listed ones");
 assert.equal(context.orderProviders(sample, '["ghost","codex"]').map(p => p.id).join(","), "codex,claude,kimi,opencode", "ids that are not present are ignored");
 assert.equal(context.orderProviders(sample, "nope").map(p => p.id).join(","), "claude,codex,kimi,opencode", "unreadable order keeps the natural order");
-const ids = ["claude", "codex", "kimi", "opencode"];
-assert.equal(context.moveProvider("[]", ids, "kimi", -1), '["claude","kimi","codex","opencode"]');
-assert.equal(context.moveProvider("[]", ids, "claude", -1), "[]", "moving past the start changes nothing");
-assert.equal(context.moveProvider("[]", ids, "opencode", 1), "[]", "moving past the end changes nothing");
-assert.equal(context.moveProvider("[]", ids, "ghost", 1), "[]");
 assert.equal(context.parseProviderOrder('["codex","codex","Bad Id",3]').join(","), "codex", "duplicates and invalid ids are dropped");
 console.log("Provider order: passed");
+
+// Reset restores exactly what a fresh install gets: the registry matches manifest.json.
+const manifestDefaults = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8")).barWidget.defaults;
+for (const key of Object.keys(context.DEFAULT_SETTINGS))
+  assert.equal(JSON.stringify(context.DEFAULT_SETTINGS[key]), JSON.stringify(manifestDefaults[key]), "reset default for " + key + " matches the manifest");
+for (const kept of ["usageSource", "cliproxyUrl", "cliproxyKeyFile", "openrouterKeyFile", "deepseekKeyFile", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers", "costPriceOverrides"])
+  assert.ok(!(kept in context.DEFAULT_SETTINGS), kept + " survives a reset");
+assert.equal(context.changedFromDefaults({}).length, 0, "missing keys already read as defaults");
+assert.equal(context.changedFromDefaults({ quotaMode: "Remaining", barWindow: "auto", usageSource: "cliproxy" }).join(","), "quotaMode",
+  "only preferences that differ count; connections never do");
+console.log("Reset defaults: passed");
+
+console.log("UsageLogic.js: all assertions passed");

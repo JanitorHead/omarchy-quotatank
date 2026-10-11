@@ -4,6 +4,18 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **Reset to defaults** under Settings → Advanced. It asks once, in place, and says how many settings differ. Preferences go back to their defaults, including provider order and Customize overrides; the source, server URLs, saved keys and tokens, T3 servers, and custom prices are kept.
+
+### Changed
+
+- **Providers reorder by dragging** a six-dot grip at the start of each row, with the open-hand cursor; a focused grip also moves with the arrow keys. The ▲ ▼ buttons are gone.
+- **Pacing reworked.** The tick and the ahead/behind badge need only the clock, so they show as soon as a limit has usage, including while a 5-hour limit is still collecting samples or its data is stale. Weekly and monthly limits now project from this window's average (over at least a day) blended evenly with the last 24 hours, instead of a two-hour recent rate: a single busy hour no longer predicts a weekly run-out, a quiet weekend no longer hides a heavy week, and a weekly projection works on the first refresh without history. Limits of a day or less keep following their recent rate, with a half-life of an eighth of the window (about 40 minutes for a 5-hour session) instead of two hours. The tick tooltip names the basis (`At your recent rate` or `At this window's pace`), and the pacing help explains both.
+- **Defaults**: every provider is allowed a menu bar chip, so OpenRouter and DeepSeek appear in the bar as soon as they are monitored, and local OpenCode history joins Claude Code and Codex in Costs. A provider with no history or no sign-in still shows nothing.
+
 ## 1.5.3
 
 ### Changed

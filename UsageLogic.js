@@ -358,18 +358,6 @@ function orderProviders(list, text) {
   return ranked.map(function (entry) { return entry.row })
 }
 
-// Moves `id` by `delta` places within `ids`, the current effective order; returns the new order as
-// JSON, or the unchanged text when the move would leave the list.
-function moveProvider(text, ids, id, delta) {
-  var current = listOrEmpty(ids).map(String)
-  var index = current.indexOf(String(id))
-  var target = index + delta
-  if (index === -1 || target < 0 || target >= current.length) return String(text === undefined || text === null ? "[]" : text)
-  current.splice(index, 1)
-  current.splice(target, 0, String(id))
-  return JSON.stringify(current)
-}
-
 // Short period tag for stacked chips. Auto has no single period, so it has no tag.
 function windowShortLabel(selector) {
   var normalized = normalizeBarWindow(selector)
@@ -548,15 +536,27 @@ function usedForWindow(provider, selector) {
   return usedFromRemaining(remainingForWindow(provider, selector))
 }
 
-// Pace projects a window's run-out from its own recent samples, not from its average since reset.
-// `samples` is the window's [epoch, used] series; each value holds until the next sample.
-// `expected` is the percent of the window already elapsed: the mark for an even burn.
-// A projection needs an observed, recent burn; otherwise `state` says why there is none.
+// Pace has two parts. The tick (`expected`) is the share of the window already elapsed: where an
+// even burn would be by now. It needs only the clock, so it shows whenever the limit has usage.
+// The projection says when the limit would run out, and how depends on the window's length:
+// - Limits of a day or less (the 5-hour session) follow the recent rate of their own samples,
+//   newest weighing most, because a session is used in one sitting.
+// - Longer limits (weekly, monthly) follow the average so far this window blended with the last
+//   24 hours. The average already counts nights and days off, so one busy hour does not predict a
+//   weekly run-out and a quiet weekend does not hide a heavy week.
+// `samples` is the window's [epoch, used] series; each value holds until the next.
 var PACE_MIN_ELAPSED_FRACTION = 0.02
-var PACE_HALF_LIFE_SECONDS = 2 * 60 * 60  // newest samples weigh most; weight halves every this long
+var PACE_SHORT_WINDOW_SECONDS = 24 * 60 * 60  // at most this long: projected from the recent rate
 var PACE_MAX_GAP_SECONDS = 60 * 60        // a longer gap is unobserved (neither use nor idle); newest sample older than this is stale
 var PACE_IDLE_SECONDS = 60 * 60           // no increase for this long: idle, no projection
 var PACE_MIN_OBSERVED_SECONDS = 10 * 60   // less observed time than this: still collecting
+var PACE_DAY_SECONDS = 24 * 60 * 60
+
+// Half-life of the recent rate for a short window: an eighth of the window, 15 minutes to 2 hours
+// (about 40 minutes for a 5-hour session).
+function paceHalfLife(windowSeconds) {
+  return clamp(windowSeconds / 8, 15 * 60, 2 * 60 * 60)
+}
 
 function finiteOrNull(value) {
   if (value === null || value === undefined || value === "") return null
@@ -568,7 +568,8 @@ function finiteOrNull(value) {
 // newest sample is too old to judge. Otherwise: `percentPerSecond` is the weighted mean rate of
 // the observed intervals, `observedSeconds` the time they cover, and `idleSeconds` the time since
 // the last increase (or since observation began, when no increase was seen).
-function recentBurn(samples, used, nowSeconds, windowStart) {
+function recentBurn(samples, used, nowSeconds, windowStart, halfLifeSeconds) {
+  var halfLife = halfLifeSeconds || paceHalfLife(5 * 60 * 60)
   var points = []
   var list = listOrEmpty(samples)
   // Index loop, not forEach: Quickshell lists may lack forEach but keep length and indexing.
@@ -597,7 +598,7 @@ function recentBurn(samples, used, nowSeconds, windowStart) {
     var to = inside[i + 1]
     var seconds = to[0] - from[0]
     if (seconds <= 0 || seconds > PACE_MAX_GAP_SECONDS) continue
-    var decay = Math.pow(0.5, (nowSeconds - to[0]) / PACE_HALF_LIFE_SECONDS)
+    var decay = Math.pow(0.5, (nowSeconds - to[0]) / halfLife)
     var rise = Math.max(0, to[1] - from[1])
     weighted += rise * decay
     weight += seconds * decay
@@ -613,6 +614,23 @@ function recentBurn(samples, used, nowSeconds, windowStart) {
   }
 }
 
+// Rise over the last day, as percent per second, for a long window; null when the window began less
+// than a day ago or the history does not reach back a day. A rolling window can fall: never negative.
+function lastDayRate(samples, used, nowSeconds, windowStart) {
+  var since = nowSeconds - PACE_DAY_SECONDS
+  if (windowStart > since) return null
+  var base = null
+  var list = listOrEmpty(samples)
+  for (var r = 0; r < list.length; r++) {
+    var row = list[r]
+    var stamp = isListLike(row) ? finiteOrNull(row[0]) : null
+    var value = isListLike(row) ? finiteOrNull(row[1]) : null
+    if (stamp === null || value === null || stamp < windowStart || stamp > since) continue
+    if (base === null || stamp > base[0]) base = [stamp, clamp(value, 0, 100)]
+  }
+  return base === null ? null : Math.max(0, used - base[1]) / PACE_DAY_SECONDS
+}
+
 function paceForWindow(row, nowSeconds) {
   var windowSeconds = finiteOrNull(row ? row.windowSeconds : null)
   var resetsAt = finiteOrNull(row ? row.resetsAt : null)
@@ -622,11 +640,13 @@ function paceForWindow(row, nowSeconds) {
 
   var untilReset = Math.max(0, resetsAt - now)
   var elapsed = clamp(windowSeconds - untilReset, 0, windowSeconds)
+  var windowStart = resetsAt - windowSeconds
   var result = {
     used: used,
     expected: 100 * elapsed / windowSeconds,
     known: false,
     exhausted: false,
+    method: windowSeconds > PACE_SHORT_WINDOW_SECONDS ? "average" : "recent",
     state: "starting",
     runsOut: false,
     etaSeconds: null,
@@ -647,24 +667,35 @@ function paceForWindow(row, nowSeconds) {
     return result
   }
 
-  var burn = recentBurn(row.samples, used, now, resetsAt - windowSeconds)
-  if (burn === null) {
-    result.state = "stale"
-    return result
-  }
-  result.observedSeconds = burn.observedSeconds
-  result.idleSeconds = burn.idleSeconds
-  if (burn.observedSeconds < PACE_MIN_OBSERVED_SECONDS) {
-    result.state = "collecting"
-    return result
-  }
-  if (burn.percentPerSecond <= 0 || burn.idleSeconds >= PACE_IDLE_SECONDS) {
-    result.state = "idle"
-    return result
+  var rate
+  if (result.method === "average") {
+    // The window's own average (over at least a day, so the first hours of a week do not alarm),
+    // blended evenly with the last day when the history reaches that far.
+    var average = used / Math.max(elapsed, PACE_DAY_SECONDS)
+    var lastDay = lastDayRate(row.samples, used, now, windowStart)
+    rate = lastDay === null ? average : (average + lastDay) / 2
+    result.observedSeconds = elapsed
+  } else {
+    var burn = recentBurn(row.samples, used, now, windowStart, paceHalfLife(windowSeconds))
+    if (burn === null) {
+      result.state = "stale"
+      return result
+    }
+    result.observedSeconds = burn.observedSeconds
+    result.idleSeconds = burn.idleSeconds
+    if (burn.observedSeconds < PACE_MIN_OBSERVED_SECONDS) {
+      result.state = "collecting"
+      return result
+    }
+    if (burn.percentPerSecond <= 0 || burn.idleSeconds >= PACE_IDLE_SECONDS) {
+      result.state = "idle"
+      return result
+    }
+    rate = burn.percentPerSecond
   }
 
-  // Time from now until 100 % at the recent rate.
-  var etaSeconds = (100 - used) / burn.percentPerSecond
+  // Time from now until 100 % at that rate.
+  var etaSeconds = (100 - used) / rate
   result.state = "projecting"
   if (etaSeconds < untilReset) {
     result.runsOut = true
@@ -708,14 +739,14 @@ function expectedText(pace, mode) {
   return "pace " + Math.round(sideOfUsed(pace.expected, mode)) + "%" + (mode === "Remaining" ? " left" : "")
 }
 
-// The pace tick is drawn only when there is usage to compare with it and a projection backs it.
-// Stale and collecting windows have no trustworthy rate: no tick, so no Ahead/Behind is claimed.
+// The tick needs only the clock, so it is drawn whenever the limit has usage to compare with it:
+// a short limit that is still collecting samples, or whose data is stale, keeps its tick and its
+// ahead/behind badge, and only the projection waits.
 function paceShowsMark(pace) {
-  return !!pace && pace.known && !pace.exhausted && pace.used > 0 &&
-    pace.state !== "stale" && pace.state !== "collecting"
+  return !!pace && pace.known && !pace.exhausted && pace.used > 0
 }
 
-// Hover text for the tick: usage against the expected share, then what the recent burn implies.
+// Hover text for the tick: usage against the expected share, then what the projection says.
 function paceTickText(pace, mode) {
   if (!paceShowsMark(pace)) return ""
   var delta = Math.round(pace.used - pace.expected)
@@ -728,14 +759,15 @@ function paceTickText(pace, mode) {
   return lines.join("\n")
 }
 
-// What the recent burn says about the rest of the window, for the tooltip.
+// What the projection says about the rest of the window, for the tooltip.
 function projectionLine(pace) {
-  if (pace.state === "projecting") {
-    return pace.runsOut
-      ? "At this pace: runs out in " + formatDuration(pace.etaSeconds)
-      : "At this pace: lasts until reset"
-  }
+  var basis = pace.method === "average" ? "At this window's pace: " : "At your recent rate: "
+  if (pace.state === "projecting")
+    return basis + (pace.runsOut ? "runs out in " + formatDuration(pace.etaSeconds) : "lasts until reset")
   if (pace.state === "idle") return "No increase for " + formatDuration(pace.idleSeconds) + " · no projection"
+  if (pace.state === "collecting") return "Collecting samples for a projection"
+  if (pace.state === "stale") return "No recent data · no projection"
+  return ""
 }
 
 // One status line for a window card; empty when there is nothing to say.
@@ -746,6 +778,8 @@ function paceText(pace, mode) {
   if (!paceShowsMark(pace)) return ""
   var expected = expectedText(pace, mode)
   if (pace.state === "idle") return "Idle " + formatDuration(pace.idleSeconds) + " · " + expected
+  if (pace.state === "collecting") return "Collecting data · " + expected
+  if (pace.state === "stale") return "No recent data · " + expected
   if (pace.runsOut) return "Runs out in " + formatDuration(pace.etaSeconds) + " · " + expected
   return "Lasts until reset · " + expected
 }
@@ -764,9 +798,7 @@ function paceStatusText(pace, mode) {
   var text = paceText(pace, mode)
   if (text !== "") return text
   if (!pace) return "No pace for this limit"
-  if (!pace.known) return "Pace starts after 2% of the window"
-  if (pace.state === "stale") return "No recent data"
-  if (pace.state === "collecting") return "Collecting data"
+  if (!pace.known) return "Pace starts after " + Math.round(PACE_MIN_ELAPSED_FRACTION * 100) + "% of the window"
   return "No usage yet"
 }
 
@@ -778,14 +810,19 @@ var PACING_LEGEND = [
   "over its window. Blocks past the tick are use",
   "ahead of pace.",
   "",
-  "The line under each limit projects your recent",
-  "rate: \"Runs out in …\" if the limit would empty",
-  "before it resets, \"Lasts until reset\" if not.",
-  "Recent use counts most (half-life " + Math.round(PACE_HALF_LIFE_SECONDS / 3600) + "h); bursts",
-  "are not predicted.",
+  "The line under each limit says when it would run",
+  "out: \"Runs out in …\" before it resets, \"Lasts",
+  "until reset\" if not.",
   "",
-  "No projection while a limit is idle or collecting",
-  "samples; no pace in the first " + Math.round(PACE_MIN_ELAPSED_FRACTION * 100) + "% of a window."
+  "Limits of a day or less follow your recent rate",
+  "(newest use counts most). Weekly and monthly",
+  "limits follow this window's average blended with",
+  "the last 24 hours, so one busy hour or a quiet",
+  "weekend does not swing them.",
+  "",
+  "A short limit makes no projection while idle or",
+  "collecting samples; no pace in the first " + Math.round(PACE_MIN_ELAPSED_FRACTION * 100) + "%",
+  "of a window."
 ].join("\n")
 
 // Severity order for threshold crossings. "none" means no reading and never counts as one.
@@ -1020,6 +1057,49 @@ var LOCAL_PROVIDERS = [
   { id: "deepseek", name: "DeepSeek", short: "DeepSeek", money: true }
 ]
 var LOCAL_PROVIDER_IDS = LOCAL_PROVIDERS.map(function (entry) { return entry.id })
+
+// Preferences Settings → Advanced → Reset restores, with their defaults (the same values as
+// manifest.json). Connections and secrets are not here, so a reset never disconnects anything:
+// the source, server URLs, saved keys and tokens, T3 servers, and custom model prices are kept.
+// CLI providers are monitored by default; a provider without a sign-in simply does not appear.
+// API-key providers stay off until a key is saved, and every monitored provider gets a chip.
+var DEFAULT_SETTINGS = {
+  enabledProviders: ["claude", "codex", "kimi", "opencode"],
+  barProviders: ["claude", "codex", "kimi", "opencode", "openrouter", "deepseek"],
+  providerOrder: "[]",
+  providerQuotaModes: "{}",
+  barProviderLimits: "{}",
+  barDisplayMode: "Percentages",
+  barWindow: "auto",
+  barWindowSecondary: "none",
+  barShowResets: false,
+  barResetTimeFormat: "24h",
+  barResetDateFormat: "DD/MM",
+  hideExhaustedProviders: false,
+  quotaMode: "Used",
+  providerColors: false,
+  squareUsageCards: true,
+  hideAccountEmails: true,
+  notifyLimitThresholds: true,
+  warningThreshold: 25,
+  criticalThreshold: 10,
+  creditWarningUsd: 5,
+  creditCriticalUsd: 1,
+  refreshIntervalSec: 900,
+  costLocalProviders: ["claude", "codex", "opencode"],
+  liveAccountActivity: true
+}
+
+// The keys of `settings` that differ from their default; what Reset would change.
+function changedFromDefaults(settings) {
+  var changed = []
+  for (var key in DEFAULT_SETTINGS) {
+    var current = settings ? settings[key] : undefined
+    if (current !== undefined && current !== null && JSON.stringify(current) !== JSON.stringify(DEFAULT_SETTINGS[key]))
+      changed.push(key)
+  }
+  return changed
+}
 
 function localProvider(providerId) {
   for (var i = 0; i < LOCAL_PROVIDERS.length; i++)
