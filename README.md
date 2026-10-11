@@ -28,7 +28,7 @@ Cropped captures of the running widget, September 2026. Account emails are hidde
 - **Usage at a glance:** compact provider percentages, configurable bar visibility, reset countdowns, warning colors, and persistent 24H/7D quota history. Fusebox reports last-used accounts directly; Go proxies can use optional [CPA Usage Keeper](docs/keeper-deployment.md) activity.
 - **Combined cost history:** local Codex/Claude transcripts and up to four [T3 Code](https://github.com/pingdotgg/t3code) servers in one 24H/7D/30D view, with API estimates, tokens, and provider/model breakdowns.
 - **Improved accounting:** common pricing across sources, cache-aware token costs, shared-folder deduplication, corrected handling of equal-sized Codex responses, custom model rates, and incremental scans.
-- **Cleaner UI:** Limits/Costs tabs, a compact provider menu, expandable details, separate quota and cost settings, fixed Save/Cancel controls, and square usage cards with a theme-corner option. Keyboard navigation and Omarchy theme/scaling support are built in.
+- **Cleaner UI:** Limits/Costs tabs, a visible provider row, expandable details, separate quota and cost settings, fixed Save/Cancel controls, and square usage cards with a theme-corner option. Keyboard navigation and Omarchy theme/scaling support are built in.
 
 See the [changelog](CHANGELOG.md) for the complete update history.
 
@@ -102,7 +102,7 @@ Full connection, credential, settings, reset-credit, and troubleshooting details
 
 ### Subscription limits and the menu bar
 
-Limits are provider-reported subscription allowances. Cards and bar chips show **percentage used** by default, matching the provider dashboards, and **Show limits as** switches them to percentage left; the warning thresholds always apply to what is left, and quota-history bars always record usage. Extra usage, credit balances, and banked reset counts appear only when the provider exposes them.
+Limits are provider-reported subscription allowances. Cards and bar chips show **percentage used** by default, matching the provider dashboards, and **Show limits as** switches them to percentage left. Warning thresholds trigger on what is left, whichever side is shown; under `Used` they are entered and shown as % used, and alerts read "High usage" or "Near the limit" with the figure in % used (under `Remaining`: "Running low" or "Almost out", in % left). Quota-history bars always record usage. Extra usage, credit balances, and banked reset counts appear only when the provider exposes them.
 
 - **Local mode** shows the signed-in account's reported session, weekly, model-specific, and other windows. Its bar percentage uses the most restrictive reported window.
 - **Proxy mode** shows each subscription separately. Cards default to overall weekly limits, then other weekly/monthly allowances or the first reported window. **Additional limits** reveals the other windows. Three subscriptions remain three readings: percentages are never added or averaged across accounts.
@@ -158,7 +158,7 @@ Public prices refresh daily and are cached for offline use. **Refresh in Costs**
 |---|---|
 | Open/close the panel | Left click; a percentage chip opens its provider |
 | Next provider | Middle click |
-| Select provider in Limits | `h` / `l`, Left / Right, or provider menu (`p`) |
+| Select provider in Limits | `h` / `l`, Left / Right, or `p` for the next provider |
 | Switch tabs | `c` for Costs, `u` for Limits |
 | Refresh the current view | `r` or Enter |
 | Scroll | `j` / `k` or Down / Up |

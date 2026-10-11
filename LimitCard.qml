@@ -85,16 +85,16 @@ Ui.BorderSurface {
 
     BlockMeter {
       id: meter
-      visible: UsageLogic.windowUsed(root.window) !== null
+      visible: UsageLogic.meterFill(root.window, root.quotaMode) !== null
       width: parent.width
-      value: UsageLogic.windowUsed(root.window) / 100
+      value: UsageLogic.meterFill(root.window, root.quotaMode) || 0
       fillColor: root.stressed ? root.urgent : root.providerColor
       trackColor: root.alpha(root.foreground, 0.14)
-      markValue: UsageLogic.paceShowsMark(root.pace) ? root.pace.expected / 100 : -1
+      markValue: UsageLogic.meterMark(root.pace, root.quotaMode)
       markAhead: UsageLogic.paceShowsMark(root.pace) && root.pace.used > root.pace.expected
       markColor: root.foreground
       markTooltip: {
-        var tick = UsageLogic.paceTickText(root.pace)
+        var tick = UsageLogic.paceTickText(root.pace, root.quotaMode)
         return tick === "" ? "" : "Now " + Qt.formatTime(new Date(root.nowSeconds * 1000), root.clockFormat) + "\n" + tick
       }
     }
@@ -113,7 +113,7 @@ Ui.BorderSurface {
       id: paceLine
       visible: root.window !== null
       width: parent.width
-      text: UsageLogic.paceStatusText(root.pace)
+      text: UsageLogic.paceStatusText(root.pace, root.quotaMode)
       color: root.pace && root.pace.runsOut ? root.urgent : root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption

@@ -277,13 +277,13 @@ function windowSelectorLabel(selector) {
   if (normalized === "session") return "5-hour (session)"
   if (normalized === "weekly") return "7-day (weekly)"
   if (normalized === "monthly") return "Monthly"
-  return "Lowest left (auto)"
+  return "Most constrained (auto)"
 }
 
 // Label for the "Default" choice of one provider slot: names the global value it inherits.
 function inheritedBarLimitLabel(slot, globalSelector) {
   var normalized = slot === "bottom" ? normalizeSecondaryBarWindow(globalSelector) : normalizeBarWindow(globalSelector)
-  return "Global: " + (normalized === "none" ? "None" : windowSelectorLabel(normalized))
+  return "Global: " + (normalized === "none" ? "None (single limit)" : windowSelectorLabel(normalized))
 }
 
 // Short period tag for stacked chips. Auto has no single period, so it has no tag.
@@ -561,6 +561,27 @@ function formatDuration(seconds) {
   return rest + "m"
 }
 
+// The meter, tick, and pace figures show the side the user chose. Pace maths stay in usage.
+function sideOfUsed(usedPercent, mode) {
+  return mode === "Remaining" ? 100 - usedPercent : usedPercent
+}
+
+// Fill of a window's meter on the chosen side, 0-1; null when no window reports usage.
+function meterFill(row, mode) {
+  var used = windowUsed(row)
+  return used === null ? null : sideOfUsed(used, mode) / 100
+}
+
+// Position of the pace tick on the chosen side, 0-1; -1 when no tick is drawn.
+function meterMark(pace, mode) {
+  return paceShowsMark(pace) ? sideOfUsed(pace.expected, mode) / 100 : -1
+}
+
+// The expected share as the chosen side reads it: "expected 50%" under Used, "expected 50% left" under Remaining.
+function expectedText(pace, mode) {
+  return "expected " + Math.round(sideOfUsed(pace.expected, mode)) + "%" + (mode === "Remaining" ? " left" : "")
+}
+
 // The pace tick is drawn only when there is usage to compare with it and a projection backs it.
 // Stale and collecting windows have no trustworthy rate: no tick, so no Ahead/Behind is claimed.
 function paceShowsMark(pace) {
@@ -569,10 +590,11 @@ function paceShowsMark(pace) {
 }
 
 // Hover text for the tick: usage against the expected share, then what the recent burn implies.
-function paceTickText(pace) {
+function paceTickText(pace, mode) {
   if (!paceShowsMark(pace)) return ""
   var delta = Math.round(pace.used - pace.expected)
-  var lines = ["Used " + Math.round(pace.used) + "% · expected " + Math.round(pace.expected) + "%"]
+  var side = mode === "Remaining" ? "Left " : "Used "
+  var lines = [side + Math.round(sideOfUsed(pace.used, mode)) + "% · " + expectedText(pace, mode)]
   if (delta > 0) lines.push("Ahead by " + delta + " pts")
   else if (delta < 0) lines.push("Behind by " + (-delta) + " pts")
   else lines.push("On pace")
@@ -592,19 +614,19 @@ function projectionLine(pace) {
 
 // One status line for a window card; empty when there is nothing to say.
 // Whenever the tick is drawn, its expected share is printed beside it.
-function paceText(pace) {
+function paceText(pace, mode) {
   if (!pace || !pace.known) return ""
   if (pace.exhausted) return "Limit reached"
   if (!paceShowsMark(pace)) return ""
-  var expected = "expected " + Math.round(pace.expected) + "%"
+  var expected = expectedText(pace, mode)
   if (pace.state === "idle") return "Idle " + formatDuration(pace.idleSeconds) + " · " + expected
   if (pace.runsOut) return "Runs out in " + formatDuration(pace.etaSeconds) + " · " + expected
   return "Lasts until reset · " + expected
 }
 
 // What the Pacing row says when no tick is drawn yet: the reason, not a blank.
-function paceStatusText(pace) {
-  var text = paceText(pace)
+function paceStatusText(pace, mode) {
+  var text = paceText(pace, mode)
   if (text !== "") return text
   if (!pace) return "not reported"
   if (!pace.known) return "starts after 2% of the window"
@@ -616,7 +638,7 @@ function paceStatusText(pace) {
 // One legend for all limit cards of a provider, shown once under them. Each card's line gives its figures.
 var PACING_LEGEND = [
   "Pacing compares usage with a steady burn across each limit's window.",
-  "The tick on a meter marks the share of the window already passed; usage past it is ahead of pace.",
+  "The tick on a meter marks where usage should be by now; shading between the tick and the fill is ahead of pace.",
   "The line under each limit projects from recent use; the newest samples weigh most (half-life " + Math.round(PACE_HALF_LIFE_SECONDS / 3600) + "h).",
   "No run-out is projected while a limit is idle, has no recent samples, or is still collecting them.",
   "Pace starts after " + Math.round(PACE_MIN_ELAPSED_FRACTION * 100) + "% of a window has passed.",
@@ -711,6 +733,40 @@ function quotaText(value, mode) {
   var text = formatPercent(value)
   if (text === "") return ""
   return text + (String(mode) === "Used" ? "% used" : "% left")
+}
+
+// Thresholds are stored as % left, so existing settings keep their meaning. Used mode shows and
+// accepts the same boundary as % used (25 left is 75 used). Severity still gates on what is left.
+function thresholdInMode(left, mode) {
+  var value = clamp(left, 0, 100)
+  return String(mode) === "Used" ? 100 - value : value
+}
+
+function thresholdToLeft(entered, mode) {
+  var value = clamp(entered, 0, 100)
+  return String(mode) === "Used" ? 100 - value : value
+}
+
+// Entry bounds for a stored % left range, expressed in the unit the mode shows.
+function thresholdBounds(minLeft, maxLeft, mode) {
+  return String(mode) === "Used" ? [100 - maxLeft, 100 - minLeft] : [minLeft, maxLeft]
+}
+
+// The figure an alert names: % used in Used mode, % left in Remaining mode.
+function alertFigure(remaining, mode) {
+  if (remaining === null || remaining === undefined) return null
+  return String(mode) === "Used" ? usedFromRemaining(remaining) : clamp(remaining, 0, 100)
+}
+
+// Remaining alerts report a limit running low; Used alerts report high usage. Same boundaries, different wording.
+function alertText(level, remaining, mode) {
+  var figure = alertFigure(remaining, mode)
+  if (figure === null) return ""
+  var used = String(mode) === "Used"
+  var title = level === "critical"
+    ? (used ? "Near the limit" : "Almost out")
+    : (used ? "High usage" : "Running low")
+  return title + ": " + quotaText(figure, mode)
 }
 
 // Providers that get a bar chip: a reading for the chosen window, or a failure the user must see.

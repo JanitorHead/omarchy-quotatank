@@ -33,6 +33,11 @@ Item {
   readonly property real filledBlocks: animatedValue * blockCount
   readonly property int completeBlocks: Math.floor(filledBlocks)
   readonly property real boundaryFraction: filledBlocks - completeBlocks
+  // Blocks between the fill's end and the tick, the tick block excluded. Under Used the fill runs past the tick; under Remaining it stops short of it.
+  readonly property bool fillPastMark: completeBlocks > markBlock
+  readonly property bool aheadActive: markAhead && markValue >= 0
+  readonly property int aheadFrom: fillPastMark ? markBlock + 1 : completeBlocks
+  readonly property int aheadTo: fillPastMark ? completeBlocks : markBlock
 
   implicitHeight: Math.max(Style.space(8), Math.round(Style.spacing.controlHeight * 0.3))
   clip: false
@@ -50,7 +55,7 @@ Item {
       width: root.blockWidth
       height: root.height
       radius: 0
-      color: index < root.completeBlocks ? (root.markAhead && index > root.markBlock ? root.aheadColor : root.fillColor) : root.trackColor
+      color: root.aheadActive && index >= root.aheadFrom && index < root.aheadTo ? root.aheadColor : (index < root.completeBlocks ? root.fillColor : root.trackColor)
     }
   }
 
@@ -60,7 +65,7 @@ Item {
     width: Math.round(root.blockWidth * root.boundaryFraction)
     height: root.height
     radius: 0
-    color: root.markAhead && root.completeBlocks > root.markBlock ? root.aheadColor : root.fillColor
+    color: root.aheadActive && root.fillPastMark ? root.aheadColor : root.fillColor
   }
 
   // Pace tick: a cut through filled blocks, with caps above and below so it reads on any fill.

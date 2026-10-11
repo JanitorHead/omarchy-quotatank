@@ -104,7 +104,7 @@ In local CLI mode, each provider has two controls: **Monitor** enables quota che
 
 In CLIProxyAPI mode, all discovered providers are monitored automatically; the provider list controls their menu-bar visibility. The Monitor column is hidden in this mode. Choosing **Widget icon** hides the menu-bar provider controls while preserving your selections.
 
-Quota source and menu-bar display use compact dropdowns. Configured connections, optional last-used account tracking, alerts (notifications and thresholds), refresh, and diagnostics sit in expandable sections; a collapsed **Alerts** or **Refresh** header shows its current values. Refresh intervals are entered in minutes (1–60). Saved credentials show a **Change** action; blank replacements retain the existing secret, which is never loaded into the form. Non-secret settings are also declared in `manifest.json` and can be changed using `omarchy bar set`.
+Quota source and menu-bar display use compact dropdowns. **Display** and **Providers** open by default. **Connection details** opens when a CLIProxyAPI key is missing. **Account activity**, **Menu bar limits per provider**, **Alerts**, **Refresh**, and **Diagnostics** start collapsed; a collapsed header shows its current values. Refresh intervals are entered in minutes (1–60). Saved credentials show a **Change** action; blank replacements retain the existing secret, which is never loaded into the form. Non-secret settings are also declared in `manifest.json` and can be changed using `omarchy bar set`.
 
 Costs settings keeps local history switches visible and collapses **Remote T3 servers**, **Custom prices**, and **Last scan**. Adding a server or price opens and focuses its editor; validation opens the relevant section and focuses the field needing attention.
 
@@ -122,16 +122,16 @@ In **Costs → gear → Custom prices**, add the exact model ID and its input/ou
 | `providerColors` | `false` | Color each provider's bar chip logo and limit meters with its brand colour instead of the Omarchy theme colour. A line that is warning or critical keeps its figure in the alert colour, so the brand colour does not hide the alert. The cost chart always uses provider colours |
 | `notifyLimitThresholds` | `true` | Send a desktop notification (`notify-send`) when a limit moves into the warning or critical threshold. Recovering re-arms the next notification |
 | `barDisplayMode` | `Percentages` | `Icon` or compact `Percentages` |
-| `quotaMode` | `Used` | `Used` or `Remaining`: which side of each allowance cards and chips report. Thresholds always gate on what is left |
-| `barWindow` | `auto` | Which reported limit supplies each chip's percentage: `auto` (lowest left), `session`/`5h`, `weekly`/`7d`, or `monthly`/`30d`. A provider that does not report the chosen window falls back to its most restrictive one |
+| `quotaMode` | `Used` | `Used` or `Remaining`: which side of each allowance cards and chips report. Alerts follow the same choice: under `Used` a notification reports high usage in % used; under `Remaining` it reports a limit running low in % left |
+| `barWindow` | `auto` | Which reported limit supplies each chip's percentage: `auto` (most constrained), `session`/`5h`, `weekly`/`7d`, or `monthly`/`30d`. A provider that does not report the chosen window falls back to its most restrictive one |
 | `barWindowSecondary` | `none` | Optional second limit stacked under the first in each chip: `session`/`5h`, `weekly`/`7d`, or `monthly`/`30d`. `none` keeps one line. The second line has no fallback: a provider that does not report that window shows `—`. When the longer of the two windows is exhausted (0% left), the chip shows only that window, with its reset when resets are shown. Warning colour considers both lines |
-| `barProviderLimits` | `"{}"` | JSON string managed by Per-provider bar limits in Display settings. Maps provider IDs to a `top` and/or `bottom` limit using the same values as `barWindow` and `barWindowSecondary`. A missing slot inherits the global value |
+| `barProviderLimits` | `"{}"` | JSON string managed by Menu bar limits per provider in settings. Maps provider IDs to a `top` and/or `bottom` limit using the same values as `barWindow` and `barWindowSecondary`. A missing slot inherits the global value |
 | `barShowResets` | `false` | Append each chip's limit reset. Windows of a day or less (5h) show a time; longer windows (weekly, monthly) show a date |
 | `barResetTimeFormat` | `24h` | Time format for limits that reset within a day: `24h` (14:30) or `12h` (2:30 PM) |
 | `barResetDateFormat` | `DD/MM` | Date format for weekly and monthly resets: `DD/MM` (22/04), `MM/DD` (04/22) or `D MMM` (22 Apr) |
 | `barProviders` | all three | Enabled providers allowed to show percentage chips; independent of popup visibility |
-| `warningThreshold` | `25` | Mark urgent at or below this percentage left |
-| `criticalThreshold` | `10` | Critical threshold in percentage left |
+| `warningThreshold` | `25` | Warn when a limit has this much or less left. Stored as % left; Settings show it as % used under `Used` (25 left is 75 used) |
+| `criticalThreshold` | `10` | Critical when this much or less is left. Stored as % left; must not be looser than `warningThreshold` |
 | `costPriceOverrides` | `"{}"` | JSON string managed by Custom model prices; exact IDs mapped to USD-per-million rates |
 | `costLocalProviders` | `["claude", "codex"]` | Local cost sources (`claude`, `codex`, `opencode`), independent of quota providers |
 | `costKeeperUrl` | empty | Optional Keeper URL for last-used quota account activity |
@@ -151,11 +151,11 @@ omarchy bar set janitorhead.quotatank warningThreshold 20 --json
 omarchy bar set janitorhead.quotatank criticalThreshold 5 --json
 ```
 
-New installations use `Percentages`: one compact provider-logo chip per provider with meaningful limits, followed by its binding window's percentage, shown as used or left per **Show limits as**. **Bar limit (top)** pins which reported limit every chip shows — lowest left (auto), 5-hour, 7-day, or monthly — and it drives the chip's warning colour and tooltip. A pinned limit tags each stacked line with its period (5h, 7d, 30d). A provider that does not report the chosen window falls back to its most restrictive one instead of losing its percentage. Clicking a chip opens that provider directly. Left and right bars automatically fall back to the icon presentation so the widget does not become excessively tall.
+New installations use `Percentages`: one compact provider-logo chip per provider with meaningful limits, followed by its binding window's percentage, shown as used or left per **Show limits as**. **Menu bar limit (top)** pins which reported limit every chip shows — most constrained (auto), 5-hour, 7-day, or monthly — and it drives the chip's warning colour and tooltip. A pinned limit tags each stacked line with its period (5h, 7d, 30d). A provider that does not report the chosen window falls back to its most restrictive one instead of losing its percentage. Clicking a chip opens that provider directly. Left and right bars automatically fall back to the icon presentation so the widget does not become excessively tall.
 
 A provider whose last refresh failed stays in the bar. Its chip shows a short reason in place of a figure: `rate limited`, `sign in`, `timeout`, `offline`, `bad data`, or `error`. Hover the chip for the full message and the next step. A sign-in failure names the command to run; other failures retry on the next automatic refresh.
 
-Per-provider bar limits override the global top and bottom limits for one provider only; providers without an override keep the global values. **Show reset day in bar** appends when each chip's limit resets, so a weekly limit can show its date instead of waiting for a monthly window to reset. It is off by default. The 5-hour limit shows a time and weekly/monthly limits show a date; **Reset time format** and **Reset date format** choose how each is written.
+Menu bar limits per provider override the global top and bottom limits for one provider only; providers without an override keep the global values. **Show reset day in menu bar** appends when each chip's limit resets, so a weekly limit can show its date instead of waiting for a monthly window to reset. It is off by default. The 5-hour limit shows a time and weekly/monthly limits show a date; **Reset time format** and **Reset date format** choose how each is written.
 
 The **Default** choice in each provider's bar-limit selectors names the global value it inherits, for example `Global: 5-hour (session)`. Any other choice overrides it for that provider only.
 

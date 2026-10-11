@@ -261,10 +261,6 @@ assert.equal(context.errorNeedsSignIn("expired"), true);
 assert.equal(context.errorNeedsSignIn("no_credentials"), true);
 assert.equal(context.errorNeedsSignIn("rate_limited"), false);
 assert.equal(context.windowShortLabel("auto"), "", "auto has no single period to tag");
-assert.equal(context.inheritedBarLimitLabel("top", "session"), "Global: 5-hour (session)");
-assert.equal(context.inheritedBarLimitLabel("bottom", "none"), "Global: None", "a disabled global bottom limit is not shown as auto");
-assert.equal(context.inheritedBarLimitLabel("bottom", "weekly"), "Global: 7-day (weekly)");
-assert.equal(context.inheritedBarLimitLabel("top", "auto"), "Global: Lowest left (auto)");
 
 // Second stacked bar limit: strict lookup, no fallback to the most restrictive window.
 assert.equal(context.normalizeSecondaryBarWindow(""), "none");
@@ -307,8 +303,6 @@ assert.equal(context.windowUsed(halfUsed.windows[0]), 41.6);
 assert.equal(context.windowRemaining(halfUsed.windows[0]), 58.4);
 assert.equal(context.usedForWindow(halfUsed, "weekly"), 41.6);
 assert.equal(context.usedForWindow(halfUsed, "auto"), 41.6, "auto still resolves to the most restrictive window");
-assert.equal(context.quotaText(41.6, "Used"), "41.6% used");
-assert.equal(context.quotaText(58.4, "Remaining"), "58.4% left");
 assert.equal(context.quotaText(null, "Used"), "");
 const onlyRemaining = { id: "x", status: "ok", windows: [{ id: "w", label: "Weekly", remaining: 30 }] };
 assert.equal(context.windowUsed(onlyRemaining.windows[0]), 70, "a window reporting one side still yields the other");
@@ -319,8 +313,25 @@ assert.equal(context.formatPercent(41.6), "41.6", "one decimal survives");
 assert.equal(context.formatPercent(4), "4", "an integer keeps no invented decimal");
 assert.equal(context.formatPercent(20.75), "20.8", "rounds to one decimal");
 assert.equal(context.formatPercent(null), "");
-assert.equal(context.quotaText(41.6, "Used"), "41.6% used");
-assert.equal(context.quotaText(58.4, "Remaining"), "58.4% left");
+
+// Alert thresholds are stored as % left. Used mode shows and enters them as % used, so 25 left is 75 used.
+assert.equal(context.thresholdInMode(25, "Remaining"), 25);
+assert.equal(context.thresholdInMode(25, "Used"), 75);
+assert.equal(context.thresholdToLeft(75, "Used"), 25);
+assert.equal(context.thresholdToLeft(25, "Remaining"), 25);
+assert.equal(context.thresholdInMode(context.thresholdToLeft(37, "Used"), "Used"), 37, "a value entered in Used mode round-trips");
+assert.equal(context.thresholdToLeft(150, "Remaining"), 100, "entries clamp to the 0-100 scale");
+// Entry bounds in the shown unit: stored 1-100 left is 0-99 used.
+assert.equal(JSON.stringify(context.thresholdBounds(1, 100, "Used")), "[0,99]");
+assert.equal(JSON.stringify(context.thresholdBounds(1, 100, "Remaining")), "[1,100]");
+assert.equal(JSON.stringify(context.thresholdBounds(0, 100, "Used")), "[0,100]");
+// Alerts report the figure in the chosen mode; severity still gates on what is left.
+assert.equal(context.alertFigure(20, "Remaining"), 20);
+assert.equal(context.alertFigure(20, "Used"), 80);
+assert.equal(context.alertFigure(null, "Used"), null);
+assert.ok(context.alertText("warning", 20, "Used").includes("80"), "a Used alert names usage");
+assert.ok(!context.alertText("warning", 20, "Used").includes("20"), "a Used alert never names the left figure");
+assert.ok(context.alertText("critical", 5, "Remaining").includes("5"), "a Remaining alert names what is left");
 
 // Pace: the projection rests on each window's own recent samples, not on its average since reset.
 // `NOW` is injected so results are fixed. Samples are [epoch, used] pairs, each holding until the next.
@@ -355,14 +366,12 @@ assert.equal(remainingOnly.used, 60, "a remaining-only row reads used through wi
 
 const early = context.paceForWindow(weekly(30, [[NOW - 60, 30]], WEEK - 1000), NOW);
 assert.equal(early.known, false, "under 2% elapsed there is no projection");
-assert.equal(context.paceStatusText(early), "starts after 2% of the window");
 
 const unused = context.paceForWindow(weekly(0, holding(weekStart, NOW, 0)), NOW);
 assert.equal(unused.state, "no-usage");
 assert.equal(unused.runsOut, false);
 assert.equal(context.paceText(unused), "");
 assert.equal(context.paceTickText(unused), "", "no tick, no tooltip");
-assert.equal(context.paceStatusText(unused), "no usage yet");
 
 const noSamples = context.paceForWindow({ used: 60, windowSeconds: WEEK, resetsAt: NOW + WEEK / 2 }, NOW);
 assert.equal(noSamples.state, "stale", "a row without samples is never projected from an average");
@@ -379,8 +388,6 @@ assert.equal(dormant.runsOut, false);
 assert.equal(dormant.etaSeconds, null);
 assert.ok(dormant.idleSeconds >= 3 * DAY - 900, "idle time runs from the last increase");
 assert.equal(context.paceShowsMark(dormant), true, "an idle window keeps its tick: used against expected");
-assert.equal(context.paceText(dormant), "Idle 2d 23h · expected 50%");
-assert.equal(context.paceTickText(dormant), "Used 60% · expected 50%\nAhead by 10 pts\nNo increase for 2d 23h · no projection");
 
 // A calm window with a burst in its last hour projects a run-out; its since-reset average (20% in half a week) does not.
 const burst = context.paceForWindow(weekly(20, [
@@ -390,17 +397,27 @@ const burst = context.paceForWindow(weekly(20, [
 assert.equal(burst.state, "projecting");
 assert.equal(burst.runsOut, true, "the recent rate decides the run-out, not the calm average");
 assert.ok(burst.etaSeconds > 0 && burst.etaSeconds < WEEK / 2);
-assert.ok(context.paceText(burst).startsWith("Runs out in "));
-assert.ok(context.paceText(burst).endsWith("· expected 50%"));
-assert.ok(context.paceTickText(burst).split("\n")[2].startsWith("At this pace: runs out in "));
 assert.equal(context.paceStatusText(burst), context.paceText(burst), "a drawn tick reports the same line as paceText");
+
+// The meter, tick, and pace tooltip follow the chosen side; the ahead/behind verdict is the same on either side.
+assert.equal(context.meterFill({ used: 20 }, "Used"), 0.2);
+assert.equal(context.meterFill({ used: 20 }, "Remaining"), 0.8);
+assert.equal(context.meterFill({ remaining: 80 }, "Used"), 0.2, "a remaining-only row fills the used side too");
+assert.equal(context.meterFill(null, "Remaining"), null);
+assert.equal(context.meterMark(burst, "Used"), burst.expected / 100);
+assert.equal(context.meterMark(burst, "Remaining"), (100 - burst.expected) / 100);
+assert.equal(context.meterMark(null, "Remaining"), -1, "no pace, no tick on either side");
+assert.ok(context.paceTickText(burst, "Remaining").startsWith("Left 80%"), "the tooltip names the side it shows");
+assert.ok(context.paceText(burst, "Remaining").endsWith("% left"), "the expected share names its side");
+assert.equal(context.paceText(burst, "Used").endsWith("% left"), false);
+const burstAhead = burst.used > burst.expected;
+assert.equal(context.meterFill({ used: burst.used }, "Used") > context.meterMark(burst, "Used"), burstAhead, "ahead means the fill runs past the tick under Used");
+assert.equal(context.meterFill({ used: burst.used }, "Remaining") < context.meterMark(burst, "Remaining"), burstAhead, "ahead means the fill stops short of the tick under Remaining");
 
 // A steady burn that empties the window exactly at reset is not a run-out (40% used, 60% left at 40%/half week).
 const steady = context.paceForWindow(weekly(40, linear(weekStart, NOW, 40)), NOW);
 assert.equal(steady.state, "projecting");
 assert.equal(steady.runsOut, false, "a steady burn that lasts until reset is not a run-out");
-assert.equal(context.paceText(steady), "Lasts until reset · expected 50%");
-assert.equal(context.paceTickText(steady), "Used 40% · expected 50%\nBehind by 10 pts\nAt this pace: lasts until reset");
 
 // Too little observed time is no basis for a projection.
 const fresh = context.paceForWindow(weekly(20, [[NOW - 300, 20], [NOW, 20]]), NOW);

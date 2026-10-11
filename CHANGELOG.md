@@ -8,8 +8,8 @@ All notable changes to this project will be documented here. The format follows
 
 ### Added
 
-- **Per-provider bar limits** (`barProviderLimits`, Display section): each provider can pin its own top and bottom bar limit. A provider without an override keeps the global **Bar limit (top)** and **Bar limit (bottom)**.
-- **Show reset day in bar** (`barShowResets`, off by default): appends when each chip's limit resets. Windows of a day or less (5h) show a time; weekly and monthly limits show a date.
+- **Menu bar limits per provider** (`barProviderLimits`, settings): each provider can pin its own top and bottom menu bar limit. A provider without an override keeps the global **Menu bar limit (top)** and **Menu bar limit (bottom)**.
+- **Show reset day in menu bar** (`barShowResets`, off by default): appends when each chip's limit resets. Windows of a day or less (5h) show a time; weekly and monthly limits show a date.
 - **Pacing row under the limits**: one **Pacing** row below all limit cards explains the tick and projection; its ⓘ badge shows the explanation on hover or click. Each card's status line gives the projection or the reason there is no tick yet (`not reported`, `starts after 2% of the window`, `no usage yet`).
 - **Pace tick stands out**: the tick is drawn in full foreground colour, extending above and below the meter, and cuts through filled blocks so it stays visible. Usage past the tick is shaded. Hovering the tick shows used against expected, whether the window is ahead or behind by how many points, and the projection.
 - **Failed providers stay in the bar**: a provider whose refresh failed shows a short reason (`rate limited`, `sign in`, `timeout`, `offline`, `bad data`, `error`) in its chip, with the full message and next step on hover, instead of disappearing.
@@ -19,11 +19,14 @@ All notable changes to this project will be documented here. The format follows
 
 ### Changed
 
-- **Settings regrouped on one vocabulary.** "Show limits as", "Bar limit (top)", "Bar limit (bottom)", "Menu bar shows", "Lowest left (auto)", and "Monthly" replace the older labels. The notification toggle and thresholds move into an **Alerts** section, and **Refresh** is its own section. Labels only: no config keys changed, so no migration.
+- Limits lists every provider as a visible tab row under the Limits/Costs tabs. This replaces the provider dropdown and the page dots. `p` now selects the next provider instead of opening a menu.
+- Limit alerts follow **Show limits as**. Under `Used`, a notification reads "High usage" or "Near the limit" with the figure in % used. Under `Remaining`, it reads "Running low" or "Almost out" with the figure in % left. Alert boundaries are unchanged, and warning and critical thresholds stay stored as % left, so existing settings keep their meaning.
+- The Alerts settings show thresholds in the chosen unit. Under `Used`, 25% left appears as 75% used, and entries are converted back to % left on save.
+- **Settings regrouped on one vocabulary.** "Show limits as", "Menu bar limit (top)", "Menu bar limit (bottom)", "Menu bar shows", "Most constrained (auto)", and "Monthly" replace the older labels. Display, Providers, and Alerts are collapsible sections; Display and Providers open by default, and **Account activity** sits under **Connection details**. The notification toggle and thresholds sit in **Alerts**, and **Refresh** is its own section. Labels only: no config keys changed, so no migration.
 - Stacked chips tag each line with its period (`5h`, `7d`, `30d`) when the limit is pinned; `auto` shows no tag. Tooltips say "% used" or "% left" to match the chip.
 - A chip whose longer window is exhausted (0% left) shows only that window, for example `30d 100%`, instead of stacking the shorter window beneath it. The shorter window's remaining allowance cannot be used until the longer one resets.
 - The provider selector in the Limits view always shows the full provider name.
-- The **Default** choice in per-provider bar limits names the global value it inherits (`Global: 5-hour (session)`).
+- The **Default** choice in per-provider menu bar limits names the global value it inherits (`Global: 5-hour (session)`, or `Global: None (single limit)` for the bottom line).
 - **Pacing follows recent use, not the average since the window began.** The projection uses an exponentially weighted rate of the window's own samples (two-hour half-life), so a limit that has been idle for days no longer reports "Runs out". The status line reads `Idle <time>` once nothing has risen for an hour, `No recent data` when the newest sample is over an hour old, and `Collecting data` for the first ten minutes. Idle and stale windows show no projection.
 - **Per-window history** (`history.json` schema 2): each limit window keeps its own samples for seven days, so weekly and monthly series never mix. A flat window is re-recorded every 30 minutes. The schema 1 file is discarded on first run, so pacing starts with empty history. Refresh intervals above one hour mark windows as `No recent data`.
 - Pace: the tick appears only once the window has usage and its rate is trusted. Stale and collecting windows draw no tick and no Ahead/Behind tooltip; their status line gives the reason. The tick's "expected N%" legend travels with the status line. Exhausted windows show "Limit reached" with no tick.

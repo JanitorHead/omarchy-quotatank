@@ -106,13 +106,17 @@ ShellRoot {
     assertTrue(!form.submit(), "empty numeric input cannot be saved")
     assertTrue(form.refreshExpanded, "invalid interval reveals the collapsed refresh settings")
     form.setValue("refreshIntervalSec", "900")
-    form.setValue("criticalThreshold", "80")
+    form.setValue("criticalThreshold", "50")
     assertTrue(!form.submit(), "inverted thresholds cannot be saved")
     assertEqual(mockShell.saveCount, 0, "invalid and cancelled edits never reach persistence")
     form.cancelRequested()
     assertEqual(form.managementKey, "", "Cancel clears the entered key")
 
     widget.showSettings()
+    form.setValue("criticalThreshold", "90")
+    assertTrue(form.submit(), "a valid Used-mode threshold pair saves")
+    assertEqual(mockShell.savedSettings.criticalThreshold, 10, "Used entries save as % left: 90 used is 10 left")
+    assertEqual(mockShell.savedSettings.warningThreshold, 25, "the 75 used warning saves as 25 left")
     form.toggleProvider("barProviders", "codex")
     mockShell.rejectSave = true
     form.setValue("hideAccountEmails", true)

@@ -111,7 +111,7 @@ Item {
       Text {
         id: axisStart
         anchors.left: parent.left
-        text: root.mode === "h24" ? "−24h" : "−7d"
+        text: root.mode === "h24" ? "−24H" : "−7D"
         color: Qt.darker(root.foreground, 1.55)
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -120,7 +120,7 @@ Item {
       Text {
         id: axisMiddle
         anchors.horizontalCenter: parent.horizontalCenter
-        text: root.mode === "h24" ? "−12h" : "−3d"
+        text: root.mode === "h24" ? "−12H" : "−3D"
         color: Qt.darker(root.foreground, 1.55)
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption

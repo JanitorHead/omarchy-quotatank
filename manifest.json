@@ -35,6 +35,7 @@
       "providerColors": false,
       "notifyLimitThresholds": true,
       "barDisplayMode": "Percentages",
+      "quotaMode": "Used",
       "barProviders": [
         "claude",
         "codex",
@@ -180,7 +181,7 @@
       {
         "key": "barWindow",
         "type": "enum",
-        "label": "Bar limit (top)",
+        "label": "Menu bar limit (top)",
         "options": [
           "auto",
           "session",
@@ -188,12 +189,12 @@
           "monthly"
         ],
         "defaultValue": "auto",
-        "description": "Which reported limit supplies the menu bar percentage. Most restrictive uses the window with the least remaining quota; a provider that does not report the chosen window falls back to that."
+        "description": "Which reported limit supplies the menu bar percentage. Most constrained uses the window with the least remaining quota; a provider that does not report the chosen window falls back to that."
       },
       {
         "key": "barWindowSecondary",
         "type": "enum",
-        "label": "Bar limit (bottom)",
+        "label": "Menu bar limit (bottom)",
         "options": [
           "none",
           "session",
@@ -206,7 +207,7 @@
       {
         "key": "barShowResets",
         "type": "boolean",
-        "label": "Show reset day in bar",
+        "label": "Show reset day in menu bar",
         "description": "Adds when each bar limit resets to its chip. Limits that reset within a day show a time; weekly and monthly limits show a date.",
         "defaultValue": false
       },
@@ -219,7 +220,7 @@
           "12h"
         ],
         "defaultValue": "24h",
-        "description": "Time format for limits that reset within a day, such as the 5-hour session limit: 24h (14:30) or 12h (2:30 PM)."
+        "description": "Time format for limits that reset within a day, such as the 5-hour session limit: 24-hour (14:30) or 12-hour (2:30 PM)."
       },
       {
         "key": "barResetDateFormat",
@@ -236,8 +237,8 @@
       {
         "key": "barProviderLimits",
         "type": "string",
-        "label": "Per-provider bar limits",
-        "description": "Managed by Per-provider bar limits in Display settings. JSON object mapping provider IDs to top and bottom bar limits; missing slots use the global bar limits.",
+        "label": "Menu bar limits per provider",
+        "description": "Managed by Menu bar limits per provider in settings. JSON object mapping provider IDs to top and bottom bar limits; missing slots use the global bar limits.",
         "defaultValue": "{}"
       },
       {
@@ -248,7 +249,8 @@
         "defaultValue": [
           "claude",
           "codex",
-          "kimi"
+          "kimi",
+          "opencode"
         ],
         "options": [
           {

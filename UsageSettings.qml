@@ -21,6 +21,7 @@ Column {
   property alias alertsExpanded: alertsSection.expanded
   property alias refreshExpanded: refreshSection.expanded
   readonly property bool percentageDisplay: draft.barDisplayMode === "Percentages"
+  readonly property string thresholdUnit: draft.quotaMode === "Remaining" ? "% left" : "% used"
   onProxyModeChanged: if (proxyMode && !draft.cliproxyKeyFile) connectionSection.expanded = true
   property var draft: ({})
   property alias managementKey: managementCredential.text
@@ -77,6 +78,7 @@ Column {
     function value(key, fallback) {
       return settings[key] === undefined || settings[key] === null ? fallback : settings[key]
     }
+    var mode = String(value("quotaMode", "Used")) === "Remaining" ? "Remaining" : "Used"
     draft = {
       usageSource: value("usageSource", "direct") === "cliproxy" ? "cliproxy" : "direct",
       cliproxyUrl: String(value("cliproxyUrl", "http://127.0.0.1:8317")),
@@ -92,15 +94,15 @@ Column {
       barShowResets: value("barShowResets", false) === true,
       barResetTimeFormat: UsageLogic.normalizeBarResetChoice("time", value("barResetTimeFormat", "24h")),
       barResetDateFormat: UsageLogic.normalizeBarResetChoice("date", value("barResetDateFormat", "DD/MM")),
-      quotaMode: String(value("quotaMode", "Used")) === "Remaining" ? "Remaining" : "Used",
+      quotaMode: mode,
       hideAccountEmails: value("hideAccountEmails", true) !== false,
       squareUsageCards: value("squareUsageCards", true) === true,
       providerColors: value("providerColors", false) === true,
       notifyLimitThresholds: value("notifyLimitThresholds", true) !== false,
       barDisplayMode: value("barDisplayMode", "Percentages"),
       refreshIntervalSec: String(value("refreshIntervalSec", 900)),
-      warningThreshold: String(value("warningThreshold", 25)),
-      criticalThreshold: String(value("criticalThreshold", 10))
+      warningThreshold: String(UsageLogic.thresholdInMode(value("warningThreshold", 25), mode)),
+      criticalThreshold: String(UsageLogic.thresholdInMode(value("criticalThreshold", 10), mode))
     }
     refreshMinutes = String(Number(draft.refreshIntervalSec) / 60)
     connectionSection.expanded = proxyMode && !draft.cliproxyKeyFile
@@ -117,6 +119,22 @@ Column {
     draft = next
     if (key === "refreshIntervalSec") refreshMinutes = String(value).trim() === "" ? "" : String(Number(value) / 60)
     errorText = ""
+  }
+
+  // Stored thresholds are % left. Switching the unit re-expresses the drafts as 100 minus the value.
+  function setQuotaMode(mode) {
+    if (mode === draft.quotaMode) return
+    var next = Object.assign({}, draft)
+    next.quotaMode = mode
+    next.warningThreshold = flipThreshold(next.warningThreshold)
+    next.criticalThreshold = flipThreshold(next.criticalThreshold)
+    draft = next
+    errorText = ""
+  }
+
+  function flipThreshold(text) {
+    var value = Number(text)
+    return String(text).trim() === "" || !isFinite(value) ? text : String(100 - value)
   }
 
   function barLimitValue(providerId, slot) {
@@ -158,10 +176,12 @@ Column {
     if (refreshMinutes.trim() === "" || !isFinite(minutes) || minutes < 1 || minutes > 60)
       return fail("Enter a refresh interval from 1 to 60 minutes.", refreshSection, refreshField)
     next.refreshIntervalSec = Math.round(minutes * 60)
+    var warningBounds = UsageLogic.thresholdBounds(1, 100, next.quotaMode)
+    var criticalBounds = UsageLogic.thresholdBounds(0, 100, next.quotaMode)
     var ranges = [
       ["refreshIntervalSec", "Refresh interval", 60, 3600],
-      ["warningThreshold", "Warning threshold", 1, 100],
-      ["criticalThreshold", "Critical threshold", 0, 100]
+      ["warningThreshold", "Warning threshold", warningBounds[0], warningBounds[1]],
+      ["criticalThreshold", "Critical threshold", criticalBounds[0], criticalBounds[1]]
     ]
     for (var i = 0; i < ranges.length; i++) {
       var range = ranges[i]
@@ -174,9 +194,15 @@ Column {
       }
       next[range[0]] = value
     }
-    if (next.criticalThreshold > next.warningThreshold) {
-      return fail("Critical threshold must be at or below the warning threshold.", alertsSection, criticalField)
+    var warningLeft = UsageLogic.thresholdToLeft(next.warningThreshold, next.quotaMode)
+    var criticalLeft = UsageLogic.thresholdToLeft(next.criticalThreshold, next.quotaMode)
+    if (criticalLeft > warningLeft) {
+      return fail(next.quotaMode === "Remaining"
+        ? "Critical threshold must be at or below the warning threshold."
+        : "Critical threshold must be at or above the warning threshold.", alertsSection, criticalField)
     }
+    next.warningThreshold = warningLeft
+    next.criticalThreshold = criticalLeft
     next.cliproxyUrl = String(next.cliproxyUrl).trim()
     next.cliproxyKeyFile = String(next.cliproxyKeyFile).trim()
     if (proxyMode && !/^https?:\/\/[^\s/?#@]+(?::[0-9]+)?(?:\/[^\s?#]*)?$/.test(next.cliproxyUrl)) {
@@ -324,11 +350,79 @@ Column {
       Hint { text: "Use the management key for Fusebox or CLIProxyAPI. The implementation is detected automatically. The key is saved privately on this device. Quota limits and estimated costs use separate data sources." }
     }
   }
+  Section {
+    id: activitySection
+    objectName: "accountActivitySection"
+    visible: root.proxyMode
+    title: "Account activity"
+    summary: root.draft.liveAccountActivity !== false ? "Live on Fusebox" : "Last used"
+    Row {
+      width: parent.width
+      Label { width: parent.width - liveAccountActivitySwitch.width; text: "Live account activity"; anchors.verticalCenter: parent.verticalCenter }
+      ProviderToggle {
+        id: liveAccountActivitySwitch
+        objectName: "liveAccountActivityToggle"
+        width: Style.space(82)
+        checked: root.draft.liveAccountActivity !== false
+        Accessible.name: "Live account activity"
+        onToggled: root.setValue("liveAccountActivity", !checked)
+      }
+    }
+    Hint { text: "Fusebox session counts appear beside the subscription title. Sessions may remain assigned after requests finish." }
+    Label { text: "CPA Usage Keeper URL" }
+    Field {
+      id: keeperUrlField
+      objectName: "costKeeperUrlField"
+      settingKey: "costKeeperUrl"
+      placeholderText: "https://proxy.example.com/keeper"
+      Accessible.name: "CPA Usage Keeper URL"
+    }
+    SettingsCredential {
+      id: keeperCredential
+      width: parent.width
+      label: "Keeper login password"
+      editorObjectName: "keeperPasswordField"
+      saved: !!root.draft.costKeeperPasswordFile
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onEdited: root.errorText = ""
+      onRevealRequested: function(item) { root.revealRequested(item) }
+    }
+    Hint { text: "Show the last-used account in the percentage menu bar." }
+    Section {
+      title: "Learn more"
+      Hint { text: "CLIProxyAPI uses Keeper for account activity. Fusebox streams live activity without Keeper. One connection is shared by all panels. With live activity off, last-used accounts update independently of Costs." }
+    }
+  }
 
-  Column {
-    width: parent.width
-    spacing: Style.spacing.md
-    Label { text: "Display"; font.bold: true }
+  Section {
+    id: displaySection
+    objectName: "displaySection"
+    title: "Display"
+    expanded: true
+    summary: (root.draft.quotaMode === "Remaining" ? "Left" : "Used") + " · " + (root.percentageDisplay ? "Percentages" : "Icon")
+    Row {
+      width: parent.width
+      Label { width: parent.width - quotaModeSelect.width; text: "Show limits as"; anchors.verticalCenter: parent.verticalCenter }
+      UsageSelect {
+        id: quotaModeSelect
+        objectName: "quotaModeControl"
+        width: Math.min(implicitWidth, parent.width * 0.7)
+        label: "Show limits as"
+        options: [
+          { value: "Used", label: "Used (%)" },
+          { value: "Remaining", label: "Left (%)" }
+        ]
+        value: String(root.draft.quotaMode || "Used") === "Remaining" ? "Remaining" : "Used"
+        foreground: root.foreground
+        surface: root.surface
+        fontFamily: root.fontFamily
+        alignPopupRight: true
+        onChanged: function(value) { root.setQuotaMode(value) }
+        onMenuClosed: if (root.visible) quotaModeSelect.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
     Row {
       width: parent.width
       Label { width: parent.width - barDisplay.width; text: "Menu bar shows"; anchors.verticalCenter: parent.verticalCenter }
@@ -348,40 +442,19 @@ Column {
         onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
       }
     }
-    Row {
-      width: parent.width
-      Label { width: parent.width - quotaModeSelect.width; text: "Show limits as"; anchors.verticalCenter: parent.verticalCenter }
-      UsageSelect {
-        id: quotaModeSelect
-        objectName: "quotaModeControl"
-        width: Math.min(implicitWidth, parent.width * 0.7)
-        label: "Show limits as"
-        options: [
-          { value: "Used", label: "Used (%)" },
-          { value: "Remaining", label: "Left (%)" }
-        ]
-        value: String(root.draft.quotaMode || "Used") === "Remaining" ? "Remaining" : "Used"
-        foreground: root.foreground
-        surface: root.surface
-        fontFamily: root.fontFamily
-        alignPopupRight: true
-        onChanged: function(value) { root.setValue("quotaMode", value) }
-        onMenuClosed: if (root.visible) quotaModeSelect.forceActiveFocus()
-        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-      }
-    }
+    Hint { text: "The widget uses an icon on vertical bars or when selected providers have no quota data." }
     Row {
       width: parent.width
       visible: root.percentageDisplay
       height: visible ? implicitHeight : 0
-      Label { width: parent.width - barWindowSelect.width; text: "Bar limit (top)"; anchors.verticalCenter: parent.verticalCenter }
+      Label { width: parent.width - barWindowSelect.width; text: "Menu bar limit (top)"; anchors.verticalCenter: parent.verticalCenter }
       UsageSelect {
         id: barWindowSelect
         objectName: "barWindowControl"
         width: Math.min(implicitWidth, parent.width * 0.7)
-        label: "Bar limit (top)"
+        label: "Menu bar limit (top)"
         options: [
-          { value: "auto", label: "Lowest left (auto)" },
+          { value: "auto", label: "Most constrained (auto)" },
           { value: "session", label: "5-hour (session)" },
           { value: "weekly", label: "7-day (weekly)" },
           { value: "monthly", label: "Monthly" }
@@ -400,12 +473,12 @@ Column {
       width: parent.width
       visible: root.percentageDisplay
       height: visible ? implicitHeight : 0
-      Label { width: parent.width - barWindowSecondarySelect.width; text: "Bar limit (bottom)"; anchors.verticalCenter: parent.verticalCenter }
+      Label { width: parent.width - barWindowSecondarySelect.width; text: "Menu bar limit (bottom)"; anchors.verticalCenter: parent.verticalCenter }
       UsageSelect {
         id: barWindowSecondarySelect
         objectName: "barWindowSecondaryControl"
         width: Math.min(implicitWidth, parent.width * 0.7)
-        label: "Bar limit (bottom)"
+        label: "Menu bar limit (bottom)"
         options: [
           { value: "none", label: "None (single limit)" },
           { value: "session", label: "5-hour (session)" },
@@ -426,13 +499,13 @@ Column {
       width: parent.width
       visible: root.percentageDisplay
       height: visible ? implicitHeight : 0
-      Label { width: parent.width - barResetsSwitch.width; text: "Show reset day in bar"; anchors.verticalCenter: parent.verticalCenter }
+      Label { width: parent.width - barResetsSwitch.width; text: "Show reset day in menu bar"; anchors.verticalCenter: parent.verticalCenter }
       ProviderToggle {
         id: barResetsSwitch
         objectName: "barShowResetsToggle"
         width: Style.space(82)
         checked: root.draft.barShowResets === true
-        Accessible.name: "Show reset day in bar"
+        Accessible.name: "Show reset day in menu bar"
         onToggled: root.setValue("barShowResets", !checked)
       }
     }
@@ -526,14 +599,15 @@ Column {
     Hint { text: "Color each provider's bar chip and limit meters with its brand color. Off uses the Omarchy theme colors. The cost chart always uses provider colors." }
   }
 
-  Column {
+  Section {
     id: providerSection
+    objectName: "providerSection"
     visible: !root.proxyMode || root.percentageDisplay
-    width: parent.width
-    spacing: Style.spacing.sm
+    title: "Providers"
+    expanded: true
     Row {
       width: parent.width
-      Label { width: parent.width - monitorHeading.width - barHeading.width; text: root.proxyMode ? "Show in menu bar" : "Providers"; font.bold: true }
+      Label { width: parent.width - monitorHeading.width - barHeading.width; text: "Provider"; font.bold: true }
       Label { id: monitorHeading; visible: !root.proxyMode; width: visible ? Style.space(82) : 0; text: "Monitor"; horizontalAlignment: Text.AlignHCenter }
       Label { id: barHeading; visible: !root.proxyMode && root.percentageDisplay; width: visible ? Style.space(100) : 0; text: "Menu bar"; horizontalAlignment: Text.AlignHCenter }
     }
@@ -577,7 +651,7 @@ Column {
   Section {
     id: barLimitsSection
     objectName: "barLimitsSection"
-    title: "Per-provider bar limits"
+    title: "Menu bar limits per provider"
     visible: root.percentageDisplay
     summary: root.barLimitOverrideCount() === 0 ? "Global limits" : root.barLimitOverrideCount() + " overridden"
     Hint { text: "Default inherits the global bar limit named in its selector. Any other choice overrides it for this provider only." }
@@ -599,10 +673,10 @@ Column {
             UsageSelect {
               objectName: "barLimitTop-" + limitRow.modelData.id
               width: parent.width
-              label: limitRow.modelData.name + " bar limit (top)"
+              label: limitRow.modelData.name + " menu bar limit (top)"
               options: [
                 { value: "default", label: UsageLogic.inheritedBarLimitLabel("top", root.draft.barWindow) },
-                { value: "auto", label: "Lowest left (auto)" },
+                { value: "auto", label: "Most constrained (auto)" },
                 { value: "session", label: "5-hour (session)" },
                 { value: "weekly", label: "7-day (weekly)" },
                 { value: "monthly", label: "Monthly" }
@@ -622,10 +696,10 @@ Column {
             UsageSelect {
               objectName: "barLimitBottom-" + limitRow.modelData.id
               width: parent.width
-              label: limitRow.modelData.name + " bar limit (bottom)"
+              label: limitRow.modelData.name + " menu bar limit (bottom)"
               options: [
                 { value: "default", label: UsageLogic.inheritedBarLimitLabel("bottom", root.draft.barWindowSecondary) },
-                { value: "none", label: "None" },
+                { value: "none", label: "None (single limit)" },
                 { value: "session", label: "5-hour (session)" },
                 { value: "weekly", label: "7-day (weekly)" },
                 { value: "monthly", label: "Monthly" }
@@ -644,55 +718,10 @@ Column {
   }
 
   Section {
-    id: activitySection
-    objectName: "accountActivitySection"
-    visible: root.proxyMode
-    title: "Account activity"
-    summary: root.draft.liveAccountActivity !== false ? "Live on Fusebox" : "Last used"
-    Row {
-      width: parent.width
-      Label { width: parent.width - liveAccountActivitySwitch.width; text: "Live account activity"; anchors.verticalCenter: parent.verticalCenter }
-      ProviderToggle {
-        id: liveAccountActivitySwitch
-        objectName: "liveAccountActivityToggle"
-        width: Style.space(82)
-        checked: root.draft.liveAccountActivity !== false
-        Accessible.name: "Live account activity"
-        onToggled: root.setValue("liveAccountActivity", !checked)
-      }
-    }
-    Hint { text: "Fusebox session counts appear beside the subscription title. Sessions may remain assigned after requests finish." }
-    Label { text: "CPA Usage Keeper URL" }
-    Field {
-      id: keeperUrlField
-      objectName: "costKeeperUrlField"
-      settingKey: "costKeeperUrl"
-      placeholderText: "https://proxy.example.com/keeper"
-      Accessible.name: "CPA Usage Keeper URL"
-    }
-    SettingsCredential {
-      id: keeperCredential
-      width: parent.width
-      label: "Keeper login password"
-      editorObjectName: "keeperPasswordField"
-      saved: !!root.draft.costKeeperPasswordFile
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      onEdited: root.errorText = ""
-      onRevealRequested: function(item) { root.revealRequested(item) }
-    }
-    Hint { text: "Show the last-used account in the percentage menu bar." }
-    Section {
-      title: "Learn more"
-      Hint { text: "CLIProxyAPI uses Keeper for account activity. Fusebox streams live activity without Keeper. One connection is shared by all panels. With live activity off, last-used accounts update every 15 seconds, independently of Costs." }
-    }
-  }
-
-  Section {
     id: alertsSection
     objectName: "alertsSection"
     title: "Alerts"
-    summary: root.draft.notifyLimitThresholds === false ? "Off" : "Warn at " + root.draft.warningThreshold + "% · critical at " + root.draft.criticalThreshold + "% left"
+    summary: root.draft.notifyLimitThresholds === false ? "Off" : "Warning at " + root.draft.warningThreshold + root.thresholdUnit + " · Critical at " + root.draft.criticalThreshold + root.thresholdUnit
     Row {
       width: parent.width
       Label { width: parent.width - notifySwitch.width; text: "Notify when limits run low"; anchors.verticalCenter: parent.verticalCenter }
@@ -712,14 +741,14 @@ Column {
       Column {
         width: (parent.width - parent.spacing) / 2
         spacing: Style.spacing.sm
-        Label { text: "Warn at or below (% left)" }
-        Field { id: warningField; objectName: "warningThresholdField"; settingKey: "warningThreshold"; Accessible.name: "Warning percentage left"; inputMethodHints: Qt.ImhDigitsOnly }
+        Label { text: root.draft.quotaMode === "Remaining" ? "Warn at or below (% left)" : "Warn at or above (% used)" }
+        Field { id: warningField; objectName: "warningThresholdField"; settingKey: "warningThreshold"; Accessible.name: "Warning threshold " + root.thresholdUnit; inputMethodHints: Qt.ImhDigitsOnly }
       }
       Column {
         width: (parent.width - parent.spacing) / 2
         spacing: Style.spacing.sm
-        Label { text: "Critical at or below (% left)" }
-        Field { id: criticalField; objectName: "criticalThresholdField"; settingKey: "criticalThreshold"; Accessible.name: "Critical percentage left"; inputMethodHints: Qt.ImhDigitsOnly }
+        Label { text: root.draft.quotaMode === "Remaining" ? "Critical at or below (% left)" : "Critical at or above (% used)" }
+        Field { id: criticalField; objectName: "criticalThresholdField"; settingKey: "criticalThreshold"; Accessible.name: "Critical threshold " + root.thresholdUnit; inputMethodHints: Qt.ImhDigitsOnly }
       }
     }
   }
@@ -749,7 +778,6 @@ Column {
     id: diagnosticsSection
     title: "Diagnostics"
     Hint { text: root.draft.hideAccountEmails !== false ? root.accountDetails.replace(/^Account:.*(?:\n|$)/m, "") : root.accountDetails }
-    Hint { text: "The widget uses an icon on vertical bars or when selected providers have no quota data." }
   }
 
   component Section: SettingsSection {

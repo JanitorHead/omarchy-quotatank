@@ -93,7 +93,7 @@ Column {
     Label {
       text: "Copy the exact model ID from Costs, including its provider and any [variant]. Overrides apply across all sources. Remove a row to restore automatic pricing. Blank cache prices use the input price; enter 0 for free tokens."
       font.pixelSize: Style.font.caption
-      opacity: 0.7
+      color: Qt.darker(root.foreground, 1.5)
     }
   }
   Label { visible: root.loadError !== ""; text: root.loadError; color: root.urgent }

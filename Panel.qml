@@ -266,7 +266,7 @@ Ui.Panel {
       var crossing = result.crossings[k]
       var critical = crossing.severity === "critical"
       Util.execArgv(["notify-send", "--app-name=Quotatank", "--urgency=" + (critical ? "critical" : "normal"),
-        crossing.title, (critical ? "Critical" : "Warning") + ": " + UsageLogic.quotaText(crossing.remaining, "Remaining")])
+        crossing.title, UsageLogic.alertText(crossing.severity, crossing.remaining, quotaMode)])
     }
   }
 
@@ -460,13 +460,11 @@ Ui.Panel {
       else keyCatcher.forceActiveFocus()
     })
   } else {
-    navigation.closeProviderMenu()
     if (costsView) costsView.closeMenu()
     if (configuring) viewMode = settingsReturnView
   }
 
   onViewModeChanged: {
-    navigation.closeProviderMenu()
     if (costsView) costsView.closeMenu()
     if (viewMode !== "settings") configForm.discardKey()
     if (viewMode !== "cost-settings") costConfigForm.discardKey()
@@ -576,7 +574,7 @@ Ui.Panel {
           readonly property var remainingValue: UsageLogic.remainingForWindow(reading, topWindow)
           readonly property var shownValue: root.quotaMode === "Remaining"
             ? remainingValue : UsageLogic.usedForWindow(reading, topWindow)
-          readonly property string remainingText: shownValue === null
+          readonly property string shownText: shownValue === null
             ? (root.proxyMode ? "—" : "") : UsageLogic.formatPercent(shownValue) + "%"
           readonly property string severity: UsageLogic.severity(
             reading, root.warningThreshold, root.criticalThreshold, remainingValue)
@@ -592,7 +590,7 @@ Ui.Panel {
           readonly property string bottomReset: root.barShowResets && stacked
             ? root.barResetText(UsageLogic.windowRowFor(reading, secondaryWindow, false)) : ""
           readonly property string topText: failed ? UsageLogic.errorReasonLabel(modelData.errorKind)
-            : (topTag ? topTag + " " : "") + remainingText + (topReset ? " · " + topReset : "")
+            : (topTag ? topTag + " " : "") + shownText + (topReset ? " · " + topReset : "")
           readonly property string bottomText: (bottomTag ? bottomTag + " " : "") + secondaryText
             + (bottomReset ? " · " + bottomReset : "")
           readonly property string secondarySeverity: secondaryRemaining === null ? "none"
@@ -622,8 +620,8 @@ Ui.Panel {
             + (shownValue === null ? " usage unavailable"
               : " · " + UsageLogic.quotaText(shownValue, root.quotaMode))
             + (topWindow === "auto" ? ""
-              : (stacked ? "\nBar limit (top): " : "\nBar limit: ") + UsageLogic.windowSelectorLabel(topWindow))
-            + (stacked ? "\nBar limit (bottom): " + UsageLogic.windowSelectorLabel(secondaryWindow)
+              : (stacked ? "\nMenu bar limit (top): " : "\nMenu bar limit: ") + UsageLogic.windowSelectorLabel(topWindow))
+            + (stacked ? "\nMenu bar limit (bottom): " + UsageLogic.windowSelectorLabel(secondaryWindow)
               + (secondaryRemaining === null ? " not reported"
                 : " · " + UsageLogic.quotaText(root.quotaMode === "Remaining"
                   ? secondaryRemaining : UsageLogic.usedFromRemaining(secondaryRemaining), root.quotaMode)) : "")
@@ -732,7 +730,7 @@ Ui.Panel {
     Ui.PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.configuring || resetBackend.active || navigation.menuOpen || costsView.menuOpen
+      blocked: root.configuring || resetBackend.active || costsView.menuOpen
 
       onMoveRequested: function(dx, dy) {
         if (dx !== 0 && root.viewMode === "limits" && root.providers.length > 1) {
@@ -751,7 +749,7 @@ Ui.Panel {
         if (text === "r" || text === "R") root.refreshNow()
         else if (text === "c" || text === "C") root.showCosts()
         else if (text === "u" || text === "U") root.showLimits()
-        else if (text === "p" || text === "P") navigation.openProviderMenu()
+        else if ((text === "p" || text === "P") && root.viewMode === "limits" && root.providers.length > 1) root.nextProvider()
         else if (root.viewMode === "costs" && (text === "m" || text === "M")) costsView.openMetricMenu()
         else if (root.viewMode === "costs" && (text === "d" || text === "D")) costsView.tokenDetailsExpanded = !costsView.tokenDetailsExpanded
         else if (root.viewMode === "costs" && (text === "b" || text === "B")) costsView.modelsExpanded = !costsView.modelsExpanded
@@ -883,14 +881,9 @@ Ui.Panel {
               providerOptions: root.providerOptions
               providerId: root.selectedProviderId
               foreground: root.foreground
-              surface: root.surface
               fontFamily: root.fontFamily
               onViewRequested: function(value) { root.viewMode = value }
               onProviderRequested: function(value) { root.selectProviderId(value) }
-              onMenuClosed: Qt.callLater(function() {
-                if (root.opened && !root.configuring && !resetBackend.active)
-                  keyCatcher.forceActiveFocus()
-              })
             }
 
             Text {
@@ -1441,11 +1434,7 @@ Ui.Panel {
           BlockMeter {
             visible: accountWindow.known
             width: parent.width
-            // The bar fills toward the limit, so it always shows usage.
-            value: {
-              var used = UsageLogic.windowUsed(accountWindow.modelData)
-              return used === null ? 0 : used / 100
-            }
+            value: UsageLogic.meterFill(accountWindow.modelData, root.quotaMode) || 0
             fillColor: accountWindow.stressed ? root.urgent : root.foreground
             trackColor: root.alpha(root.foreground, 0.14)
           }
@@ -1514,9 +1503,8 @@ Ui.Panel {
         visible: creditsCard.hasMeter
         width: parent.width
         text: creditsCard.hasMeter
-          ? "MONTHLY ALLOWANCE · "
-            + Math.round(Number(creditsCard.credits.used) / Number(creditsCard.credits.limit) * 100)
-            + "% USED"
+          ? "MONTHLY ALLOWANCE · " + Math.round(UsageLogic.sideOfUsed(Number(creditsCard.credits.used) / Number(creditsCard.credits.limit) * 100, root.quotaMode))
+            + (root.quotaMode === "Remaining" ? "% LEFT" : "% USED")
           : ""
         color: root.dim
         font.family: root.fontFamily
@@ -1529,7 +1517,7 @@ Ui.Panel {
         visible: creditsCard.hasMeter
         width: parent.width
         value: creditsCard.hasMeter
-          ? Number(creditsCard.credits.used) / Number(creditsCard.credits.limit) : 0
+          ? UsageLogic.sideOfUsed(Number(creditsCard.credits.used) / Number(creditsCard.credits.limit) * 100, root.quotaMode) / 100 : 0
         fillColor: root.foreground
         trackColor: root.alpha(root.foreground, 0.14)
       }
