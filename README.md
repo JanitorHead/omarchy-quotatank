@@ -68,11 +68,11 @@ In CLIProxyAPI mode, Codex cards show how many banked resets the account holds. 
 
 **Menu bar limit** picks the window every chip shows: most constrained, 5-hour, 7-day, or monthly. A pinned limit is tagged with its period. **Menu bar limit (bottom)** stacks a second limit under the first. **Show reset day in menu bar** appends when each line resets: a time for limits that reset within a day, a date for weekly and monthly ones. Both formats are configurable. The top and bottom limits can also be set for a single provider under **Menu bar limits per provider**.
 
-A chip turns to the alert color when either of its lines is at warning or critical. Clicking a chip opens that provider.
+A chip switches to the Omarchy theme's alert color when either of its lines is at warning or critical. Quotatank has no red of its own: the color comes from the theme (its `red` entry by default), so it is red in the themes shown here and follows whatever color your theme uses. Clicking a chip opens that provider.
 
 | Omarchy theme colors (default) | Provider brand colors |
 |---|---|
-| ![Four menu bar chips in theme colors; Claude Code and OpenAI Codex in the alert color](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/bar.png) | ![The same chips with provider brand colors](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/bar-brand.png) |
+| ![Four menu bar chips in Tokyo Night; Claude Code and OpenAI Codex in the theme's alert color](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/bar.png) | ![The same chips with provider brand colors](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/bar-brand.png) |
 
 With **Provider colors** on, chips and limit meters take each provider's brand color. A line at warning or critical keeps the alert color, so the brand color never hides an alert.
 
