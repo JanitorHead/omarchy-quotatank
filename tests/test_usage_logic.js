@@ -132,7 +132,6 @@ assert.equal(context.lastUsedAccount({ ...accountPool, accounts: { 0: accountPoo
 assert.equal(context.minRemaining(context.lastUsedAccount({ ...accountPool, accounts: [
   { ...accountPool.accounts[1], status: "disabled", windows: [] }
 ] }, recent, true).reading), null);
-console.log("UsageLogic.js: all assertions passed");
 
 const codexWindows = [
   {id: "additional-secondary", label: "Code review · Weekly limit", windowSeconds: 604800},
@@ -626,3 +625,18 @@ assert.equal(context.moneyView(limitBound, "Used").amount, 6, "a key limit holdi
 assert.equal(context.moneyView(limitBound, "Used").total, 10);
 const unknownSize = { id: "openrouter", status: "ok", windows: [], credits: { currency: "USD", spendable: 4, remaining: null } };
 assert.equal(context.moneyView(unknownSize, "Used").unit, "left", "without the allowance's size, used cannot be told");
+assert.equal(usedView.text, "$73.42", "the view carries the figure formatted in its currency");
+const yuan = { id: "deepseek", status: "ok", windows: [], credits: { currency: "CNY", spendable: 80, remaining: 80, total: null } };
+assert.equal(context.spendable(yuan), 80, "a balance in another currency still counts as money");
+assert.equal(context.moneyView(yuan, "Used").text, "¥80.00", "DeepSeek balances show in their own currency");
+assert.equal(context.moneyCurrency(yuan), "CNY");
+assert.equal(context.moneyCurrency({ id: "claude" }), "USD", "providers without money default to dollars");
+assert.equal(context.formatMoney(1234.5, "EUR"), "€1,234.50");
+assert.equal(context.formatMoney(-0.004, "USD"), "-$0.0040");
+assert.equal(context.formatMoney(3, "CHF"), "CHF 3.00", "an unknown currency keeps its code");
+assert.equal(context.LOCAL_PROVIDER_IDS.join(","), "claude,codex,kimi,opencode,openrouter,deepseek");
+assert.equal(context.providerShortName({ id: "openrouter", name: "OpenRouter" }), "OpenRouter");
+assert.equal(context.providerShortName({ id: "claude", name: "Claude Code" }), "Claude");
+assert.equal(context.providerShortName({ id: "gemini-cli", name: "Gemini CLI" }), "Gemini CLI", "proxy providers keep their name");
+
+console.log("UsageLogic.js: all assertions passed");
