@@ -46,6 +46,7 @@
       "barWindowSecondary": "none",
       "barProviderLimits": "{}",
       "barShowResets": false,
+      "hideExhaustedProviders": false,
       "barResetTimeFormat": "24h",
       "barResetDateFormat": "DD/MM",
       "warningThreshold": 25,
@@ -222,6 +223,13 @@
         "type": "boolean",
         "label": "Menu bar: show when limits reset",
         "description": "Adds when each chip's limit resets. Limits that reset within a day show a time; weekly and monthly limits show a date.",
+        "defaultValue": false
+      },
+      {
+        "key": "hideExhaustedProviders",
+        "type": "boolean",
+        "label": "Menu bar: hide providers with a used-up weekly or monthly limit",
+        "description": "Removes a provider's chip while one of its weekly or monthly limits is used up. The chip returns when that limit resets; Limits keeps showing the provider.",
         "defaultValue": false
       },
       {

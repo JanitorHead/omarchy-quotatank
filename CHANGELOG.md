@@ -9,6 +9,7 @@ All notable changes to this project will be documented here. The format follows
 ### Added
 
 - **OpenRouter** as a provider (off by default; local mode). Save an API key or a management key under **Limits → gear → OpenRouter**, or set `OPENROUTER_API_KEY`. Spending limits that reset (the key's daily, weekly, or monthly limit, guardrail and workspace budgets, free-model daily requests) are ordinary limit cards with pace and projection. What can still be spent, the lowest of the balance and every limit's allowance, leads the tile, the chip (dollars on top, the tightest limit's percentage below), and the headline with how long it lasts at this week's rate. A management key adds the account balance; a **Balance** card shows purchased, used, and today's, this week's, and this month's spend.
+- **Hide providers that are used up** (`hideExhaustedProviders`, off by default, under **Menu bar**): a provider's chip leaves the bar while one of its weekly or monthly limits is used up and returns when that limit resets. Limits keeps showing it, with `… is used up · back in 5d 10h`.
 - **Low balance alerts in dollars** (`creditWarningUsd`, default `$5`; `creditCriticalUsd`, default `$1`) color OpenRouter's chip, tile, and card and send a desktop notification when crossed.
 
 ### Changed
@@ -22,6 +23,9 @@ All notable changes to this project will be documented here. The format follows
 - The pacing help row reads **How the tick and projection work**, opens on a click of the text as well as the ⓘ badge, and its explanation is wrapped to fit the tooltip.
 - Error cards put the next step on its own line.
 - Opening Costs settings no longer draws a focus ring on the first switch.
+- The footer countdown reads `Next refresh in 14 min` instead of `Next refresh 14:44`, which looked like a clock time.
+- A projected run-out in the headline uses the alert color only when the limit is at a threshold or would run out within a day; otherwise it adds `at this rate`.
+- QML references the palette as `Commons.Color`, as the Omarchy shell guide requires for Qt 6.12, where an unqualified `Color` resolves to Qt's own type.
 
 ## 1.4.2
 

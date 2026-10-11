@@ -72,9 +72,13 @@ Ui.Panel {
   readonly property bool barShowResets: setting("barShowResets", false) === true
   // Clock format for the pace tick's "Now" time: the same reset time setting as the bar.
   readonly property string tickTimeFormat: UsageLogic.barResetFormat("time", setting("barResetTimeFormat", "24h"), setting("barResetDateFormat", "DD/MM"))
+  // Optionally drop providers whose weekly or monthly limit is used up: they cannot be used until it
+  // resets. Limits still shows them, marked used up, with the reset time.
+  readonly property bool hideUsedUpProviders: setting("hideExhaustedProviders", false) === true
   readonly property var percentageProviders: UsageLogic.barProviders(
     UsageLogic.selectedProviders(providers, setting("barProviders", ["claude", "codex", "kimi", "opencode"])),
     function (provider) { return barLimitsFor(provider.id).top })
+    .filter(function (provider) { return !hideUsedUpProviders || UsageLogic.usedUpLongWindow(provider) === null })
   function barLimitsFor(providerId) {
     return UsageLogic.barLimitsFor(barProviderLimits, providerId, barWindow, barWindowSecondary)
   }
@@ -180,7 +184,10 @@ Ui.Panel {
       projected++
       if (pace.runsOut && (!soonest || pace.etaSeconds < soonest.eta)) soonest = { row: rows[i], eta: pace.etaSeconds }
     }
-    if (reached) return { text: String(reached.label || "A limit") + " is used up", urgent: true }
+    if (reached) {
+      var back = durationUntil(reached.resetsAt)
+      return { text: String(reached.label || "A limit") + " is used up" + (back && back !== "now" ? " · back in " + back : ""), urgent: true }
+    }
     var money = UsageLogic.spendable(provider)
     var moneyLine = ""
     var moneyLow = false
@@ -192,7 +199,13 @@ Ui.Panel {
       moneyLine = UsageLogic.formatUsd(money) + " left" + (runway ? " · lasts " + runway : "")
     }
     if (moneyLow) return { text: moneyLine, urgent: true }
-    if (soonest) return { text: String(soonest.row.label || "A limit") + " runs out in " + UsageLogic.formatDuration(soonest.eta), urgent: true }
+    if (soonest) {
+      // A projection from a short recent burst can sit far ahead of actual use; only alarm when the
+      // limit is already at a threshold or would run out within a day.
+      var pressing = soonest.eta <= 86400 || windowSeverity(soonest.row) === "warning" || windowSeverity(soonest.row) === "critical"
+      return { text: String(soonest.row.label || "A limit") + " runs out in " + UsageLogic.formatDuration(soonest.eta)
+        + (pressing ? "" : " at this rate"), urgent: pressing }
+    }
     if (moneyLine !== "") return { text: moneyLine, urgent: false }
     if (projected > 0) return { text: projected === rows.length ? "Every limit lasts until reset" : "Projected limits last until reset", urgent: false }
     return empty
@@ -545,13 +558,13 @@ Ui.Panel {
     return backend.loading ? "Refreshing…" : "Waiting for first refresh"
   }
 
+  // A countdown, written so it cannot be read as a clock time beside "Updated 14:56".
   function footerRight() {
     if (viewMode === "costs") return ""
     if (backend.nextRefreshAt <= 0) return ""
     var seconds = Math.max(0, Math.floor((backend.nextRefreshAt - nowMs) / 1000))
-    var minutes = Math.floor(seconds / 60)
-    var remainder = String(seconds % 60).padStart(2, "0")
-    return "Next refresh " + minutes + ":" + remainder
+    if (seconds < 60) return "Next refresh in " + Math.max(1, seconds) + " s"
+    return "Next refresh in " + Math.ceil(seconds / 60) + " min"
   }
 
   visible: true

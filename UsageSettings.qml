@@ -101,6 +101,7 @@ Column {
       barWindowSecondary: UsageLogic.normalizeSecondaryBarWindow(value("barWindowSecondary", "none")),
       barProviderLimits: UsageLogic.serializeBarLimits(UsageLogic.parseBarLimits(value("barProviderLimits", "{}"))),
       barShowResets: value("barShowResets", false) === true,
+      hideExhaustedProviders: value("hideExhaustedProviders", false) === true,
       barResetTimeFormat: UsageLogic.normalizeBarResetChoice("time", value("barResetTimeFormat", "24h")),
       barResetDateFormat: UsageLogic.normalizeBarResetChoice("date", value("barResetDateFormat", "DD/MM")),
       quotaMode: mode,
@@ -182,6 +183,7 @@ Column {
     var bottom = UsageLogic.normalizeSecondaryBarWindow(draft.barWindowSecondary)
     if (bottom !== "none") text += " + " + UsageLogic.windowSelectorLabel(bottom)
     if (draft.barShowResets === true) text += " · resets"
+    if (draft.hideExhaustedProviders === true) text += " · hides used up"
     return text
   }
 
@@ -676,6 +678,25 @@ Column {
         onMenuClosed: if (root.visible) barResetDateSelect.forceActiveFocus()
         onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
       }
+    }
+
+    Row {
+      width: parent.width
+      visible: root.percentageDisplay
+      height: visible ? implicitHeight : 0
+      Label { width: parent.width - hideUsedUpSwitch.width; text: "Hide providers that are used up"; anchors.verticalCenter: parent.verticalCenter }
+      ProviderToggle {
+        id: hideUsedUpSwitch
+        objectName: "hideExhaustedProvidersToggle"
+        width: Style.space(82)
+        checked: root.draft.hideExhaustedProviders === true
+        Accessible.name: "Hide providers whose weekly or monthly limit is used up"
+        onToggled: root.setValue("hideExhaustedProviders", !checked)
+      }
+    }
+    Hint {
+      visible: root.percentageDisplay
+      text: "Removes a chip while one of its weekly or monthly limits is used up. It returns when that limit resets; Limits still shows the provider."
     }
 
     Section {

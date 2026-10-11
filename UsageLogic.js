@@ -175,6 +175,27 @@ function minRemaining(provider) {
   return remaining <= 100 ? clamp(remaining, 0, 100) : null
 }
 
+// The weekly or monthly limit a provider has used up, if any: such a provider cannot be used until
+// that window resets, so its chip may be hidden. A limit of a week or longer counts; a 5-hour or
+// daily limit refills soon and does not. Returns the soonest-resetting such row, or null.
+function usedUpLongWindow(provider) {
+  if (!provider || provider.status !== "ok") return null
+  var rows = listOrEmpty(provider.windows)
+  var found = null
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i]
+    var remaining = remainingOf(row)
+    if (remaining === null || remaining > 0) continue
+    var seconds = Number(row.windowSeconds)
+    var long = isFinite(seconds) && seconds > 0
+      ? seconds >= 604800
+      : windowMatches(row, "weekly") || windowMatches(row, "monthly")
+    if (!long) continue
+    if (!found || Number(row.resetsAt || Infinity) < Number(found.resetsAt || Infinity)) found = row
+  }
+  return found
+}
+
 function severity(provider, warningThreshold, criticalThreshold, remaining) {
   var value = (remaining === undefined || remaining === null)
     ? minRemaining(provider) : Number(remaining)

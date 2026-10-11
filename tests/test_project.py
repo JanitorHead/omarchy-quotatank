@@ -27,7 +27,7 @@ class ProjectContractTests(unittest.TestCase):
             "warningThreshold", "criticalThreshold", "liveAccountActivity",
             "usageSource", "cliproxyUrl", "cliproxyKeyFile", "hideAccountEmails", "squareUsageCards", "providerColors", "notifyLimitThresholds", "costPriceOverrides",
             "costLocalProviders", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers",
-            "openrouterKeyFile", "creditWarningUsd", "creditCriticalUsd",
+            "openrouterKeyFile", "creditWarningUsd", "creditCriticalUsd", "hideExhaustedProviders",
         })
 
     def test_packaged_paths_and_assets_are_self_contained(self):

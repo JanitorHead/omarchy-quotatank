@@ -597,3 +597,15 @@ assert.equal(context.moneyRunway(30, 10, Date.UTC(2026, 9, 12, 2) / 1000), "", "
 assert.equal(context.rowPeriodTag({ windowSeconds: 86400 }), "1d");
 assert.equal(context.rowPeriodTag({ windowSeconds: 2592000 }), "30d");
 assert.equal(context.rowPeriodTag({ id: "x" }), "");
+
+// Used-up weekly or monthly limits hide a chip on request; short limits refill soon and never do.
+const usedUp = (rows) => ({ id: "codex", status: "ok", windows: rows });
+assert.equal(context.usedUpLongWindow(usedUp([{ id: "session", remaining: 0, windowSeconds: 18000 }])), null, "a used-up 5-hour limit refills soon");
+assert.equal(context.usedUpLongWindow(usedUp([{ id: "weekly", remaining: 0.4, windowSeconds: 604800 }])), null, "a little left is not used up");
+assert.equal(context.usedUpLongWindow(usedUp([{ id: "weekly", remaining: 0, windowSeconds: 604800, resetsAt: 9 }])).resetsAt, 9);
+assert.equal(context.usedUpLongWindow(usedUp([{ id: "monthly", label: "Monthly limit", remaining: 0 }])).id, "monthly", "an untimed monthly row counts by its name");
+assert.equal(context.usedUpLongWindow(usedUp([
+  { id: "monthly", remaining: 0, windowSeconds: 2592000, resetsAt: 50 },
+  { id: "weekly", remaining: 0, windowSeconds: 604800, resetsAt: 20 },
+])).id, "weekly", "the soonest return is reported");
+assert.equal(context.usedUpLongWindow({ ...usedUp([{ id: "weekly", remaining: 0, windowSeconds: 604800 }]), status: "error" }), null);
