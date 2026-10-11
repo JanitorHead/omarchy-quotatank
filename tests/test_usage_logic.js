@@ -250,7 +250,8 @@ const noSession = windowed([
 ]);
 assert.equal(context.barTagFor(noSession, "session", true), "30d", "a fallback figure is tagged with its own period, not the chosen one");
 assert.equal(context.barTagFor(noSession, "weekly", true), "7d");
-assert.equal(context.barTagFor(noSession, "auto", true), "", "auto has no tag");
+assert.equal(context.barTagFor(noSession, "auto", true), "30d", "most constrained names the period of the limit it picked");
+assert.equal(context.barTagFor(windowed([{ id: "quota", label: "Quota", remaining: 30 }]), "auto", true), "", "an unknown period gets no tag");
 assert.equal(context.barTagFor(windowed([{ id: "quota", label: "Quota", remaining: 30 }]), "session", true), "", "an unknown fallback period gets no tag");
 assert.equal(context.barTagFor({ ...noSession, status: "error" }, "weekly", false), "7d");
 const failedNoWindows = { id: "codex", status: "error", errorKind: "rate_limited", windows: [] };

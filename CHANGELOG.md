@@ -19,6 +19,7 @@ All notable changes to this project will be documented here. The format follows
 - **Limit cards are ordered shortest window first** for every provider, so a 5-hour limit always sits above weekly and monthly ones.
 - **Limits redesigned as a dashboard.** Provider tiles replace the provider tab row: each shows the provider's logo, its most pressing figure, and a mini meter, in the theme's alert color when a refresh failed or a limit is at warning or critical. Under them, a headline answers the main question for the selected provider (`5 hour limit runs out in 1h 9m`, `Every limit lasts until reset`).
 - **Bolder limit cards**: a large figure, a taller meter, and a badge with the points ahead of or behind pace (`14 pts ahead`). Account cards in Fusebox and CLIProxyAPI mode use the same large figure. The `USAGE LIMITS` header is gone; the headline replaces it.
+- **Most constrained chips name their limit**: the chip tags the period of the limit it picked (`7d 91%`, `5h 72%`), as pinned limits already did.
 - **Chip tooltips name the limits shown** with the provider's own labels (`5 hour limit: 72% used`).
 - The pacing help row reads **How the tick and projection work**, opens on a click of the text as well as the ⓘ badge, and its explanation is wrapped to fit the tooltip.
 - Error cards put the next step on its own line.

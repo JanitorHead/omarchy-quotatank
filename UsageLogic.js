@@ -316,12 +316,13 @@ function windowShortLabel(selector) {
   return ""
 }
 
-// Period tag for the row a chip actually shows. A provider without the chosen window
-// falls back to its most restrictive row; the tag then names that row's period, or
-// nothing when the period cannot be told, so a fallback figure is never tagged wrong.
+// Period tag for the row a chip actually shows. Most constrained names the period of the
+// limit it picked (so "7d 91%" says the weekly limit is the tight one). A provider without the
+// chosen window falls back to its most restrictive row; the tag then names that row's period,
+// or nothing when the period cannot be told, so a figure is never tagged wrong.
 function barTagFor(provider, selector, allowFallback) {
   var want = normalizeBarWindow(selector)
-  if (want === "auto") return ""
+  if (want === "auto") return rowPeriodTag(windowRowFor(provider, "auto", true))
   var row = windowRowFor(provider, want, allowFallback)
   if (row === null || windowMatches(row, want)) return windowShortLabel(want)
   return rowPeriodTag(row)
