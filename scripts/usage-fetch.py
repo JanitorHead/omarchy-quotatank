@@ -1374,6 +1374,947 @@ def fetch_deepseek(timeout: float, key_file: Path | None = None) -> dict[str, An
     return result
 
 
+# --------------------------------------------------------------- API-key providers
+#
+# Helpers shared by the plan and balance collectors that follow. Each collector sends its key
+# only to its own provider. A provider with separate international and China-mainland platforms
+# (one company, two account systems, a key valid on only one) is asked internationally first.
+
+KEYED_PERIODS = {
+    300: ("session", "5-hour limit"),
+    1440: ("daily", "Daily limit"),
+    10080: ("weekly", "Weekly limit"),
+    43200: ("monthly", "Monthly limit"),
+}
+
+
+def key_or_error(provider_id: str, key_file: Path | None, name: str) -> tuple[str, dict[str, Any] | None]:
+    """The provider's key, or the result to return instead when the key is unreadable or missing."""
+    try:
+        token = provider_key(provider_id, key_file)
+    except ProviderFailure as exc:
+        return "", error_provider(provider_id, exc.kind, exc.message)
+    if not token:
+        return "", error_provider(provider_id, "no_credentials",
+                                  f"No {name} key was found. Add one under Settings → Providers.")
+    return token, None
+
+
+def keyed_error(provider_id: str, exc: ProviderFailure, name: str,
+                fix: str = "Enter a new one under Settings → Providers.") -> dict[str, Any]:
+    """A failed read as a result. A rejected key says which key to save, not how to sign in."""
+    if exc.kind == "expired":
+        return error_provider(provider_id, "expired", f"{name} rejected the saved key. {fix}")
+    return error_provider(provider_id, exc.kind, exc.message)
+
+
+def bearer_headers(token: str) -> dict[str, str]:
+    return {"Authorization": "Bearer " + token, "Accept": "application/json"}
+
+
+def first_accepting_host(hosts: tuple[str, ...], read: Callable[[str], Any]) -> tuple[str, Any]:
+    """`read(host)` from the first host that accepts the key.
+
+    Only a rejected key moves on to the next host. Any other failure is reported as it is, so a
+    key that works is never sent to a platform it does not belong to."""
+    for host in hosts[:-1]:
+        try:
+            return host, read(host)
+        except ProviderFailure as exc:
+            if exc.kind != "expired":
+                raise
+    return hosts[-1], read(hosts[-1])
+
+
+def dict_list(value: Any) -> list[dict[str, Any]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def amount_text(value: float) -> str:
+    """1,234.5 rather than 1234.50: counts and flows read as quantities, not money."""
+    return f"{value:,.2f}".rstrip("0").rstrip(".")
+
+
+def period_identity(minutes: int | None) -> tuple[str, str, int | None]:
+    """Window id, label and length in seconds for a limit period given in minutes."""
+    if minutes in KEYED_PERIODS:
+        window_id, label = KEYED_PERIODS[minutes]
+        return window_id, label, minutes * 60
+    label, seconds = duration_label(minutes)
+    return (f"limit-{minutes}m" if minutes else "limit"), label, seconds
+
+
+def balance_credits(label: str, currency: str, remaining: float | None, spendable: float | None,
+                    **extra: Any) -> dict[str, Any]:
+    """`credits` shaped like parse_deepseek's. Plan providers pass spendable=None, so a side balance
+    never turns their percentage chip into a money chip."""
+    return {
+        "label": label,
+        "currency": currency,
+        "used": None,
+        "limit": None,
+        "remaining": remaining,
+        "total": None,
+        "unlimited": False,
+        "resetCreditsAvailable": None,
+        "spendable": spendable,
+        "spend": {},
+        **extra,
+    }
+
+
+# --------------------------------------------------------------- Z.ai
+#
+# GLM Coding Plan meters from the monitor endpoint behind the Z.ai and BigModel usage dashboards.
+# It has no public reference; CodexBar's zai.js and several Omarchy plugins read it. Z.ai
+# (api.z.ai) and BigModel (open.bigmodel.cn) are the international and China-mainland platforms
+# of the same company, Zhipu, and a key belongs to one of them.
+
+ZAI_HOSTS = ("https://api.z.ai", "https://open.bigmodel.cn")
+ZAI_QUOTA_PATH = "/api/monitor/usage/quota/limit"
+# A limit's period is `number` × `unit`; the unit codes in minutes: day, hour, minute, week.
+ZAI_UNIT_MINUTES = {1: 1440, 3: 60, 5: 1, 6: 10080}
+ZAI_LIMIT_UNITS = {"TOKENS_LIMIT": "tokens", "CREDIT_LIMIT": "credits", "TIME_LIMIT": "tool calls"}
+# Codes of a missing, invalid or expired key (docs.z.ai/api-reference/api-code). The monitor
+# endpoint can also return them, or 401, inside an HTTP 200 body.
+ZAI_REJECTED_CODES = (401, 403, 1000, 1001, 1003)
+
+
+def zai_limit_usage(raw: dict[str, Any]) -> tuple[float | None, str]:
+    """Used percent of one limit, and a count detail when the counts are given.
+
+    `percentage` is a whole number. The limit size (`usage`) with the spent (`currentValue`) or
+    left (`remaining`) count is more precise, so it wins when present."""
+    size, spent, left = number(raw.get("usage")), number(raw.get("currentValue")), number(raw.get("remaining"))
+    if size is not None and size > 0:
+        if left is not None:
+            spent = max(size - left, spent if spent is not None else size - left)
+        if spent is not None:
+            spent = clamp(spent, 0.0, size)
+            return spent / size * 100.0, f"{amount_text(spent)} of {amount_text(size)} {ZAI_LIMIT_UNITS[raw['type']]}"
+    return number(raw.get("percentage")), ""
+
+
+def parse_zai(payload: Any, now: float) -> tuple[list[dict[str, Any]], str]:
+    """The 5-hour and weekly token (or credit) windows, the monthly MCP tool allowance, and the plan.
+
+    Each window's length comes from its unit and number rather than from its position."""
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "Z.ai returned unreadable quota data.")
+    code = number(payload.get("code"))
+    if payload.get("success") is not True or code not in (None, 0, 200):
+        if code in ZAI_REJECTED_CODES:
+            raise ProviderFailure("expired", "Z.ai rejected the key.")
+        raise ProviderFailure("http", "Z.ai could not report the Coding Plan quota.")
+    data = payload.get("data")
+    limits = data.get("limits") if isinstance(data, dict) else None
+    if not isinstance(limits, list):
+        raise ProviderFailure("malformed", "Z.ai returned unreadable quota data.")
+
+    windows: list[dict[str, Any]] = []
+    for raw in dict_list(limits):
+        if not isinstance(raw.get("type"), str) or raw["type"] not in ZAI_LIMIT_UNITS:
+            continue
+        used, detail = zai_limit_usage(raw)
+        if used is None:
+            continue
+        unit, count = number(raw.get("unit")), number(raw.get("number"))
+        scale = ZAI_UNIT_MINUTES.get(int(unit)) if unit is not None and unit.is_integer() else None
+        minutes = int(count) * scale if scale and count is not None and count > 0 and count.is_integer() else None
+        reset = epoch_seconds(raw.get("nextResetTime"))
+        if raw["type"] == "TIME_LIMIT":
+            # The MCP tools (web search, web reader) have a monthly allowance, marked as unit 5, number 1.
+            window_id, label, seconds = period_identity(43200 if (unit, count) == (5, 1) else minutes)
+            window_id, label = "mcp", "MCP tools · " + label
+        else:
+            window_id, label, seconds = period_identity(minutes)
+            # A 5-hour window cannot reset more than five hours from now; a later time is not trusted.
+            if minutes == 300 and reset is not None and reset > now + FIVE_HOURS + 60:
+                reset = None
+        if any(window["id"] == window_id for window in windows):
+            window_id = f"{window_id}-{len(windows)}"
+        windows.append(make_window(window_id, label, used, reset, seconds, detail))
+
+    names = (data.get(key) for key in ("planName", "plan", "plan_type", "packageName", "level"))
+    plan = next((name.strip() for name in names if isinstance(name, str) and name.strip()), "")
+    return windows, plan.capitalize() if plan.islower() else plan
+
+
+@provider_fetcher("zai", keyed=True)
+def fetch_zai(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "zai"
+    token, missing = key_or_error(provider_id, key_file, "Z.ai")
+    if missing:
+        return missing
+    now = time.time()
+    try:
+        host, (windows, plan) = first_accepting_host(
+            ZAI_HOSTS, lambda host: parse_zai(http_json(host + ZAI_QUOTA_PATH, bearer_headers(token), timeout), now))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Z.ai")
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="BigModel quota API" if host == ZAI_HOSTS[1] else "Z.ai quota API", windows=windows)
+    if not windows:
+        result["notice"] = "Z.ai reported no Coding Plan limits for this key."
+    return result
+
+
+# --------------------------------------------------------------- MiniMax
+#
+# Token Plan (formerly Coding Plan) quota, readable only with the plan's Subscription Key
+# (`sk-cp-…`); pay-as-you-go keys (`sk-api-…`) cannot read it. Global and China-mainland accounts
+# live on separate MiniMax hosts. Every answer is HTTP 200: failures, a rejected key included,
+# are told by `base_resp.status_code`.
+
+MINIMAX_HOSTS = ("https://api.minimax.io", "https://api.minimaxi.com")
+MINIMAX_REMAINS_PATH = "/v1/token_plan/remains"
+# 1004: no key; 2049: a key this host does not know, which a global key gets from the China host.
+MINIMAX_REJECTED_CODES = (1004, 2049)
+MINIMAX_LANES = (
+    # remaining-percent prefix, window bounds, milliseconds left, id, label when the bounds are missing
+    ("current_interval", "start_time", "end_time", "remains_time", "session", "5-hour limit"),
+    ("current_weekly", "weekly_start_time", "weekly_end_time", "weekly_remains_time", "weekly", "Weekly limit"),
+)
+
+
+def minimax_subscription_key(key_file: Path | None) -> tuple[str, bool]:
+    """The first Subscription Key among the environment and the saved key, and whether any key exists.
+
+    Other tools read a pay-as-you-go key from MINIMAX_API_KEY; it must not hide a Subscription Key
+    saved in widget settings, so every candidate is checked rather than only the first."""
+    found = False
+    for name in PROVIDER_KEY_ENV["minimax"]:
+        value = os.environ.get(name, "").strip()
+        if value.startswith("sk-cp-"):
+            return value, True
+        found = found or bool(value)
+    path = key_file or provider_key_path("minimax")
+    if key_file is not None or path.exists():
+        value = read_private_key(path, "MiniMax key")
+        if value.startswith("sk-cp-"):
+            return value, True
+        found = True
+    return "", found
+
+
+def parse_minimax(payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
+    """The 5-hour and weekly windows of the text bucket (`general`), the credit packs, and the plan.
+
+    MiniMax reports the share that REMAINS, with window bounds in epoch milliseconds. A lane the
+    plan does not include comes back as status 3 with 100% left and is skipped."""
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "MiniMax returned unreadable quota data.")
+    data = payload["data"] if isinstance(payload.get("data"), dict) else payload
+    base = payload.get("base_resp") if isinstance(payload.get("base_resp"), dict) else data.get("base_resp")
+    status = number(base.get("status_code")) if isinstance(base, dict) else None
+    if status:
+        if status in MINIMAX_REJECTED_CODES or str(base.get("status_msg") or "").strip().lower() == "invalid api key":
+            raise ProviderFailure("expired", "MiniMax rejected the key.")
+        raise ProviderFailure("http", f"MiniMax reported error {status:.0f} for the quota request.")
+
+    rows = dict_list(data.get("model_remains"))
+    names = [str(row.get("model_name") or "").strip().lower() for row in rows]
+    # The text bucket drives coding tools; video has its own lanes and is left out.
+    text = next((row for row, name in zip(rows, names) if name == "general"), None) \
+        or next((row for row, name in zip(rows, names) if name != "video"), None)
+    if text is None:
+        raise ProviderFailure("malformed", "MiniMax returned no Token Plan quota.")
+
+    windows: list[dict[str, Any]] = []
+    for prefix, start_key, end_key, left_key, window_id, fallback in MINIMAX_LANES:
+        left = number(text.get(prefix + "_remaining_percent"))
+        if left is None or (number(text.get(prefix + "_status")) == 3 and left >= 100):
+            continue
+        start, end = epoch_seconds(text.get(start_key)), epoch_seconds(text.get(end_key))
+        seconds = end - start if start is not None and end is not None and end > start else None
+        label = period_identity(seconds // 60)[1] if seconds and seconds % 60 == 0 else fallback
+        reset = end if end is not None and end > now else None
+        left_ms = number(text.get(left_key))
+        if reset is None and left_ms is not None and left_ms > 0:
+            reset = now + left_ms / 1000
+        windows.append(make_window(window_id, label, 100.0 - left, reset, seconds))
+
+    balances = (number(data.get(key)) for key in ("points_balance", "point_balance", "credits_balance", "credit_balance"))
+    packs = next((value for value in balances if value is not None), None)
+    credits = balance_credits("Credit packs", "CREDITS", packs, None) if packs is not None else None
+    card = data.get("current_combo_card")
+    titles = (data.get("current_subscribe_title"), data.get("plan_name"), data.get("combo_title"),
+              data.get("current_plan_title"), card.get("title") if isinstance(card, dict) else None)
+    plan = next((title.strip() for title in titles if isinstance(title, str) and title.strip()), "")
+    return windows, credits, plan
+
+
+@provider_fetcher("minimax", keyed=True)
+def fetch_minimax(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "minimax"
+    try:
+        token, found = minimax_subscription_key(key_file)
+    except ProviderFailure as exc:
+        return error_provider(provider_id, exc.kind, exc.message)
+    if not found:
+        return error_provider(provider_id, "no_credentials",
+                              "No MiniMax key was found. Add one under Settings → Providers.")
+    if not token:
+        return error_provider(provider_id, "config",
+                              "MiniMax limits need the Token Plan Subscription Key (sk-cp-…); a pay-as-you-go "
+                              "API key cannot read them. Save it under Settings → Providers.")
+    now = time.time()
+    try:
+        host, (windows, credits, plan) = first_accepting_host(
+            MINIMAX_HOSTS,
+            lambda host: parse_minimax(http_json(host + MINIMAX_REMAINS_PATH, bearer_headers(token), timeout), now))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "MiniMax", "Save the current Subscription Key under Settings → Providers.")
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="MiniMax China API" if host == MINIMAX_HOSTS[1] else "MiniMax API",
+                  windows=windows, credits=credits)
+    if not windows:
+        result["notice"] = "MiniMax reported no Token Plan limits for this key."
+    return result
+
+
+# --------------------------------------------------------------- Synthetic
+#
+# Synthetic's limits refill gradually instead of resetting at a set time: the 5-hour limit gets a
+# few percent back at each tick and the weekly budget regenerates through the week. Their windows
+# carry no reset time, so the next tick is never mistaken for a reset by pace estimates. Older
+# accounts report a single `subscription` request limit with a renewal time instead.
+
+SYNTHETIC_QUOTAS_URL = "https://api.synthetic.new/v2/quotas"
+
+
+def synthetic_dollars(value: Any) -> float | None:
+    return number(value.replace("$", "").replace(",", "")) if isinstance(value, str) else number(value)
+
+
+def synthetic_used(raw: Any) -> float | None:
+    """Used percent of one quota: from its remaining percent, else from its counts."""
+    if not isinstance(raw, dict):
+        return None
+    left = number(raw.get("percentRemaining"))
+    if left is not None:
+        return 100.0 - left
+    size = number(raw.get("max"))
+    if size is None:
+        size = number(raw.get("limit"))
+    spent, remaining = number(raw.get("requests")), number(raw.get("remaining"))
+    if spent is None and size is not None and remaining is not None:
+        spent = size - remaining
+    if size is None or size <= 0 or spent is None:
+        return None
+    return clamp(spent, 0.0, size) / size * 100.0
+
+
+def parse_synthetic(payload: Any) -> tuple[list[dict[str, Any]], str, str]:
+    """The rolling 5-hour and weekly windows (or the legacy request limit), the plan, and a notice."""
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "Synthetic returned unreadable quota data.")
+    root = payload["data"] if isinstance(payload.get("data"), dict) else payload
+    windows: list[dict[str, Any]] = []
+    rolling, weekly = root.get("rollingFiveHourLimit"), root.get("weeklyTokenLimit")
+    used = synthetic_used(rolling)
+    if used is not None:
+        windows.append(make_window("session", "5-hour limit", used, None, FIVE_HOURS, "Refills gradually"))
+    used = synthetic_used(weekly)
+    if used is not None:
+        size, left = synthetic_dollars(weekly.get("maxCredits")), synthetic_dollars(weekly.get("remainingCredits"))
+        detail = "Refills gradually"
+        if size is not None and size > 0 and left is not None:
+            detail = f"${clamp(size - left, 0.0, size):.2f} of ${size:.2f} · refills gradually"
+        windows.append(make_window("weekly", "Weekly limit", used, None, SEVEN_DAYS, detail))
+    if not windows:
+        legacy = root.get("subscription")
+        used = synthetic_used(legacy)
+        if used is not None:
+            windows.append(make_window("subscription", "Request limit", used, legacy.get("renewsAt")))
+    if not windows:
+        raise ProviderFailure("malformed", "Synthetic returned no quota data.")
+    names = (root.get(key) for key in ("plan", "planName"))
+    plan = next((name.strip() for name in names if isinstance(name, str) and name.strip()), "")
+    limited = isinstance(rolling, dict) and rolling.get("limited") is True
+    return windows, plan, "Synthetic is holding requests until the 5-hour limit refills." if limited else ""
+
+
+@provider_fetcher("synthetic", keyed=True)
+def fetch_synthetic(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "synthetic"
+    token, missing = key_or_error(provider_id, key_file, "Synthetic")
+    if missing:
+        return missing
+    try:
+        windows, plan, notice = parse_synthetic(http_json(SYNTHETIC_QUOTAS_URL, bearer_headers(token), timeout))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Synthetic")
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="Synthetic API", windows=windows, notice=notice)
+    return result
+
+
+# --------------------------------------------------------------- Chutes
+#
+# Subscription caps as Chutes computes them (chutesai/chutes-api, `_get_subscription_usage`): a
+# fixed 4-hour bucket aligned to UTC, and a monthly cycle from the subscription anchor. Usage and
+# caps are measured at pay-as-you-go prices rather than charged, so only their share is shown.
+
+CHUTES_USAGE_URL = "https://api.chutes.ai/users/me/subscription_usage"
+CHUTES_PLANS = {10.0: "Plus", 20.0: "Pro"}
+
+
+def chutes_time(value: Any) -> int | None:
+    """Chutes stores subscription anchors in UTC and may send them without an offset."""
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return epoch_seconds(value)
+        return int((parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).timestamp())
+    return epoch_seconds(value)
+
+
+def chutes_window(raw: Any, window_id: str, label: str, seconds: int) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    spent, cap = number(raw.get("usage")), number(raw.get("cap"))
+    if spent is None or cap is None or cap <= 0:
+        return None
+    return make_window(window_id, label, clamp(spent, 0.0, cap) / cap * 100.0, chutes_time(raw.get("reset_at")), seconds)
+
+
+def parse_chutes(payload: Any) -> tuple[list[dict[str, Any]], str, str]:
+    """The 4-hour and monthly subscription windows, the plan, and a notice."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("subscription"), bool):
+        raise ProviderFailure("malformed", "Chutes returned unreadable subscription usage.")
+    if not payload["subscription"]:
+        return [], "", "This Chutes account has no subscription, so it has no plan limits."
+    windows: list[dict[str, Any]] = []
+    four_hour = chutes_window(payload.get("four_hour"), "four-hour", "4-hour limit", 4 * 60 * 60)
+    if four_hour:
+        windows.append(four_hour)
+    monthly = payload.get("monthly")
+    if isinstance(monthly, dict):
+        # The cycle runs from the anchor to the same day next month: 28 to 31 days.
+        anchor, reset = chutes_time(payload.get("anchor_date")), chutes_time(monthly.get("reset_at"))
+        period = reset - anchor if anchor is not None and reset is not None else 0
+        window = chutes_window(monthly, "monthly", "Monthly limit",
+                               period if 28 * ONE_DAY <= period <= 31 * ONE_DAY else THIRTY_DAYS)
+        if window:
+            windows.append(window)
+    price = number(payload.get("monthly_price"))
+    if payload.get("custom") is True:
+        plan = "Custom plan"
+    elif price is not None and price > 0:
+        plan = CHUTES_PLANS.get(price, f"${price:g}/month plan")
+    else:
+        plan = ""
+    return windows, plan, "" if windows else "Chutes reported no subscription limits for this account."
+
+
+@provider_fetcher("chutes", keyed=True)
+def fetch_chutes(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "chutes"
+    token, missing = key_or_error(provider_id, key_file, "Chutes")
+    if missing:
+        return missing
+    try:
+        windows, plan, notice = parse_chutes(http_json(CHUTES_USAGE_URL, bearer_headers(token), timeout))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Chutes")
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="Chutes API", windows=windows, notice=notice)
+    return result
+
+
+# --------------------------------------------------------------- Ollama Cloud
+#
+# docs.ollama.com/api/balance. Current plans include monthly credits in USD for a period with
+# explicit bounds; legacy plans report session and weekly limits as the share remaining.
+# Purchased credits are a separate balance that never resets.
+
+OLLAMA_BALANCE_URL = "https://ollama.com/api/balance"
+
+
+def parse_ollama(payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """The included-credit window (or the legacy limits) and the purchased balance."""
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "Ollama returned unreadable balance data.")
+    included, purchased = payload.get("included"), payload.get("purchased")
+    windows: list[dict[str, Any]] = []
+    if isinstance(included, dict):
+        allowance, balance = usd(included.get("allowance_usd")), usd(included.get("balance_usd"))
+        if allowance is not None and allowance > 0 and balance is not None:
+            period = included.get("period") if isinstance(included.get("period"), dict) else {}
+            start, end = epoch_seconds(period.get("from")), epoch_seconds(period.get("until"))
+            window = money_window("monthly", "Monthly limit", allowance - balance, allowance, None, end, now)
+            window["windowSeconds"] = end - start if start is not None and end is not None and end > start else THIRTY_DAYS
+            windows.append(window)
+        for key, label, seconds in (("session", "Session limit", None), ("weekly", "Weekly limit", SEVEN_DAYS)):
+            legacy = included.get(key)
+            left = number(legacy.get("remaining_percent")) if isinstance(legacy, dict) else None
+            if left is not None:
+                windows.append(make_window(key, label, 100.0 - left, legacy.get("resets_at"), seconds))
+    bought = usd(purchased.get("balance_usd")) if isinstance(purchased, dict) else None
+    credits = balance_credits("Purchased credits", "USD", bought, None) if bought is not None else None
+    if not windows and credits is None:
+        raise ProviderFailure("malformed", "Ollama returned unreadable balance data.")
+    return windows, credits
+
+
+@provider_fetcher("ollama", keyed=True)
+def fetch_ollama(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "ollama"
+    token, missing = key_or_error(provider_id, key_file, "Ollama")
+    if missing:
+        return missing
+    try:
+        windows, credits = parse_ollama(http_json(OLLAMA_BALANCE_URL, bearer_headers(token), timeout), time.time())
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Ollama")
+    result = base_provider(provider_id)
+    result.update(source="Ollama API", windows=windows, credits=credits)
+    return result
+
+
+# --------------------------------------------------------------- Warp
+#
+# The credit limit comes from the GraphQL operation the Warp app runs. The edge in front of it
+# answers 429 unless the User-Agent looks like Warp's own client, so the request identifies as one.
+
+WARP_GRAPHQL_URL = "https://app.warp.dev/graphql/v2?op=GetRequestLimitInfo"
+WARP_USER_AGENT = "Warp/1.0"
+WARP_QUERY = (
+    "query GetRequestLimitInfo($requestContext: RequestContext!) {"
+    " user(requestContext: $requestContext) { __typename ... on UserOutput { user {"
+    " requestLimitInfo { isUnlimited nextRefreshTime requestLimit requestsUsedSinceLastRefresh }"
+    " bonusGrants { requestCreditsGranted requestCreditsRemaining expiration }"
+    " workspaces { bonusGrantsInfo { grants { requestCreditsGranted requestCreditsRemaining expiration } } }"
+    " } } } }"
+)
+
+
+def parse_warp(payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
+    """The monthly credit window, add-on credits that have not expired, and a notice."""
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "Warp returned unreadable credit data.")
+    errors = dict_list(payload.get("errors"))
+    if errors or payload.get("errors"):
+        text = " ".join(str(error.get("message") or "") for error in errors).lower()
+        if "unauthorized" in text or "unauthenticated" in text:
+            raise ProviderFailure("expired", "Warp rejected the key.")
+        raise ProviderFailure("http", "Warp could not report the credit limit.")
+    data = payload.get("data")
+    user = data.get("user") if isinstance(data, dict) else None
+    account = user.get("user") if isinstance(user, dict) else None
+    info = account.get("requestLimitInfo") if isinstance(account, dict) else None
+    if not isinstance(info, dict):
+        raise ProviderFailure("malformed", "Warp did not return the credit limit. "
+                                           "Check that the saved key is a personal Warp API key.")
+
+    windows: list[dict[str, Any]] = []
+    notice = ""
+    limit, used = number(info.get("requestLimit")), number(info.get("requestsUsedSinceLastRefresh"))
+    if info.get("isUnlimited") is True:
+        notice = "Warp reports unlimited credits on this plan."
+    elif limit is not None and limit > 0 and used is not None:
+        windows.append(make_window("monthly", "Monthly limit", clamp(used, 0.0, limit) / limit * 100.0,
+                                   info.get("nextRefreshTime"), THIRTY_DAYS,
+                                   f"{amount_text(used)} of {amount_text(limit)} credits"))
+    else:
+        notice = "Warp reported no credit limit for this key."
+
+    # Add-on credits are spent after the monthly ones and expire instead of resetting.
+    grants = dict_list(account.get("bonusGrants"))
+    for workspace in dict_list(account.get("workspaces")):
+        shared = workspace.get("bonusGrantsInfo")
+        grants += dict_list(shared.get("grants") if isinstance(shared, dict) else None)
+    counted = [(number(grant.get("requestCreditsGranted")), number(grant.get("requestCreditsRemaining")))
+               for grant in grants if (epoch_seconds(grant.get("expiration")) or now + 1) > now]
+    counted = [(granted, left) for granted, left in counted if left is not None]
+    credits = None
+    if counted:
+        granted = [amount for amount, _ in counted]
+        credits = balance_credits("Add-on credits", "CREDITS", sum(left for _, left in counted), None,
+                                  total=None if None in granted else sum(granted))
+    return windows, credits, notice
+
+
+@provider_fetcher("warp", keyed=True)
+def fetch_warp(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "warp"
+    token, missing = key_or_error(provider_id, key_file, "Warp")
+    if missing:
+        return missing
+    release = os.uname().release
+    headers = {**bearer_headers(token), "User-Agent": WARP_USER_AGENT, "x-warp-client-id": "warp-app",
+               "x-warp-os-category": "Linux", "x-warp-os-name": "Linux", "x-warp-os-version": release}
+    body = {
+        "query": WARP_QUERY,
+        "variables": {"requestContext": {"clientContext": {},
+                                         "osContext": {"category": "Linux", "name": "Linux", "version": release}}},
+        "operationName": "GetRequestLimitInfo",
+    }
+    try:
+        windows, credits, notice = parse_warp(http_json(WARP_GRAPHQL_URL, headers, timeout, body), time.time())
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Warp", "Create a personal API key in Warp and save it under Settings → Providers.")
+    result = base_provider(provider_id)
+    result.update(source="Warp API", windows=windows, credits=credits, notice=notice)
+    return result
+
+
+# --------------------------------------------------------------- ZenMux
+#
+# Subscription quota and pay-as-you-go balance from ZenMux's documented Management API, which
+# accepts only Management API keys. The 5-hour and 7-day windows roll, with reset times given;
+# the monthly cap has no usage figure, so it is not shown.
+
+ZENMUX_API_BASE = "https://zenmux.ai/api/v1/management"
+ZENMUX_WINDOWS = (
+    ("quota_5_hour", "session", "5-hour limit", FIVE_HOURS),
+    ("quota_7_day", "weekly", "Weekly limit", SEVEN_DAYS),
+)
+
+
+def zenmux_data(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict) or payload.get("success") is not True or not isinstance(payload.get("data"), dict):
+        raise ProviderFailure("malformed", "ZenMux returned unreadable usage data.")
+    return payload["data"]
+
+
+def parse_zenmux(payload: Any) -> tuple[list[dict[str, Any]], str, str]:
+    """The rolling windows, the plan tier, and a notice when the account is not in good standing."""
+    data = zenmux_data(payload)
+    windows: list[dict[str, Any]] = []
+    for key, window_id, label, seconds in ZENMUX_WINDOWS:
+        quota = data.get(key)
+        fraction = number(quota.get("usage_percentage")) if isinstance(quota, dict) else None
+        if fraction is None:
+            continue
+        spent, size = number(quota.get("used_flows")), number(quota.get("max_flows"))
+        detail = f"{amount_text(spent)} of {amount_text(size)} flows" if spent is not None and size is not None else ""
+        windows.append(make_window(window_id, label, fraction * 100.0, quota.get("resets_at"), seconds, detail))
+    plan_info = data.get("plan")
+    tier = plan_info.get("tier") if isinstance(plan_info, dict) else None
+    plan = tier.strip().title() if isinstance(tier, str) else ""
+    status = data.get("account_status")
+    notice = ""
+    if isinstance(status, str) and status.strip() and status.strip().lower() != "healthy":
+        notice = f"ZenMux reports this account as {status.strip().lower()}."
+    return windows, plan, notice
+
+
+def parse_zenmux_balance(payload: Any) -> dict[str, Any] | None:
+    data = zenmux_data(payload)
+    total = usd(data.get("total_credits"))
+    if total is None or str(data.get("currency") or "usd").lower() != "usd":
+        return None
+    return balance_credits("Pay-as-you-go credits", "USD", total, None)
+
+
+@provider_fetcher("zenmux", keyed=True)
+def fetch_zenmux(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "zenmux"
+    token, missing = key_or_error(provider_id, key_file, "ZenMux")
+    if missing:
+        return missing
+    headers = bearer_headers(token)
+    try:
+        windows, plan, notice = parse_zenmux(http_json(ZENMUX_API_BASE + "/subscription/detail", headers, timeout))
+        try:
+            credits = parse_zenmux_balance(http_json(ZENMUX_API_BASE + "/payg/balance", headers, timeout))
+        except ProviderFailure as exc:
+            # The balance is extra; only a rejected key outranks the quota already read.
+            if exc.kind == "expired":
+                raise
+            credits = None
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "ZenMux",
+                           "It needs a Management API key from the ZenMux console, saved under Settings → Providers.")
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="ZenMux Management API", windows=windows, credits=credits, notice=notice)
+    return result
+
+
+# --------------------------------------------------------------- Cline
+#
+# ClinePass subscription limits: a rolling 5-hour window, the calendar week, and the calendar
+# month (docs.cline.bot/getting-started/clinepass). Pay-as-you-go Cline credits are not part of it.
+
+CLINE_USAGE_URL = "https://api.cline.bot/api/v1/users/me/plan/usage-limits"
+CLINE_LIMITS = {
+    "five_hour": ("session", "5-hour limit", FIVE_HOURS),
+    "weekly": ("weekly", "Weekly limit", SEVEN_DAYS),
+    "monthly": ("monthly", "Monthly limit", None),
+}
+
+
+def calendar_month_seconds(resets_at: int | None) -> int:
+    """Length of the calendar month that ends at `resets_at` (UTC); 30 days when it is unknown."""
+    if resets_at is None:
+        return THIRTY_DAYS
+    end = datetime.fromtimestamp(resets_at, timezone.utc)
+    first = end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    previous = datetime.fromtimestamp(first.timestamp() - ONE_DAY, timezone.utc)
+    start = end.replace(year=previous.year, month=previous.month, day=min(end.day, previous.day))
+    return int(end.timestamp() - start.timestamp())
+
+
+def parse_clinepass(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict) or payload.get("success") is not True:
+        raise ProviderFailure("malformed", "Cline returned unreadable usage limits.")
+    data = payload.get("data")
+    limits = data.get("limits") if isinstance(data, dict) else None
+    if not isinstance(limits, list):
+        raise ProviderFailure("malformed", "Cline returned unreadable usage limits.")
+    windows: list[dict[str, Any]] = []
+    for raw in dict_list(limits):
+        known = CLINE_LIMITS.get(raw["type"]) if isinstance(raw.get("type"), str) else None
+        used = number(raw.get("percentUsed"))
+        if known is None or used is None:
+            continue
+        window_id, label, seconds = known
+        reset = epoch_seconds(raw.get("resetsAt"))
+        windows.append(make_window(window_id, label, used, reset, seconds or calendar_month_seconds(reset)))
+    return windows
+
+
+@provider_fetcher("clinepass", keyed=True)
+def fetch_clinepass(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "clinepass"
+    token, missing = key_or_error(provider_id, key_file, "Cline")
+    if missing:
+        return missing
+    try:
+        windows = parse_clinepass(http_json(CLINE_USAGE_URL, bearer_headers(token), timeout))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Cline")
+    result = base_provider(provider_id)
+    result.update(plan="ClinePass" if windows else "", source="Cline API", windows=windows)
+    if not windows:
+        result["notice"] = "Cline reported no ClinePass limits; the account may not have a ClinePass subscription."
+    return result
+
+
+# --------------------------------------------------------------- Moonshot
+#
+# Account balance of the Kimi (Moonshot) open platform. International accounts (USD) and
+# China-mainland accounts (CNY) are separate platforms of the same company; a key is valid on one.
+
+MOONSHOT_HOSTS = ("https://api.moonshot.ai", "https://api.moonshot.cn")
+MOONSHOT_BALANCE_PATH = "/v1/users/me/balance"
+
+
+def parse_moonshot(payload: Any, currency: str) -> tuple[dict[str, Any], str]:
+    """Available balance as spendable money; vouchers and cash are its two parts.
+
+    Cash can go negative (owed); calls then run on vouchers, and stop once nothing is available."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        raise ProviderFailure("malformed", "Moonshot returned unreadable balance data.")
+    if number(payload.get("code")) != 0 or payload.get("status") is not True:
+        raise ProviderFailure("http", "Moonshot could not report the balance.")
+    data = payload["data"]
+    available, voucher, cash = (usd(data.get(key)) for key in ("available_balance", "voucher_balance", "cash_balance"))
+    if available is None:
+        raise ProviderFailure("malformed", "Moonshot returned no balance for this key.")
+    credits = balance_credits("Balance", currency, available, max(0.0, available), granted=voucher, toppedUp=cash)
+    notice = ""
+    if available <= 0:
+        notice = "Moonshot is refusing API calls until the balance is topped up."
+    elif cash is not None and cash < 0:
+        notice = f"Moonshot reports {abs(cash):.2f} {currency} owed; vouchers pay for calls until it is settled."
+    return credits, notice
+
+
+@provider_fetcher("moonshot", keyed=True)
+def fetch_moonshot(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "moonshot"
+    token, missing = key_or_error(provider_id, key_file, "Moonshot")
+    if missing:
+        return missing
+    try:
+        host, (credits, notice) = first_accepting_host(
+            MOONSHOT_HOSTS,
+            lambda host: parse_moonshot(http_json(host + MOONSHOT_BALANCE_PATH, bearer_headers(token), timeout),
+                                        "CNY" if host == MOONSHOT_HOSTS[1] else "USD"))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Moonshot")
+    result = base_provider(provider_id)
+    result.update(plan="API key", source="Moonshot China API" if host == MOONSHOT_HOSTS[1] else "Moonshot API",
+                  credits=credits, notice=notice)
+    return result
+
+
+# --------------------------------------------------------------- Venice
+#
+# docs.venice.ai billing balance, readable only with an Admin API key. Staked DIEM is a daily
+# allowance that refreshes at 00:00 UTC and is spent first; earned, bundled (subscription) and
+# prepaid USD credits are dollar balances spent after it, in that order.
+
+VENICE_BALANCE_URL = "https://api.venice.ai/api/v1/billing/balance"
+
+
+def parse_venice(payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
+    """Today's DIEM allowance as a daily window and the dollar credits as spendable money."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("canConsume"), bool) \
+            or not isinstance(payload.get("balances"), dict):
+        raise ProviderFailure("malformed", "Venice returned unreadable balance data.")
+    balances = payload["balances"]
+    windows: list[dict[str, Any]] = []
+    diem, allocation = number(balances.get("diem")), number(payload.get("diemEpochAllocation"))
+    if diem is not None and allocation is not None and allocation > 0:
+        spent = clamp(allocation - diem, 0.0, allocation)
+        windows.append(make_window("daily", "DIEM · Daily limit", spent / allocation * 100.0, next_utc_reset("daily", now),
+                                   ONE_DAY, f"{amount_text(spent)} of {amount_text(allocation)} DIEM"))
+    # Each dollar balance is null unless positive.
+    dollars = {key: usd(balances.get(key)) for key in ("usd", "bundledCredits", "earnedCredits")}
+    credits = None
+    if any(value is not None for value in dollars.values()) or not windows:
+        remaining = round(sum(value or 0.0 for value in dollars.values()), 2)
+        granted = None if dollars["bundledCredits"] is None and dollars["earnedCredits"] is None \
+            else round((dollars["bundledCredits"] or 0.0) + (dollars["earnedCredits"] or 0.0), 2)
+        credits = balance_credits("Balance", "USD", remaining, remaining, granted=granted, toppedUp=dollars["usd"])
+    notice = "" if payload["canConsume"] else "Venice has no balance left for API calls."
+    return windows, credits, notice
+
+
+@provider_fetcher("venice", keyed=True)
+def fetch_venice(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "venice"
+    token, missing = key_or_error(provider_id, key_file, "Venice")
+    if missing:
+        return missing
+    try:
+        windows, credits, notice = parse_venice(http_json(VENICE_BALANCE_URL, bearer_headers(token), timeout), time.time())
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Venice",
+                           "The balance needs an Admin API key from venice.ai/settings/api, saved under Settings → Providers.")
+    result = base_provider(provider_id)
+    result.update(plan="API key", source="Venice API", windows=windows, credits=credits, notice=notice)
+    return result
+
+
+# --------------------------------------------------------------- DeepInfra
+#
+# Documented billing endpoints. A negative Stripe balance is prepaid money and a positive one is
+# owed; usage since the last invoice (`recent`) is not yet deducted from it. The optional spending
+# limit (USD) is set against that usage; DeepInfra does not say when it resets.
+
+DEEPINFRA_API_BASE = "https://api.deepinfra.com"
+
+
+def parse_deepinfra(checklist: Any, usage_payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any], str]:
+    """The spending-limit window, the balance as spendable money, this month's spend, and a notice."""
+    stripe = number(checklist.get("stripe_balance")) if isinstance(checklist, dict) else None
+    recent = number(checklist.get("recent")) if isinstance(checklist, dict) else None
+    if stripe is None or recent is None:
+        raise ProviderFailure("malformed", "DeepInfra returned unreadable billing data.")
+    recent = max(0.0, recent)
+    available = round(-(stripe + recent), 2)
+    windows: list[dict[str, Any]] = []
+    allowances = [max(0.0, available)]
+    limit = number(checklist.get("limit"))
+    if limit is not None and limit > 0:
+        windows.append(money_window("limit", "Spending limit", recent, limit, None, None, now))
+        allowances.append(max(0.0, limit - recent))
+    suspended = checklist.get("suspended") is True
+    if suspended:
+        allowances.append(0.0)
+    # `total_cost` is in cents; with from=current the latest period is this month.
+    months = [(str(month.get("period") or ""), number(month.get("total_cost")))
+              for month in dict_list(usage_payload.get("months") if isinstance(usage_payload, dict) else None)]
+    months = [month for month in months if month[1] is not None]
+    spend = {"monthly": round(max(months)[1] / 100, 2)} if months else {}
+    credits = balance_credits("Balance", "USD", available, round(min(allowances), 2), spend=spend)
+    notice = ""
+    if suspended:
+        reason = checklist.get("suspend_reason")
+        notice = "DeepInfra has suspended this account" + \
+            (f" ({reason.replace('-', ' ')})." if isinstance(reason, str) and reason else ".")
+    elif available < 0:
+        notice = f"DeepInfra shows ${-available:.2f} owed."
+    return windows, credits, notice
+
+
+@provider_fetcher("deepinfra", keyed=True)
+def fetch_deepinfra(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "deepinfra"
+    token, missing = key_or_error(provider_id, key_file, "DeepInfra")
+    if missing:
+        return missing
+    headers = bearer_headers(token)
+    try:
+        checklist = http_json(DEEPINFRA_API_BASE + "/payment/checklist?compute_owed=true", headers, timeout)
+        try:
+            usage_payload = http_json(DEEPINFRA_API_BASE + "/payment/usage?from=current", headers, timeout)
+        except ProviderFailure:
+            # Month-to-date spend is extra; the balance already read stands without it.
+            usage_payload = None
+        windows, credits, notice = parse_deepinfra(checklist, usage_payload, time.time())
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "DeepInfra")
+    result = base_provider(provider_id)
+    result.update(plan="API key", source="DeepInfra API", windows=windows, credits=credits, notice=notice)
+    return result
+
+
+# --------------------------------------------------------------- Vercel AI Gateway
+#
+# The team's AI Gateway credits (vercel.com/docs/ai-gateway/sdks-and-apis/rest-api): the
+# remaining balance and lifetime spend, both decimal strings in USD. No limit or reset applies.
+
+VERCEL_CREDITS_URL = "https://ai-gateway.vercel.sh/v1/credits"
+
+
+def parse_vercel(payload: Any) -> dict[str, Any]:
+    balance = usd(payload.get("balance")) if isinstance(payload, dict) else None
+    if balance is None:
+        raise ProviderFailure("malformed", "Vercel AI Gateway returned unreadable credit data.")
+    spent = usd(payload.get("total_used"))
+    return balance_credits("Balance", "USD", balance, max(0.0, balance),
+                           used=spent if spent is not None and spent >= 0 else None)
+
+
+@provider_fetcher("vercel", keyed=True)
+def fetch_vercel(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "vercel"
+    token, missing = key_or_error(provider_id, key_file, "Vercel AI Gateway")
+    if missing:
+        return missing
+    try:
+        credits = parse_vercel(http_json(VERCEL_CREDITS_URL, bearer_headers(token), timeout))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Vercel AI Gateway")
+    result = base_provider(provider_id)
+    result.update(plan="API key", source="Vercel AI Gateway API", credits=credits)
+    return result
+
+
+# --------------------------------------------------------------- Poe
+#
+# creator.poe.com Usage API: the current point balance, plan and add-on points together.
+
+POE_BALANCE_URL = "https://api.poe.com/usage/current_balance"
+
+
+def parse_poe(payload: Any) -> dict[str, Any]:
+    points = number(payload.get("current_point_balance")) if isinstance(payload, dict) else None
+    if points is None:
+        raise ProviderFailure("malformed", "Poe returned unreadable balance data.")
+    return balance_credits("Points", "POINTS", points, max(0.0, points))
+
+
+@provider_fetcher("poe", keyed=True)
+def fetch_poe(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "poe"
+    token, missing = key_or_error(provider_id, key_file, "Poe")
+    if missing:
+        return missing
+    try:
+        credits = parse_poe(http_json(POE_BALANCE_URL, bearer_headers(token), timeout))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Poe")
+    result = base_provider(provider_id)
+    result.update(plan="API key", source="Poe API", credits=credits)
+    return result
 
 
 # --------------------------------------------------------------- CLIProxyAPI
