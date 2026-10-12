@@ -68,10 +68,6 @@ Estimated model costs use the public [`model_prices_and_context_window.json`](ht
 
 Current Kimi credential locations, endpoint shapes, fixed-point wallet units, and profile fields were checked against `MoonshotAI/kimi-cli` at commit `d723cc47ee43e5ca3c3c4ec2473f205d44acede2`. The `wire.jsonl` location, recursive subagent event envelope, and `StatusUpdate.token_usage` fields used by the Costs tab were checked again at commit `cbc15c076d17f70fec9f89c90c0502e68657f505`. Kimi CLI is distributed under the MIT license (Copyright (c) 2026 Moonshot AI). No Kimi CLI source or artwork is redistributed; the Kimi mark comes from Simple Icons (see Provider marks).
 
-## Provider marks
-
-Claude, Anthropic, OpenAI, Codex, Kimi, and Moonshot AI names and marks are the property of their respective owners. Their inclusion identifies compatible services and does not imply affiliation or endorsement.
-
 ## OmaProxy
 
 The account browsing, email privacy, and Antigravity quota-summary protocol were informed by [`soojy/omaproxy`](https://github.com/soojy/omaproxy) at commit `f61b92f02b3e75f75dc6c6cbd8c1556fdc3c5901`. The interface uses this plugin’s native Omarchy components and fixed-block meters. OmaProxy’s license follows:
@@ -100,10 +96,35 @@ The account browsing, email privacy, and Antigravity quota-summary protocol were
 
 ## Provider marks
 
-The marks in `assets/<provider>.svg` and `assets/<provider>-bar.svg` identify the
-services each provider reports on. The Claude, Kimi, OpenCode, OpenRouter, and
-DeepSeek paths are taken from [Simple Icons](https://simpleicons.org), released
-under CC0 1.0, so every mark shares the same 24-unit optical frame. The Codex
-mark is redistributed from `basecamp/omarchy` as noted above. Claude, Codex, Kimi,
-OpenCode, OpenRouter, and DeepSeek are trademarks of their respective owners; the
-marks are used here only to identify the monitored services.
+The marks in `assets/<provider>.svg`, `assets/<provider>-bar.svg`, and `assets/<provider>-light.svg` identify the services each provider reports on. Each is a single 24-unit SVG. The `-bar` variants are white for the usage bar; the `-light` variants are dark for light surfaces. These variants only change the fill.
+
+- [Simple Icons](https://simpleicons.org) 16.35.0 (commit `ed9a5192b24ad2f169bf1009931da0df27d5a49a`), released under CC0 1.0: Claude, Kimi, OpenCode, OpenRouter, DeepSeek, Gemini (`googlegemini`), GitHub Copilot (`githubcopilot`), Cursor, JetBrains, Hugging Face, Z.ai (`zdotai`), MiniMax, Ollama, Warp, Cline (`cline`), Moonshot AI (`moonshotai`), Vercel, and Poe.
+- [Lobe Icons](https://github.com/lobehub/lobe-icons) (`@lobehub/icons-static-svg` 1.95.1), MIT: Amp (`amp`), Antigravity, Grok, Kiro (`kiro-color` for the coloured mark), Kilo Code (`kilocode`), Chutes, ZenMux, Venice, and DeepInfra. Chutes and ZenMux paths are rescaled into the 24-unit frame.
+- Droid, Codebuff, and Synthetic are self-drawn monograms (a rounded square with a letter) and use no third-party artwork.
+- Codex is redistributed from `basecamp/omarchy` as noted above.
+
+Simple Icons is released under CC0 1.0; the Lobe Icons MIT licence follows:
+
+> MIT License
+>
+> Copyright (c) 2023 LobeHub
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
+
+Claude, Anthropic, OpenAI, Codex, Kimi, Moonshot AI, Antigravity, Gemini, GitHub Copilot, Cursor, Grok, Kiro, JetBrains, Droid, Amp, Kilo Code, Codebuff, Hugging Face, Z.ai, MiniMax, Synthetic, Chutes, Ollama, Warp, ZenMux, Cline, Venice, DeepInfra, Vercel, Poe, OpenCode, OpenRouter, and DeepSeek names and marks are the property of their respective owners. Their inclusion identifies compatible services and does not imply affiliation or endorsement.
