@@ -874,4 +874,24 @@ assert.deepEqual(chipIds(context.limitChips([chipRow("a", null), chipRow("b", 40
   ["b"], "unknown pressure counts as untouched");
 console.log("Chip cap: passed");
 
+// One-click setup: sign in with the CLI that is there, install it with mise and sign in, or link out.
+const entryOf = (id) => context.localProvider(id);
+const signedOut = { status: "error", errorKind: "no_credentials" };
+assert.equal(context.setupAction(entryOf("gemini"), signedOut, ["gemini"]).kind, "signin");
+assert.equal(context.setupAction(entryOf("gemini"), signedOut, ["gemini"]).command, entryOf("gemini").login);
+assert.equal(context.setupAction(entryOf("gemini"), { status: "error", errorKind: "expired" }, ["gemini"]).kind, "signin", "an expired sign-in is fixed the same way");
+const install = context.setupAction(entryOf("gemini"), signedOut, []);
+assert.equal(install.kind, "install", "a missing CLI with a mise package installs, then signs in");
+assert.equal(install.command, "mise use -g " + entryOf("gemini").mise + " && " + entryOf("gemini").login);
+assert.equal(context.setupAction(entryOf("kiro"), signedOut, []).kind, "link", "no mise package: link to where the tool comes from");
+assert.equal(context.setupAction(entryOf("kiro"), signedOut, []).url, entryOf("kiro").installUrl);
+assert.equal(context.setupAction(entryOf("gemini"), signedOut, null).kind, "signin", "before the backend says, the CLI is assumed present");
+assert.equal(context.setupAction(entryOf("gemini"), { status: "ok" }, ["gemini"]).kind, "", "a connected provider offers nothing");
+assert.equal(context.setupAction(entryOf("gemini"), { status: "error", errorKind: "timeout" }, ["gemini"]).kind, "", "other failures are not fixed by signing in");
+assert.equal(context.setupAction(entryOf("zai"), null, []).kind, "", "API-key providers are set up with a key, not a sign-in");
+assert.equal(context.setupAction(entryOf("jetbrains"), signedOut, []).kind, "link", "an IDE is got, not signed in to");
+assert.equal(context.providerStatus(entryOf("gemini"), { status: "error", errorKind: "expired" }, false, false, true).text,
+  "Sign-in expired", "beside a Sign in button the status drops the instruction");
+console.log("Provider setup: passed");
+
 console.log("UsageLogic.js: all assertions passed");

@@ -10,15 +10,15 @@
 
 </div>
 
-![Six provider chips in the menu bar with the Limits panel open below: Claude, Codex, Kimi, OpenCode, OpenRouter, and DeepSeek tiles, a headline that reads 5-hour limit runs out in 1h 9m, and three limit cards; beside it the Costs tab with a 30-day chart and the model breakdown](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/hero.png)
+![Menu bar chips for the four providers closest to a limit and a +4 chip, with the Limits panel open below: tiles for Claude, Codex, Gemini, Antigravity, Copilot, Cursor, Z.ai, and OpenRouter, a headline that reads 5-hour limit runs out in 1h 11m, and three limit cards; beside it the Costs tab with a 30-day chart and the model breakdown](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/hero.png)
 
 Quotatank reads the plan limits of the coding agents you already signed in to — **Claude Code, OpenAI Codex, Gemini CLI, Antigravity, GitHub Copilot, Cursor, Kimi Code, OpenCode Go, Grok, Kiro, JetBrains AI, Droid, Amp, Kilo Code, Codebuff, and Hugging Face** — the coding plans and prepaid balances behind an API key — **Z.ai, MiniMax, Synthetic, Chutes, Ollama Cloud, Warp, Cline, ZenMux, OpenRouter, DeepSeek, Moonshot, Venice, DeepInfra, Vercel AI Gateway, and Poe** — or every account behind a **Fusebox or CLIProxyAPI** server. A second tab estimates what your recorded tokens would cost at API rates.
 
-<sub>Screenshots use fixture data in the Tokyo Night theme unless noted; the Providers page uses fixture data in a custom dark theme.</sub>
+<sub>Screenshots use fixture data in the Tokyo Night theme.</sub>
 
 ## Why it is different
 
-- **It finds what you already use.** Sign-ins on this computer are picked up on their own; one quiet line in Limits names any it found that you are not monitoring yet. Providers you do not have never show up.
+- **It finds what you already use, and fixes what is missing.** Sign-ins on this computer are picked up on their own, and one quiet line in Limits names any it found that you are not monitoring yet. A provider that is signed out gets a **Sign in** button that opens its sign-in in a terminal; one whose CLI is missing gets **Install and sign in**, through Omarchy's mise. Providers you do not have never show up.
 - **A run-out time, not just a percentage.** Each limit card projects from your recent rate: `Runs out in 1h 9m` when the limit would empty before it resets, `Lasts until reset` when it would not. One headline above the cards gives the answer for the whole provider.
 - **A pace tick on the meter.** A tick marks where even use would have put you by now; blocks past it are use ahead of pace, and a badge counts the points ahead or behind.
 - **Money where money is the limit.** Prepaid providers such as OpenRouter, DeepSeek, Moonshot, and Venice lead with what you can still spend, in their own currency, with low-balance alerts in amounts rather than percentages.
@@ -81,7 +81,7 @@ The tick marks where even use would be by now, so blocks past it are use ahead o
 
 ![Three panels: Codex with the headline Weekly limit is used up, back in 5d 10h; OpenCode Go with a sign-in expired card that quotes the command to run; DeepSeek with a drained balance and the notice that the platform is refusing calls](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/states.png)
 
-When something is wrong, the panel says what and what to do: a used-up limit names when it comes back, a failed refresh names the command to run, and a drained balance says it needs topping up. The chip in the bar shows a short reason instead of a figure (`sign in`, `rate limited`, `offline`), and hovering it gives the full message.
+When something is wrong, the panel says what and what to do: a used-up limit names when it comes back, a failed refresh names the command to run, and a drained balance says it needs topping up. A signed-out provider's card has a **Sign in** button; the panel refreshes on its own until the sign-in lands. The chip in the bar shows a short reason instead of a figure (`sign in`, `rate limited`, `offline`), and hovering it gives the full message.
 
 ## Balances, not just percentages
 
@@ -128,13 +128,13 @@ Local Claude Code, Codex, and OpenCode history are on by default, and up to four
 
 ## Settings that apply as you go
 
-![The Providers page: Grok CLI and Kiro under Found on this computer with Ignore and Monitor; eight monitored providers, each with a grip, Monitor and Menu bar switches, and a status such as Connected · Claude Max 20x; key editors under Z.ai and OpenRouter; and More providers folded at the bottom](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/settings.png)
+![The Providers page twice. On the left, Kiro under Found on this computer with Ignore and Monitor, then the monitored providers with their status, Gemini CLI reading Sign-in expired with a Sign in button. On the right, further down: Grok CLI waiting for a sign-in with a Sign in button, and More providers with Install and sign in buttons and links to get each tool](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/settings.png)
 
 The gear opens an index of six pages, and each row already says what the page is set to. There is no Save button: every switch, selector, and valid number applies the moment it changes, so you can compare the bar with the setting still in front of you. Keys and tokens are the exception, with an explicit **Save** that writes a private file, after which the page shows **Replace** and **Remove**.
 
 | Page | What lives there |
 |---|---|
-| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server). **Found on this computer** offers sign-ins Quotatank detected but is not monitoring, with **Monitor** and **Ignore**. **Monitored** lists the providers in use, each with what the last check found (`Connected · Claude Max 20x`, `Sign-in expired — Run claude auth login`, `No key saved`), a grip to drag it into the order tiles and chips follow, **Monitor** and **Menu bar** switches, its key editor when it takes an API key, and **Customize** to read it as used or left and pin the limits its chip shows. **More providers** folds away everything else, filterable by name, with a link to each provider's key page |
+| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server). **Found on this computer** offers sign-ins Quotatank detected but is not monitoring, with **Monitor** and **Ignore**. **Monitored** lists the providers in use, each with what the last check found (`Connected · Claude Max 20x`, `Sign-in expired`, `No key saved`) and, when signed out, a **Sign in** or **Install and sign in** button; a grip to drag it into the order tiles and chips follow; **Monitor** and **Menu bar** switches; its key editor when it takes an API key; and **Customize** to read it as used or left and pin the limits its chip shows. **More providers** folds away everything else, filterable by name, with the same buttons, a link to get each tool, and a link to each provider's key page |
 | **Menu bar** | Chips or the widget icon, the limit each chip shows, a second limit, reset times and formats, how many chips the bar holds, hiding used-up providers |
 | **Alerts** | Desktop notifications, the percentage thresholds, and the low-balance amounts |
 | **Display** | Used or left, provider colors, square cards, hidden account emails |
@@ -146,7 +146,8 @@ Every key is listed in the [settings reference](https://github.com/JanitorHead/o
 Privacy:
 
 - Quotatank reads existing CLI, app, and IDE sign-ins and never writes, rotates, or deletes authentication state. Quota checks are read-only and never spend quota.
-- Gemini CLI access tokens last an hour. When the saved one has expired, Quotatank exchanges Gemini CLI's refresh token for a new access token that lives only in memory for that check; nothing is written back.
+- Gemini CLI access tokens last an hour. When the saved one has expired, Quotatank exchanges Gemini CLI's refresh token for a new access token that lives only in memory for that check, using the sign-in client of the Gemini CLI installed on this computer; nothing is written back.
+- **Sign in** and **Install and sign in** only run when you press them, in a terminal you can see, with the provider's own sign-in command.
 - Antigravity is read from its own running language server on `127.0.0.1`, using the session token that process was started with, or from `agy`'s usage report. GitHub Copilot can fall back to `gh auth token`. Both commands run without a shell, with a timeout and no browser.
 - Applying a banked Codex reset is a separate action in CLIProxyAPI mode, and it asks for confirmation first.
 - API keys, management keys, and T3 tokens are saved in private files (`0600`, in a `0700` directory), never in widget settings or command-line arguments. **Remove** deletes the file.
@@ -175,7 +176,7 @@ flowchart TB
 
 ### Sign-ins on this computer
 
-Sign in to each tool the way you already do. Quotatank picks up the sign-ins it finds: new installations monitor every provider below by default and show the ones that are signed in; if you set Quotatank up before, **Settings → Providers → Found on this computer** offers the new ones with one click.
+Sign in to each tool the way you already do, or from Quotatank: **Sign in** opens the command below in a floating terminal, and **Install and sign in** first installs the CLI with `mise use -g` (the way `omarchy default agent` installs agents) when it is not on PATH. Tools that are not CLIs, such as an IDE, get a link to their download page instead. Quotatank picks up the sign-ins it finds: new installations monitor every provider below by default and show the ones that are signed in; if you set Quotatank up before, **Settings → Providers → Found on this computer** offers the new ones with one click.
 
 | Provider | Sign in with | Shows |
 |---|---|---|

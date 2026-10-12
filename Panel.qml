@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
+import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
@@ -288,6 +289,33 @@ Ui.Panel {
   function refreshNow() {
     if (viewMode === "costs") costBackend.refresh()
     else backend.refresh()
+  }
+
+  // Sign in to or install a provider in a floating Omarchy terminal, then refresh every few seconds
+  // until its sign-in shows up (or three minutes pass), so the panel updates without a manual refresh.
+  property string setupWatchId: ""
+  property int setupWatchTicks: 0
+  function startSetup(entry, action) {
+    if (!entry || !action || action.command === "") return
+    Quickshell.execDetached(["omarchy-launch-floating-terminal-with-presentation", action.command])
+    setupWatchId = entry.id
+    setupWatchTicks = 0
+    setupWatch.restart()
+  }
+  Timer {
+    id: setupWatch
+    interval: 8000
+    repeat: true
+    onTriggered: {
+      var reading = UsageLogic.readingFor(backend.providers, root.setupWatchId)
+      root.setupWatchTicks++
+      if ((reading && reading.status === "ok") || root.setupWatchTicks > 22) {
+        stop()
+        root.setupWatchId = ""
+        return
+      }
+      backend.refresh()
+    }
   }
 
   function showLimits() {
@@ -1077,6 +1105,7 @@ Ui.Panel {
             usageLoading: backend.loading
             proxyImplementation: backend.proxyImplementation
             costSources: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sources) : []
+            onSetupRequested: function(entry, action) { root.startSetup(entry, action) }
             onChangeRequested: function(values) { root.saveSettings(values) }
             onCloseRequested: root.leaveSettings()
             onRevealRequested: function(item) {
@@ -1181,6 +1210,23 @@ Ui.Panel {
                 font.pixelSize: Style.font.bodySmall
                 textFormat: Text.PlainText
                 wrapMode: Text.WordWrap
+              }
+
+              // The same one-click fix Settings offers, right where the failure is reported.
+              Ui.Button {
+                id: errorSetupButton
+                objectName: "errorSetupButton"
+                readonly property var entry: root.proxyMode || !root.provider ? null : UsageLogic.localProvider(root.provider.id)
+                readonly property var action: UsageLogic.setupAction(entry, root.provider, backend.installed)
+                visible: action.kind === "signin" || action.kind === "install"
+                text: root.setupWatchId !== "" && entry && root.setupWatchId === entry.id ? "Waiting for the sign-in…" : action.label
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.bodySmall
+                focusable: true
+                tooltipText: action.command
+                onClicked: root.startSetup(entry, action)
               }
             }
           }

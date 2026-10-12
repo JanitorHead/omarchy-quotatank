@@ -17,6 +17,7 @@ sys.path.insert(0, str(BACKEND.parent))
 SPEC = importlib.util.spec_from_file_location("model_usage_backend_gemini", BACKEND)
 usage = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(usage)
+REAL_INSTALL_ROOTS = usage.gemini_install_roots
 
 SECRET = "sk-synthetic"
 STALE_MS = 1_000_000  # 1970: the stored access token has expired
@@ -32,6 +33,11 @@ RESEARCH_QUOTA = {"buckets": [
 ]}
 # provider-research.md, Gemini section: "ineligibleTiers[].reasonCode" for the consumer shutdown.
 SHUTDOWN_TIERS = [{"reasonCode": "UNSUPPORTED_CLIENT", "reasonMessage": "This client is no longer supported."}]
+
+# Gemini CLI's installed-app OAuth client as its install ships it. The values are fake.
+FAKE_CLIENT_ID = "123-abc.apps.googleusercontent.com"
+FAKE_CLIENT_SECRET = "GOCSPX-REMOVED"
+FAKE_INSTALL_JS = f'const client = {{id: "{FAKE_CLIENT_ID}", secret: "{FAKE_CLIENT_SECRET}"}};'
 
 
 def id_token(claims: dict[str, str]) -> str:
@@ -63,6 +69,15 @@ class GeminiCase(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, environment)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Gemini CLI's client comes from a fake install unless a test says otherwise.
+        self.install = self.root / "install"
+        (self.install / "bundle").mkdir(parents=True)
+        (self.install / "bundle" / "gemini.js").write_text(FAKE_INSTALL_JS)
+        roots = mock.patch.object(usage, "gemini_install_roots", return_value=[self.install])
+        roots.start()
+        self.addCleanup(roots.stop)
+        usage.gemini_oauth_client.cache_clear()
+        self.addCleanup(usage.gemini_oauth_client.cache_clear)
 
     def write_creds(self, **fields: object) -> None:
         creds: dict[str, object] = {"access_token": "sk-synthetic-access", "refresh_token": "sk-synthetic-refresh",
@@ -182,6 +197,7 @@ class GeminiTests(GeminiCase):
         fields = self.form.call_args.args[1]
         self.assertEqual(set(fields), {"client_id", "client_secret", "refresh_token", "grant_type"})
         self.assertEqual((fields["grant_type"], fields["refresh_token"]), ("refresh_token", "sk-synthetic-refresh"))
+        self.assertEqual((fields["client_id"], fields["client_secret"]), (FAKE_CLIENT_ID, FAKE_CLIENT_SECRET))
         self.assertEqual(self.requests[0]["headers"]["Authorization"], "Bearer sk-synthetic-fresh")
         self.assertEqual(path.read_bytes(), before_bytes)
         self.assertEqual(sorted(self.root.rglob("*")), before_files)
@@ -272,6 +288,51 @@ class GeminiTests(GeminiCase):
         (self.home / "oauth_creds.json").write_text("[]")
         result = self.fetch(status(), RESEARCH_QUOTA)
         self.assertEqual(result["errorKind"], "no_credentials")
+
+
+class GeminiInstallTests(GeminiCase):
+    def test_refresh_without_a_local_install_is_expired_and_sends_nothing(self):
+        self.write_creds(expiry_date=STALE_MS)
+        with mock.patch.object(usage, "gemini_install_roots", return_value=[]):
+            usage.gemini_oauth_client.cache_clear()
+            result = self.fetch(status(), RESEARCH_QUOTA)
+        self.assertEqual(result["errorKind"], "expired")
+        self.assertEqual(result["message"], "Gemini CLI's sign-in has expired. Run gemini to refresh it.")
+        self.form.assert_not_called()
+        self.assertEqual(self.requests, [])
+
+    def test_client_is_read_from_the_gemini_on_path_through_its_symlink(self):
+        package = self.root / "npm" / "lib" / "node_modules" / "@google" / "gemini-cli"
+        (package / "dist").mkdir(parents=True)
+        (package / "bundle").mkdir()
+        (package / "package.json").write_text('{"name": "@google/gemini-cli"}')
+        (package / "bundle" / "gemini.js").write_text(FAKE_INSTALL_JS)
+        entry = package / "dist" / "index.js"
+        entry.write_text("#!/usr/bin/env node\n")
+        entry.chmod(0o755)
+        bin_dir = self.root / "npm" / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "gemini").symlink_to(entry)
+        self.write_creds(expiry_date=STALE_MS)
+        with mock.patch.object(usage, "gemini_install_roots", REAL_INSTALL_ROOTS), \
+                mock.patch.dict(os.environ, {"PATH": str(bin_dir)}):
+            usage.gemini_oauth_client.cache_clear()
+            result = self.fetch(status(), RESEARCH_QUOTA, form=[{"access_token": "sk-synthetic-fresh"}])
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(self.form.call_args.args[1]["client_id"], FAKE_CLIENT_ID)
+
+    def test_a_file_with_only_the_client_id_is_not_a_client(self):
+        (self.install / "bundle" / "gemini.js").write_text('const id = "123-abc.apps.googleusercontent.com";')
+        usage.gemini_oauth_client.cache_clear()
+        self.assertIsNone(usage.gemini_oauth_client())
+
+    def test_the_client_search_reads_at_most_64_mib_of_a_file(self):
+        with (self.install / "bundle" / "gemini.js").open("wb") as handle:
+            handle.seek(usage.GEMINI_CLIENT_MAX_BYTES)
+            handle.write(FAKE_INSTALL_JS.encode())
+        usage.gemini_oauth_client.cache_clear()
+        self.assertIsNone(usage.gemini_oauth_client())
+
 
 
 if __name__ == "__main__":
