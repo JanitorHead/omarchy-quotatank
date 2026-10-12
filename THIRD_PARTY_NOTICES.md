@@ -98,8 +98,8 @@ The account browsing, email privacy, and Antigravity quota-summary protocol were
 
 The marks in `assets/<provider>.svg`, `assets/<provider>-bar.svg`, and `assets/<provider>-light.svg` identify the services each provider reports on. Each is a single 24-unit SVG. The `-bar` variants are white for the usage bar; the `-light` variants are dark for light surfaces. These variants only change the fill.
 
-- [Simple Icons](https://simpleicons.org) 16.35.0 (commit `ed9a5192b24ad2f169bf1009931da0df27d5a49a`), released under CC0 1.0: Claude, Kimi, OpenCode, OpenRouter, DeepSeek, Gemini (`googlegemini`), GitHub Copilot (`githubcopilot`), Cursor, JetBrains, Amp, Hugging Face, Z.ai (`zdotai`), MiniMax, Ollama, Warp, Cline (`cline`), Moonshot AI (`moonshotai`), Vercel, and Poe.
-- [Lobe Icons](https://github.com/lobehub/lobe-icons) (`@lobehub/icons-static-svg` 1.95.1), MIT: Antigravity, Grok, Kiro (`kiro-color` for the coloured mark), Kilo Code (`kilocode`), Chutes, ZenMux, Venice, and DeepInfra. Chutes and ZenMux paths are rescaled into the 24-unit frame.
+- [Simple Icons](https://simpleicons.org) 16.35.0 (commit `ed9a5192b24ad2f169bf1009931da0df27d5a49a`), released under CC0 1.0: Claude, Kimi, OpenCode, OpenRouter, DeepSeek, Gemini (`googlegemini`), GitHub Copilot (`githubcopilot`), Cursor, JetBrains, Hugging Face, Z.ai (`zdotai`), MiniMax, Ollama, Warp, Cline (`cline`), Moonshot AI (`moonshotai`), Vercel, and Poe.
+- [Lobe Icons](https://github.com/lobehub/lobe-icons) (`@lobehub/icons-static-svg` 1.95.1), MIT: Amp (`amp`), Antigravity, Grok, Kiro (`kiro-color` for the coloured mark), Kilo Code (`kilocode`), Chutes, ZenMux, Venice, and DeepInfra. Chutes and ZenMux paths are rescaled into the 24-unit frame.
 - Droid, Codebuff, and Synthetic are self-drawn monograms (a rounded square with a letter) and use no third-party artwork.
 - Codex is redistributed from `basecamp/omarchy` as noted above.
 
