@@ -9,23 +9,31 @@ contract. Access tokens are never printed, persisted, or included in errors.
 from __future__ import annotations
 
 import argparse
+import base64
+import calendar
 import concurrent.futures
 import hashlib
+import http.client
 import json
 import os
 import re
 import select
 import shutil
+import signal
+import sqlite3
+import ssl
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
+from xml.etree import ElementTree
 
 from model_usage_common import atomic_write_json, clean_message
 
@@ -105,6 +113,7 @@ PROVIDER_KEY_ENV: dict[str, tuple[str, ...]] = {
     "amp": ("AMP_API_KEY",),
     "kilo": ("KILO_API_KEY",),
     "codebuff": ("CODEBUFF_API_KEY",),
+    "huggingface": ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"),
     "zai": ("Z_AI_API_KEY", "ZAI_API_KEY"),
     "minimax": ("MINIMAX_CODING_API_KEY", "MINIMAX_API_KEY"),
     "synthetic": ("SYNTHETIC_API_KEY",),
@@ -1156,6 +1165,2286 @@ def fetch_opencode(timeout: float) -> dict[str, Any]:
         source="OpenCode Go usage API",
         windows=windows,
     )
+    return result
+
+
+# --------------------------------------------------------------- Sign-in helpers
+#
+# The collectors from here to OpenRouter read sign-ins that other tools own: CLI login files,
+# IDE state databases, and running language servers. Every read is size-bounded and read-only;
+# nothing is refreshed and saved (Gemini refreshes in memory only), and no token reaches a
+# message.
+
+MAX_LOCAL_TEXT_BYTES = 64 * 1024
+MAX_CLI_OUTPUT_BYTES = 1024 * 1024
+# The edges in front of several of these APIs refuse Python's default User-Agent.
+SIGNIN_USER_AGENT = OPENCODE_USER_AGENT
+
+
+def time_left(deadline: float) -> float:
+    """Seconds left before `deadline`: collectors that make several calls share one budget."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ProviderFailure("timeout", "The usage request timed out.")
+    return remaining
+
+
+def utc_timestamp(value: Any) -> int | None:
+    """Epoch seconds from an epoch number or ISO-8601 text; text without an offset is UTC.
+
+    `epoch_seconds` reads naive text on the local clock, but these providers send UTC without
+    saying so (date-only resets, older agy builds). Fractions finer than microseconds are cut."""
+    if not isinstance(value, str) or number(value) is not None:
+        return epoch_seconds(value)
+    text = re.sub(r"\.(\d+)", lambda match: "." + (match.group(1) + "00000")[:6], value.strip())
+    try:
+        parsed = datetime.fromisoformat(re.sub(r"[Zz]$", "+00:00", text))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    stamp = int(parsed.timestamp())
+    return stamp if stamp > 0 else None
+
+
+def first_number(mapping: dict[str, Any], *keys: str) -> float | None:
+    """The first of `keys` that holds a number."""
+    return next((value for key in keys if (value := number(mapping.get(key))) is not None), None)
+
+
+def unknown_window(window_id: str, label: str, resets_at: Any = None,
+                   window_seconds: int | None = None, detail: str = "") -> dict[str, Any]:
+    """A limit the provider names but does not measure: listed, never shown as a percentage."""
+    window = make_window(window_id, label, 0, resets_at, window_seconds, detail)
+    window.update(used=None, remaining=None)
+    return window
+
+
+def read_text(path: Path, max_bytes: int = MAX_LOCAL_TEXT_BYTES) -> str:
+    """A small text file another tool owns, size-bounded like `read_json`."""
+    with path.open("rb") as handle:
+        raw = handle.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise ValueError(f"Text input exceeds the {max_bytes}-byte limit")
+    return raw.decode("utf-8")
+
+
+def data_home() -> Path:
+    return Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")).expanduser()
+
+
+def cache_home() -> Path:
+    return Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")).expanduser()
+
+
+def read_sqlite(path: Path, *queries: tuple[str, tuple[Any, ...]]) -> list[Any]:
+    """The first column of each query's first row in another app's SQLite store.
+
+    It is opened read-only (`mode=ro`; never `immutable`, since the app may be writing) with a
+    short busy timeout, so a poll can neither change the store nor keep it locked."""
+    connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.25)
+    try:
+        values = []
+        for query, parameters in queries:
+            row = connection.execute(query, parameters).fetchone()
+            values.append(row[0] if row else None)
+        return values
+    finally:
+        connection.close()
+
+
+def sqlite_text(value: Any) -> str:
+    """A stored string: TEXT, or a UTF-8 or UTF-16LE BLOB as VS Code-style state databases keep them."""
+    if isinstance(value, bytes):
+        utf16 = len(value) % 2 == 0 and value[1::2].count(0) == len(value) // 2
+        value = value.decode("utf-16-le" if utf16 else "utf-8", "ignore")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def json_object(text: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(text) if text else None
+    except (ValueError, RecursionError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def jwt_claims(token: str) -> dict[str, Any]:
+    """A JWT's payload, unverified: read only to name the account and to spot expiry before a call."""
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+    try:
+        payload = base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)).decode("utf-8")
+    except ValueError:
+        return {}
+    return json_object(payload)
+
+
+def key_or_cli_token(provider_id: str, key_file: Path | None,
+                     cli_token: Callable[[], str]) -> tuple[str, str]:
+    """The environment or saved key, else the token the provider's own CLI keeps, with its origin
+    ("key" or "cli"); ("", "") when neither exists."""
+    token = provider_key(provider_id, key_file)
+    if token:
+        return token, "key"
+    token = cli_token()
+    return (token, "cli") if token else ("", "")
+
+
+def stop_process_group(process: subprocess.Popen[bytes]) -> None:
+    """End everything a CLI started: TERM, a short grace period, then KILL for what remains."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            break
+        grace = time.monotonic() + 1
+        while time.monotonic() < grace:
+            process.poll()  # A reaped leader lets an emptied group read as gone.
+            try:
+                os.killpg(process.pid, 0)
+            except (ProcessLookupError, PermissionError):
+                return
+            time.sleep(0.05)
+    process.poll()
+
+
+def run_cli(argv: list[str], timeout: float, *, env: dict[str, str] | None = None,
+            cwd: str | None = None, max_bytes: int = MAX_CLI_OUTPUT_BYTES) -> tuple[int, bytes, bytes]:
+    """Run a CLI without a shell or stdin and return (exit code, stdout, stderr).
+
+    It gets its own process group, stopped afterwards: CLIs such as agy start helpers (a language
+    server) that would otherwise outlive the poll. Raises TimeoutError at the deadline, ValueError
+    when a stream outgrows `max_bytes`, and OSError when the CLI cannot start."""
+    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, env=env, cwd=cwd, start_new_session=True)
+    deadline = time.monotonic() + timeout
+    output = {process.stdout: bytearray(), process.stderr: bytearray()}
+    pending = list(output)
+    try:
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            ready, _, _ = select.select(pending, [], [], min(0.25, remaining))
+            for stream in ready:
+                chunk = os.read(stream.fileno(), 65536)
+                if not chunk:
+                    pending.remove(stream)
+                elif len(output[stream]) + len(chunk) > max_bytes:
+                    raise ValueError("CLI output exceeds the size limit")
+                else:
+                    output[stream].extend(chunk)
+        code = process.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        raise TimeoutError from None
+    finally:
+        stop_process_group(process)
+        for stream in output:
+            stream.close()
+    return code, bytes(output[process.stdout]), bytes(output[process.stderr])
+
+
+# --------------------------------------------------------------- Antigravity
+#
+# The quota comes from Antigravity's own processes, never from a token Quotatank holds. First the
+# language server of the running app or IDE: it accepts local calls that carry the CSRF token it
+# was started with (in its command line, which the same user can read). Then `agy -p /usage`,
+# which answers from agy's own sign-in. Google's FAQ forbids third-party software from using an
+# Antigravity login; both paths only ask Antigravity for the numbers it already shows its user.
+
+PROC_ROOT = Path("/proc")
+ANTIGRAVITY_RPC_PATH = "/exa.language_server_pb.LanguageServerService/"
+ANTIGRAVITY_STATUS_REQUEST = {"metadata": {"ideName": "antigravity", "extensionName": "antigravity",
+                                           "ideVersion": "unknown", "locale": "en"}}
+ANTIGRAVITY_SERVER_BINARY = re.compile(r"language[_-]server(?:[_-][a-z0-9]+)*(?:\.exe)?", re.IGNORECASE)
+ANTIGRAVITY_IDE_MARKERS = ("--app_data_dir antigravity-ide", "--app_data_dir=antigravity-ide",
+                           "/extensions/antigravity/bin/language_server")
+ANTIGRAVITY_SESSION_ALIASES = frozenset({"session", "5h", "5-hour", "five hour", "five-hour"})
+ANTIGRAVITY_CADENCES = {"session": ("5-hour limit", FIVE_HOURS), "weekly": ("Weekly limit", SEVEN_DAYS),
+                        "daily": ("Daily limit", ONE_DAY)}
+ANTIGRAVITY_GROUP_ORDER = {"Gemini": 0, "Claude/GPT": 1}
+MAX_ANTIGRAVITY_SERVERS = 4
+MAX_ANTIGRAVITY_PORTS = 8
+MAX_PROC_READ_BYTES = 1024 * 1024
+ANTIGRAVITY_ATTEMPT_SECONDS = 2.0
+AGY_MIN_VERSION = (1, 1, 11)
+AGY_MIN_SECONDS = 3.0
+# A failed `agy -p` run is classified from its stderr (CodexBar AntigravityCLIPrintFailure.swift,
+# AntigravityCLISession.swift L32-53). The text itself never reaches a message: it can hold
+# profile URLs, proxy details, and paths.
+AGY_SIGNED_OUT = re.compile(r"select\s+login\s+method|not\s+logged\s+into\s+antigravity|keyring\s*auth\s*:\s*timed\s+out"
+                            r"|not\s+(?:logged|signed)\s+in|unauthenticated|(?:authentication|login)\s+required"
+                            r"|please\s+(?:log|sign)\s+in", re.IGNORECASE)
+AGY_INELIGIBLE = re.compile(r"eligibility\s+check\s+failed|not\s+eligible|does\s+not\s+support\s+google\s+tos"
+                            r"|unsupported\s+(?:country|region)", re.IGNORECASE)
+AGY_NETWORK = re.compile(r"\b(?:eof|timed\s+out|timeout|deadline\s+exceeded|no\s+such\s+host|dns|connection\s+refused"
+                         r"|connection\s+reset|unreachable|proxy|certificate|tls|ssl)\b", re.IGNORECASE)
+
+
+def antigravity_code_ok(code: Any) -> bool:
+    """Antigravity reports some failures in the body, as a `code` other than 0, "ok", or "success"."""
+    return code is None or str(code).strip().lower() in ("0", "ok", "success")
+
+
+def antigravity_cadence(bucket: dict[str, Any]) -> str:
+    """"session", "weekly", "daily", or "" for a quota bucket: from its `window` when given, else
+    from its id and name (CodexBar AntigravityStatusProbe.swift L356-404)."""
+    explicit = str(bucket.get("window") or "").strip()
+    values = [explicit] if explicit else [bucket.get("bucketId") or bucket.get("id"),
+                                          bucket.get("displayName") or bucket.get("name")]
+    candidates: set[str] = set()
+    for raw in values:
+        value = str(raw or "").strip().lower().replace("_", "-")
+        for variant in filter(None, (value, value[:-len(" limit")] if value.endswith(" limit") else "")):
+            candidates.add(variant)
+            candidates.update(alias for alias in (*ANTIGRAVITY_SESSION_ALIASES, "weekly", "daily")
+                              if variant.endswith("-" + alias))
+    if candidates & ANTIGRAVITY_SESSION_ALIASES:
+        return "session"
+    return "weekly" if "weekly" in candidates else "daily" if "daily" in candidates else ""
+
+
+def antigravity_fraction(bucket: dict[str, Any]) -> float | None:
+    """A bucket's remaining fraction in any shape Antigravity sends; None when it has none."""
+    value = bucket.get("remainingFraction", bucket.get("remaining_fraction"))
+    remaining = bucket.get("remaining")
+    if value is None and isinstance(remaining, dict):
+        value = remaining.get("remainingFraction")
+        if value is None and remaining.get("case") == "remainingFraction":
+            value = remaining.get("value")
+    return number(value)
+
+
+def antigravity_group_title(group: dict[str, Any]) -> str:
+    name = clean_message(group.get("displayName") or group.get("display_name") or group.get("name") or "")
+    lowered = name.lower()
+    if "gemini" in lowered:
+        return "Gemini"
+    if "claude" in lowered or "gpt" in lowered:
+        return "Claude/GPT"
+    return name or "Models"
+
+
+def require_measured(windows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not any(window["used"] is not None for window in windows):
+        raise ProviderFailure("malformed", "Antigravity reported no measured quota.")
+    return windows
+
+
+def antigravity_identity(payload: dict[str, Any]) -> tuple[str, str]:
+    """(plan, account) from GetUserStatus. The tier name comes first: planInfo says Pro for Ultra."""
+    status = payload.get("userStatus")
+    if not isinstance(status, dict):
+        raise ProviderFailure("malformed", "Antigravity returned no account status.")
+    tier = status.get("userTier") if isinstance(status.get("userTier"), dict) else {}
+    plan_status = status.get("planStatus") if isinstance(status.get("planStatus"), dict) else {}
+    info = plan_status.get("planInfo") if isinstance(plan_status.get("planInfo"), dict) else {}
+    names = [tier.get("name"), *(info.get(key) for key in ("planDisplayName", "displayName", "productName",
+                                                            "planName", "planShortName"))]
+    plan = next((clean_message(name) for name in names if isinstance(name, str) and name.strip()), "")
+    email = status.get("email")
+    return plan, clean_message(email) if isinstance(email, str) else ""
+
+
+def antigravity_pool(text: str) -> str:
+    if "claude" in text or "gpt" in text or "openai" in text:
+        return "claude-gpt"
+    if "gemini" in text and ("pro" in text or "flash" in text):
+        return "gemini"
+    return ""
+
+
+def antigravity_model_windows(configs: Any) -> list[dict[str, Any]]:
+    """Per-model quotas (IDE language servers have no summary) as one window per pool: its most
+    constrained text model, the earlier reset on ties. Lite, autocomplete, and image models draw
+    on other allowances. The rows carry no period, so none is assumed."""
+    pools: dict[str, list[tuple[float | None, int | None]]] = {"gemini": [], "claude-gpt": []}
+    for config in configs if isinstance(configs, list) else []:
+        quota = config.get("quotaInfo") if isinstance(config, dict) else None
+        if not isinstance(quota, dict):
+            continue
+        alias = config.get("modelOrAlias")
+        model = str(alias.get("model") or "").lower() if isinstance(alias, dict) else ""
+        label = str(config.get("label") or "").lower()
+        if model.startswith("tab_") or any(word in model + " " + label for word in ("lite", "autocomplete", "image")):
+            continue
+        pool = antigravity_pool(model) or antigravity_pool(label)
+        if pool:
+            pools[pool].append((number(quota.get("remainingFraction")), utc_timestamp(quota.get("resetTime"))))
+    windows = []
+    for pool, title in (("gemini", "Gemini models"), ("claude-gpt", "Claude and GPT models")):
+        measured = [row for row in pools[pool] if row[0] is not None]
+        resets = [reset for _, reset in pools[pool] if reset]
+        if measured:
+            fraction, reset = min(measured, key=lambda row: (row[0], row[1] or float("inf")))
+            windows.append(make_window("antigravity-" + pool, title, 100 * (1 - fraction), reset))
+        elif resets:
+            windows.append(unknown_window("antigravity-" + pool, title, min(resets), None, "Quota amount unavailable"))
+    return windows
+
+
+def parse_antigravity_status(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], str, str]:
+    """Model quotas with the plan and account from GetUserStatus; GetCommandModelConfigs has only quotas."""
+    if isinstance(payload.get("userStatus"), dict):
+        plan, account = antigravity_identity(payload)
+        data = payload["userStatus"].get("cascadeModelConfigData")
+        configs = data.get("clientModelConfigs") if isinstance(data, dict) else None
+    else:
+        plan = account = ""
+        configs = payload.get("clientModelConfigs")
+    windows = antigravity_model_windows(configs)
+    if not windows:
+        raise ProviderFailure("malformed", "Antigravity reported no model quotas.")
+    return windows, plan, account
+
+
+def argv_flag(argv: list[str], flag: str) -> str:
+    """`--flag value` or `--flag=value` from an argument vector; empty when absent."""
+    for index, argument in enumerate(argv):
+        lowered = argument.lower()
+        if lowered == flag:
+            return argv[index + 1] if index + 1 < len(argv) else ""
+        if lowered.startswith(flag + "="):
+            return argument[len(flag) + 1:]
+    return ""
+
+
+def antigravity_server(pid: int, argv: list[str]) -> dict[str, Any] | None:
+    """The language server of an Antigravity app or IDE, from its command line; None for anything else."""
+    if not argv or not ANTIGRAVITY_SERVER_BINARY.fullmatch(os.path.basename(argv[0])):
+        return None
+    command = " ".join(argv).lower()
+    if not (("--app_data_dir" in command and "antigravity" in command) or "/antigravity/" in command
+            or "antigravity.app/" in command or "/gemini.app/" in command):
+        return None
+    token = argv_flag(argv, "--csrf_token")
+    # The server refuses calls without its token, and a token that could break a header is no token.
+    if not re.fullmatch(r"[!-~]{1,512}", token):
+        return None
+    kind = "ide" if any(marker in command for marker in ANTIGRAVITY_IDE_MARKERS) else "app"
+    return {"pid": pid, "kind": kind, "csrf": token}
+
+
+def antigravity_servers(proc_root: Path = PROC_ROOT) -> list[dict[str, Any]]:
+    """This user's Antigravity language servers, the desktop app's before the IDE's.
+
+    Read from /proc rather than `ps`: a process's command line needs no subprocess to read."""
+    try:
+        names = os.listdir(proc_root)
+    except OSError:
+        return []
+    uid = os.getuid()
+    servers = []
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            if os.stat(proc_root / name).st_uid != uid:
+                continue
+            with open(proc_root / name / "cmdline", "rb") as handle:
+                raw = handle.read(MAX_PROC_READ_BYTES)
+        except OSError:
+            continue
+        server = antigravity_server(int(name), [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part])
+        if server:
+            servers.append(server)
+    servers.sort(key=lambda server: (server["kind"] != "app", server["pid"]))
+    return servers[:MAX_ANTIGRAVITY_SERVERS]
+
+
+def listening_ports(pid: int, proc_root: Path = PROC_ROOT) -> list[int]:
+    """TCP ports `pid` listens on: its socket inodes matched against its own tcp tables, so a port
+    that another process opened is never sent the token."""
+    fd_dir = proc_root / str(pid) / "fd"
+    try:
+        entries = os.listdir(fd_dir)
+    except OSError:
+        return []
+    inodes = set()
+    for entry in entries[:4096]:
+        try:
+            target = os.readlink(fd_dir / entry)
+        except OSError:
+            continue
+        if target.startswith("socket:[") and target.endswith("]"):
+            inodes.add(target[8:-1])
+    ports = set()
+    for table in ("tcp", "tcp6") if inodes else ():
+        try:
+            with open(proc_root / str(pid) / "net" / table, "rb") as handle:
+                rows = handle.read(MAX_PROC_READ_BYTES).decode("ascii", "replace").splitlines()
+        except OSError:
+            continue
+        for row in rows:
+            columns = row.split()
+            # Column 4 is the socket state (0A is LISTEN) and column 10 its inode.
+            if len(columns) > 9 and columns[3] == "0A" and columns[9] in inodes:
+                try:
+                    port = int(columns[1].rsplit(":", 1)[1], 16)
+                except (IndexError, ValueError):
+                    continue
+                if 0 < port < 65536:
+                    ports.add(port)
+    return sorted(ports)[:MAX_ANTIGRAVITY_PORTS]
+
+
+def antigravity_rpc(scheme: str, port: int, csrf: str, method: str, body: dict[str, Any],
+                    timeout: float) -> dict[str, Any]:
+    """One Connect call to a language server port on 127.0.0.1.
+
+    http.client rather than urllib, so that no proxy from the environment ever sees the token.
+    The server's certificate is self-signed for loopback; verification is off for this pinned
+    address only."""
+    if scheme == "https":
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        connection: http.client.HTTPConnection = http.client.HTTPSConnection(
+            "127.0.0.1", port, timeout=timeout, context=context)
+    else:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    try:
+        connection.request("POST", ANTIGRAVITY_RPC_PATH + method,
+                           body=json.dumps(body, separators=(",", ":")).encode("utf-8"),
+                           headers={"Content-Type": "application/json", "Connect-Protocol-Version": "1",
+                                    "X-Codeium-Csrf-Token": csrf})
+        response = connection.getresponse()
+        status, raw = response.status, response.read(MAX_HTTP_RESPONSE_BYTES + 1)
+    except (OSError, http.client.HTTPException) as exc:
+        kind = "timeout" if isinstance(exc, TimeoutError) else "network"
+        raise ProviderFailure(kind, "Antigravity's language server did not answer.") from None
+    finally:
+        connection.close()
+    if status in (401, 403):
+        raise ProviderFailure("expired", "Antigravity refused the local quota request. Restart Antigravity, then refresh.")
+    if status != 200:
+        raise ProviderFailure("http", f"Antigravity's language server answered HTTP {status}.")
+    try:
+        payload = json.loads(raw) if len(raw) <= MAX_HTTP_RESPONSE_BYTES else None
+    except (ValueError, RecursionError):
+        payload = None
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "Antigravity returned unreadable quota data.")
+    if not antigravity_code_ok(payload.get("code")):
+        raise ProviderFailure("http", "Antigravity's language server reported an error.")
+    return payload
+
+
+def antigravity_call(endpoints: list[tuple[str, int, str]], method: str, body: dict[str, Any],
+                     deadline: float, parse: Callable[[dict[str, Any]], Any]) -> Any:
+    """`parse` of the first answer it accepts; a refusal outranks plain failures in the error."""
+    refused = last = None
+    for scheme, port, csrf in endpoints:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            return parse(antigravity_rpc(scheme, port, csrf, method, body,
+                                         min(remaining, ANTIGRAVITY_ATTEMPT_SECONDS)))
+        except ProviderFailure as exc:
+            refused = refused or (exc if exc.kind == "expired" else None)
+            last = exc
+    raise refused or last or ProviderFailure("timeout", "Antigravity's language server did not answer in time.")
+
+
+def read_antigravity_server(server: dict[str, Any], deadline: float,
+                            proc_root: Path = PROC_ROOT) -> tuple[list[dict[str, Any]], str, str]:
+    """Windows, plan, and account from one language server, trying each of its ports over https,
+    then plain http: each port speaks only one of them."""
+    ports = listening_ports(server["pid"], proc_root)
+    if not ports:
+        raise ProviderFailure("network", "Antigravity is still starting. Try again in a few seconds.")
+    endpoints = [(scheme, port, server["csrf"]) for port in ports for scheme in ("https", "http")]
+    # The summary gets half the budget, leaving the rest for an IDE's per-model fallback.
+    summary_deadline = time.monotonic() + (deadline - time.monotonic()) / 2
+    try:
+        windows = antigravity_call(endpoints, "RetrieveUserQuotaSummary", {"forceRefresh": True}, summary_deadline,
+                                   lambda payload: require_measured(
+                                       parse_antigravity_usage(payload, untouched_is_unknown=False)))
+    except ProviderFailure:
+        # IDE language servers have no summary (they answer 404); their model quotas follow.
+        windows = None
+    if windows is not None:
+        try:
+            plan, account = antigravity_call(endpoints, "GetUserStatus", ANTIGRAVITY_STATUS_REQUEST,
+                                             min(deadline, time.monotonic() + 1), antigravity_identity)
+        except ProviderFailure:
+            plan = account = ""
+        return windows, plan, account
+    try:
+        return antigravity_call(endpoints, "GetUserStatus", ANTIGRAVITY_STATUS_REQUEST, deadline,
+                                parse_antigravity_status)
+    except ProviderFailure as failure:
+        if failure.kind == "expired":
+            raise
+    return antigravity_call(endpoints, "GetCommandModelConfigs", ANTIGRAVITY_STATUS_REQUEST, deadline,
+                            parse_antigravity_status)
+
+
+def antigravity_from_servers(servers: list[dict[str, Any]], deadline: float,
+                             proc_root: Path = PROC_ROOT) -> tuple[list[dict[str, Any]], str, str]:
+    failure = None
+    for server in servers:
+        if deadline - time.monotonic() <= 0:
+            break
+        try:
+            return read_antigravity_server(server, deadline, proc_root)
+        except ProviderFailure as exc:
+            failure = failure or exc
+    raise failure or ProviderFailure("timeout", "Antigravity's language server did not answer in time.")
+
+
+def agy_binary(env: dict[str, str]) -> str:
+    """agy as ANTIGRAVITY_CLI_PATH names it, else as PATH finds it; empty when there is none."""
+    override = os.environ.get("ANTIGRAVITY_CLI_PATH", "").strip()
+    if override:
+        path = Path(override).expanduser()
+        return str(path) if path.is_file() and os.access(path, os.X_OK) else ""
+    return shutil.which("agy", path=env.get("PATH")) or ""
+
+
+def agy_version(output: bytes) -> tuple[int, ...] | None:
+    match = re.fullmatch(rb"\s*(\d+)\.(\d+)\.(\d+)\s*", output)
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def agy_failure(code: int, stderr: bytes) -> ProviderFailure:
+    text = stderr.decode("utf-8", "replace")
+    if AGY_SIGNED_OUT.search(text):
+        return ProviderFailure("expired", "agy is signed out. Run `agy` in a terminal to sign in, then refresh.")
+    if AGY_INELIGIBLE.search(text):
+        if AGY_NETWORK.search(text):
+            return ProviderFailure("network", "agy could not reach Google to check eligibility. Check the network or proxy.")
+        return ProviderFailure("config", "agy reports that this Google account is not eligible for Antigravity.")
+    if AGY_NETWORK.search(text):
+        return ProviderFailure("network", "agy could not reach Google. Check the network or proxy.")
+    return ProviderFailure("cli_unavailable", f"agy exited with status {code} while reading the quota.")
+
+
+def parse_agy_usage_report(output: bytes) -> list[dict[str, Any]]:
+    try:
+        report = json.loads(output)
+    except (ValueError, RecursionError):
+        raise ProviderFailure("malformed", "agy printed an unreadable usage report.") from None
+    command = report.get("command") if isinstance(report, dict) else None
+    # The status is case-sensitive; CodexBar's fixtures carry a report only with "SUCCESS".
+    if not isinstance(command, dict) or report.get("status") != "SUCCESS" or command.get("name") != "usage":
+        raise ProviderFailure("malformed", "agy did not return a usage report.")
+    return require_measured(parse_antigravity_usage(command.get("data"), untouched_is_unknown=False))
+
+
+def agy_usage(agy: str, env: dict[str, str], deadline: float) -> list[dict[str, Any]]:
+    """`agy -p /usage`, from agy 1.1.11 on: it answers without starting an agent turn or spending
+    quota (agy CHANGELOG 1.1.11), while older builds could turn the slash command into a prompt.
+
+    agy may open a browser to sign in again, so `open`, `xdg-open`, and $BROWSER are stubs that
+    fail; it runs without stdin in an empty private directory. Its own print timeout is the time
+    this poll has left."""
+    with tempfile.TemporaryDirectory(prefix="quotatank-agy-") as scratch:
+        for name in ("open", "xdg-open"):
+            stub = Path(scratch) / name
+            stub.write_text("#!/bin/sh\nexit 1\n")
+            stub.chmod(0o700)
+        child_env = {**env, "PATH": scratch + os.pathsep + env.get("PATH", ""), "BROWSER": str(Path(scratch) / "open")}
+        try:
+            code, version, _ = run_cli([agy, "--version"], min(3.0, time_left(deadline)), env=child_env,
+                                       cwd=scratch, max_bytes=4096)
+            parsed = agy_version(version) if code == 0 else None
+            if parsed is None or parsed < AGY_MIN_VERSION:
+                raise ProviderFailure("cli_unavailable",
+                                      "Update agy to 1.1.11 or later to read Antigravity quota without the app.")
+            budget = time_left(deadline)
+            code, report, errors = run_cli(
+                [agy, "-p", "/usage", "--output-format", "json", "--print-timeout", f"{max(1, int(budget))}s"],
+                budget, env=child_env, cwd=scratch)
+        except TimeoutError:
+            raise ProviderFailure("timeout", "agy did not report the quota in time. Open Antigravity for a faster reading.") from None
+        except ValueError:
+            raise ProviderFailure("malformed", "agy printed more than a usage report.") from None
+        except OSError:
+            raise ProviderFailure("cli_unavailable", "agy could not be started.") from None
+    if code != 0:
+        raise agy_failure(code, errors)
+    return parse_agy_usage_report(report)
+
+
+def antigravity_installed() -> bool:
+    gemini_dir = Path.home() / ".gemini"
+    return (gemini_dir / "antigravity").is_dir() or (gemini_dir / "antigravity-cli").is_dir()
+
+
+@provider_detector("antigravity")
+def detect_antigravity() -> bool:
+    return antigravity_installed() or bool(antigravity_servers()) or bool(agy_binary(runtime_environment()))
+
+
+@provider_fetcher("antigravity")
+def fetch_antigravity(timeout: float) -> dict[str, Any]:
+    provider_id = "antigravity"
+    deadline = time.monotonic() + timeout
+    failure: ProviderFailure | None = None
+    servers = antigravity_servers()
+    if servers:
+        try:
+            windows, plan, account = antigravity_from_servers(servers, deadline)
+        except ProviderFailure as exc:
+            failure = exc
+        else:
+            result = base_provider(provider_id)
+            result.update(plan=plan, account=account, source="Antigravity language server", windows=windows)
+            return result
+    env = runtime_environment()
+    agy = agy_binary(env)
+    if agy and deadline - time.monotonic() >= AGY_MIN_SECONDS:
+        try:
+            windows = agy_usage(agy, env, deadline)
+        except ProviderFailure as exc:
+            failure = failure or exc
+        else:
+            result = base_provider(provider_id)
+            result.update(source="agy usage report", windows=windows)
+            return result
+    if failure is not None:
+        return error_provider(provider_id, failure.kind, failure.message)
+    if agy or antigravity_installed():
+        return error_provider(provider_id, "cli_unavailable", "Antigravity is not running. Open it to read the quota.")
+    return error_provider(provider_id, "no_credentials",
+                          "No Antigravity sign-in was found. Open Antigravity, or sign in with `agy`.")
+
+
+# --------------------------------------------------------------- Gemini CLI
+#
+# Gemini CLI keeps its Google sign-in in ~/.gemini/oauth_creds.json and refreshes the one-hour
+# access token only while it runs, so the stored token is usually stale. Quotatank then exchanges
+# the refresh token for an access token held in memory only, with Gemini CLI's own installed-app
+# OAuth client (google-gemini/gemini-cli@9b6e0265, packages/core/src/code_assist/oauth2.ts
+# L76-85; Google treats an installed app's client secret as public). Nothing is written back, and
+# Google does not rotate the refresh token, so Gemini CLI's own sign-in keeps working.
+
+GEMINI_OAUTH_CLIENT_ID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
+GEMINI_OAUTH_CLIENT_SECRET = "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"
+GEMINI_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GEMINI_CODE_ASSIST_URL = "https://cloudcode-pa.googleapis.com/v1internal:"
+# Matched in this order: every Flash-Lite model id also contains "flash".
+GEMINI_MODEL_FAMILIES = (("flash-lite", "Flash-Lite"), ("flash", "Flash"), ("pro", "Pro"))
+GEMINI_FAMILY_ORDER = ("pro", "flash", "flash-lite")
+GEMINI_SHUTDOWN = ("Google stopped serving Gemini CLI quotas for personal Google accounts in June 2026. "
+                   "Use the Antigravity provider instead.")
+GEMINI_EXPIRED = "The Gemini CLI sign-in is no longer accepted. Run `gemini` to sign in again."
+
+
+def gemini_home() -> Path:
+    """Gemini CLI's directory; GEMINI_CLI_HOME stands in for the home directory that holds it."""
+    return Path(os.environ.get("GEMINI_CLI_HOME") or Path.home()).expanduser() / ".gemini"
+
+
+def gemini_auth_type(home: Path) -> str:
+    try:
+        settings = read_json(home / "settings.json")
+    except (OSError, ValueError, RecursionError):
+        return ""
+    security = settings.get("security") if isinstance(settings, dict) else None
+    auth = security.get("auth") if isinstance(security, dict) else None
+    selected = auth.get("selectedType") if isinstance(auth, dict) else None
+    return selected if isinstance(selected, str) else ""
+
+
+def http_form_json(url: str, fields: dict[str, str], timeout: float) -> Any:
+    """POST a form the way http_json posts JSON (no redirects, a size cap): OAuth token endpoints
+    take forms. A failure carries `http_status`, so a revoked grant is told apart from an outage."""
+    request = urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode("ascii"), method="POST",
+                                     headers={"Content-Type": "application/x-www-form-urlencoded",
+                                              "Accept": "application/json"})
+    try:
+        with urllib.request.build_opener(NoRedirects()).open(request, timeout=timeout) as response:
+            raw = response.read(MAX_HTTP_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        failure = ProviderFailure("rate_limited" if exc.code == 429 else "http",
+                                  f"The sign-in endpoint returned HTTP {exc.code}.")
+        failure.http_status = exc.code
+        raise failure from None
+    except (TimeoutError, urllib.error.URLError, OSError) as exc:
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
+            raise ProviderFailure("timeout", "The sign-in request timed out.") from None
+        raise ProviderFailure("network", "Could not reach the sign-in endpoint. Check the connection and TLS certificate.") from None
+    if len(raw) > MAX_HTTP_RESPONSE_BYTES:
+        raise ProviderFailure("malformed", "The sign-in endpoint returned unexpectedly large data.")
+    try:
+        return json.loads(raw)
+    except (ValueError, RecursionError):
+        raise ProviderFailure("malformed", "The sign-in endpoint returned unreadable data.") from None
+
+
+def gemini_access_token(credentials: dict[str, Any], timeout: float) -> tuple[str, str]:
+    """An access token and id token: the stored pair while the token has a minute left, otherwise
+    a fresh pair that lives only in this process."""
+    token, id_token = credentials.get("access_token"), credentials.get("id_token")
+    id_token = id_token if isinstance(id_token, str) else ""
+    expires = epoch_seconds(credentials.get("expiry_date"))
+    if isinstance(token, str) and token and (expires is None or expires > time.time() + 60):
+        return token, id_token
+    refresh = credentials.get("refresh_token")
+    if not isinstance(refresh, str) or not refresh:
+        raise ProviderFailure("expired", GEMINI_EXPIRED)
+    try:
+        response = http_form_json(GEMINI_TOKEN_URL, {
+            "client_id": GEMINI_OAUTH_CLIENT_ID, "client_secret": GEMINI_OAUTH_CLIENT_SECRET,
+            "refresh_token": refresh, "grant_type": "refresh_token"}, timeout)
+    except ProviderFailure as exc:
+        # 400 is invalid_grant: the refresh token was revoked or has lapsed.
+        if getattr(exc, "http_status", None) in (400, 401):
+            raise ProviderFailure("expired", GEMINI_EXPIRED) from None
+        raise
+    fresh = response.get("access_token") if isinstance(response, dict) else None
+    if not isinstance(fresh, str) or not fresh:
+        raise ProviderFailure("malformed", "Google returned an unreadable sign-in response.")
+    fresh_id = response.get("id_token")
+    return fresh, fresh_id if isinstance(fresh_id, str) and fresh_id else id_token
+
+
+def gemini_shutdown_signal(text: Any) -> bool:
+    """Google's wording for the June 2026 consumer shutdown (CodexBar GeminiStatusProbe.swift L135-150)."""
+    lowered = str(text or "").lower()
+    return ("unsupported_client" in lowered or "ineligibletiererror" in lowered
+            or ("no longer supported" in lowered and "gemini code assist" in lowered)
+            or ("migrate" in lowered and "antigravity" in lowered and "gemini" in lowered))
+
+
+def parse_gemini_code_assist(payload: Any, hosted_domain: str) -> tuple[str, str, str, bool]:
+    """(project, plan, tier id, consumer shutdown) from loadCodeAssist.
+
+    A named paid tier or a Workspace domain is outside the consumer shutdown, so only accounts with
+    neither read Google's UNSUPPORTED_CLIENT listing as the shutdown (CodexBar docs/gemini.md)."""
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "Gemini returned an unexpected account status.")
+    project = payload.get("cloudaicompanionProject")
+    if isinstance(project, dict):
+        project = project.get("id") or project.get("projectId")
+    current = payload.get("currentTier")
+    tier = str(current.get("id") or "") if isinstance(current, dict) else ""
+    paid = payload.get("paidTier")
+    paid_name = str(paid.get("name") or "").strip() if isinstance(paid, dict) else ""
+    ineligible = payload.get("ineligibleTiers") if isinstance(payload.get("ineligibleTiers"), list) else []
+    shutdown = not paid_name and not hosted_domain and any(
+        isinstance(entry, dict) and (gemini_shutdown_signal(entry.get("reasonCode"))
+                                     or gemini_shutdown_signal(entry.get("reasonMessage")))
+        for entry in ineligible)
+    if shutdown and not tier:
+        raise ProviderFailure("config", GEMINI_SHUTDOWN)
+    if paid_name:
+        plan = paid_name
+    elif tier == "free-tier":
+        plan = "Workspace" if hosted_domain else "Free"
+    else:
+        plan = {"standard-tier": "Paid", "legacy-tier": "Legacy"}.get(tier, "")
+    return (project.strip() if isinstance(project, str) else ""), clean_message(plan), tier, shutdown
+
+
+def parse_gemini_quota(payload: Any) -> list[dict[str, Any]]:
+    """Daily quotas per model family (Pro, Flash, Flash-Lite), each its most used model."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("buckets"), list):
+        raise ProviderFailure("malformed", "Gemini returned an unexpected quota payload.")
+    lowest: dict[str, tuple[float, Any]] = {}
+    for bucket in payload["buckets"]:
+        if not isinstance(bucket, dict):
+            continue
+        model = str(bucket.get("modelId") or "").lower()
+        fraction = number(bucket.get("remainingFraction"))
+        family = next((key for key, _ in GEMINI_MODEL_FAMILIES if key in model), "")
+        if family and fraction is not None and (family not in lowest or fraction < lowest[family][0]):
+            lowest[family] = (fraction, bucket.get("resetTime"))
+    names = dict(GEMINI_MODEL_FAMILIES)
+    windows = [make_window(family, names[family] + " · Daily limit", 100 * (1 - lowest[family][0]),
+                           utc_timestamp(lowest[family][1]), ONE_DAY)
+               for family in GEMINI_FAMILY_ORDER if family in lowest]
+    if not windows:
+        raise ProviderFailure("malformed", "Gemini returned no model quotas.")
+    return windows
+
+
+@provider_detector("gemini")
+def detect_gemini() -> bool:
+    return (gemini_home() / "oauth_creds.json").is_file()
+
+
+@provider_fetcher("gemini")
+def fetch_gemini(timeout: float) -> dict[str, Any]:
+    provider_id = "gemini"
+    home = gemini_home()
+    if gemini_auth_type(home) in ("api-key", "gemini-api-key", "vertex-ai"):
+        return error_provider(provider_id, "no_credentials",
+                              "Gemini CLI uses an API key or Vertex AI here; only a Google sign-in has a quota to show.")
+    path = home / "oauth_creds.json"
+    if not path.is_file():
+        return error_provider(provider_id, "no_credentials",
+                              "No Gemini CLI sign-in was found. Run `gemini` and sign in with Google.")
+    try:
+        credentials = read_json(path)
+        if not isinstance(credentials, dict):
+            raise ValueError("credentials are not an object")
+    except (OSError, ValueError, RecursionError):
+        return error_provider(provider_id, "no_credentials", "Gemini CLI credentials could not be read.")
+
+    deadline = time.monotonic() + timeout
+    try:
+        token, id_token = gemini_access_token(credentials, time_left(deadline))
+        claims = jwt_claims(id_token)
+        hosted_domain = claims.get("hd") if isinstance(claims.get("hd"), str) else ""
+        headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
+        # The request Gemini CLI itself sends at startup (packages/core/src/code_assist/setup.ts L167-185).
+        project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT_ID") or ""
+        metadata = {"ideType": "IDE_UNSPECIFIED", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}
+        body: dict[str, Any] = {"metadata": metadata}
+        if project:
+            body = {"cloudaicompanionProject": project, "metadata": {**metadata, "duetProject": project}}
+        assigned, plan, tier, shutdown = parse_gemini_code_assist(
+            http_json(GEMINI_CODE_ASSIST_URL + "loadCodeAssist", headers, time_left(deadline), body), hosted_domain)
+        project = assigned or project
+        try:
+            quota = http_json(GEMINI_CODE_ASSIST_URL + "retrieveUserQuota", headers, time_left(deadline),
+                              {"project": project} if project else {})
+        except ProviderFailure as exc:
+            # The shutdown's quota refusal carries no wording of its own; only the account status tells.
+            if exc.kind == "expired" and shutdown and tier != "standard-tier":
+                raise ProviderFailure("config", GEMINI_SHUTDOWN) from None
+            raise
+        windows = parse_gemini_quota(quota)
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            return error_provider(provider_id, "expired", GEMINI_EXPIRED)
+        return error_provider(provider_id, exc.kind, exc.message)
+
+    email = claims.get("email")
+    result = base_provider(provider_id)
+    result.update(plan=plan, account=clean_message(email) if isinstance(email, str) else "",
+                  source="Gemini Code Assist quota API", windows=windows)
+    return result
+
+
+# --------------------------------------------------------------- GitHub Copilot
+#
+# Copilot quotas come from the endpoint Copilot's editor clients read; `gh api
+# /copilot_internal/user` returns the same document. Any GitHub OAuth token of the account works,
+# so the candidates below are tried in order. None is stored.
+
+COPILOT_USER_URL = "https://api.github.com/copilot_internal/user"
+COPILOT_TOKEN_ENV = ("COPILOT_API_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
+COPILOT_QUOTAS = (("premium_interactions", "premium", "Premium requests"), ("chat", "chat", "Chat"),
+                  ("completions", "completions", "Completions"))
+
+
+def copilot_editor_tokens() -> list[str]:
+    """github.com tokens that Copilot's editor plugins saved in apps.json or hosts.json."""
+    tokens = []
+    for name in ("apps.json", "hosts.json"):
+        try:
+            saved = read_json(config_home() / "github-copilot" / name)
+        except (OSError, ValueError, RecursionError):
+            continue
+        for host, entry in saved.items() if isinstance(saved, dict) else ():
+            token = entry.get("oauth_token") if isinstance(entry, dict) else None
+            if str(host).split(":", 1)[0] == "github.com" and isinstance(token, str) and token.strip():
+                tokens.append(token.strip())
+    return tokens
+
+
+def gh_config_dir() -> Path:
+    override = os.environ.get("GH_CONFIG_DIR", "").strip()
+    return Path(override).expanduser() if override else config_home() / "gh"
+
+
+def gh_hosts_token() -> str:
+    """The `oauth_token` directly under `github.com:` in gh's hosts.yml, read without a YAML
+    parser. gh keeps it there only when the system keyring is unavailable."""
+    try:
+        lines = read_text(gh_config_dir() / "hosts.yml").splitlines()
+    except (OSError, ValueError):
+        return ""
+    in_host, child_indent = False, None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent == 0:
+            in_host = stripped.endswith(":") and stripped[:-1].strip("'\"") == "github.com"
+            child_indent = None
+            continue
+        if not in_host:
+            continue
+        child_indent = indent if child_indent is None else child_indent
+        key, _, value = stripped.partition(":")
+        if indent == child_indent and key.strip() == "oauth_token" and value.strip():
+            return value.strip().strip("'\"")
+    return ""
+
+
+def gh_cli_token(timeout: float) -> str:
+    """`gh auth token`, the only way to a token gh keeps in the system keyring."""
+    env = runtime_environment()
+    gh = shutil.which("gh", path=env.get("PATH"))
+    if not gh:
+        return ""
+    try:
+        code, output, _ = run_cli([gh, "auth", "token", "--hostname", "github.com"], min(timeout, 5.0),
+                                  env=env, max_bytes=4096)
+    except (OSError, TimeoutError, ValueError):
+        return ""
+    token = output.decode("utf-8", "replace").strip()
+    return token if code == 0 and re.fullmatch(r"[!-~]{1,1024}", token) else ""
+
+
+def copilot_tokens(deadline: float) -> Iterator[str]:
+    """GitHub tokens in order: the environment, Copilot's editor sign-ins, gh's hosts.yml, and last
+    `gh auth token`, a subprocess that runs only when the cheaper sources had none that worked."""
+    for name in COPILOT_TOKEN_ENV:
+        value = os.environ.get(name, "").strip()
+        if value:
+            yield value
+    yield from copilot_editor_tokens()
+    hosts_token = gh_hosts_token()
+    if hosts_token:
+        yield hosts_token
+    if deadline > time.monotonic():
+        cli_token = gh_cli_token(deadline - time.monotonic())
+        if cli_token:
+            yield cli_token
+
+
+def copilot_plan(payload: dict[str, Any]) -> str:
+    """Copilot Free by its SKU; any other seat by GitHub's plan name."""
+    if "free_limited" in str(payload.get("access_type_sku") or "").lower():
+        return "Copilot Free"
+    plan = str(payload.get("copilot_plan") or "").strip().replace("_", " ")
+    return clean_message("Copilot " + plan.title()) if plan else ""
+
+
+def copilot_period_seconds(reset: int | None) -> int:
+    """Copilot quotas renew monthly on a calendar date: the length of the month ending at `reset`."""
+    if reset is None:
+        return THIRTY_DAYS
+    end = datetime.fromtimestamp(reset, timezone.utc)
+    year, month = (end.year - 1, 12) if end.month == 1 else (end.year, end.month - 1)
+    start = end.replace(year=year, month=month, day=min(end.day, calendar.monthrange(year, month)[1]))
+    return int((end - start).total_seconds())
+
+
+def copilot_window(window_id: str, name: str, used: float, total: float | None, left: float | None,
+                   reset: int | None) -> dict[str, Any]:
+    detail = f"{max(0.0, total - left):g} of {total:g} used" if total and left is not None else ""
+    return make_window(window_id, name + " · Monthly limit", used, reset, copilot_period_seconds(reset), detail)
+
+
+def parse_copilot_user(payload: Any) -> tuple[list[dict[str, Any]], str, bool]:
+    """Windows for each Copilot quota, the plan, and whether the account has Copilot at all.
+
+    A quota GitHub marks as absent (`has_quota: false` or a zero entitlement, as Copilot Free does
+    for premium requests) is no window rather than 100% used, and an unlimited one is none either.
+    A `quota_reset_at` of 0 means unknown, so the account's monthly reset date applies."""
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "GitHub returned an unexpected Copilot payload.")
+    account_reset = utc_timestamp(payload.get("quota_reset_date_utc")) or utc_timestamp(payload.get("quota_reset_date"))
+    snapshots = payload.get("quota_snapshots") if isinstance(payload.get("quota_snapshots"), dict) else {}
+    windows = []
+    for key, window_id, name in COPILOT_QUOTAS:
+        snapshot = snapshots.get(key)
+        if not isinstance(snapshot, dict) or snapshot.get("unlimited") is True or snapshot.get("has_quota") is False:
+            continue
+        total = number(snapshot.get("entitlement"))
+        left = first_number(snapshot, "remaining", "quota_remaining")
+        share_left = number(snapshot.get("percent_remaining"))
+        if total is not None and total <= 0:
+            continue
+        if share_left is None and total and left is not None:
+            share_left = left / total * 100
+        if share_left is not None:
+            reset = utc_timestamp(snapshot.get("quota_reset_at")) or account_reset
+            windows.append(copilot_window(window_id, name, 100 - share_left, total, left, reset))
+    # Older Copilot Free documents give allowances in `monthly_quotas` and what is left in
+    # `limited_user_quotas`.
+    monthly, limited = payload.get("monthly_quotas"), payload.get("limited_user_quotas")
+    if isinstance(monthly, dict) and isinstance(limited, dict):
+        reset = utc_timestamp(payload.get("limited_user_reset_date")) or account_reset
+        present = {window["id"] for window in windows}
+        for key, window_id, name in COPILOT_QUOTAS[1:]:
+            total, left = number(monthly.get(key)), number(limited.get(key))
+            if window_id not in present and total is not None and total > 0 and left is not None:
+                windows.append(copilot_window(window_id, name, (total - left) / total * 100, total, left, reset))
+    has_copilot = bool(windows or snapshots or payload.get("copilot_plan"))
+    return windows, copilot_plan(payload), has_copilot
+
+
+@provider_detector("copilot")
+def detect_copilot() -> bool:
+    copilot_dir = config_home() / "github-copilot"
+    return (bool(os.environ.get("COPILOT_API_TOKEN", "").strip()) or (copilot_dir / "apps.json").is_file()
+            or (copilot_dir / "hosts.json").is_file() or (gh_config_dir() / "hosts.yml").is_file())
+
+
+@provider_fetcher("copilot")
+def fetch_copilot(timeout: float) -> dict[str, Any]:
+    provider_id = "copilot"
+    deadline = time.monotonic() + timeout
+    tried: set[str] = set()
+    rejected = without_copilot = False
+    for token in copilot_tokens(deadline):
+        if token in tried:
+            continue
+        tried.add(token)
+        try:
+            payload = http_json(COPILOT_USER_URL, {"Authorization": "token " + token, "Accept": "application/json",
+                                                   "User-Agent": SIGNIN_USER_AGENT}, time_left(deadline))
+            windows, plan, has_copilot = parse_copilot_user(payload)
+        except ProviderFailure as exc:
+            # A refused token, or one whose account has no Copilot (http_json names the status in
+            # its message), moves on: another sign-in may belong to the account with the seat.
+            if exc.kind == "expired" or (exc.kind == "http" and "HTTP 404" in exc.message):
+                rejected = rejected or exc.kind == "expired"
+                without_copilot = without_copilot or exc.kind == "http"
+                continue
+            return error_provider(provider_id, exc.kind, exc.message)
+        if not has_copilot:
+            without_copilot = True
+            continue
+        result = base_provider(provider_id)
+        result.update(plan=plan, source="GitHub Copilot usage API", windows=windows)
+        if not windows:
+            result["notice"] = "GitHub reports no metered Copilot limits for this plan."
+        return result
+    if without_copilot:
+        return error_provider(provider_id, "no_credentials", "This GitHub account has no Copilot plan.")
+    if rejected:
+        return error_provider(provider_id, "expired", "GitHub rejected the saved sign-in. Run `gh auth login` again.")
+    return error_provider(provider_id, "no_credentials", "No GitHub sign-in was found. Run `gh auth login`.")
+
+
+# --------------------------------------------------------------- Cursor
+#
+# Cursor's usage summary is a dashboard route that authenticates with the dashboard's session
+# cookie, which is made of the Cursor app's own access token (a JWT) and the user id in its `sub`
+# claim. The token comes from the app's state database or cursor-agent's login file, both read
+# read-only; nothing is taken from a browser.
+
+CURSOR_SUMMARY_URL = "https://cursor.com/api/usage-summary"
+
+
+def cursor_state_db() -> Path:
+    return config_home() / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+
+
+def cursor_agent_auth() -> Path:
+    return config_home() / "cursor" / "auth.json"
+
+
+def cursor_tokens() -> list[str]:
+    """Access tokens the Cursor app and cursor-agent keep, the app's first."""
+    tokens = []
+    if cursor_state_db().is_file():
+        try:
+            value = sqlite_text(read_sqlite(cursor_state_db(), ("SELECT value FROM ItemTable WHERE key = ?",
+                                                                ("cursorAuth/accessToken",)))[0])
+        except sqlite3.Error:
+            value = ""
+        if value:
+            tokens.append(value)
+    try:
+        saved = read_json(cursor_agent_auth())
+    except (OSError, ValueError, RecursionError):
+        saved = None
+    token = saved.get("accessToken") if isinstance(saved, dict) else None
+    if isinstance(token, str) and token.strip():
+        tokens.append(token.strip())
+    return tokens
+
+
+def cursor_session_cookie(token: str) -> str:
+    """The dashboard cookie for a token with a user id and more than a minute left; empty otherwise."""
+    claims = jwt_claims(token)
+    user = str(claims.get("sub") or "").split("|")[-1]
+    expires = number(claims.get("exp"))
+    if (not re.fullmatch(r"[A-Za-z0-9._-]+", user) or not re.fullmatch(r"[A-Za-z0-9._-]+", token)
+            or expires is None or expires <= time.time() + 60):
+        return ""
+    return f"WorkosCursorSessionToken={user}%3A%3A{token}"
+
+
+def cents_to_usd(value: Any) -> float | None:
+    amount = number(value)
+    return None if amount is None else amount / 100
+
+
+def parse_cursor_summary(payload: Any, now: float) -> tuple[list[dict[str, Any]], str]:
+    """Windows for the billing cycle: the plan's included usage (with its Auto and named-model pools
+    when Cursor splits them) and an on-demand budget that has a cap."""
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "Cursor returned an unexpected usage summary.")
+    start, end = utc_timestamp(payload.get("billingCycleStart")), utc_timestamp(payload.get("billingCycleEnd"))
+    seconds = end - start if start and end and end > start else None
+    individual = payload.get("individualUsage") if isinstance(payload.get("individualUsage"), dict) else {}
+    plan_usage = individual.get("plan") if isinstance(individual.get("plan"), dict) else {}
+    team = payload.get("teamUsage") if isinstance(payload.get("teamUsage"), dict) else {}
+    # Percent fields are already percentages, even below 1 (0.36 means 0.36%).
+    total, detail, label = number(plan_usage.get("totalPercentUsed")), "", "Monthly limit"
+    for source, name in ((plan_usage, "Monthly limit"), (individual.get("overall"), "Monthly limit"),
+                         (team.get("pooled"), "Team pool · Monthly limit")):
+        used = cents_to_usd(source.get("used")) if isinstance(source, dict) else None
+        limit = cents_to_usd(source.get("limit")) if isinstance(source, dict) else None
+        if used is not None and limit is not None and limit > 0:
+            detail = f"${used:.2f} of ${limit:.2f}"
+            if total is None:
+                total, label = used / limit * 100, name
+            break
+    windows = []
+    if total is not None:
+        windows.append(make_window("plan", label, total, end, seconds, detail))
+    for key, window_id, name in (("autoPercentUsed", "auto", "Auto"), ("apiPercentUsed", "named", "Named models")):
+        share = number(plan_usage.get(key))
+        if share is not None:
+            windows.append(make_window(window_id, name + " · Monthly limit", share, end, seconds))
+    on_demand = individual.get("onDemand")
+    if isinstance(on_demand, dict) and on_demand.get("enabled") is not False:
+        used, limit = cents_to_usd(on_demand.get("used")), cents_to_usd(on_demand.get("limit"))
+        if used is not None and limit is not None and limit > 0:
+            window = money_window("on-demand", "On-demand · Monthly limit", used, limit, None, end, now)
+            window["windowSeconds"] = seconds
+            windows.append(window)
+    membership = str(payload.get("membershipType") or "").strip().replace("_", " ")
+    return windows, clean_message("Cursor " + membership.title()) if membership else ""
+
+
+@provider_detector("cursor")
+def detect_cursor() -> bool:
+    return cursor_state_db().is_file() or cursor_agent_auth().is_file()
+
+
+@provider_fetcher("cursor")
+def fetch_cursor(timeout: float) -> dict[str, Any]:
+    provider_id = "cursor"
+    tokens = cursor_tokens()
+    if not tokens:
+        return error_provider(provider_id, "no_credentials",
+                              "No Cursor sign-in was found. Sign in to Cursor or run `cursor-agent login`.")
+    usable = next(((token, cookie) for token in tokens if (cookie := cursor_session_cookie(token))), None)
+    if usable is None:
+        return error_provider(provider_id, "expired",
+                              "The Cursor sign-in has expired. Open Cursor or run `cursor-agent login`.")
+    token, cookie = usable
+    try:
+        payload = http_json(CURSOR_SUMMARY_URL, {"Cookie": cookie, "Accept": "application/json",
+                                                 "User-Agent": SIGNIN_USER_AGENT}, timeout)
+        windows, plan = parse_cursor_summary(payload, time.time())
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            return error_provider(provider_id, "expired",
+                                  "Cursor rejected the saved sign-in. Sign in to Cursor again or run `cursor-agent login`.")
+        return error_provider(provider_id, exc.kind, exc.message)
+    email = jwt_claims(token).get("email")
+    result = base_provider(provider_id)
+    result.update(plan=plan, account=clean_message(email) if isinstance(email, str) else "",
+                  source="Cursor usage summary", windows=windows)
+    if not windows:
+        result["notice"] = "Cursor reported no plan usage for this billing cycle."
+    return result
+
+
+# --------------------------------------------------------------- Grok CLI
+#
+# SuperGrok credits come from the billing route the Grok CLI calls, with the bearer `grok login`
+# saved. The CLI renews that token itself; Quotatank only reads it.
+
+GROK_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
+GROK_SETTINGS_URL = "https://cli-chat-proxy.grok.com/v1/settings"
+
+
+def grok_auth_path() -> Path:
+    return Path(os.environ.get("GROK_HOME") or (Path.home() / ".grok")).expanduser() / "auth.json"
+
+
+def grok_login(saved: Any) -> dict[str, Any] | None:
+    """The auth.json entry to use: the SuperGrok sign-in (an `https://auth.x.ai::` scope) over the
+    legacy session, and only an entry that holds a bearer key."""
+    preferred = legacy = None
+    for scope, entry in saved.items() if isinstance(saved, dict) else ():
+        if not isinstance(entry, dict) or not isinstance(entry.get("key"), str) or not entry["key"].strip():
+            continue
+        if str(scope).startswith("https://auth.x.ai::"):
+            preferred = preferred or entry
+        elif "/sign-in" in str(scope):
+            legacy = legacy or entry
+    return preferred or legacy
+
+
+def grok_plan_name(raw: Any) -> str:
+    text = clean_message(raw).strip()
+    compact = re.sub(r"[^a-z]", "", text.lower())
+    return {"supergrokheavy": "SuperGrok Heavy", "heavy": "SuperGrok Heavy", "supergrok": "SuperGrok"}.get(compact, text)
+
+
+def grok_amount(value: Any) -> float | None:
+    return number(value.get("val")) if isinstance(value, dict) else None
+
+
+def parse_grok_billing(payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
+    """The credit window of the current billing period, the prepaid wallet, and the plan."""
+    config = payload.get("config") if isinstance(payload, dict) else None
+    if not isinstance(config, dict):
+        raise ProviderFailure("malformed", "Grok returned an unexpected billing payload.")
+    period = config.get("currentPeriod") if isinstance(config.get("currentPeriod"), dict) else {}
+    kind = str(period.get("type") or "").upper()
+    end = utc_timestamp(period.get("end"))
+    # A start measures only the period whose end it belongs to.
+    start = utc_timestamp(period.get("start")) if end else utc_timestamp(config.get("billingPeriodStart"))
+    end = end or utc_timestamp(config.get("billingPeriodEnd"))
+    seconds = end - start if start and end and start <= now < end else None
+    if seconds is None and kind.endswith("WEEKLY"):
+        seconds = SEVEN_DAYS
+    if kind.endswith("WEEKLY"):
+        label = "Weekly limit"
+    elif kind.endswith("MONTHLY"):
+        label = "Monthly limit"
+    else:
+        label = friendly_window_label(seconds) if seconds else "Credits"
+    used = number(config.get("creditUsagePercent"))
+    if used is None:
+        cap, spent = grok_amount(config.get("onDemandCap")), grok_amount(config.get("onDemandUsed"))
+        used = spent / cap * 100 if cap and spent is not None else None
+    windows = []
+    if used is not None:
+        windows.append(make_window("credits", label, used, end, seconds))
+    elif end:
+        # SuperGrok Heavy can omit the share: the period is known, its use is not.
+        windows.append(unknown_window("credits", label, end, seconds, "Credit use not reported"))
+    credits = None
+    wallet = config.get("prepaidBalance")
+    # Proto3 JSON drops a zero amount, so an empty wallet object is a confirmed $0.
+    cents = (0.0 if not wallet else number(wallet.get("val"))) if isinstance(wallet, dict) else None
+    if cents is not None and cents >= 0:
+        balance = round(cents / 100, 2)
+        credits = {"label": "Prepaid balance", "currency": "USD", "used": None, "limit": None,
+                   "remaining": balance, "total": None, "unlimited": False, "resetCreditsAvailable": None,
+                   "spendable": balance, "spend": {}}
+    if not windows and credits is None:
+        raise ProviderFailure("malformed", "Grok returned no credit usage.")
+    return windows, credits, grok_plan_name(config.get("subscriptionTier") or payload.get("subscriptionTier"))
+
+
+@provider_detector("grok")
+def detect_grok() -> bool:
+    return grok_auth_path().is_file()
+
+
+@provider_fetcher("grok")
+def fetch_grok(timeout: float) -> dict[str, Any]:
+    provider_id = "grok"
+    path = grok_auth_path()
+    if not path.is_file():
+        return error_provider(provider_id, "no_credentials", "No Grok CLI sign-in was found. Run `grok login`.")
+    try:
+        login = grok_login(read_json(path))
+    except (OSError, ValueError, RecursionError):
+        return error_provider(provider_id, "no_credentials", "Grok CLI credentials could not be read.")
+    if login is None:
+        return error_provider(provider_id, "no_credentials", "The Grok CLI sign-in holds no token. Run `grok login`.")
+    expires = utc_timestamp(login.get("expires_at"))
+    if expires is not None and expires <= time.time():
+        return error_provider(provider_id, "expired",
+                              "The Grok CLI sign-in has expired. Run `grok` to renew it, or `grok login`.")
+
+    deadline = time.monotonic() + timeout
+    headers = {"Authorization": "Bearer " + login["key"].strip(), "x-xai-token-auth": "xai-grok-cli",
+               "Accept": "application/json", "User-Agent": SIGNIN_USER_AGENT}
+    try:
+        windows, credits, plan = parse_grok_billing(http_json(GROK_BILLING_URL, headers, time_left(deadline)),
+                                                    time.time())
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            return error_provider(provider_id, "expired", "Grok rejected the CLI sign-in. Run `grok login` again.")
+        return error_provider(provider_id, exc.kind, exc.message)
+    if not plan:
+        try:
+            settings = http_json(GROK_SETTINGS_URL, headers, min(2.0, time_left(deadline)))
+            plan = grok_plan_name(settings.get("subscription_tier_display")) if isinstance(settings, dict) else ""
+        except ProviderFailure:
+            pass  # The plan name is optional; the credits stand on their own.
+    email = login.get("email")
+    result = base_provider(provider_id)
+    result.update(plan=plan, account=clean_message(email) if isinstance(email, str) else "",
+                  source="Grok CLI billing API", windows=windows, credits=credits)
+    return result
+
+
+# --------------------------------------------------------------- Kiro
+#
+# Kiro credits come from GetUsageLimits, the AWS call kiro-cli itself makes, with the token and
+# profile kiro-cli keeps in its SQLite store. The store is read-only to Quotatank: kiro-cli owns
+# the token and renews it. `kiro-cli chat` is never run.
+
+KIRO_ENDPOINTS = {"us-east-1": "https://codewhisperer.us-east-1.amazonaws.com/",
+                  "eu-central-1": "https://q.eu-central-1.amazonaws.com/"}
+
+
+def kiro_store() -> Path:
+    override = os.environ.get("KIRO_DATA_DIR", "").strip()
+    return (Path(override).expanduser() if override else data_home() / "kiro-cli") / "data.sqlite3"
+
+
+def kiro_identity(store: Path) -> tuple[dict[str, Any], str]:
+    """kiro-cli's token record and the ARN of its CodeWhisperer profile."""
+    token, profile = read_sqlite(store, ("SELECT value FROM auth_kv WHERE key = ?", ("kirocli:odic:token",)),
+                                 ("SELECT value FROM state WHERE key = ?", ("api.codewhisperer.profile",)))
+    arn = json_object(sqlite_text(profile)).get("arn")
+    return json_object(sqlite_text(token)), arn.strip() if isinstance(arn, str) else ""
+
+
+def kiro_amount(row: dict[str, Any], key: str) -> float | None:
+    """A credit amount, preferring the `…WithPrecision` field Kiro sends beside the rounded one."""
+    return first_number(row, key + "WithPrecision", key)
+
+
+def parse_kiro_usage(payload: Any) -> tuple[list[dict[str, Any]], str]:
+    """The month's plan credits, without the overage that `currentUsage` includes, and the overage
+    allowance when it is enabled (CodexBar KiroUsageLimitsAPI.swift L187-247)."""
+    rows = payload.get("usageBreakdownList") if isinstance(payload, dict) else None
+    credits = [row for row in rows if isinstance(row, dict) and row.get("resourceType") == "CREDIT"] if isinstance(rows, list) else []
+    if len(credits) != 1:
+        raise ProviderFailure("malformed", "Kiro returned no single credit balance.")
+    credit = credits[0]
+    limit, total = kiro_amount(credit, "usageLimit"), kiro_amount(credit, "currentUsage")
+    overage = kiro_amount(credit, "currentOverages") or 0.0
+    if limit is None or total is None or min(limit, total, overage) < 0 or overage > total:
+        raise ProviderFailure("malformed", "Kiro returned inconsistent credit usage.")
+    reset = number(credit.get("nextDateReset") or payload.get("nextDateReset"))
+    # Anything outside plausible Unix seconds would be a change of unit, not a date.
+    reset = reset if reset is not None and 1_000_000_000 <= reset <= 4_102_444_800 else None
+    plan_used = total - overage
+    windows = []
+    if limit > 0:
+        bonus = " (bonus credits included)" if credit.get("bonuses") else ""
+        windows.append(make_window("credits", "Monthly limit", plan_used / limit * 100, reset, THIRTY_DAYS,
+                                   f"{plan_used:,.2f} of {limit:,.0f} credits{bonus}"))
+    overage_config = payload.get("overageConfiguration")
+    cap = kiro_amount(credit, "overageCap")
+    if (isinstance(overage_config, dict) and str(overage_config.get("overageStatus") or "").upper() == "ENABLED"
+            and cap is not None and cap > 0):
+        charges = number(credit.get("overageCharges"))
+        currency = str(credit.get("currency") or "USD").upper()
+        charged = f" · {charges:,.2f} {currency}" if charges is not None and charges >= 0 else ""
+        windows.append(make_window("overage", "Overage · Monthly limit", overage / cap * 100, reset, THIRTY_DAYS,
+                                   f"{overage:,.2f} of {cap:,.0f} credits{charged}"))
+    info = payload.get("subscriptionInfo") if isinstance(payload.get("subscriptionInfo"), dict) else {}
+    title = str(info.get("subscriptionTitle") or "").strip()
+    return windows, clean_message(title.title())
+
+
+@provider_detector("kiro")
+def detect_kiro() -> bool:
+    return kiro_store().is_file()
+
+
+@provider_fetcher("kiro")
+def fetch_kiro(timeout: float) -> dict[str, Any]:
+    provider_id = "kiro"
+    store = kiro_store()
+    if not store.is_file():
+        return error_provider(provider_id, "no_credentials", "No kiro-cli sign-in was found. Run `kiro-cli login`.")
+    try:
+        token, arn = kiro_identity(store)
+    except sqlite3.Error:
+        return error_provider(provider_id, "no_credentials", "kiro-cli's sign-in store could not be read.")
+    access = token.get("access_token")
+    if not isinstance(access, str) or not access.strip():
+        return error_provider(provider_id, "no_credentials", "kiro-cli is not signed in. Run `kiro-cli login`.")
+    expires = utc_timestamp(token.get("expires_at"))
+    if expires is not None and expires <= time.time():
+        return error_provider(provider_id, "expired",
+                              "kiro-cli's access token has expired; it renews the next time you use kiro-cli.")
+    match = re.fullmatch(r"arn:aws:codewhisperer:([a-z0-9-]+):[^:\s]*:profile/\S+", arn)
+    endpoint = KIRO_ENDPOINTS.get(match.group(1)) if match else None
+    if endpoint is None:
+        return error_provider(provider_id, "config",
+                              "kiro-cli has no supported usage profile yet. Run `kiro-cli` once, then refresh.")
+    try:
+        payload = http_json(endpoint, {"Content-Type": "application/x-amz-json-1.0",
+                                       "X-Amz-Target": "AmazonCodeWhispererService.GetUsageLimits",
+                                       "Authorization": "Bearer " + access.strip(), "Accept": "application/json",
+                                       "User-Agent": SIGNIN_USER_AGENT}, timeout, {"profileArn": arn})
+        windows, plan = parse_kiro_usage(payload)
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            return error_provider(provider_id, "expired", "Kiro refused kiro-cli's token. Run `kiro-cli login` again.")
+        return error_provider(provider_id, exc.kind, exc.message)
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="Kiro usage limits API", windows=windows)
+    if not windows:
+        result["notice"] = "Kiro reported no credit allowance for this plan."
+    return result
+
+
+# --------------------------------------------------------------- JetBrains AI
+#
+# JetBrains IDEs keep the AI Assistant quota in a local options file and log every refresh to
+# idea.log, where it is often fresher than the file. Both are only read: nothing is sent anywhere
+# and no IDE file changes.
+
+JETBRAINS_PRODUCTS = (
+    ("IntelliJIdea", "IntelliJ IDEA"), ("IdeaIC", "IntelliJ IDEA Community"), ("PyCharm", "PyCharm"),
+    ("WebStorm", "WebStorm"), ("GoLand", "GoLand"), ("CLion", "CLion"), ("DataGrip", "DataGrip"),
+    ("RubyMine", "RubyMine"), ("Rider", "Rider"), ("PhpStorm", "PhpStorm"), ("AppCode", "AppCode"),
+    ("Fleet", "Fleet"), ("AndroidStudio", "Android Studio"), ("RustRover", "RustRover"), ("Aqua", "Aqua"),
+    ("DataSpell", "DataSpell"),
+)
+JETBRAINS_QUOTA_FILE = "AIAssistantQuotaManager2.xml"
+JETBRAINS_LOG_TAIL_BYTES = 4 * 1024 * 1024
+# The IDE counts one displayed credit as 100,000 quota units.
+JETBRAINS_UNITS_PER_CREDIT = 100_000
+JETBRAINS_STATE_MARKER = "QuotaManager2Impl - New quota state is: "
+JETBRAINS_REFILL_MARKER = "QuotaManager2Impl - New quota refill state is: "
+_JB_NUMBER = r"([0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)"
+_JB_DETAILS = r"QuotaDetails\(current=" + _JB_NUMBER + r", maximum=" + _JB_NUMBER + r", available=" + _JB_NUMBER + r"\)"
+JETBRAINS_STATE = re.compile(r"Available\(current=" + _JB_NUMBER + r", maximum=" + _JB_NUMBER
+                             + r", until=([^,)\s]+), tariffQuota=" + _JB_DETAILS
+                             + r"(?:, topUpQuota=" + _JB_DETAILS + r")?\)")
+JETBRAINS_REFILL = re.compile(r"Known\(next=([^,)\s]+), tariff=QuotaRefillInfoTariff\(amount=" + _JB_NUMBER
+                              + r", duration=([^,)\s]+)\)\)")
+
+
+def jetbrains_installations() -> list[tuple[Path, str]]:
+    """IDE configuration directories of products with AI Assistant, with their display names."""
+    found = []
+    for base in (config_home() / "JetBrains", data_home() / "JetBrains", config_home() / "Google"):
+        try:
+            names = sorted(os.listdir(base))
+        except OSError:
+            continue
+        for name in names:
+            product = next(((prefix, title) for prefix, title in JETBRAINS_PRODUCTS
+                            if name.lower().startswith(prefix.lower())), None)
+            if product and (base / name).is_dir():
+                found.append((base / name, f"{product[1]} {name[len(product[0]):]}".strip()))
+    return found
+
+
+def jetbrains_duration(text: Any) -> int | None:
+    """Seconds in an ISO-8601 duration ("PT720H") or the log's short form ("30d")."""
+    raw = str(text or "").strip()
+    short = re.fullmatch(r"(\d+)([dhms])", raw)
+    if short:
+        return int(short.group(1)) * {"d": ONE_DAY, "h": 3600, "m": 60, "s": 1}[short.group(2)] or None
+    iso = re.fullmatch(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?", raw)
+    if not iso or not any(iso.groups()):
+        return None
+    days, hours, minutes, seconds = (int(part or 0) for part in iso.groups())
+    return days * ONE_DAY + hours * 3600 + minutes * 60 + seconds or None
+
+
+def jetbrains_quota(info: dict[str, Any]) -> dict[str, float | None]:
+    """The month's credits, kept apart from purchased top-ups: a total that includes top-ups never
+    pairs with monthly figures (CodexBar JetBrainsStatusProbe.swift L306-326)."""
+    tariff = info.get("tariffQuota")
+    monthly = tariff if isinstance(tariff, dict) and number(tariff.get("current")) is not None \
+        and number(tariff.get("maximum")) is not None else info
+    top_up = info.get("topUpQuota") if isinstance(info.get("topUpQuota"), dict) else {}
+    return {"used": number(monthly.get("current")), "maximum": number(monthly.get("maximum")),
+            "topUpMaximum": number(top_up.get("maximum")), "topUpAvailable": number(top_up.get("available"))}
+
+
+def parse_jetbrains_quota_file(text: str) -> tuple[dict[str, float | None], dict[str, Any]]:
+    """The quota and the next refill from AIAssistantQuotaManager2.xml, whose values are JSON
+    held in XML attributes."""
+    try:
+        root = ElementTree.fromstring(text)
+    except ElementTree.ParseError:
+        raise ProviderFailure("malformed", "The JetBrains AI quota file could not be read.") from None
+    component = next((node for node in root.iter("component") if node.get("name") == "AIAssistantQuotaManager2"), None)
+    options = {option.get("name"): option.get("value") or "" for option in component.iter("option")} \
+        if component is not None else {}
+    info, refill = json_object(options.get("quotaInfo", "")), json_object(options.get("nextRefill", ""))
+    if not info:
+        raise ProviderFailure("malformed", "The JetBrains AI quota file holds no quota.")
+    tariff = refill.get("tariff") if isinstance(refill.get("tariff"), dict) else {}
+    return jetbrains_quota(info), {"next": utc_timestamp(refill.get("next")),
+                                   "duration": jetbrains_duration(refill.get("duration") or tariff.get("duration"))}
+
+
+def jetbrains_log_time(line: str) -> float | None:
+    """The local time an idea.log line was written ("2026-10-05 15:27:49,811 …")."""
+    try:
+        return datetime.strptime(line[:23], "%Y-%m-%d %H:%M:%S,%f").timestamp()
+    except ValueError:
+        return None
+
+
+def parse_jetbrains_log(text: str) -> tuple[float, dict[str, float | None], dict[str, Any]] | None:
+    """(time, quota, refill) from the newest quota state in an idea.log tail.
+
+    A newest state that does not parse invalidates the log, so an older account's quota never
+    stands in for it. A missing refill leaves the reset unknown rather than borrowing one."""
+    quota: tuple[float, dict[str, float | None]] | None = None
+    refill: dict[str, Any] | None = None
+    for line in reversed(text.splitlines()):
+        if quota is None and JETBRAINS_STATE_MARKER in line:
+            match = JETBRAINS_STATE.fullmatch(line.split(JETBRAINS_STATE_MARKER, 1)[1].strip())
+            stamp = jetbrains_log_time(line)
+            if not match or stamp is None or not number(match.group(5)):
+                return None
+            values = [number(value) for value in match.groups()]
+            quota = (stamp, {"used": values[3], "maximum": values[4], "topUpMaximum": values[7],
+                             "topUpAvailable": values[8]})
+        elif refill is None and JETBRAINS_REFILL_MARKER in line:
+            match = JETBRAINS_REFILL.fullmatch(line.split(JETBRAINS_REFILL_MARKER, 1)[1].strip())
+            refill = {"next": utc_timestamp(match.group(1)), "duration": jetbrains_duration(match.group(3))} \
+                if match else {"next": None, "duration": None}
+        if quota is not None and refill is not None:
+            break
+    if quota is None:
+        return None
+    return quota[0], quota[1], refill or {"next": None, "duration": None}
+
+
+def read_log_tail(path: Path, max_bytes: int = JETBRAINS_LOG_TAIL_BYTES) -> str:
+    """The last `max_bytes` of a log as whole lines: a cut first line is dropped, and a file that
+    ends mid-line (still being written) yields nothing."""
+    try:
+        with path.open("rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            start = max(0, size - max_bytes)
+            handle.seek(start)
+            data = handle.read(size - start)
+    except OSError:
+        return ""
+    if not data.endswith(b"\n"):
+        return ""
+    return data[data.find(b"\n") + 1 if start else 0:].decode("utf-8", "replace")
+
+
+def jetbrains_log(installation: Path) -> tuple[float, dict[str, float | None], dict[str, Any]] | None:
+    log = cache_home() / installation.parent.name / installation.name / "log" / "idea.log"
+    return parse_jetbrains_log(read_log_tail(log))
+
+
+def jetbrains_reading() -> tuple[dict[str, float | None], dict[str, Any], str, str] | None:
+    """(quota, refill, IDE, origin) of the freshest reading: the most recently written quota file,
+    replaced by its own IDE's log when that is newer. The IDEs may be signed in to different
+    accounts, so another IDE's log never replaces it; without any file, the newest log wins."""
+    installations = jetbrains_installations()
+    files = []
+    for path, name in installations:
+        try:
+            files.append(((path / "options" / JETBRAINS_QUOTA_FILE).stat().st_mtime, path, name))
+        except OSError:
+            continue
+    if files:
+        modified, path, name = max(files)
+        logged = jetbrains_log(path)
+        if logged and logged[0] > modified:
+            return logged[1], logged[2], name, "idea.log"
+        try:
+            quota, refill = parse_jetbrains_quota_file(read_text(path / "options" / JETBRAINS_QUOTA_FILE,
+                                                                 MAX_LOCAL_JSON_BYTES))
+        except (OSError, ValueError, ProviderFailure):
+            if logged:
+                return logged[1], logged[2], name, "idea.log"
+            raise ProviderFailure("malformed", "The JetBrains AI quota file could not be read.") from None
+        return quota, refill, name, "quota file"
+    logs = [(logged, name) for path, name in installations if (logged := jetbrains_log(path))]
+    if not logs:
+        return None
+    logged, name = max(logs, key=lambda entry: entry[0][0])
+    return logged[1], logged[2], name, "idea.log"
+
+
+def jetbrains_usage(quota: dict[str, float | None], refill: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """The month's credits as a window that resets at the next refill (not at `until`, the
+    subscription's end), and purchased top-ups as a separate balance."""
+    windows = []
+    used, maximum, seconds = quota["used"], quota["maximum"], refill.get("duration")
+    if used is not None and maximum is not None and maximum > 0:
+        label = "Monthly limit" if seconds is None or 27 * ONE_DAY <= seconds <= 31 * ONE_DAY \
+            else friendly_window_label(seconds)
+        windows.append(make_window("monthly", label, used / maximum * 100, refill.get("next"), seconds,
+                                   f"{used / JETBRAINS_UNITS_PER_CREDIT:,.2f} of "
+                                   f"{maximum / JETBRAINS_UNITS_PER_CREDIT:,.2f} credits"))
+    credits = None
+    top_up, available = quota["topUpMaximum"], quota["topUpAvailable"]
+    if top_up is not None and top_up > 0 and available is not None and available >= 0:
+        left = round(min(available, top_up) / JETBRAINS_UNITS_PER_CREDIT, 2)
+        credits = {"label": "Top-up credits", "currency": "CREDITS", "used": None, "limit": None, "remaining": left,
+                   "total": round(top_up / JETBRAINS_UNITS_PER_CREDIT, 2), "unlimited": False,
+                   "resetCreditsAvailable": None, "spendable": left, "spend": {}}
+    return windows, credits
+
+
+@provider_detector("jetbrains")
+def detect_jetbrains() -> bool:
+    return any((path / "options" / JETBRAINS_QUOTA_FILE).is_file() for path, _ in jetbrains_installations())
+
+
+@provider_fetcher("jetbrains")
+def fetch_jetbrains(timeout: float) -> dict[str, Any]:
+    provider_id = "jetbrains"
+    try:
+        reading = jetbrains_reading()
+    except ProviderFailure as exc:
+        return error_provider(provider_id, exc.kind, exc.message)
+    if reading is None:
+        return error_provider(provider_id, "no_credentials",
+                              "No JetBrains AI quota was found. Use AI Assistant in a JetBrains IDE.")
+    quota, refill, ide, origin = reading
+    windows, credits = jetbrains_usage(quota, refill)
+    result = base_provider(provider_id)
+    result.update(source=f"{ide} AI Assistant ({origin})", windows=windows, credits=credits)
+    if not windows:
+        result["notice"] = "JetBrains AI reported no monthly credit allowance."
+    return result
+
+
+# --------------------------------------------------------------- Droid
+#
+# Factory's Droid limits come from its API with a Factory API key: the environment or saved key,
+# else the FACTORY_API_KEY line Droid users keep in ~/.factory/.env. Droid's own encrypted login
+# store is never read.
+
+FACTORY_API_BASE = "https://api.factory.ai"
+# The API serves Factory's web app, whose identifying headers CodexBar sends as well.
+FACTORY_HEADERS = {"Accept": "application/json", "Origin": "https://app.factory.ai",
+                   "Referer": "https://app.factory.ai/", "x-factory-client": "web-app",
+                   "User-Agent": SIGNIN_USER_AGENT}
+FACTORY_WINDOWS = (("fiveHour", "5h", "5-hour limit", FIVE_HOURS), ("weekly", "weekly", "Weekly limit", SEVEN_DAYS),
+                   ("monthly", "monthly", "Monthly limit", THIRTY_DAYS))
+# Allowances above this are Factory's way of saying unlimited; they have no percentage.
+FACTORY_UNLIMITED_TOKENS = 1_000_000_000_000
+
+
+def factory_env_key() -> str:
+    """FACTORY_API_KEY from ~/.factory/.env (an `export ` prefix and quotes allowed)."""
+    try:
+        lines = read_text(Path.home() / ".factory" / ".env").splitlines()
+    except (OSError, ValueError):
+        return ""
+    for line in lines:
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == "FACTORY_API_KEY":
+            return value.strip().strip("'\"").strip()
+    return ""
+
+
+def factory_identity(payload: Any) -> tuple[str, str, str]:
+    """(plan, account, user id) from /api/app/auth/me."""
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "Factory returned an unexpected account payload.")
+    organization = payload.get("organization") if isinstance(payload.get("organization"), dict) else {}
+    subscription = organization.get("subscription") if isinstance(organization.get("subscription"), dict) else {}
+    orb = subscription.get("orbSubscription") if isinstance(subscription.get("orbSubscription"), dict) else {}
+    plan_info = orb.get("plan") if isinstance(orb.get("plan"), dict) else {}
+    name = str(plan_info.get("name") or "").strip() or str(subscription.get("factoryTier") or "").strip().title()
+    plan = name if not name or "factory" in name.lower() else "Factory " + name
+    profile = payload.get("userProfile") if isinstance(payload.get("userProfile"), dict) else {}
+    account = profile.get("email") or organization.get("name") or ""
+    return clean_message(plan), clean_message(account), str(profile.get("id") or "")
+
+
+def factory_window(raw: Any, window_id: str, label: str, seconds: int | None, now: float) -> dict[str, Any] | None:
+    used = number(raw.get("usedPercent")) if isinstance(raw, dict) else None
+    if used is None:
+        return None
+    left, end = number(raw.get("secondsRemaining")), utc_timestamp(raw.get("windowEnd"))
+    if left is not None and left > 0:
+        reset: float | None = now + left
+    elif end is not None and end > now:
+        reset = end
+    else:
+        reset = None
+        # A rolling window whose end has passed has reset; Factory leaves the old figure behind.
+        if end is not None and left is None:
+            used = 0.0
+    return make_window(window_id, label, used, reset, seconds)
+
+
+def parse_factory_limits(payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None] | None:
+    """Token-rate-limit billing: 5-hour, weekly, and monthly windows for the standard pool (and the
+    core pool once it is in use), and the extra-usage balance. None on the older billing."""
+    if not isinstance(payload, dict) or payload.get("usesTokenRateLimitsBilling") is not True \
+            or not isinstance(payload.get("limits"), dict):
+        return None
+    windows = []
+    for pool, prefix in (("standard", ""), ("core", "Core · ")):
+        raw = payload["limits"].get(pool)
+        rows = [factory_window(raw.get(key), (pool + "-" + suffix) if prefix else suffix, prefix + label, seconds, now)
+                for key, suffix, label, seconds in FACTORY_WINDOWS] if isinstance(raw, dict) else []
+        rows = [row for row in rows if row]
+        if prefix and not any(row["used"] or row["resetsAt"] for row in rows):
+            continue
+        windows += rows
+    cents = number(payload.get("extraUsageBalanceCents"))
+    credits = None
+    if cents is not None and cents >= 0 and (cents > 0 or payload.get("extraUsageAllowed") is True):
+        balance = round(cents / 100, 2)
+        credits = {"label": "Extra usage", "currency": "USD", "used": None, "limit": None, "remaining": balance,
+                   "total": None, "unlimited": False, "resetCreditsAvailable": None, "spendable": balance, "spend": {}}
+    return windows, credits
+
+
+def factory_legacy_percent(row: dict[str, Any]) -> float | None:
+    """The share of a standard or premium token allowance used: the server's 0-1 ratio when it is
+    usable, else tokens over allowance; None for an unlimited allowance."""
+    used, allowance, ratio = number(row.get("userTokens")), number(row.get("totalAllowance")), number(row.get("usedRatio"))
+    allowance_known = allowance is not None and 0 < allowance <= FACTORY_UNLIMITED_TOKENS
+    if ratio is not None and 0 <= ratio <= 1.001 and not (ratio == 0 and used and allowance_known):
+        return ratio * 100
+    if allowance_known and used is not None:
+        return used / allowance * 100
+    return None
+
+
+def parse_factory_usage(payload: Any) -> list[dict[str, Any]]:
+    """The older token billing: standard and premium allowances for the subscription period."""
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    if not isinstance(usage, dict):
+        raise ProviderFailure("malformed", "Factory returned an unexpected usage payload.")
+    start, end = utc_timestamp(usage.get("startDate")), utc_timestamp(usage.get("endDate"))
+    seconds = end - start if start and end and end > start else None
+    windows = []
+    for key, name in (("standard", "Standard"), ("premium", "Premium")):
+        percent = factory_legacy_percent(usage[key]) if isinstance(usage.get(key), dict) else None
+        if percent is not None:
+            windows.append(make_window(key, name + " · Monthly limit", percent, end, seconds))
+    return windows
+
+
+@provider_detector("factory")
+def detect_factory() -> bool:
+    return (Path.home() / ".factory").is_dir()
+
+
+@provider_fetcher("factory", keyed=True)
+def fetch_factory(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "factory"
+    try:
+        token, origin = key_or_cli_token(provider_id, key_file, factory_env_key)
+    except ProviderFailure as exc:
+        return error_provider(provider_id, exc.kind, exc.message)
+    if not token:
+        return error_provider(provider_id, "no_credentials",
+                              "No Factory API key was found. Add one under Settings → Providers.")
+    deadline = time.monotonic() + timeout
+    headers = {**FACTORY_HEADERS, "Authorization": "Bearer " + token}
+    try:
+        plan, account, user = factory_identity(http_json(FACTORY_API_BASE + "/api/app/auth/me", headers,
+                                                         time_left(deadline)))
+        try:
+            limits = parse_factory_limits(http_json(FACTORY_API_BASE + "/api/billing/limits", headers,
+                                                    time_left(deadline)), time.time())
+        except ProviderFailure:
+            limits = None  # Older accounts have no token rate limits; their usage follows.
+        if limits is None:
+            query = urllib.parse.urlencode({"useCache": "true", **({"userId": user} if user else {})})
+            windows, credits = parse_factory_usage(http_json(
+                FACTORY_API_BASE + "/api/organization/subscription/usage?" + query, headers, time_left(deadline))), None
+        else:
+            windows, credits = limits
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            message = ("Factory rejected the saved key. Enter a new one under Settings → Providers." if origin == "key"
+                       else "Factory rejected the key in ~/.factory/.env. Replace it with a current key.")
+            return error_provider(provider_id, "expired", message)
+        return error_provider(provider_id, exc.kind, exc.message)
+    result = base_provider(provider_id)
+    result.update(plan=plan, account=account, source="Factory API", windows=windows, credits=credits)
+    if not windows and credits is None:
+        result["notice"] = "Factory reported no usage limits for this account."
+    return result
+
+
+# --------------------------------------------------------------- Amp
+#
+# Amp reports balances as the text `amp usage` prints, through the internal API call the CLI
+# makes, so the windows are parsed from that text (CodexBar AmpUsageParser.swift). The token is
+# the environment or saved key, else the one `amp login` keeps in Amp's secrets file.
+
+AMP_USAGE_URL = "https://ampcode.com/api/internal?userDisplayBalanceInfo"
+AMP_SECRETS_KEY = "apiKey@https://ampcode.com/"
+AMP_AMOUNT = r"([0-9][0-9,]*(?:\.[0-9]+)?)"
+AMP_RENEWAL = r"resets\s+upon\s+renewal\s+in\s+([0-9][0-9,]*)\s+(days?|months?)"
+AMP_IDENTITY = re.compile(r"(?im)^\s*Signed in as\s+([^\s(]+)(?:\s+\(([^\r\n)]+)\))?\s*$")
+AMP_FREE = re.compile(r"(?im)^\s*Amp Free:\s*\$?" + AMP_AMOUNT + r"\s*/\s*\$?" + AMP_AMOUNT
+                      + r"\s+remaining(?:\s*\(replenishes\s*\+\$?" + AMP_AMOUNT + r"\s*/\s*hour\))?")
+AMP_FREE_SHARE = re.compile(r"(?im)^\s*Amp Free:\s*" + AMP_AMOUNT + r"\s*%\s+remaining")
+AMP_TIER = re.compile(r"(?im)^\s*Amp\s+([^\r\n]+?)\s+Tier:\s*agent\s+usage\s+\$" + AMP_AMOUNT + r"\s+of\s+\$"
+                      + AMP_AMOUNT + r"\s+remaining\b([^\r\n]*?)" + AMP_RENEWAL + r"\b")
+AMP_SUBSCRIPTION = re.compile(r"(?im)^\s*(?:Subscription\s+(.+?)|Amp\s+(.+?)\s+Subscription):\s*" + AMP_AMOUNT
+                              + r"\s*%\s+other\s+usage\s+and\s+" + AMP_AMOUNT
+                              + r"\s*%\s+orb\s+usage\s+remaining\s*-\s*" + AMP_RENEWAL)
+AMP_ORB = re.compile(r"(?i)\borb\s+usage\s+" + AMP_AMOUNT + r"h\s+of\s+" + AMP_AMOUNT
+                     + r"h\s+a1\.small\s+orb\s+hours\s+remaining\b")
+AMP_PERIOD = re.compile(r"\bperiod\s+(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})\b")
+AMP_CREDITS = re.compile(r"(?im)^\s*Individual credits:\s*\$?" + AMP_AMOUNT + r"\s+remaining")
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def amp_amount(text: str | None) -> float | None:
+    return number(text.replace(",", "")) if text else None
+
+
+def amp_renewal(count: str, unit: str, now: float) -> int | None:
+    """When a "renews in N days/months" countdown ends: as close as the text allows."""
+    value = int(count.replace(",", ""))
+    if unit.lower().startswith("month"):
+        if value > 1200:
+            return None
+        start = datetime.fromtimestamp(now, timezone.utc)
+        months = start.month - 1 + value
+        year, month = start.year + months // 12, months % 12 + 1
+        return int(start.replace(year=year, month=month,
+                                 day=min(start.day, calendar.monthrange(year, month)[1])).timestamp())
+    return int(now) + value * ONE_DAY if value <= 36_500 else None
+
+
+def amp_credits(balance: float) -> dict[str, Any]:
+    return {"label": "Credits", "currency": "USD", "used": None, "limit": None, "remaining": round(balance, 2),
+            "total": None, "unlimited": False, "resetCreditsAvailable": None, "spendable": round(max(0.0, balance), 2),
+            "spend": {}}
+
+
+def parse_amp_display(text: str, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str, str]:
+    """Windows, prepaid credits, plan, and account from Amp's usage text."""
+    text = ANSI_ESCAPE.sub("", text).replace("**", "")
+    identity = AMP_IDENTITY.search(text)
+    windows, plan = [], ""
+    tier, subscription = AMP_TIER.search(text), AMP_SUBSCRIPTION.search(text)
+    limit = amp_amount(tier.group(3)) if tier else None
+    left = amp_amount(tier.group(2)) if tier else None
+    if tier and limit and limit > 0 and left is not None:
+        # The agent dollars are exact; the percentages next to them are rounded.
+        period = AMP_PERIOD.search(tier.group(4))
+        start, end = (utc_timestamp(period.group(1)), utc_timestamp(period.group(2))) if period else (None, None)
+        reset = end or amp_renewal(tier.group(5), tier.group(6), now)
+        seconds = end - start if start and end and end > start else None
+        agent = money_window("agent", "Agent · Monthly limit", max(0.0, limit - left), limit, None, reset, now)
+        agent["windowSeconds"] = seconds
+        windows.append(agent)
+        orb = AMP_ORB.search(tier.group(4))
+        hours, hours_left = (amp_amount(orb.group(2)), amp_amount(orb.group(1))) if orb else (None, None)
+        if hours and hours > 0 and hours_left is not None:
+            windows.append(make_window("orb", "Orb hours · Monthly limit", (hours - hours_left) / hours * 100,
+                                       reset, seconds, f"{hours_left:g}h of {hours:g}h left"))
+        plan = tier.group(1).strip()
+    elif subscription:
+        reset = amp_renewal(subscription.group(5), subscription.group(6), now)
+        for window_id, name, share in (("agent", "Agent", subscription.group(3)), ("orb", "Orb hours", subscription.group(4))):
+            share_left = amp_amount(share)
+            if share_left is not None:
+                windows.append(make_window(window_id, name + " · Monthly limit", 100 - share_left, reset))
+        plan = (subscription.group(1) or subscription.group(2) or "").strip()
+    free, free_share = AMP_FREE.search(text), AMP_FREE_SHARE.search(text)
+    quota = amp_amount(free.group(2)) if free else None
+    free_left = amp_amount(free.group(1)) if free else None
+    if free and quota and quota > 0 and free_left is not None:
+        rate, spent = amp_amount(free.group(3)), max(0.0, quota - free_left)
+        # Amp Free refills continuously: it is full again once the spent amount has refilled.
+        refilled = now + spent / rate * 3600 if rate and spent else None
+        window = money_window("free", "Amp Free", spent, quota, None, refilled, now)
+        if rate:
+            window["detail"] = clean_message(f"{window['detail']} · refills ${rate:.2f}/hour")
+        windows.append(window)
+    elif free_share and (share_left := amp_amount(free_share.group(1))) is not None:
+        windows.append(make_window("free", "Amp Free · Daily limit", 100 - share_left, None, ONE_DAY))
+    balance = amp_amount(match.group(1)) if (match := AMP_CREDITS.search(text)) else None
+    credits = amp_credits(balance) if balance is not None else None
+    if not windows and credits is None:
+        lowered = text.lower()
+        if identity is None and any(word in lowered for word in ("sign in", "log in", "login")):
+            raise ProviderFailure("expired", "Amp reports that it is signed out.")
+        raise ProviderFailure("malformed", "Amp returned no usage figures.")
+    plan = "Amp " + plan if plan else ("Amp Free" if free or free_share else "")
+    return windows, credits, clean_message(plan), clean_message(identity.group(1)) if identity else ""
+
+
+def amp_secrets() -> Path:
+    return data_home() / "amp" / "secrets.json"
+
+
+def amp_cli_token() -> str:
+    try:
+        saved = read_json(amp_secrets())
+    except (OSError, ValueError, RecursionError):
+        return ""
+    token = saved.get(AMP_SECRETS_KEY) if isinstance(saved, dict) else None
+    return token.strip() if isinstance(token, str) else ""
+
+
+@provider_detector("amp")
+def detect_amp() -> bool:
+    return amp_secrets().is_file()
+
+
+@provider_fetcher("amp", keyed=True)
+def fetch_amp(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "amp"
+    try:
+        token, origin = key_or_cli_token(provider_id, key_file, amp_cli_token)
+    except ProviderFailure as exc:
+        return error_provider(provider_id, exc.kind, exc.message)
+    if not token:
+        return error_provider(provider_id, "no_credentials",
+                              "No Amp sign-in was found. Run `amp login` or add a key under Settings → Providers.")
+    try:
+        payload = http_json(AMP_USAGE_URL, {"Authorization": "Bearer " + token, "Accept": "application/json",
+                                            "User-Agent": SIGNIN_USER_AGENT}, timeout,
+                            {"method": "userDisplayBalanceInfo", "params": {}})
+        if not isinstance(payload, dict):
+            raise ProviderFailure("malformed", "Amp returned an unexpected usage payload.")
+        if payload.get("ok") is not True:
+            error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+            if error.get("code") == "auth-required":
+                raise ProviderFailure("expired", "Amp rejected the token.")
+            raise ProviderFailure("http", "Amp could not report usage.")
+        reply = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        text = reply.get("displayText")
+        if not isinstance(text, str) or not text.strip():
+            raise ProviderFailure("malformed", "Amp returned no usage text.")
+        windows, credits, plan, account = parse_amp_display(text, time.time())
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            message = ("Amp rejected the saved key. Enter a new one under Settings → Providers." if origin == "key"
+                       else "Amp rejected the CLI sign-in. Run `amp login` again.")
+            return error_provider(provider_id, "expired", message)
+        return error_provider(provider_id, exc.kind, exc.message)
+    result = base_provider(provider_id)
+    result.update(plan=plan, account=account, source="Amp usage API", windows=windows, credits=credits)
+    return result
+
+
+# --------------------------------------------------------------- Kilo Code
+#
+# Kilo's prepaid credits and Kilo Pass come from the tRPC batch its web app calls. The token is the
+# environment or saved key, else the one `kilo auth login` keeps.
+
+KILO_PROCEDURES = ("user.getCreditBlocks", "kiloPass.getState")
+KILO_PASS_TIERS = {"tier_19": "Starter", "tier_49": "Pro", "tier_199": "Expert"}
+
+
+def kilo_usage_url() -> str:
+    batch = json.dumps({str(index): {"json": None} for index in range(len(KILO_PROCEDURES))}, separators=(",", ":"))
+    return ("https://app.kilo.ai/api/trpc/" + ",".join(KILO_PROCEDURES) + "?"
+            + urllib.parse.urlencode({"batch": "1", "input": batch}))
+
+
+def kilo_auth() -> Path:
+    return data_home() / "kilo" / "auth.json"
+
+
+def kilo_cli_token() -> str:
+    """The access token in the Kilo CLI's auth.json, an OpenCode-style store under the data home."""
+    try:
+        saved = read_json(kilo_auth())
+    except (OSError, ValueError, RecursionError):
+        return ""
+    entry = saved.get("kilo") if isinstance(saved, dict) else None
+    token = entry.get("access") if isinstance(entry, dict) else None
+    return token.strip() if isinstance(token, str) else ""
+
+
+def kilo_result(entry: Any) -> Any:
+    """One procedure's data from the batch; a refused or failed procedure raises."""
+    if not isinstance(entry, dict):
+        return None
+    if isinstance(entry.get("error"), dict):
+        text = json.dumps(entry["error"]).lower()
+        if "unauthorized" in text or "forbidden" in text:
+            raise ProviderFailure("expired", "Kilo rejected the token.")
+        raise ProviderFailure("http", "Kilo could not report usage.")
+    result = entry.get("result") if isinstance(entry.get("result"), dict) else {}
+    data = result.get("data")
+    if isinstance(data, dict) and "json" in data:
+        return data["json"]
+    return data if data is not None else result.get("json")
+
+
+def parse_kilo_usage(payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
+    """The prepaid credit balance (amounts are millionths of a dollar) and the Kilo Pass month."""
+    if isinstance(payload, dict):
+        entries = [payload] if "result" in payload or "error" in payload \
+            else [payload.get(str(index)) for index in range(len(KILO_PROCEDURES))]
+    elif isinstance(payload, list):
+        entries = payload
+    else:
+        raise ProviderFailure("malformed", "Kilo returned an unexpected usage payload.")
+    blocks_data, pass_data = (kilo_result(entry) for entry in (list(entries) + [None, None])[:2])
+    credits = None
+    if isinstance(blocks_data, dict):
+        blocks = [block for block in blocks_data.get("creditBlocks") or [] if isinstance(block, dict)] \
+            if isinstance(blocks_data.get("creditBlocks"), list) else []
+        amounts = [value for block in blocks if (value := number(block.get("amount_mUsd"))) is not None]
+        balances = [value for block in blocks if (value := number(block.get("balance_mUsd"))) is not None]
+        total = sum(amounts) / 1e6 if amounts else None
+        remaining = sum(balances) / 1e6 if balances else None
+        if remaining is None and (balance := number(blocks_data.get("totalBalance_mUsd"))) is not None:
+            remaining = balance / 1e6
+        if remaining is not None:
+            remaining = max(0.0, remaining)
+            credits = {"label": "Credits", "currency": "USD",
+                       "used": round(max(0.0, total - remaining), 2) if total is not None else None, "limit": None,
+                       "remaining": round(remaining, 2), "total": round(total, 2) if total is not None else None,
+                       "unlimited": False, "resetCreditsAvailable": None, "spendable": round(remaining, 2), "spend": {}}
+    windows, plan = [], ""
+    subscription = pass_data.get("subscription") if isinstance(pass_data, dict) else None
+    if isinstance(subscription, dict):
+        base = number(subscription.get("currentPeriodBaseCreditsUsd"))
+        bonus = max(0.0, number(subscription.get("currentPeriodBonusCreditsUsd")) or 0.0)
+        spent = number(subscription.get("currentPeriodUsageUsd"))
+        reset = next((stamp for key in ("nextBillingAt", "nextRenewalAt", "renewsAt", "renewAt")
+                      if (stamp := utc_timestamp(subscription.get(key)))), None)
+        if base is not None and spent is not None and base + bonus > 0:
+            window = money_window("pass", "Kilo Pass · Monthly limit", max(0.0, spent), base + bonus, None, reset, now)
+            window["windowSeconds"] = THIRTY_DAYS
+            if bonus:
+                window["detail"] = clean_message(f"{window['detail']} (includes ${bonus:.2f} bonus)")
+            windows.append(window)
+        tier = str(subscription.get("tier") or "").strip()
+        plan = clean_message("Kilo Pass " + KILO_PASS_TIERS.get(tier, tier)) if tier else "Kilo Pass"
+    if not windows and credits is None:
+        raise ProviderFailure("malformed", "Kilo returned no credit balance.")
+    return windows, credits, plan
+
+
+@provider_detector("kilo")
+def detect_kilo() -> bool:
+    return kilo_auth().is_file()
+
+
+@provider_fetcher("kilo", keyed=True)
+def fetch_kilo(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "kilo"
+    try:
+        token, origin = key_or_cli_token(provider_id, key_file, kilo_cli_token)
+    except ProviderFailure as exc:
+        return error_provider(provider_id, exc.kind, exc.message)
+    if not token:
+        return error_provider(provider_id, "no_credentials",
+                              "No Kilo sign-in was found. Run `kilo auth login` or add a key under Settings → Providers.")
+    try:
+        payload = http_json(kilo_usage_url(), {"Authorization": "Bearer " + token, "Accept": "application/json",
+                                               "User-Agent": SIGNIN_USER_AGENT}, timeout)
+        windows, credits, plan = parse_kilo_usage(payload, time.time())
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            message = ("Kilo rejected the saved key. Enter a new one under Settings → Providers." if origin == "key"
+                       else "Kilo rejected the CLI sign-in. Run `kilo auth login` again.")
+            return error_provider(provider_id, "expired", message)
+        return error_provider(provider_id, exc.kind, exc.message)
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="Kilo API", windows=windows, credits=credits)
+    return result
+
+
+# --------------------------------------------------------------- Codebuff
+#
+# Codebuff's credits come from its usage API. An API key reads only the credit balance; the session
+# `codebuff login` saves also reads the subscription and its weekly limit.
+
+CODEBUFF_API_BASE = "https://www.codebuff.com"
+
+
+def codebuff_credentials() -> Path:
+    # Codebuff was called Manicode, and the CLI still keeps its login under that name.
+    return Path.home() / ".config" / "manicode" / "credentials.json"
+
+
+def codebuff_cli_token() -> str:
+    try:
+        saved = read_json(codebuff_credentials())
+    except (OSError, ValueError, RecursionError):
+        return ""
+    for entry in ((saved.get("default"), saved) if isinstance(saved, dict) else ()):
+        token = entry.get("authToken") if isinstance(entry, dict) else None
+        if isinstance(token, str) and token.strip():
+            return token.strip()
+    return ""
+
+
+def parse_codebuff_usage(payload: Any) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """The credit quota as a window resetting at `next_quota_reset`; a balance without a quota as
+    credits counted in Codebuff's own unit."""
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "Codebuff returned an unexpected usage payload.")
+    used, quota = first_number(payload, "usage", "used"), first_number(payload, "quota", "limit")
+    left = first_number(payload, "remainingBalance", "remaining")
+    if used is None and quota is not None and left is not None:
+        used = quota - left
+    if quota is not None and quota > 0 and used is not None:
+        window = make_window("credits", "Credits", used / quota * 100, utc_timestamp(payload.get("next_quota_reset")),
+                             None, f"{used:,.0f} of {quota:,.0f} credits")
+        return [window], None
+    if left is not None:
+        return [], {"label": "Credits", "currency": "CREDITS", "used": used, "limit": None, "remaining": left,
+                    "total": None, "unlimited": False, "resetCreditsAvailable": None,
+                    "spendable": max(0.0, left), "spend": {}}
+    raise ProviderFailure("malformed", "Codebuff returned no credit balance.")
+
+
+def parse_codebuff_subscription(payload: Any) -> tuple[list[dict[str, Any]], str, str]:
+    """The weekly limit, plan, and account from the subscription a CLI session can read."""
+    if not isinstance(payload, dict):
+        return [], "", ""
+    subscription = payload.get("subscription") if isinstance(payload.get("subscription"), dict) else {}
+    limits = payload.get("rateLimit") if isinstance(payload.get("rateLimit"), dict) else {}
+    used, limit = first_number(limits, "weeklyUsed", "used"), first_number(limits, "weeklyLimit", "limit")
+    windows = []
+    if limit is not None and limit > 0:
+        windows.append(make_window("weekly", "Weekly limit", max(0.0, used or 0.0) / limit * 100,
+                                   utc_timestamp(limits.get("weeklyResetsAt")), SEVEN_DAYS))
+    tier = next((value.strip() for value in (subscription.get("displayName"), payload.get("displayName"),
+                                             subscription.get("tier"), payload.get("tier"))
+                 if isinstance(value, str) and value.strip()), "")
+    plan = tier if not tier or "codebuff" in tier.lower() else "Codebuff " + tier[:1].upper() + tier[1:]
+    user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+    email = payload.get("email") or user.get("email")
+    return windows, clean_message(plan), clean_message(email) if isinstance(email, str) else ""
+
+
+@provider_detector("codebuff")
+def detect_codebuff() -> bool:
+    return codebuff_credentials().is_file()
+
+
+@provider_fetcher("codebuff", keyed=True)
+def fetch_codebuff(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "codebuff"
+    try:
+        token, origin = key_or_cli_token(provider_id, key_file, codebuff_cli_token)
+    except ProviderFailure as exc:
+        return error_provider(provider_id, exc.kind, exc.message)
+    if not token:
+        return error_provider(provider_id, "no_credentials",
+                              "No Codebuff sign-in was found. Run `codebuff login` or add a key under Settings → Providers.")
+    deadline = time.monotonic() + timeout
+    headers = {"Authorization": "Bearer " + token, "Accept": "application/json", "User-Agent": SIGNIN_USER_AGENT}
+    try:
+        # The API requires a client fingerprint; this one names the probe, as CodexBar's does.
+        windows, credits = parse_codebuff_usage(http_json(CODEBUFF_API_BASE + "/api/v1/usage", headers,
+                                                          time_left(deadline), {"fingerprintId": "quotatank-usage"}))
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            message = ("Codebuff rejected the saved key. Enter a new one under Settings → Providers." if origin == "key"
+                       else "Codebuff rejected the CLI sign-in. Run `codebuff login` again.")
+            return error_provider(provider_id, "expired", message)
+        return error_provider(provider_id, exc.kind, exc.message)
+    plan = account = ""
+    if origin == "cli":
+        try:
+            weekly, plan, account = parse_codebuff_subscription(http_json(
+                CODEBUFF_API_BASE + "/api/user/subscription", headers, min(5.0, time_left(deadline))))
+            windows += weekly
+        except ProviderFailure:
+            pass  # The subscription adds detail; the credits stand on their own.
+    result = base_provider(provider_id)
+    result.update(plan=plan, account=account, source="Codebuff API", windows=windows, credits=credits)
+    return result
+
+
+# --------------------------------------------------------------- Hugging Face
+#
+# Hugging Face reports this month's Inference Providers spend and, for accounts that have it, the
+# ZeroGPU time quota. The token is the environment or saved key, else the one `hf auth login`
+# saved; it needs Billing read access.
+
+HF_API_BASE = "https://huggingface.co/api"
+
+
+def huggingface_token_path() -> Path:
+    """Where `hf auth login` saves the token: HF_TOKEN_PATH, else HF_HOME, else the XDG cache home."""
+    override = os.environ.get("HF_TOKEN_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
+    hf_home = os.environ.get("HF_HOME", "").strip()
+    return (Path(hf_home).expanduser() if hf_home else cache_home() / "huggingface") / "token"
+
+
+def huggingface_cli_token() -> str:
+    try:
+        lines = read_text(huggingface_token_path()).splitlines()
+    except (OSError, ValueError):
+        return ""
+    return lines[0].strip().strip("'\"").strip() if lines else ""
+
+
+def parse_huggingface_usage(payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """This month's billed inference spend (what exceeds the included credit) as `credits`, and a
+    window when a spending limit is set. Neither has a reset: the report's end date is only the
+    end of the query (CodexBar huggingface.ts L221-222)."""
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    inference = usage.get("inferenceProviders") if isinstance(usage, dict) else None
+    gross = number(inference.get("usedNanoUsd")) if isinstance(inference, dict) else None
+    included = number(inference.get("includedNanoUsd")) if isinstance(inference, dict) else None
+    if gross is None or included is None or gross < 0 or included < 0:
+        raise ProviderFailure("malformed", "Hugging Face returned an unexpected billing report.")
+    billed = round(max(0.0, gross - included) / 1e9, 2)
+    limit = number(inference.get("limitNanoUsd"))
+    limit = round(limit / 1e9, 2) if limit is not None and limit > 0 else None
+    windows = [money_window("inference-limit", "Inference spending limit", billed, limit, None, None, now)] if limit else []
+    credits = {"label": "Inference spend", "currency": "USD", "used": billed, "limit": limit, "remaining": None,
+               "total": None, "unlimited": False, "resetCreditsAvailable": None, "spendable": None,
+               "spend": {"monthly": billed}}
+    return windows, credits
+
+
+def parse_zero_gpu(payload: Any) -> dict[str, Any] | None:
+    """ZeroGPU time (in seconds) used of the account's quota, with the quota's own reset."""
+    total = number(payload.get("base")) if isinstance(payload, dict) else None
+    left = number(payload.get("current")) if isinstance(payload, dict) else None
+    if total is None or left is None or total <= 0 or left < 0:
+        return None
+    used = max(0.0, total - left)
+    return make_window("zerogpu", "ZeroGPU", used / total * 100, utc_timestamp(payload.get("resetsAt")), None,
+                       f"{used / 60:,.1f} of {total / 60:,.1f} GPU minutes")
+
+
+@provider_detector("huggingface")
+def detect_huggingface() -> bool:
+    return huggingface_token_path().is_file()
+
+
+@provider_fetcher("huggingface", keyed=True)
+def fetch_huggingface(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "huggingface"
+    try:
+        token, origin = key_or_cli_token(provider_id, key_file, huggingface_cli_token)
+    except ProviderFailure as exc:
+        return error_provider(provider_id, exc.kind, exc.message)
+    if not token:
+        return error_provider(provider_id, "no_credentials",
+                              "No Hugging Face token was found. Run `hf auth login` or add one under Settings → Providers.")
+    now = time.time()
+    deadline = time.monotonic() + timeout
+    month_start = datetime.fromtimestamp(now, timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    query = urllib.parse.urlencode({"startDate": int(month_start.timestamp()), "endDate": int(now)})
+    headers = {"Authorization": "Bearer " + token, "Accept": "application/json", "User-Agent": SIGNIN_USER_AGENT}
+    try:
+        windows, credits = parse_huggingface_usage(http_json(f"{HF_API_BASE}/settings/billing/usage-v2?{query}",
+                                                             headers, time_left(deadline)), now)
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            message = ("Hugging Face rejected the saved token, or it lacks Billing read access. Enter a new one "
+                       "under Settings → Providers." if origin == "key" else
+                       "Hugging Face rejected the `hf auth login` token, or it lacks Billing read access. "
+                       "Run `hf auth login` with a token that can read billing.")
+            return error_provider(provider_id, "expired", message)
+        return error_provider(provider_id, exc.kind, exc.message)
+    try:
+        zero_gpu = parse_zero_gpu(http_json(HF_API_BASE + "/spaces/zero-gpu/quota", headers,
+                                            min(2.0, time_left(deadline))))
+    except ProviderFailure:
+        zero_gpu = None  # ZeroGPU is optional; the billing report stands on its own.
+    result = base_provider(provider_id)
+    result.update(source="Hugging Face billing API", windows=windows + ([zero_gpu] if zero_gpu else []),
+                  credits=credits)
     return result
 
 
@@ -2548,25 +4837,52 @@ def parse_cliproxy_codex(payload: Any) -> tuple[list[dict[str, Any]], dict[str, 
     return windows, credits, plan
 
 
-def parse_antigravity_usage(payload: Any) -> list[dict[str, Any]]:
-    if not isinstance(payload, dict) or not isinstance(payload.get("groups"), list):
+def parse_antigravity_usage(payload: Any, *, untouched_is_unknown: bool = True) -> list[dict[str, Any]]:
+    """Quota buckets as windows, Gemini before Claude/GPT and 5-hour before weekly.
+
+    A bucket without a fraction, or a disabled one, is unknown rather than exhausted: proto3 JSON
+    drops a zero fraction. CLIProxyAPI signs in with a third-party OAuth client, which Cloud Code
+    can answer with a placeholder of untouched limits (CodexBar AntigravityRemoteUsageFetcher.swift
+    L139-142), so there a summary with every limit untouched is unknown. Antigravity's own
+    processes pass `untouched_is_unknown=False`: untouched is their normal state after a reset."""
+    body = payload
+    if isinstance(payload, dict) and not isinstance(payload.get("groups"), list):
+        body = next((payload[key] for key in ("response", "summary") if isinstance(payload.get(key), dict)), payload)
+    if not isinstance(body, dict) or not isinstance(body.get("groups"), list):
         raise ProviderFailure("malformed", "Antigravity returned an unexpected quota summary.")
-    windows = []
-    for i, group in enumerate(payload["groups"]):
+    if not antigravity_code_ok(payload.get("code")):
+        raise ProviderFailure("http", "Antigravity reported a quota error.")
+    rows = []
+    for group_index, group in enumerate(body["groups"]):
         if not isinstance(group, dict) or not isinstance(group.get("buckets"), list):
             continue
-        name = clean_message(group.get("displayName") or group.get("display_name") or "Models")
-        for j, bucket in enumerate(group["buckets"]):
+        title = antigravity_group_title(group)
+        for bucket_index, bucket in enumerate(group["buckets"]):
             if not isinstance(bucket, dict):
                 continue
-            remaining = number(bucket.get("remainingFraction", bucket.get("remaining_fraction")))
-            label = clean_message(bucket.get("window") or bucket.get("displayName") or "Quota")
-            reset = bucket.get("resetTime", bucket.get("reset_time"))
-            window = make_window(f"antigravity-{i}-{j}", f"{name} · {label}",
-                                 100 * (1 - remaining) if remaining is not None else 0, reset)
-            if remaining is None:
-                window.update(used=None, remaining=None, detail="Quota amount unavailable")
-            windows.append(window)
+            cadence = antigravity_cadence(bucket)
+            order = (ANTIGRAVITY_GROUP_ORDER.get(title, 2), group_index, {"session": 0, "weekly": 1}.get(cadence, 2),
+                     bucket_index)
+            fraction = None if bucket.get("disabled") is True else antigravity_fraction(bucket)
+            rows.append((order, title, cadence, bucket, fraction))
+    rows.sort(key=lambda row: row[0])
+    untouched = untouched_is_unknown and bool(rows) and all(row[4] is not None and row[4] >= 0.999 for row in rows)
+    windows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for _, title, cadence, bucket, fraction in rows:
+        window_id = re.sub(r"[^a-z0-9]+", "-", str(bucket.get("bucketId") or bucket.get("id") or "").lower()).strip("-")
+        window_id = window_id if window_id and window_id not in seen else f"antigravity-{len(windows)}"
+        seen.add(window_id)
+        fallback = bucket.get("window") or bucket.get("displayName") or bucket.get("display_name") or bucket.get("name")
+        name, seconds = ANTIGRAVITY_CADENCES.get(cadence, (clean_message(fallback or "Quota"), None))
+        label, reset = f"{title} · {name}", utc_timestamp(bucket.get("resetTime", bucket.get("reset_time")))
+        if fraction is None:
+            windows.append(unknown_window(window_id, label, reset, seconds, "Quota amount unavailable"))
+        elif untouched:
+            windows.append(unknown_window(window_id, label, reset, seconds,
+                                          "Unverified: every limit was reported untouched"))
+        else:
+            windows.append(make_window(window_id, label, 100 * (1 - fraction), reset, seconds))
     return windows
 
 
