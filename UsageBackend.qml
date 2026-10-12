@@ -37,6 +37,9 @@ Item {
   readonly property var providers: payload ? UsageLogic.listOrEmpty(payload.providers) : []
   // Providers set up on this computer, monitored or not; Settings offers the ones not monitored yet.
   readonly property var detected: payload ? UsageLogic.listOrEmpty(payload.detected) : []
+  // Providers whose CLI is on PATH, or null before a payload says: Settings offers Sign in for these
+  // and Install for the rest.
+  readonly property var installed: payload && payload.installed !== undefined ? UsageLogic.listOrEmpty(payload.installed) : null
   readonly property string proxyImplementation: String(payload && payload.proxyImplementation || "")
   readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl, cliproxyKeyFile, keyFiles])
   readonly property string scriptPath: localPath(Qt.resolvedUrl("scripts/usage-fetch.py"))

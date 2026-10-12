@@ -12,6 +12,7 @@ import argparse
 import base64
 import calendar
 import concurrent.futures
+import functools
 import hashlib
 import http.client
 import json
@@ -102,6 +103,14 @@ AUTH_COMMANDS = {
     "kilo": "kilo auth login",
     "codebuff": "codebuff login",
     "huggingface": "hf auth login",
+}
+
+# The executable whose presence means a provider's CLI is installed (see installed_providers).
+PROVIDER_CLI: dict[str, str] = {
+    "claude": "claude", "codex": "codex", "kimi": "kimi", "opencode": "opencode",
+    "antigravity": "agy", "gemini": "gemini", "copilot": "gh", "cursor": "cursor-agent",
+    "grok": "grok", "kiro": "kiro-cli", "factory": "droid", "amp": "amp", "kilo": "kilo",
+    "codebuff": "codebuff", "huggingface": "hf",
 }
 
 # Environment variables that carry a provider's API key, in precedence order. They win over the
@@ -299,6 +308,17 @@ def detected_providers() -> list[str]:
         if present:
             found.append(provider_id)
     return found
+
+
+def installed_providers() -> list[str]:
+    """Providers whose command-line tool is on PATH, so the widget can offer that tool's sign-in."""
+    path = runtime_environment().get("PATH")
+    installed = []
+    for provider_id in PROVIDER_ORDER:
+        executable = PROVIDER_CLI.get(provider_id)
+        if executable and shutil.which(executable, path=path):
+            installed.append(provider_id)
+    return installed
 
 
 class NoRedirects(urllib.request.HTTPRedirectHandler):
@@ -1817,14 +1837,18 @@ def fetch_antigravity(timeout: float) -> dict[str, Any]:
 # --------------------------------------------------------------- Gemini CLI
 #
 # Gemini CLI keeps its Google sign-in in ~/.gemini/oauth_creds.json and refreshes the one-hour
-# access token only while it runs, so the stored token is usually stale. Quotatank then exchanges
-# the refresh token for an access token held in memory only, with Gemini CLI's own installed-app
-# OAuth client (google-gemini/gemini-cli@9b6e0265, packages/core/src/code_assist/oauth2.ts
-# L76-85; Google treats an installed app's client secret as public). Nothing is written back, and
-# Google does not rotate the refresh token, so Gemini CLI's own sign-in keeps working.
+# access token only while it runs, so the stored token is usually stale. When a refresh is needed,
+# Quotatank exchanges the refresh token for an access token held in memory only. The exchange uses
+# the installed-app OAuth client of the Gemini CLI on this computer (its oauth2 module; Google treats
+# an installed app's client secret as public). That client is read from the local install at refresh
+# time and is never stored here. Nothing is written back, and Google does not rotate the refresh
+# token, so Gemini CLI's own sign-in keeps working. Without a local install the sign-in is expired.
 
-GEMINI_OAUTH_CLIENT_ID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
-GEMINI_OAUTH_CLIENT_SECRET = "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"
+GEMINI_CLIENT_FILES = ("bundle/gemini.js", "node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js",
+                       "dist/src/code_assist/oauth2.js")
+GEMINI_CLIENT_MAX_BYTES = 64 * 1024 * 1024
+GEMINI_CLIENT_ID_RE = re.compile(rb"[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com")
+GEMINI_CLIENT_SECRET_RE = re.compile(rb"GOCSPX-[A-Za-z0-9_-]+")
 GEMINI_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GEMINI_CODE_ASSIST_URL = "https://cloudcode-pa.googleapis.com/v1internal:"
 # Matched in this order: every Flash-Lite model id also contains "flash".
@@ -1833,6 +1857,7 @@ GEMINI_FAMILY_ORDER = ("pro", "flash", "flash-lite")
 GEMINI_SHUTDOWN = ("Google stopped serving Gemini CLI quotas for personal Google accounts in June 2026. "
                    "Use the Antigravity provider instead.")
 GEMINI_EXPIRED = "The Gemini CLI sign-in is no longer accepted. Run `gemini` to sign in again."
+GEMINI_NO_CLIENT_EXPIRED = "Gemini CLI's sign-in has expired. Run gemini to refresh it."
 
 
 def gemini_home() -> Path:
@@ -1879,6 +1904,67 @@ def http_form_json(url: str, fields: dict[str, str], timeout: float) -> Any:
         raise ProviderFailure("malformed", "The sign-in endpoint returned unreadable data.") from None
 
 
+def gemini_package_dir(entry: Path) -> Path | None:
+    """The package directory behind a resolved `gemini` entry point: the nearest ancestor with a package.json."""
+    for directory in entry.parents[:4]:
+        if (directory / "package.json").is_file():
+            return directory
+    return None
+
+
+def gemini_glob_dirs(base: Path, pattern: str) -> list[Path]:
+    try:
+        return sorted(path for path in base.glob(pattern) if path.is_dir())
+    except OSError:
+        return []
+
+
+def gemini_install_roots() -> list[Path]:
+    """Directories that may hold Gemini CLI's package. Nothing is run: the `gemini` on PATH is resolved
+    through its symlinks, then the usual global install locations are matched by name."""
+    roots: list[Path] = []
+    executable = shutil.which("gemini", path=runtime_environment().get("PATH"))
+    if executable:
+        try:
+            package = gemini_package_dir(Path(executable).resolve())
+        except (OSError, RuntimeError):
+            package = None
+        if package is not None:
+            roots.append(package)
+            # npm may hoist @google/gemini-cli-core beside the package rather than inside it.
+            roots.extend(gemini_glob_dirs(package.parent, "gemini-cli*"))
+    home = Path.home()
+    # mise keeps one directory per version; its npm backend nests the package under lib/node_modules.
+    for version in gemini_glob_dirs(home / ".local" / "share" / "mise" / "installs", "*gemini*/*"):
+        roots.append(version)
+        roots.extend(gemini_glob_dirs(version, "lib/node_modules/@google/gemini-cli*"))
+    for base in (home / ".bun" / "install" / "global" / "node_modules", Path("/usr/lib/node_modules"),
+                 Path("/usr/local/lib/node_modules"), home / ".npm-global" / "lib" / "node_modules",
+                 home / ".local" / "lib" / "node_modules"):
+        roots.extend(gemini_glob_dirs(base, "@google/gemini-cli*"))
+    return list(dict.fromkeys(roots))
+
+
+@functools.cache
+def gemini_oauth_client() -> tuple[str, str] | None:
+    """Gemini CLI's installed-app client id and secret from the first local install that has both.
+    Read once per process; each candidate file is read up to GEMINI_CLIENT_MAX_BYTES."""
+    for root in gemini_install_roots():
+        for relative in GEMINI_CLIENT_FILES:
+            path = root / relative
+            try:
+                if not path.is_file():
+                    continue
+                with path.open("rb") as handle:
+                    text = handle.read(GEMINI_CLIENT_MAX_BYTES)
+            except OSError:
+                continue
+            client_id, secret = GEMINI_CLIENT_ID_RE.search(text), GEMINI_CLIENT_SECRET_RE.search(text)
+            if client_id and secret:
+                return client_id.group(0).decode("ascii"), secret.group(0).decode("ascii")
+    return None
+
+
 def gemini_access_token(credentials: dict[str, Any], timeout: float) -> tuple[str, str]:
     """An access token and id token: the stored pair while the token has a minute left, otherwise
     a fresh pair that lives only in this process."""
@@ -1890,9 +1976,12 @@ def gemini_access_token(credentials: dict[str, Any], timeout: float) -> tuple[st
     refresh = credentials.get("refresh_token")
     if not isinstance(refresh, str) or not refresh:
         raise ProviderFailure("expired", GEMINI_EXPIRED)
+    client = gemini_oauth_client()
+    if client is None:
+        raise ProviderFailure("expired", GEMINI_NO_CLIENT_EXPIRED)
     try:
         response = http_form_json(GEMINI_TOKEN_URL, {
-            "client_id": GEMINI_OAUTH_CLIENT_ID, "client_secret": GEMINI_OAUTH_CLIENT_SECRET,
+            "client_id": client[0], "client_secret": client[1],
             "refresh_token": refresh, "grant_type": "refresh_token"}, timeout)
     except ProviderFailure as exc:
         # 400 is invalid_grant: the refresh token was revoked or has lapsed.
@@ -2015,7 +2104,8 @@ def fetch_gemini(timeout: float) -> dict[str, Any]:
         windows = parse_gemini_quota(quota)
     except ProviderFailure as exc:
         if exc.kind == "expired":
-            return error_provider(provider_id, "expired", GEMINI_EXPIRED)
+            message = GEMINI_NO_CLIENT_EXPIRED if exc.message == GEMINI_NO_CLIENT_EXPIRED else GEMINI_EXPIRED
+            return error_provider(provider_id, "expired", message)
         return error_provider(provider_id, exc.kind, exc.message)
 
     email = claims.get("email")
@@ -5350,6 +5440,7 @@ def build_payload(
         "providers": providers,
         "source": source,
         "detected": detected_providers(),
+        "installed": installed_providers(),
         **metadata,
     }
 

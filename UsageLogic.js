@@ -1071,6 +1071,29 @@ function providerMark(providerId) {
   return String(providerId || "?").charAt(0).toUpperCase()
 }
 
+// How Settings sets up a sign-in provider: `login` runs in a floating Omarchy terminal; `mise` is
+// the package Omarchy's mise installs the CLI from (the names `omarchy default agent` uses), so a
+// missing CLI can be installed and signed in to in one go; `installUrl` is where to get a tool
+// that neither covers, such as an app or IDE.
+var PROVIDER_SETUP = {
+  claude: { login: "claude auth login", mise: "claude", installUrl: "https://claude.com/product/claude-code" },
+  codex: { login: "codex login", mise: "codex", installUrl: "https://developers.openai.com/codex/cli" },
+  kimi: { login: "kimi login", installUrl: "https://github.com/MoonshotAI/kimi-cli" },
+  opencode: { login: "opencode auth login", mise: "opencode", installUrl: "https://opencode.ai" },
+  antigravity: { login: "agy", installUrl: "https://antigravity.google" },
+  gemini: { login: "gemini", mise: "gemini", installUrl: "https://github.com/google-gemini/gemini-cli" },
+  copilot: { login: "gh auth login", mise: "gh", installUrl: "https://cli.github.com" },
+  cursor: { login: "cursor-agent login", mise: "cursor-agent", installUrl: "https://cursor.com/cli" },
+  grok: { login: "grok login", mise: "npm:@xai-official/grok", installUrl: "https://www.npmjs.com/package/@xai-official/grok" },
+  kiro: { login: "kiro-cli login", installUrl: "https://kiro.dev/cli" },
+  jetbrains: { installUrl: "https://www.jetbrains.com/ai/" },
+  factory: { login: "droid", installUrl: "https://factory.ai" },
+  amp: { login: "amp login", mise: "npm:@sourcegraph/amp", installUrl: "https://ampcode.com" },
+  kilo: { login: "kilo auth login", mise: "npm:@kilocode/cli", installUrl: "https://kilo.ai/cli" },
+  codebuff: { login: "codebuff login", mise: "npm:codebuff", installUrl: "https://www.codebuff.com" },
+  huggingface: { login: "hf auth login", installUrl: "https://huggingface.co/docs/huggingface_hub/installation" }
+}
+
 // Providers the widget reads on this computer, in scripts/usage-fetch.py's PROVIDER_ORDER, which is
 // also their default order everywhere. `short` is the tile and chip name. `auth` says how one is set
 // up: "signin" (a CLI, app, or IDE sign-in the provider owns), "key" (an API key saved here or set in
@@ -1112,7 +1135,8 @@ var LOCAL_PROVIDERS = [
   { id: "poe", name: "Poe", short: "Poe", auth: "key", money: true, keyEnv: "POE_API_KEY", keysUrl: "https://poe.com/api/keys", signIn: "Save a Poe API key" }
 ].map(function (entry) {
   // Every entry carries every field, so QML bindings never read `undefined` as text.
-  return Object.assign({ money: false, keyEnv: "", keysUrl: "", lightIcon: false }, entry)
+  return Object.assign({ money: false, keyEnv: "", keysUrl: "", lightIcon: false, login: "", mise: "", installUrl: "" },
+    entry, PROVIDER_SETUP[entry.id] || {})
 })
 var LOCAL_PROVIDER_IDS = LOCAL_PROVIDERS.map(function (entry) { return entry.id })
 // Providers whose key can be saved in settings, as the `<id>KeyFile` setting.
@@ -1294,8 +1318,9 @@ var STATUS_FALLBACKS = {
 
 // The line under a monitored provider in Settings: what the last check found and, when something is
 // missing, what to do. `tone` is "ok", "muted", or "error". A saved key never reports a missing
-// sign-in, so such a reading predates the key and the provider reads as still being checked.
-function providerStatus(entry, reading, hasKey, checking) {
+// sign-in, so such a reading predates the key and the provider reads as still being checked. With
+// `withButton` the row also shows a Sign in or Install button, so the hint is left out.
+function providerStatus(entry, reading, hasKey, checking, withButton) {
   var pending = { text: checking ? "Checking…" : "Not checked yet", tone: "muted" }
   if (!reading) return pending
   if (reading.status === "ok") {
@@ -1304,14 +1329,15 @@ function providerStatus(entry, reading, hasKey, checking) {
   }
   if (reading.status !== "error") return { text: "", tone: "muted" }
   var kind = String(reading.errorKind || "")
+  var hint = withButton ? "" : " — " + entry.signIn
   if (kind === "no_credentials") {
     if (hasKey) return pending
     return entry.auth === "key" ? { text: "No key saved", tone: "muted" }
-      : { text: "Not signed in — " + entry.signIn, tone: "muted" }
+      : { text: "Not signed in" + hint, tone: "muted" }
   }
   if (kind === "expired")
     return entry.auth === "key" || hasKey ? { text: "Key rejected", tone: "error" }
-      : { text: "Sign-in expired — " + entry.signIn, tone: "error" }
+      : { text: "Sign-in expired" + hint, tone: "error" }
   var message = String(reading.message || "")
   if (message !== "") return { text: message, tone: "error" }
   return { text: Object.prototype.hasOwnProperty.call(STATUS_FALLBACKS, kind) ? STATUS_FALLBACKS[kind] : "Error", tone: "error" }
@@ -1322,6 +1348,24 @@ function providerStatus(entry, reading, hasKey, checking) {
 function keyHint(entry) {
   return (entry.auth === "both" ? "Optional: used instead of the sign-in. " : "")
     + (entry.keyEnv ? entry.keyEnv + " in the environment takes precedence." : "")
+}
+
+// The one-click way to fix a provider that is not signed in, or `kind: ""` when there is nothing to
+// offer. `installed` is the backend's list of providers whose CLI is on PATH; when it is unknown the
+// CLI is assumed present. Order of preference: sign in with the CLI that is there; install it with
+// mise and sign in, in one terminal; or link to where the tool comes from.
+function setupAction(entry, reading, installed) {
+  var none = { kind: "", label: "", command: "", url: "" }
+  if (!entry || entry.auth === "key") return none
+  if (reading && (reading.status === "ok" || !errorNeedsSignIn(reading.errorKind))) return none
+  var present = installed === null || installed === undefined || contains(installed, entry.id)
+  if (present && entry.login !== "")
+    return { kind: "signin", label: "Sign in", command: entry.login, url: "" }
+  if (!present && entry.mise !== "" && entry.login !== "")
+    return { kind: "install", label: "Install and sign in", command: "mise use -g " + entry.mise + " && " + entry.login, url: "" }
+  if (!present && entry.installUrl !== "")
+    return { kind: "link", label: "Get " + entry.short + " ↗", command: "", url: entry.installUrl }
+  return none
 }
 
 // Providers whose name, short name, or id contains `text`, ignoring case; all of them when blank.

@@ -188,7 +188,14 @@ ShellRoot {
         list.forceLayout()
         root.check(root.form.providerRows.map(function (row) { return row.id }).join(",") === "claude,codex,openrouter", "rows show the providers in use, in the saved order")
         root.check(root.find(root.form, "status-claude").text === "Connected · Max", "a connected provider names its plan")
-        root.check(root.find(root.form, "status-codex").text.indexOf("Sign-in expired — ") === 0, "an expired sign-in says how to fix it")
+        root.check(root.find(root.form, "status-codex").text === "Sign-in expired", "an expired sign-in is named beside its fix")
+        var setupCommand = ""
+        var takeSetup = function (entry, action) { setupCommand = action.command }
+        root.form.setupRequested.connect(takeSetup)
+        root.check(root.find(root.form, "setup-codex").visible, "an expired sign-in offers Sign in")
+        root.find(root.form, "setup-codex").clicked()
+        root.form.setupRequested.disconnect(takeSetup)
+        root.check(setupCommand === "codex login", "Sign in asks the host to run the provider's own sign-in")
         root.check(root.find(root.form, "status-openrouter").text === "No key saved", "a key provider without a key says so")
         root.check(root.find(root.form, "openrouterKeyRow").visible, "the key editor sits under a key provider")
         root.check(root.form.sections.waiting.length === 1 && root.find(root.form, "provider-gemini") !== null, "a missing sign-in waits out of sight")

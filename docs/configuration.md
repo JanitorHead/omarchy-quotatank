@@ -15,7 +15,7 @@ Quotatank is a monitor, not an authentication manager. Its backend reads credent
 | Kimi Code | Kimi's `/usages` and optional `/me` endpoints | `$KIMI_CODE_HOME/credentials/kimi-code.json` (`kimi login`) |
 | OpenCode Go | `https://opencode.ai/zen/go/v1/usage` | The key in `$XDG_DATA_HOME/opencode/auth.json`, or `OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY` |
 | Antigravity | The running Antigravity app's or IDE's local language server on `127.0.0.1` (`RetrieveUserQuotaSummary`, `GetUserStatus`); otherwise `agy -p /usage --output-format json` (agy 1.1.11 or later) | The session token the language server was started with, read from its own command line in `/proc`; `agy` uses its own sign-in. `ANTIGRAVITY_CLI_PATH` points at a non-standard `agy` |
-| Gemini CLI | Cloud Code Assist `loadCodeAssist` and `retrieveUserQuota` | `${GEMINI_CLI_HOME:-~}/.gemini/oauth_creds.json` (`gemini`, signed in with Google). An expired access token is refreshed in memory for that check only; nothing is written |
+| Gemini CLI | Cloud Code Assist `loadCodeAssist` and `retrieveUserQuota` | `${GEMINI_CLI_HOME:-~}/.gemini/oauth_creds.json` (`gemini`, signed in with Google). An expired access token is refreshed in memory for that check only, with the sign-in client read from the Gemini CLI installed on this computer; nothing is written. Without a local Gemini CLI the sign-in reads as expired |
 | GitHub Copilot | `GET https://api.github.com/copilot_internal/user` | `COPILOT_API_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, the editor sign-in in `~/.config/github-copilot/{apps,hosts}.json`, GitHub CLI's `hosts.yml` (`GH_CONFIG_DIR`), then `gh auth token` |
 | Cursor | `https://cursor.com/api/usage-summary` | Cursor's access token from its `state.vscdb` (opened read-only) or `cursor-agent`'s `auth.json` |
 | Grok CLI | `https://cli-chat-proxy.grok.com/v1/billing` | `${GROK_HOME:-~/.grok}/auth.json` (`grok login`) |
@@ -54,6 +54,16 @@ A key is only ever sent to its own provider. Where a company runs an internation
 ### Found on this computer
 
 Every refresh also checks, without any network call, which providers are set up here: a credential file or IDE quota file exists, a key is in the environment or saved, or the Antigravity language server is running. Settings lists those that are not monitored under **Found on this computer**, with **Monitor** and **Ignore**, and Limits mentions them in one line until each is handled. **Ignore** adds the provider to `dismissedProviders`.
+
+### Sign in and install from Settings
+
+A signed-out provider that has a sign-in of its own shows a button, in Settings → Providers and on its error card in Limits:
+
+- **Sign in**, when its CLI is on PATH: opens `omarchy-launch-floating-terminal-with-presentation` with the provider's sign-in command (`claude auth login`, `gemini`, `gh auth login`, …).
+- **Install and sign in**, when the CLI is missing and Omarchy's mise can install it: runs `mise use -g <package> && <sign-in command>` in the same kind of terminal. The packages are the ones `omarchy default agent` uses (`claude`, `codex`, `gemini`, `opencode`, `cursor-agent`, `gh`, `npm:@xai-official/grok`, `npm:@sourcegraph/amp`, `npm:@kilocode/cli`, `npm:codebuff`).
+- **Get … ↗**, for everything else (an app or IDE, or a CLI with its own installer): opens the tool's download page.
+
+Starting a sign-in also monitors the provider. The widget then refreshes every eight seconds, for up to three minutes, until the provider reads as connected. Which CLIs are installed comes from the backend's `installed` list.
 
 Environment overrides owned by the tools are honored: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`, `KIMI_CODE_BASE_URL`, `KIMI_SHARE_DIR`, `GEMINI_CLI_HOME`, `GH_CONFIG_DIR`, `GROK_HOME`, `KIRO_DATA_DIR`, `HF_HOME`, and `HF_TOKEN_PATH`.
 
@@ -227,7 +237,7 @@ Refresh intervals above one hour mark short limits `No recent data`, because the
 
 ## Troubleshooting
 
-**The panel asks me to sign in.** Run the exact command displayed for that provider, then press `r`. This plugin will not repair credentials itself.
+**The panel asks me to sign in.** Press **Sign in** on the provider's card, or run the command displayed for that provider and press `r`. Quotatank never repairs credentials itself; it only opens the provider's own sign-in.
 
 **Codex reports unavailable.** Confirm `codex` is on `PATH` and `codex login` succeeds. The collector uses current app-server RPC with `-s read-only -a never`; it does not call the older private web endpoint.
 

@@ -72,11 +72,17 @@ IDE sign-in, a key in its environment variable, or a key saved from settings), a
 sends it only to that provider's API. Credential files and SQLite stores are read
 size-bounded and read-only; nothing is written back, rotated, or deleted. Two
 narrow exceptions are documented in code: an expired Gemini CLI access token is
-exchanged for a fresh one held in memory for that check only, and Antigravity's
-language server is reached on `127.0.0.1` with its self-signed certificate
-accepted, using the session token read from that same user's process command line
-in `/proc`. `agy` and `gh auth token` run without a shell, with a timeout and
-closed stdin; `agy` also gets browser launchers replaced by stubs that fail.
+exchanged for a fresh one held in memory for that check only, using the installed-app
+client read from the Gemini CLI installed on this computer (none is shipped here),
+and Antigravity's language server is reached on `127.0.0.1` with its self-signed
+certificate accepted, using the session token read from that same user's process
+command line in `/proc`. `agy` and `gh auth token` run without a shell, with a
+timeout and closed stdin; `agy` also gets browser launchers replaced by stubs that fail.
+
+**Sign in** and **Install and sign in** run only on a click, in a visible Omarchy
+terminal, with a fixed command from the plugin's own provider list (a sign-in
+command, optionally preceded by `mise use -g <package>`); no user input or backend
+data is put into the command.
 
 Banked resets use fixed upstream URLs and explicit managed account selection.
 The account identity is checked again before consumption. Each logical reset

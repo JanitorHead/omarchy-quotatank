@@ -58,6 +58,13 @@ Column {
   property var lastPayload: null
   readonly property var shownReadings: lastPayload ? UsageLogic.listOrEmpty(lastPayload.providers) : []
   readonly property var shownDetected: lastPayload ? UsageLogic.listOrEmpty(lastPayload.detected) : []
+  readonly property var shownInstalled: lastPayload && lastPayload.installed !== undefined ? UsageLogic.listOrEmpty(lastPayload.installed) : null
+  // The provider whose sign-in or install was just started from here, until its next good reading.
+  property string pendingSetup: ""
+  onShownReadingsChanged: {
+    var reading = UsageLogic.readingFor(shownReadings, pendingSetup)
+    if (pendingSetup !== "" && reading && reading.status === "ok") pendingSetup = ""
+  }
   readonly property var sections: UsageLogic.providerSections(proxyMode ? [] : providerOptions,
     enabledProviders, dismissedProviders, shownReadings, shownDetected, settings)
   // The draggable rows: every proxy provider, or the local providers in use.
@@ -85,6 +92,8 @@ Column {
   signal changeRequested(var values)
   signal closeRequested()
   signal revealRequested(var item)
+  // Sign in to or install a provider: the host opens the terminal and watches for the sign-in.
+  signal setupRequested(var entry, var action)
 
   spacing: Style.spacing.xxl
   Keys.onEscapePressed: root.back()
@@ -134,6 +143,19 @@ Column {
 
   function dismissProvider(id) {
     set("dismissedProviders", UsageLogic.withMember(dismissedProviders, id, true, allProviderIds))
+  }
+
+  // Sign in, install, or open the tool's page. Starting a sign-in also monitors the provider: the
+  // user asked for it, so it should appear in Limits as soon as the sign-in lands.
+  function runSetup(entry, action) {
+    if (!entry || !action || action.kind === "") return
+    if (action.kind === "link") {
+      Qt.openUrlExternally(action.url)
+      return
+    }
+    if (!monitored(entry.id)) setMonitored(entry.id, true)
+    pendingSetup = entry.id
+    setupRequested(entry, action)
   }
 
   function rememberPayload() {
@@ -564,7 +586,9 @@ Column {
         readonly property var entry: root.proxyMode ? null : UsageLogic.localProvider(providerId)
         readonly property bool hasKey: UsageLogic.keySaved(root.settings, providerId)
         readonly property var reading: UsageLogic.readingFor(root.shownReadings, providerId)
-        readonly property var status: entry ? UsageLogic.providerStatus(entry, reading, hasKey, root.usageLoading) : null
+        readonly property var setup: reading ? UsageLogic.setupAction(entry, reading, root.shownInstalled) : UsageLogic.setupAction(null, null, null)
+        readonly property var status: entry ? UsageLogic.providerStatus(entry, reading, hasKey, root.usageLoading,
+          setup.kind === "signin" || setup.kind === "install") : null
         // A provider that also has a sign-in of its own only needs the editor while that sign-in is
         // not what connects it.
         readonly property bool keyEditor: !!entry && entry.auth !== "signin"
@@ -654,6 +678,11 @@ Column {
                 color: providerRow.status && providerRow.status.tone === "error" ? root.urgent : Qt.darker(root.foreground, 1.5)
                 maximumLineCount: 2
                 elide: Text.ElideRight
+              }
+              SetupAction {
+                entry: providerRow.entry
+                reading: providerRow.reading
+                needsReading: true
               }
             }
             Toggle {
@@ -789,8 +818,11 @@ Column {
         model: root.proxyMode ? [] : root.sections.waiting
         delegate: ProviderOption {
           id: waitingOption
+          readonly property var setup: UsageLogic.setupAction(waitingOption.modelData,
+            UsageLogic.readingFor(root.shownReadings, waitingOption.modelData.id), root.shownInstalled)
           hint: UsageLogic.providerStatus(waitingOption.modelData,
-            UsageLogic.readingFor(root.shownReadings, waitingOption.modelData.id), false, root.usageLoading).text
+            UsageLogic.readingFor(root.shownReadings, waitingOption.modelData.id), false, root.usageLoading,
+            setup.kind === "signin" || setup.kind === "install").text
           keyEditable: waitingOption.modelData.auth === "both"
         }
       }
@@ -1759,6 +1791,53 @@ Column {
     onActiveFocusChanged: if (activeFocus) root.revealRequested(linkButton)
   }
 
+  // The one-click fix for a provider that is not signed in: Sign in (opens a terminal with its
+  // sign-in command), Install and sign in (mise, then the sign-in), or a link to get the tool.
+  // While a started sign-in is pending it says so; the panel refreshes on its own until it lands.
+  component SetupAction: Row {
+    id: setup
+    property var entry: null
+    property var reading: null
+    // A monitored provider waits for its first check before offering a fix; one that is not
+    // monitored has no reading to wait for.
+    property bool needsReading: false
+    readonly property var action: needsReading && !reading
+      ? UsageLogic.setupAction(null, null, null) : UsageLogic.setupAction(entry, reading, root.shownInstalled)
+    readonly property bool pending: !!entry && root.pendingSetup === entry.id
+    visible: !root.proxyMode && action.kind !== ""
+    spacing: Style.spacing.sm
+
+    Ui.Button {
+      id: setupButton
+      objectName: setup.entry ? "setup-" + setup.entry.id : ""
+      visible: setup.action.kind === "signin" || setup.action.kind === "install"
+      anchors.verticalCenter: parent.verticalCenter
+      text: setup.action.label
+      bordered: true
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      fontSize: Style.font.caption
+      horizontalPadding: Style.spacing.sm
+      verticalPadding: Style.spacing.xs
+      focusable: true
+      tooltipText: setup.action.command
+      Accessible.name: setup.action.label + " to " + (setup.entry ? setup.entry.name : "")
+      onClicked: root.runSetup(setup.entry, setup.action)
+      onActiveFocusChanged: if (activeFocus) root.revealRequested(setupButton)
+    }
+    LinkButton {
+      visible: setup.action.kind === "link"
+      anchors.verticalCenter: parent.verticalCenter
+      text: setup.action.label
+      url: setup.action.url
+    }
+    Hint {
+      visible: setup.pending
+      anchors.verticalCenter: parent.verticalCenter
+      text: "Finish in the terminal; this updates on its own."
+    }
+  }
+
   // A provider outside the monitored rows: its name and Monitor switch, then its setup hint and,
   // when it takes a key, where to get one. `keyEditable` offers a key editor on request, for a
   // provider with a sign-in of its own that can use a key instead.
@@ -1786,9 +1865,14 @@ Column {
       }
     }
     Row {
+      // The sign-in hint is what the Sign in / Install button does, so the button replaces it.
+      readonly property bool hintShown: option.hint !== ""
+        && !(option.hint === option.modelData.signIn && (optionSetup.action.kind === "signin" || optionSetup.action.kind === "install"))
+      visible: hintShown || optionLink.visible
       width: parent.width
       spacing: Style.spacing.sm
       Hint {
+        visible: parent.hintShown
         width: parent.width - (optionLink.visible ? optionLink.width + parent.spacing : 0)
         anchors.verticalCenter: parent.verticalCenter
         text: option.hint
@@ -1800,6 +1884,11 @@ Column {
         text: "Get a key ↗"
         url: option.modelData.keysUrl
       }
+    }
+    SetupAction {
+      id: optionSetup
+      entry: option.modelData
+      reading: UsageLogic.readingFor(root.shownReadings, option.modelData.id)
     }
     Ui.Button {
       id: addKeyButton

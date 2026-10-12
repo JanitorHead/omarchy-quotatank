@@ -40,7 +40,8 @@ This contract covers live subscription limits only. The on-demand transcript/cos
     }
   ],
   "source": "direct",
-  "detected": ["claude", "codex", "copilot"]
+  "detected": ["claude", "codex", "copilot"],
+  "installed": ["claude", "codex", "gemini"]
 }
 ```
 
@@ -49,6 +50,8 @@ All provider records have the same core keys, including error records. `status` 
 `windows[].used` and `remaining` are percentages, or `null` when the provider reports the window but not how much of it is used (for example an Antigravity model group without a remaining fraction). The UI shows such a window without a meter, never as 0%.
 
 `detected` lists, in collector order, every provider set up on this computer, monitored or not: a credential or IDE quota file exists, a key is saved or in the environment, or the Antigravity language server runs. It is computed from local files, the environment, and `/proc` only, with no network call, and Settings uses it to offer providers that are not monitored yet.
+
+`installed` lists, in collector order, the providers whose command-line tool is on `PATH` (`claude`, `codex`, `gemini`, `gh` for Copilot, `cursor-agent`, `agy`, …). Settings uses it to choose between **Sign in** (the tool is there) and **Install and sign in** or a download link (it is not).
 
 `--providers a,b,c` selects the local providers to query (any id from `PROVIDER_ORDER`). `--key-file <id>=<path>`, repeatable, passes the private key file Settings saved for an API-key provider; the provider's environment variable still takes precedence.
 

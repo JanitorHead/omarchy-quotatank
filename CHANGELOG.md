@@ -4,6 +4,18 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.7.0
+
+### Added
+
+- **Sign in and install from the widget.** A signed-out provider gets a **Sign in** button in Settings → Providers and on its error card in Limits; it opens the provider's own sign-in command in a floating Omarchy terminal. When its CLI is not installed, **Install and sign in** installs it with `mise use -g` first (the packages `omarchy default agent` uses), and tools that are not CLIs get a link to their download page. Starting a sign-in monitors the provider, and the panel refreshes on its own until the sign-in lands.
+- The backend reports which provider CLIs are on `PATH` (`installed`).
+
+### Changed
+
+- Gemini CLI's in-memory token refresh reads the sign-in client from the Gemini CLI installed on this computer instead of shipping a copy of it. Without a local Gemini CLI an expired sign-in reads as expired.
+- A provider status next to a Sign in button no longer repeats the command (`Sign-in expired` instead of `Sign-in expired — Run gemini…`).
+
 ## 1.6.0
 
 ### Added
@@ -320,6 +332,7 @@ All notable changes to this project will be documented here. The format follows
   for horizontal and vertical bars.
 - Fixture, contract, QML lint, and live Quickshell runtime tests.
 
+[1.7.0]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.7.0
 [1.6.0]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.6.0
 [1.5.3]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.3
 [1.5.2]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.2
