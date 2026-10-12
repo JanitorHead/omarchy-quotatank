@@ -30,16 +30,48 @@ from typing import Any, Callable
 from model_usage_common import atomic_write_json, clean_message
 
 SCHEMA_VERSION = 1
-PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode", "openrouter", "deepseek")
+# Every provider the collector can read, in the order the widget lists them by default. Plan
+# limits read from a CLI or IDE sign-in come first, then API-key plans and balances.
+PROVIDER_ORDER = (
+    "claude", "codex", "kimi", "opencode",
+    "antigravity", "gemini", "copilot", "cursor", "grok", "kiro", "jetbrains",
+    "factory", "amp", "kilo", "codebuff", "huggingface",
+    "zai", "minimax", "synthetic", "chutes", "ollama", "warp", "zenmux", "clinepass",
+    "openrouter", "deepseek", "moonshot", "venice", "deepinfra", "vercel", "poe",
+)
 PROVIDER_NAMES = {
     "claude": "Claude Code",
     "codex": "OpenAI Codex",
     "kimi": "Kimi Code",
     "opencode": "OpenCode Go",
+    "antigravity": "Antigravity",
+    "gemini": "Gemini CLI",
+    "copilot": "GitHub Copilot",
+    "cursor": "Cursor",
+    "grok": "Grok CLI",
+    "kiro": "Kiro",
+    "jetbrains": "JetBrains AI",
+    "factory": "Droid",
+    "amp": "Amp",
+    "kilo": "Kilo Code",
+    "codebuff": "Codebuff",
+    "huggingface": "Hugging Face",
+    "zai": "Z.ai Coding Plan",
+    "minimax": "MiniMax Coding Plan",
+    "synthetic": "Synthetic",
+    "chutes": "Chutes",
+    "ollama": "Ollama Cloud",
+    "warp": "Warp",
+    "zenmux": "ZenMux",
+    "clinepass": "Cline",
     "openrouter": "OpenRouter",
     "deepseek": "DeepSeek",
-    "antigravity": "Antigravity",
-    "gemini": "Gemini",
+    "moonshot": "Moonshot",
+    "venice": "Venice",
+    "deepinfra": "DeepInfra",
+    "vercel": "Vercel AI Gateway",
+    "poe": "Poe",
+    # Names CLIProxyAPI reports for accounts it manages.
     "gemini-cli": "Gemini CLI",
     "qwen": "Qwen",
     "github-copilot": "GitHub Copilot",
@@ -51,6 +83,41 @@ AUTH_COMMANDS = {
     "codex": "codex login",
     "kimi": "kimi login",
     "opencode": "opencode auth login",
+    "antigravity": "agy",
+    "gemini": "gemini",
+    "copilot": "gh auth login",
+    "cursor": "cursor-agent login",
+    "grok": "grok login",
+    "kiro": "kiro-cli login",
+    "factory": "droid",
+    "amp": "amp login",
+    "kilo": "kilo auth login",
+    "codebuff": "codebuff login",
+    "huggingface": "hf auth login",
+}
+
+# Environment variables that carry a provider's API key, in precedence order. They win over the
+# key saved from widget settings, which lives in a private file (see provider_key).
+PROVIDER_KEY_ENV: dict[str, tuple[str, ...]] = {
+    "openrouter": ("OPENROUTER_API_KEY",),
+    "deepseek": ("DEEPSEEK_API_KEY",),
+    "factory": ("FACTORY_API_KEY",),
+    "amp": ("AMP_API_KEY",),
+    "kilo": ("KILO_API_KEY",),
+    "codebuff": ("CODEBUFF_API_KEY",),
+    "zai": ("Z_AI_API_KEY", "ZAI_API_KEY"),
+    "minimax": ("MINIMAX_CODING_API_KEY", "MINIMAX_API_KEY"),
+    "synthetic": ("SYNTHETIC_API_KEY",),
+    "chutes": ("CHUTES_API_KEY",),
+    "ollama": ("OLLAMA_API_KEY",),
+    "warp": ("WARP_API_KEY", "WARP_TOKEN"),
+    "zenmux": ("ZENMUX_MANAGEMENT_API_KEY",),
+    "clinepass": ("CLINE_API_KEY", "CLINEPASS_API_KEY"),
+    "moonshot": ("MOONSHOT_API_KEY",),
+    "venice": ("VENICE_API_KEY",),
+    "deepinfra": ("DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN"),
+    "vercel": ("AI_GATEWAY_API_KEY",),
+    "poe": ("POE_API_KEY",),
 }
 
 ONE_DAY = 24 * 60 * 60
@@ -67,6 +134,8 @@ MAX_CODEX_RPC_LINE_BYTES = 2 * 1024 * 1024
 CODEX_RPC_READ_BYTES = 64 * 1024
 MAX_CLIPROXY_ACCOUNTS = 32
 MAX_CLIPROXY_PROVIDERS = 32
+# Managed account types whose quota CLIProxyAPI can look up; other providers are listed as unsupported.
+CLIPROXY_QUOTA_PROVIDERS = ("claude", "codex", "kimi", "antigravity")
 RUST_QUOTA_STALE_SECONDS = 10 * 60
 
 
@@ -151,14 +220,90 @@ def error_provider(provider_id: str, kind: str, message: str) -> dict[str, Any]:
     return result
 
 
+# Each collector registers itself with @provider_fetcher. A keyed collector also accepts the
+# private key file saved from widget settings: fetch(timeout, key_file).
+FETCHERS: dict[str, Callable[[float], dict[str, Any]]] = {}
+KEYED_FETCHERS: dict[str, Callable[[float, Path | None], dict[str, Any]]] = {}
+# Cheap local checks (files, environment, running processes; never the network) that say whether
+# a provider is set up on this computer. Settings use them to offer providers worth monitoring.
+DETECTORS: dict[str, Callable[[], bool]] = {}
+
+
+def provider_fetcher(provider_id: str, *, keyed: bool = False) -> Callable[[Callable[..., dict[str, Any]]], Callable[..., dict[str, Any]]]:
+    def register(fetch: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
+        FETCHERS[provider_id] = fetch
+        if keyed:
+            KEYED_FETCHERS[provider_id] = fetch
+        return fetch
+    return register
+
+
+def provider_detector(provider_id: str) -> Callable[[Callable[[], bool]], Callable[[], bool]]:
+    def register(detect: Callable[[], bool]) -> Callable[[], bool]:
+        DETECTORS[provider_id] = detect
+        return detect
+    return register
+
+
+def config_home() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")).expanduser()
+
+
+def provider_key_path(provider_id: str) -> Path:
+    """Where widget settings save a provider's key; `<ID>_API_KEY_FILE` overrides it."""
+    override = os.environ.get(provider_id.upper() + "_API_KEY_FILE")
+    if override:
+        return Path(override).expanduser()
+    return config_home() / "omarchy" / "model-usage" / (provider_id + ".key")
+
+
+def provider_env_key(provider_id: str) -> str:
+    for name in PROVIDER_KEY_ENV.get(provider_id, ()):
+        value = os.environ.get(name)
+        if value and value.strip():
+            return value.strip()
+    return ""
+
+
+def provider_key(provider_id: str, key_file: Path | None) -> str:
+    """The environment wins, then the private file saved from widget settings. Empty when neither exists."""
+    value = provider_env_key(provider_id)
+    if value:
+        return value
+    path = key_file or provider_key_path(provider_id)
+    if not path.exists() and key_file is None:
+        return ""
+    return read_private_key(path, PROVIDER_NAMES.get(provider_id, provider_id) + " key")
+
+
+def detected_providers() -> list[str]:
+    """Providers set up on this computer: a registered detector says so, or a key is available."""
+    found = []
+    for provider_id in PROVIDER_ORDER:
+        try:
+            detect = DETECTORS.get(provider_id)
+            present = bool(detect()) if detect is not None else False
+            if not present and provider_id in PROVIDER_KEY_ENV:
+                present = bool(provider_env_key(provider_id)) or provider_key_path(provider_id).exists()
+        except Exception:
+            present = False
+        if present:
+            found.append(provider_id)
+    return found
+
+
 class NoRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # Authenticated requests must never forward credentials to a redirect.
         return None
 
 
-def http_json(url: str, headers: dict[str, str], timeout: float) -> Any:
-    request = urllib.request.Request(url, headers=headers)
+def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = None) -> Any:
+    """GET, or POST `body` as JSON when given. Redirects are refused and responses are size-capped."""
+    data = None if body is None else json.dumps(body, separators=(",", ":")).encode("utf-8")
+    if data is not None and not any(name.lower() == "content-type" for name in headers):
+        headers = {**headers, "Content-Type": "application/json"}
+    request = urllib.request.Request(url, data=data, headers=headers, method="GET" if data is None else "POST")
     try:
         with urllib.request.build_opener(NoRedirects()).open(request, timeout=timeout) as response:
             raw = response.read(MAX_HTTP_RESPONSE_BYTES + 1)
@@ -323,9 +468,19 @@ def parse_claude_usage(payload: Any) -> tuple[list[dict[str, Any]], dict[str, An
     return windows, credits
 
 
+def claude_config_dir() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude")).expanduser()
+
+
+@provider_detector("claude")
+def detect_claude() -> bool:
+    return (claude_config_dir() / ".credentials.json").is_file()
+
+
+@provider_fetcher("claude")
 def fetch_claude(timeout: float) -> dict[str, Any]:
     provider_id = "claude"
-    config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude")).expanduser()
+    config_dir = claude_config_dir()
     credentials_path = config_dir / ".credentials.json"
     if not credentials_path.is_file():
         return error_provider(provider_id, "no_credentials", "No Claude Code sign-in was found.")
@@ -619,6 +774,13 @@ def parse_codex_rate_limits(
     return windows, credits, plan, reached
 
 
+@provider_detector("codex")
+def detect_codex() -> bool:
+    codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser()
+    return (codex_home / "auth.json").is_file()
+
+
+@provider_fetcher("codex")
 def fetch_codex(timeout: float) -> dict[str, Any]:
     provider_id = "codex"
     env = runtime_environment()
@@ -817,10 +979,20 @@ def parse_kimi_profile(payload: Any) -> tuple[str, str]:
     return plan, account
 
 
+def kimi_credentials_path() -> Path:
+    kimi_home = Path(os.environ.get("KIMI_CODE_HOME") or (Path.home() / ".kimi-code")).expanduser()
+    return kimi_home / "credentials" / "kimi-code.json"
+
+
+@provider_detector("kimi")
+def detect_kimi() -> bool:
+    return kimi_credentials_path().is_file()
+
+
+@provider_fetcher("kimi")
 def fetch_kimi(timeout: float) -> dict[str, Any]:
     provider_id = "kimi"
-    kimi_home = Path(os.environ.get("KIMI_CODE_HOME") or (Path.home() / ".kimi-code")).expanduser()
-    credentials_path = kimi_home / "credentials" / "kimi-code.json"
+    credentials_path = kimi_credentials_path()
     if not credentials_path.is_file():
         return error_provider(provider_id, "no_credentials", "No Kimi Code sign-in was found.")
     try:
@@ -949,6 +1121,12 @@ def parse_opencode_usage(payload: Any) -> list[dict[str, Any]]:
     return windows
 
 
+@provider_detector("opencode")
+def detect_opencode() -> bool:
+    return bool(opencode_token())
+
+
+@provider_fetcher("opencode")
 def fetch_opencode(timeout: float) -> dict[str, Any]:
     provider_id = "opencode"
     token = opencode_token()
@@ -995,25 +1173,6 @@ OPENROUTER_BUDGET_NAMES = {
     "workspace": "workspace budget",
 }
 MAX_OPENROUTER_BUDGETS = 4
-
-
-def openrouter_key_path() -> Path:
-    override = os.environ.get("OPENROUTER_API_KEY_FILE")
-    if override:
-        return Path(override).expanduser()
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
-    return config_home / "omarchy" / "model-usage" / "openrouter.key"
-
-
-def openrouter_key(key_file: Path | None) -> str:
-    """The environment wins, then the private file saved from widget settings."""
-    value = os.environ.get("OPENROUTER_API_KEY")
-    if value and value.strip():
-        return value.strip()
-    path = key_file or openrouter_key_path()
-    if not path.exists() and key_file is None:
-        return ""
-    return read_private_key(path, "OpenRouter key")
 
 
 def next_utc_reset(interval: str, now: float) -> int | None:
@@ -1119,10 +1278,11 @@ def parse_openrouter(key_payload: Any, credits_payload: Any, now: float) -> tupl
     return windows, credits, plan
 
 
+@provider_fetcher("openrouter", keyed=True)
 def fetch_openrouter(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
     provider_id = "openrouter"
     try:
-        token = openrouter_key(key_file)
+        token = provider_key("openrouter", key_file)
     except ProviderFailure as exc:
         return error_provider(provider_id, exc.kind, exc.message)
     if not token:
@@ -1162,25 +1322,6 @@ def fetch_openrouter(timeout: float, key_file: Path | None = None) -> dict[str, 
 DEEPSEEK_API_BASE = "https://api.deepseek.com"
 
 
-def deepseek_key_path() -> Path:
-    override = os.environ.get("DEEPSEEK_API_KEY_FILE")
-    if override:
-        return Path(override).expanduser()
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
-    return config_home / "omarchy" / "model-usage" / "deepseek.key"
-
-
-def deepseek_key(key_file: Path | None) -> str:
-    """The environment wins, then the private file saved from widget settings."""
-    value = os.environ.get("DEEPSEEK_API_KEY")
-    if value and value.strip():
-        return value.strip()
-    path = key_file or deepseek_key_path()
-    if not path.exists() and key_file is None:
-        return ""
-    return read_private_key(path, "DeepSeek key")
-
-
 def parse_deepseek(payload: Any) -> tuple[dict[str, Any], str]:
     """The platform balance becomes `credits`: prepaid money with no limits and no spend history.
 
@@ -1211,10 +1352,11 @@ def parse_deepseek(payload: Any) -> tuple[dict[str, Any], str]:
     return credits, notice
 
 
+@provider_fetcher("deepseek", keyed=True)
 def fetch_deepseek(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
     provider_id = "deepseek"
     try:
-        token = deepseek_key(key_file)
+        token = provider_key("deepseek", key_file)
     except ProviderFailure as exc:
         return error_provider(provider_id, exc.kind, exc.message)
     if not token:
@@ -1581,7 +1723,7 @@ def fetch_cliproxy_account(provider_id: str, entry: dict[str, Any], client: CliP
     if entry.get("disabled") is True or entry.get("status") == "disabled":
         result.update(status="disabled", notice="This account is paused in CLIProxyAPI.")
         return result
-    if provider_id not in (*PROVIDER_ORDER, "antigravity"):
+    if provider_id not in CLIPROXY_QUOTA_PROVIDERS:
         result.update(status="unsupported", notice="This provider does not expose a supported quota lookup.")
         return result
     try:
@@ -1740,7 +1882,7 @@ def load_history(path: Path) -> dict[str, Any]:
     ):
         return empty_history()
     result = empty_history()
-    for provider_id in list(dict.fromkeys([*PROVIDER_ORDER, *raw["providers"]]))[:MAX_CLIPROXY_PROVIDERS + 3]:
+    for provider_id in list(dict.fromkeys([*PROVIDER_ORDER, *raw["providers"]]))[:len(PROVIDER_ORDER) + MAX_CLIPROXY_PROVIDERS]:
         result["providers"][provider_id] = read_series(raw["providers"].get(provider_id))
     for provider_id, windows in raw["windows"].items():
         if not isinstance(windows, dict):
@@ -1880,22 +2022,6 @@ def update_and_attach_history(
 # --------------------------------------------------------------- Orchestration
 
 
-FETCHERS: dict[str, Callable[[float], dict[str, Any]]] = {
-    "claude": fetch_claude,
-    "codex": fetch_codex,
-    "kimi": fetch_kimi,
-    "opencode": fetch_opencode,
-    "openrouter": fetch_openrouter,
-    "deepseek": fetch_deepseek,
-}
-
-# Providers whose key the widget saves to a private file, and the fetcher that takes that file.
-KEYED_FETCHERS: dict[str, Callable[[float, Path | None], dict[str, Any]]] = {
-    "openrouter": fetch_openrouter,
-    "deepseek": fetch_deepseek,
-}
-
-
 def safe_fetch(provider_id: str, timeout: float,
                fetchers: dict[str, Callable[[float], dict[str, Any]]] | None = None) -> dict[str, Any]:
     try:
@@ -1933,6 +2059,17 @@ def parse_provider_ids(value: str) -> list[str]:
     return [provider_id for provider_id in PROVIDER_ORDER if provider_id in requested]
 
 
+def parse_key_files(values: list[str]) -> dict[str, Path]:
+    """`--key-file PROVIDER=PATH` pairs for API-key providers; unknown providers are ignored."""
+    key_files: dict[str, Path] = {}
+    for value in values:
+        provider_id, separator, path = str(value).partition("=")
+        provider_id = provider_id.strip().lower()
+        if separator and path.strip() and provider_id in PROVIDER_KEY_ENV:
+            key_files[provider_id] = Path(path.strip()).expanduser()
+    return key_files
+
+
 def build_payload(
     provider_ids: list[str], timeout: float, state_dir: Path | None,
     source: str = "direct", cliproxy_url: str = "http://127.0.0.1:8317",
@@ -1955,6 +2092,7 @@ def build_payload(
         "generatedAt": now_iso(),
         "providers": providers,
         "source": source,
+        "detected": detected_providers(),
         **metadata,
     }
 
@@ -1967,15 +2105,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source", choices=("direct", "cliproxy"), default="direct")
     parser.add_argument("--cliproxy-url", default=os.environ.get("CLIPROXY_API_URL") or "http://127.0.0.1:8317")
     parser.add_argument("--cliproxy-key-file", type=lambda value: Path(value).expanduser())
-    parser.add_argument("--openrouter-key-file", type=lambda value: Path(value).expanduser())
-    parser.add_argument("--deepseek-key-file", type=lambda value: Path(value).expanduser())
+    parser.add_argument("--key-file", action="append", default=[], metavar="PROVIDER=PATH",
+                        help="Private key file saved from widget settings for an API-key provider.")
     args = parser.parse_args(argv)
 
     provider_ids = parse_provider_ids(args.providers)
     timeout = clamp(args.timeout, 1.0, 30.0)
     try:
-        key_files = {name: path for name, path in (("openrouter", args.openrouter_key_file), ("deepseek", args.deepseek_key_file))
-                     if path is not None}
+        key_files = parse_key_files(args.key_file)
         payload = build_payload(provider_ids, timeout, args.state_dir, args.source, args.cliproxy_url,
                                 args.cliproxy_key_file, key_files)
     except Exception as exc:
