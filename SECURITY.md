@@ -67,6 +67,17 @@ Upstream provider tokens stay on CLIProxyAPI, which substitutes `$TOKEN$` for
 quota calls and explicitly confirmed Codex banked-reset actions. Management responses and account checks are bounded.
 The backend never downloads auth files or stores their raw metadata. The backend does not request client API keys or the model catalog.
 
+In local mode, each provider reads only its own tool's credential (a CLI, app, or
+IDE sign-in, a key in its environment variable, or a key saved from settings), and
+sends it only to that provider's API. Credential files and SQLite stores are read
+size-bounded and read-only; nothing is written back, rotated, or deleted. Two
+narrow exceptions are documented in code: an expired Gemini CLI access token is
+exchanged for a fresh one held in memory for that check only, and Antigravity's
+language server is reached on `127.0.0.1` with its self-signed certificate
+accepted, using the session token read from that same user's process command line
+in `/proc`. `agy` and `gh auth token` run without a shell, with a timeout and
+closed stdin; `agy` also gets browser launchers replaced by stubs that fail.
+
 Banked resets use fixed upstream URLs and explicit managed account selection.
 The account identity is checked again before consumption. Each logical reset
 attempt has a UUID reused for retries; automatic polling cannot consume a reset.

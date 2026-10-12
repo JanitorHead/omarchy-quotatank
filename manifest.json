@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "janitorhead.quotatank",
   "name": "Quotatank",
-  "version": "1.5.3",
+  "version": "1.6.0",
   "author": "JanitorHead",
   "license": "MIT",
-  "description": "Menu-bar AI usage tracker for coding agents. Shows how much of your Claude Code (Anthropic), OpenAI Codex (ChatGPT plan), Kimi Code, OpenCode Go or Antigravity subscription is left: 5-hour and weekly rate limits and quotas, resets, pace and run-out time. Monitors OpenRouter and DeepSeek prepaid credits, with low-balance alerts. Reads CLI logins, Fusebox or CLIProxyAPI. A Costs tab charts tokens and LLM spend per model at API prices, like ccusage, from Claude Code, Codex, OpenCode and T3 Code.",
+  "description": "Menu-bar AI usage tracker and monitor for coding agents. Shows how much of your Claude Code (Anthropic), Codex (ChatGPT), Gemini CLI, Antigravity, GitHub Copilot, Cursor, Kimi, Grok, Kiro, Z.ai GLM, MiniMax or OpenCode subscription is left: 5-hour and weekly rate limits, quotas, resets, pace. Tracks prepaid credits and balances for OpenRouter, DeepSeek, Moonshot and more. Finds your sign-ins on its own. A Costs tab charts tokens and LLM spend per model, like ccusage.",
   "kinds": [
     "bar-widget"
   ],
@@ -108,6 +108,7 @@
       "barProviderLimits": "{}",
       "barShowResets": false,
       "hideExhaustedProviders": false,
+      "barMaxChips": 4,
       "barResetTimeFormat": "24h",
       "barResetDateFormat": "DD/MM",
       "warningThreshold": 25,
@@ -690,6 +691,16 @@
         "label": "Menu bar: hide providers with a used-up weekly or monthly limit",
         "description": "Removes a provider's chip while one of its weekly or monthly limits is used up. The chip returns when that limit resets; Limits keeps showing the provider.",
         "defaultValue": false
+      },
+      {
+        "key": "barMaxChips",
+        "type": "integer",
+        "label": "Menu bar: most chips shown (0 = all)",
+        "description": "Past this many, the bar keeps the providers closest to a limit and folds the rest into a +N chip.",
+        "min": 0,
+        "max": 6,
+        "step": 1,
+        "defaultValue": 4
       },
       {
         "key": "barResetTimeFormat",

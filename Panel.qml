@@ -85,10 +85,24 @@ Ui.Panel {
   // Optionally drop providers whose weekly or monthly limit is used up: they cannot be used until it
   // resets. Limits still shows them, marked used up, with the reset time.
   readonly property bool hideUsedUpProviders: setting("hideExhaustedProviders", false) === true
-  readonly property var percentageProviders: UsageLogic.barProviders(
+  readonly property var barCandidates: UsageLogic.barProviders(
     UsageLogic.selectedProviders(providers, setting("barProviders", UsageLogic.DEFAULT_SETTINGS.barProviders)),
     function (provider) { return barLimitsFor(provider.id).top })
     .filter(function (provider) { return !hideUsedUpProviders || UsageLogic.usedUpLongWindow(provider) === null })
+  // With many providers the bar keeps the ones closest to a limit (failures first) and folds the
+  // rest into one "+N" chip, so the bar never pushes into the clock.
+  readonly property var chipSelection: UsageLogic.limitChips(barCandidates,
+    Number(setting("barMaxChips", UsageLogic.DEFAULT_SETTINGS.barMaxChips)), chipPressure)
+  readonly property var percentageProviders: chipSelection.shown
+  readonly property var overflowProviders: chipSelection.hidden
+  function chipPressure(provider) {
+    if (String(provider.status) === "error") return -1
+    var money = moneySeverityOf(provider)
+    if (money === "critical") return 0
+    if (money === "warning") return root.warningThreshold
+    var remaining = UsageLogic.remainingForWindow(provider, barLimitsFor(provider.id).top)
+    return remaining === null ? 100 : remaining
+  }
   function barLimitsFor(providerId) {
     return UsageLogic.barLimitsFor(barProviderLimits, providerId, barWindow, barWindowSecondary)
   }
@@ -686,7 +700,12 @@ Ui.Panel {
           readonly property var money: failed ? null : UsageLogic.spendable(reading)
           readonly property var moneyShown: money === null ? null : UsageLogic.moneyView(reading, providerChip.quotaMode)
           readonly property bool moneyChip: money !== null
-          readonly property bool windowStacked: secondaryWindow !== "none" && !failed && !moneyChip
+          // A second line that would repeat the first (the most constrained limit is the weekly one
+          // and the second line asks for weekly too) is left out.
+          readonly property bool sameLimitTwice: secondaryWindow !== "none"
+            && UsageLogic.windowRowFor(reading, topWindow, true) !== null
+            && UsageLogic.windowRowFor(reading, topWindow, true) === UsageLogic.windowRowFor(reading, secondaryWindow, false)
+          readonly property bool windowStacked: secondaryWindow !== "none" && !failed && !moneyChip && !sameLimitTwice
           readonly property var remainingValue: UsageLogic.remainingForWindow(reading, topWindow)
           readonly property var shownValue: providerChip.quotaMode === "Remaining"
             ? remainingValue : UsageLogic.usedForWindow(reading, topWindow)
@@ -834,6 +853,22 @@ Ui.Panel {
               }
             }
           }
+        }
+      }
+
+      // The providers left out by "Chips in the bar": one chip that names them and opens the first.
+      Ui.WidgetButton {
+        id: overflowChip
+        objectName: "barOverflowChip"
+        visible: root.overflowProviders.length > 0
+        bar: root.bar
+        text: "+" + root.overflowProviders.length
+        horizontalMargin: Style.space(5)
+        active: root.overflowProviders.some(function (provider) { return String(provider.status) === "error" })
+        tooltipText: root.overflowProviders.map(function (provider) { return String(provider.name || provider.id) }).join("\n")
+        onPressed: function(buttonCode) {
+          if (root.overflowProviders.length > 0)
+            root.handleProviderChipPress(String(root.overflowProviders[0].id), buttonCode)
         }
       }
     }

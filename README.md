@@ -12,15 +12,16 @@
 
 ![Six provider chips in the menu bar with the Limits panel open below: Claude, Codex, Kimi, OpenCode, OpenRouter, and DeepSeek tiles, a headline that reads 5-hour limit runs out in 1h 9m, and three limit cards; beside it the Costs tab with a 30-day chart and the model breakdown](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/hero.png)
 
-Quotatank reads the plan limits of **Claude Code, OpenAI Codex, Kimi Code, and OpenCode Go** from the CLIs you already signed in with, the prepaid balances of **OpenRouter and DeepSeek** from an API key, or every account behind a **Fusebox or CLIProxyAPI** server. A second tab estimates what your recorded tokens would cost at API rates.
+Quotatank reads the plan limits of the coding agents you already signed in to — **Claude Code, OpenAI Codex, Gemini CLI, Antigravity, GitHub Copilot, Cursor, Kimi Code, OpenCode Go, Grok, Kiro, JetBrains AI, Droid, Amp, Kilo Code, Codebuff, and Hugging Face** — the coding plans and prepaid balances behind an API key — **Z.ai, MiniMax, Synthetic, Chutes, Ollama Cloud, Warp, Cline, ZenMux, OpenRouter, DeepSeek, Moonshot, Venice, DeepInfra, Vercel AI Gateway, and Poe** — or every account behind a **Fusebox or CLIProxyAPI** server. A second tab estimates what your recorded tokens would cost at API rates.
 
-<sub>Screenshots use fixture data in the Tokyo Night theme unless noted.</sub>
+<sub>Screenshots use fixture data in the Tokyo Night theme unless noted; the Providers page uses fixture data in a custom dark theme.</sub>
 
 ## Why it is different
 
+- **It finds what you already use.** Sign-ins on this computer are picked up on their own; one quiet line in Limits names any it found that you are not monitoring yet. Providers you do not have never show up.
 - **A run-out time, not just a percentage.** Each limit card projects from your recent rate: `Runs out in 1h 9m` when the limit would empty before it resets, `Lasts until reset` when it would not. One headline above the cards gives the answer for the whole provider.
 - **A pace tick on the meter.** A tick marks where even use would have put you by now; blocks past it are use ahead of pace, and a badge counts the points ahead or behind.
-- **Money where money is the limit.** OpenRouter and DeepSeek lead with what you can still spend, in their own currency, with low-balance alerts in amounts rather than percentages.
+- **Money where money is the limit.** Prepaid providers such as OpenRouter, DeepSeek, Moonshot, and Venice lead with what you can still spend, in their own currency, with low-balance alerts in amounts rather than percentages.
 - **Two limits and their reset times in each chip.** Stack a second limit under the first, show when each one resets, or hide a provider from the bar while its weekly limit is used up.
 - **Settings that apply as you make them.** No Save button: flip a switch and watch the bar change, then flip it back.
 - **Alerts that re-arm.** A desktop notification fires when a limit or a balance crosses your warning or critical threshold, and again after it recovers or resets.
@@ -86,7 +87,7 @@ When something is wrong, the panel says what and what to do: a used-up limit nam
 
 ![OpenRouter's panel with a $74.00 left headline, a Balance card listing purchased, used, and this week's spend, and a monthly key limit card; beside it DeepSeek's panel with a $12.50 balance and its granted and topped-up amounts](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/balance.png)
 
-OpenRouter and DeepSeek are prepaid, so their figure is money: what the account can still spend, which for OpenRouter is the lowest of the balance and every spending limit's allowance. The headline adds how long it lasts at this week's rate (`$74.00 left · lasts about 8 weeks`), OpenRouter's limits that reset become ordinary limit cards with a pace, and a CNY-only DeepSeek account shows yuan. **Low balance** alerts are amounts in the balance's currency, `5` and `1` by default.
+Prepaid providers — OpenRouter, DeepSeek, Moonshot, Venice, DeepInfra, Vercel AI Gateway, and Poe — show money: what the account can still spend, which for OpenRouter is the lowest of the balance and every spending limit's allowance. The headline adds how long it lasts at this week's rate (`$74.00 left · lasts about 8 weeks`), limits that reset become ordinary limit cards with a pace, a CNY-only DeepSeek or Moonshot account shows yuan, and Poe counts points. **Low balance** alerts are amounts in the balance's currency, `5` and `1` by default. Credit packs that sit beside a plan, such as MiniMax's or Warp's add-on credits, are shown but never raise a low-balance alert.
 
 ## Menu bar
 
@@ -96,6 +97,7 @@ OpenRouter and DeepSeek are prepaid, so their figure is money: what the account 
 - **Second limit below** stacks a second limit under the first.
 - **Show when limits reset** appends when each line resets: a time for limits that reset within a day, a date for weekly and monthly ones, in the formats you choose.
 - **Hide providers that are used up** takes a provider out of the bar while one of its weekly or monthly limits is used up; it returns when the limit resets, and Limits keeps showing it.
+- **Chips in the bar** caps how many chips the bar holds, four by default. Past that it keeps the providers closest to a limit, in their usual order, and folds the rest into a `+N` chip that names them.
 - **Provider colors** paints each chip and limit meter in the provider's brand color.
 
 Money providers lead with their balance and stack their tightest limit below. Clicking a chip opens that provider.
@@ -126,14 +128,14 @@ Local Claude Code, Codex, and OpenCode history are on by default, and up to four
 
 ## Settings that apply as you go
 
-![The settings index with six rows and what each is set to, beside the Providers page with Monitor and Menu bar switches, Codex customized to read as left with its 5-hour limit pinned, the saved OpenRouter key, and the Menu bar page](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/settings.png)
+![The Providers page: Grok CLI and Kiro under Found on this computer with Ignore and Monitor; eight monitored providers, each with a grip, Monitor and Menu bar switches, and a status such as Connected · Claude Max 20x; key editors under Z.ai and OpenRouter; and More providers folded at the bottom](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/settings.png)
 
 The gear opens an index of six pages, and each row already says what the page is set to. There is no Save button: every switch, selector, and valid number applies the moment it changes, so you can compare the bar with the setting still in front of you. Keys and tokens are the exception, with an explicit **Save** that writes a private file, after which the page shows **Replace** and **Remove**.
 
 | Page | What lives there |
 |---|---|
-| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server), one row per provider with a grip to drag it into the order tiles and chips follow, **Monitor** and **Menu bar** switches, the API key editor under OpenRouter and DeepSeek, and **Customize** under each provider to override the defaults for that one: read it as used or left, pin the limit its chip shows and the second one below |
-| **Menu bar** | Chips or the widget icon, the limit each chip shows, a second limit, reset times and formats, hiding used-up providers |
+| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server). **Found on this computer** offers sign-ins Quotatank detected but is not monitoring, with **Monitor** and **Ignore**. **Monitored** lists the providers in use, each with what the last check found (`Connected · Claude Max 20x`, `Sign-in expired — Run claude auth login`, `No key saved`), a grip to drag it into the order tiles and chips follow, **Monitor** and **Menu bar** switches, its key editor when it takes an API key, and **Customize** to read it as used or left and pin the limits its chip shows. **More providers** folds away everything else, filterable by name, with a link to each provider's key page |
+| **Menu bar** | Chips or the widget icon, the limit each chip shows, a second limit, reset times and formats, how many chips the bar holds, hiding used-up providers |
 | **Alerts** | Desktop notifications, the percentage thresholds, and the low-balance amounts |
 | **Display** | Used or left, provider colors, square cards, hidden account emails |
 | **Costs** | Local history, T3 servers, custom prices, and the last scan |
@@ -143,11 +145,13 @@ Every key is listed in the [settings reference](https://github.com/JanitorHead/o
 
 Privacy:
 
-- Quotatank reads existing CLI sign-ins and does not write authentication state. Quota checks are read-only.
+- Quotatank reads existing CLI, app, and IDE sign-ins and never writes, rotates, or deletes authentication state. Quota checks are read-only and never spend quota.
+- Gemini CLI access tokens last an hour. When the saved one has expired, Quotatank exchanges Gemini CLI's refresh token for a new access token that lives only in memory for that check; nothing is written back.
+- Antigravity is read from its own running language server on `127.0.0.1`, using the session token that process was started with, or from `agy`'s usage report. GitHub Copilot can fall back to `gh auth token`. Both commands run without a shell, with a timeout and no browser.
 - Applying a banked Codex reset is a separate action in CLIProxyAPI mode, and it asks for confirmation first.
 - API keys, management keys, and T3 tokens are saved in private files (`0600`, in a `0700` directory), never in widget settings or command-line arguments. **Remove** deletes the file.
 - Cost history stores token counts, timestamps, model names, and hashed transcript identifiers. It never stores prompts, responses, or tool output.
-- HTTPS certificates are verified, and redirects are rejected.
+- HTTPS certificates are verified, and redirects are rejected. The one exception is Antigravity's loopback language server, whose self-signed certificate is accepted on `127.0.0.1` only.
 
 ## Connect a source
 
@@ -156,8 +160,8 @@ Limits and Costs have separate sources. A proxy can supply Limits while local tr
 ```mermaid
 flowchart TB
   subgraph Limits
-    cli["CLI sign-ins<br/>claude · codex · kimi · opencode"] --> uf["usage-fetch.py"]
-    keys["API keys<br/>OpenRouter · DeepSeek"] --> uf
+    cli["Sign-ins on this computer<br/>CLIs · apps · IDEs"] --> uf["usage-fetch.py"]
+    keys["API keys<br/>saved here or in the environment"] --> uf
     proxy["Fusebox / CLIProxyAPI<br/>one card per account"] --> uf
     uf --> chips["Menu bar chips"]
     uf --> panel["Limits tab"]
@@ -169,20 +173,52 @@ flowchart TB
   end
 ```
 
-### Local CLI sign-ins
+### Sign-ins on this computer
 
-Sign in with each provider's CLI. Then open **Settings → Providers**, keep **Local sign-ins** as the source, and turn on **Monitor** for the providers you use.
+Sign in to each tool the way you already do. Quotatank picks up the sign-ins it finds: new installations monitor every provider below by default and show the ones that are signed in; if you set Quotatank up before, **Settings → Providers → Found on this computer** offers the new ones with one click.
 
-| Provider | Connect with | Read from |
+| Provider | Sign in with | Shows |
 |---|---|---|
-| Claude Code | `claude auth login` | Claude OAuth usage endpoint |
-| OpenAI Codex | `codex login` | Codex app-server rate-limit RPC |
-| Kimi Code | `kimi login` | Kimi usage endpoint |
-| OpenCode Go | `opencode auth login` | OpenCode Go usage endpoint, using `OPENCODE_GO_API_KEY` or the key the OpenCode CLI stored |
-| OpenRouter | An API key saved under its switch, or `OPENROUTER_API_KEY` | `GET /api/v1/key` and `GET /api/v1/credits`: the key's limits, the balance, and spend |
-| DeepSeek | An API key saved under its switch, or `DEEPSEEK_API_KEY` | `GET /user/balance`: the platform balance per currency |
+| Claude Code | `claude auth login` | 5-hour and weekly limits, model limits, extra usage |
+| OpenAI Codex | `codex login` | 5-hour and weekly limits, credits |
+| Gemini CLI | `gemini`, signed in with Google | Daily request limits per model |
+| Antigravity | The Antigravity app or IDE while it runs, or `agy` | 5-hour and weekly limits per model group |
+| GitHub Copilot | `gh auth login`, or the Copilot sign-in of your editor | Monthly chat, completions, and premium request allowances |
+| Cursor | The Cursor app, or `cursor-agent login` | The monthly plan allowance and on-demand spend |
+| Kimi Code | `kimi login` | Weekly and 5-hour limits |
+| OpenCode Go | `opencode auth login`, or `OPENCODE_GO_API_KEY` | 5-hour, weekly, and monthly limits |
+| Grok CLI | `grok login` | The billing-period allowance |
+| Kiro | `kiro-cli login` | Monthly credits and overage |
+| JetBrains AI | AI Assistant in any JetBrains IDE | The monthly quota and top-up credits, read from the IDE's own files |
+| Droid (Factory) | `droid`, or a saved `FACTORY_API_KEY` | Weekly and monthly token allowances |
+| Amp | `amp login`, or a saved key | Free daily credits and monthly plan usage |
+| Kilo Code | `kilo auth login`, or a saved key | The Kilo Pass allowance and credit balance |
+| Codebuff | `codebuff login`, or a saved key | Weekly limit and credits |
+| Hugging Face | `hf auth login`, or a saved token | The inference spending limit |
 
-Quotatank reads existing CLI credentials and does not write authentication state. Sign-in stays with the CLI. See the [configuration reference](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#providers-and-authentication) for details.
+### API keys
+
+Turn the provider on under **Settings → Providers → More providers**, then save its key; **Get a key ↗** opens the page that issues one. A key in the provider's environment variable works too and takes precedence.
+
+| Provider | Key | Shows |
+|---|---|---|
+| Z.ai Coding Plan | API key, or `Z_AI_API_KEY` (BigModel keys work too) | 5-hour and weekly prompt limits, monthly MCP tool calls |
+| MiniMax Coding Plan | Subscription Key (`sk-cp-…`), or `MINIMAX_CODING_API_KEY` | 5-hour and weekly limits, credit packs |
+| Synthetic | API key, or `SYNTHETIC_API_KEY` | 5-hour and weekly limits |
+| Chutes | API key, or `CHUTES_API_KEY` | 4-hour and monthly subscription limits |
+| Ollama Cloud | API key, or `OLLAMA_API_KEY` | The monthly included allowance and purchased credits |
+| Warp | Personal API key, or `WARP_API_KEY` | Monthly AI credits and add-on credits |
+| Cline | API key, or `CLINE_API_KEY` | ClinePass 5-hour, weekly, and monthly limits |
+| ZenMux | Management key, or `ZENMUX_MANAGEMENT_API_KEY` | 5-hour and 7-day flow limits, pay-as-you-go credits |
+| OpenRouter | API key, or `OPENROUTER_API_KEY` | The key's limits, the balance, and spend |
+| DeepSeek | API key, or `DEEPSEEK_API_KEY` | The platform balance per currency |
+| Moonshot | API key, or `MOONSHOT_API_KEY` | The balance, international or China |
+| Venice | Admin API key, or `VENICE_API_KEY` | Daily DIEM allocation and USD balance |
+| DeepInfra | API key, or `DEEPINFRA_API_KEY` | The balance, spending limit, and this month's spend |
+| Vercel AI Gateway | API key, or `AI_GATEWAY_API_KEY` | Gateway credits and lifetime spend |
+| Poe | API key, or `POE_API_KEY` | The points balance |
+
+Quotatank reads existing credentials and never writes authentication state; sign-in stays with each tool. Claude Code, OpenAI Codex, OpenCode Go, OpenRouter, and GitHub Copilot have been checked against live accounts. The other providers follow their documentation and established open-source readers and are tested against recorded responses. The [configuration reference](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#providers-and-authentication) lists the files and endpoints each provider uses.
 
 ### Fusebox or CLIProxyAPI
 
@@ -219,7 +255,7 @@ omarchy-shell janitorhead.quotatank costs
 omarchy-shell janitorhead.quotatank refresh
 ```
 
-The other commands are `open`, `close`, `toggle`, `show`, `hide`, `next`, `configure`, `configureCosts`, and `exportJson`. While hide-emails is on, `exportJson` writes numbered account labels instead of identities.
+The other commands are `open`, `close`, `toggle`, `show`, `hide`, `next`, `configure`, `configureProviders`, `configureCosts`, and `exportJson`. While hide-emails is on, `exportJson` writes numbered account labels instead of identities.
 
 ## Documentation
 

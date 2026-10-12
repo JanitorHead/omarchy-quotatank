@@ -695,7 +695,7 @@ Column {
             LinkButton {
               objectName: providerRow.providerId + "KeysLink"
               visible: !!providerRow.entry && providerRow.entry.keysUrl !== ""
-              text: "Create a key on " + providerRow.name + " ↗"
+              text: "Get a key ↗"
               url: providerRow.entry ? providerRow.entry.keysUrl : ""
             }
             // No key page to link to: the hint says where the key is created.
@@ -906,6 +906,22 @@ Column {
         value: UsageLogic.normalizeBarResetChoice("date", root.value("barResetDateFormat", "DD/MM"))
         onChanged: function(next) { root.set("barResetDateFormat", next) }
       }
+
+      SelectRow {
+        objectName: "barMaxChipsControl"
+        label: "Chips in the bar"
+        options: [
+          { value: "0", label: "All" },
+          { value: "2", label: "Up to 2" },
+          { value: "3", label: "Up to 3" },
+          { value: "4", label: "Up to 4" },
+          { value: "5", label: "Up to 5" },
+          { value: "6", label: "Up to 6" }
+        ]
+        value: String(Number(root.value("barMaxChips", UsageLogic.DEFAULT_SETTINGS.barMaxChips)))
+        onChanged: function(next) { root.set("barMaxChips", Number(next)) }
+      }
+      Hint { text: "Past that, the bar keeps the providers closest to a limit and folds the rest into a +N chip." }
 
       SwitchRow {
         objectName: "hideExhaustedProvidersToggle"
@@ -1862,6 +1878,8 @@ Column {
     if (bottom !== "none") text += " + " + UsageLogic.windowSelectorLabel(bottom)
     if (value("barShowResets", false) === true) text += " · resets"
     if (value("hideExhaustedProviders", false) === true) text += " · hides used up"
+    var cap = Number(value("barMaxChips", UsageLogic.DEFAULT_SETTINGS.barMaxChips))
+    if (cap > 0) text += " · up to " + cap + " chips"
     return text
   }
 
