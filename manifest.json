@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "janitorhead.quotatank",
   "name": "Quotatank",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "author": "JanitorHead",
   "license": "MIT",
-  "description": "Menu-bar quota monitor for Claude Code, OpenAI Codex, Kimi Code, OpenCode Go, OpenRouter, and DeepSeek. Shows used or remaining per limit, a pacing tick, a projected run-out time, and prepaid balances with low-balance alerts. Fusebox and CLIProxyAPI accounts get one card each. Settings apply as you change them. Estimated API cost history from local Codex, Claude Code, and OpenCode transcripts and T3 Code servers, by model.",
+  "description": "Menu-bar AI usage tracker for coding agents. Shows how much of your Claude Code (Anthropic), OpenAI Codex (ChatGPT plan), Kimi Code, OpenCode Go or Antigravity subscription is left: 5-hour and weekly rate limits and quotas, resets, pace and run-out time. Monitors OpenRouter and DeepSeek prepaid credits, with low-balance alerts. Reads CLI logins, Fusebox or CLIProxyAPI. A Costs tab charts tokens and LLM spend per model at API prices, like ccusage, from Claude Code, Codex, OpenCode and T3 Code.",
   "kinds": [
     "bar-widget"
   ],

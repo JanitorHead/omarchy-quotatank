@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.5.3
+
+### Changed
+
+- Rewrote the marketplace description: it now covers the Costs tab's token and LLM spend, Antigravity accounts behind CLIProxyAPI, and prepaid credits. No code changes.
+
 ## 1.5.2
 
 ### Added
@@ -288,6 +294,7 @@ All notable changes to this project will be documented here. The format follows
   for horizontal and vertical bars.
 - Fixture, contract, QML lint, and live Quickshell runtime tests.
 
+[1.5.3]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.3
 [1.5.2]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.2
 [1.5.1]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.1
 [1.5.0]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.0
