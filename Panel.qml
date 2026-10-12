@@ -26,6 +26,10 @@ Ui.Panel {
   readonly property string providerOrder: String(setting("providerOrder", "[]"))
   readonly property var providers: UsageLogic.orderProviders(UsageLogic.availableProviders(proxyMode
     ? backend.providers : UsageLogic.selectedProviders(backend.providers, backend.enabledProviderIds)), providerOrder)
+  // Providers set up on this computer that are neither monitored nor dismissed. Limits points to
+  // them in one quiet line until each is monitored or ignored under Settings → Providers.
+  readonly property var foundProviders: proxyMode ? [] : UsageLogic.foundProviders(backend.detected,
+    backend.enabledProviderIds, UsageLogic.listOrEmpty(setting("dismissedProviders", UsageLogic.DEFAULT_SETTINGS.dismissedProviders)))
   property string selectedProviderId: ""
   property bool expandedAccountLimits: false
   property string historyMode: "h24"
@@ -135,6 +139,7 @@ Ui.Panel {
       label: UsageLogic.providerShortName(provider),
       name: String(provider.name || id),
       iconUrl: barIconUrl(provider),
+      mark: UsageLogic.providerMark(id),
       figure: failed ? UsageLogic.errorReasonLabel(provider.errorKind)
         : money !== null ? money.text
         : (shown === null ? "—" : UsageLogic.formatPercent(shown) + "%"),
@@ -463,14 +468,12 @@ Ui.Panel {
     return text
   }
 
+  // Dark marks ship an `-light` variant for light surfaces; the registry says which.
   function iconUrl(provider) {
-    if (!provider) return ""
-    if (!UsageLogic.localProvider(provider.id)) return ""
-    if (provider.id === "codex") {
-      return Qt.resolvedUrl(colorLuminance(surface) >= 0.5
-        ? "assets/codex-light.svg" : "assets/codex.svg")
-    }
-    return Qt.resolvedUrl("assets/" + provider.id + ".svg")
+    var entry = provider ? UsageLogic.localProvider(provider.id) : null
+    if (!entry) return ""
+    var light = entry.lightIcon && colorLuminance(surface) >= 0.5
+    return Qt.resolvedUrl("assets/" + entry.id + (light ? "-light.svg" : ".svg"))
   }
 
   function barIconUrl(provider) {
@@ -1034,6 +1037,8 @@ Ui.Panel {
             fontFamily: root.fontFamily
             accountDetails: root.accountTooltip(root.provider)
             proxyProviders: root.proxyMode ? backend.providers : []
+            usagePayload: root.proxyMode ? null : backend.payload
+            usageLoading: backend.loading
             proxyImplementation: backend.proxyImplementation
             costSources: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sources) : []
             onChangeRequested: function(values) { root.saveSettings(values) }
@@ -1094,7 +1099,7 @@ Ui.Panel {
             text: backend.loading
               ? "Reading your limits…"
               : root.proxyMode ? "No enabled managed accounts found. Check the accounts configured in " + UsageLogic.proxyName(backend.proxyImplementation) + "."
-              : "Nothing to show yet. Turn on a provider under Settings → Providers, then sign in to its CLI or save its API key."
+              : "Nothing to show yet. Sign in to a provider's CLI or app, or turn one on under Settings → Providers."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -1292,6 +1297,31 @@ Ui.Panel {
               if (root.opened && !root.configuring && !resetBackend.active)
                 keyCatcher.forceActiveFocus()
             })
+          }
+
+          // One quiet pointer to providers set up here but not monitored; it goes away once each is
+          // monitored or ignored under Settings → Providers.
+          Text {
+            objectName: "foundProvidersLine"
+            visible: root.viewMode === "limits" && root.foundProviders.length > 0
+            width: parent.width
+            text: UsageLogic.foundSummary(root.foundProviders) + " · Set up"
+            textFormat: Text.PlainText
+            color: foundArea.containsMouse ? root.foreground : root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.underline: foundArea.containsMouse
+            wrapMode: Text.WordWrap
+            Accessible.role: Accessible.Link
+            Accessible.name: text
+
+            MouseArea {
+              id: foundArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.showSettings("providers")
+            }
           }
 
           Ui.PanelSeparator { visible: !root.configuring; foreground: root.foreground }

@@ -377,6 +377,41 @@ assert.equal(context.paceForWindow(weekly(10, []), null), null, "no clock, no pr
 const remainingOnly = context.paceForWindow({ remaining: 40, windowSeconds: WEEK, resetsAt: NOW + WEEK / 2, samples: [] }, NOW);
 assert.equal(remainingOnly.used, 60, "a remaining-only row reads used through windowUsed");
 
+// Unknown usage (null on both sides, e.g. an Antigravity pool without a remaining fraction) stays
+// unknown: no figure, no meter, no pace, never the most constrained window, never an alert.
+const unknownWindow = { id: "gemini-pro", label: "Gemini Pro · 5-hour limit", used: null, remaining: null,
+  resetsAt: NOW + HOUR, windowSeconds: SESSION };
+assert.equal(context.windowUsed(unknownWindow), null, "null usage is not 0% used");
+assert.equal(context.windowRemaining(unknownWindow), null, "null usage is not 0% left");
+assert.equal(context.windowUsed({ used: "" }), null, "an empty value is unknown too");
+assert.equal(context.windowUsed({ used: 0, remaining: 100 }), 0, "a real zero stays zero");
+assert.equal(context.windowRemaining({ used: null, remaining: 0 }), 0, "a real zero left stays zero");
+assert.equal(context.meterFill(unknownWindow, "Used"), null, "no meter fill");
+assert.equal(context.meterFill(unknownWindow, "Remaining"), null);
+assert.equal(context.paceForWindow(unknownWindow, NOW), null, "no pace without usage");
+const partlyKnown = { id: "antigravity", status: "ok", windows: [unknownWindow,
+  { id: "claude-weekly", label: "Claude · Weekly limit", used: 30, remaining: 70, windowSeconds: WEEK, resetsAt: NOW + DAY }] };
+assert.equal(context.minRemaining(partlyKnown), 70, "an unknown window is never the most constrained");
+assert.equal(context.exactRemainingForWindow(partlyKnown, "session"), null, "the chosen window has no figure");
+assert.equal(context.remainingForWindow(partlyKnown, "session"), 70, "the chip falls back to a known window");
+assert.equal(context.severity({ id: "antigravity", status: "ok", windows: [unknownWindow] }, 25, 10), "none", "no alert from unknown usage");
+assert.equal(context.usedUpLongWindow({ id: "antigravity", status: "ok", windows: [{ ...unknownWindow, windowSeconds: WEEK }] }), null);
+const exportedUnknown = context.exportWindows([unknownWindow], NOW)[0];
+assert.equal(exportedUnknown.used, null);
+assert.equal(exportedUnknown.remaining, null);
+assert.equal(exportedUnknown.pace, null);
+
+// A monthly window that reports its real calendar period (28 to 31 days) is still monthly.
+for (const days of [28, 30, 31])
+  assert.equal(context.windowMatches({ windowSeconds: days * DAY }, "monthly"), true, days + "-day month");
+assert.equal(context.windowMatches({ windowSeconds: 27 * DAY }, "monthly"), false);
+assert.equal(context.windowMatches({ windowSeconds: 32 * DAY }, "monthly"), false);
+assert.equal(context.windowMatches({ windowSeconds: 31 * DAY }, "weekly"), false);
+assert.equal(context.rowPeriodTag({ windowSeconds: 31 * DAY }), "30d");
+assert.equal(context.exactRemainingForWindow({ id: "ollama", status: "ok",
+  windows: [{ id: "monthly", label: "Monthly limit", windowSeconds: 2678400, remaining: 55 }] }, "monthly"), 55,
+  "the Monthly menu bar choice finds a 31-day month");
+
 const early = context.paceForWindow(weekly(30, [[NOW - 60, 30]], WEEK - 1000), NOW);
 assert.equal(early.known, false, "under 2% elapsed there is no pace");
 assert.equal(context.paceStatusText(early), "Pace starts after 2% of the window");
@@ -602,9 +637,22 @@ assert.equal(context.normalizeBarResetChoice("date", "12h"), "DD/MM")
 assert.equal(context.normalizeBarResetChoice("time", "12h"), "12h")
 assert.equal(context.normalizeBarResetChoice("time", undefined), "24h")
 
-// Provider colours: distinct per provider; unknown ids fall back, including prototype keys.
-const brandColors = ["claude", "codex", "kimi", "opencode", "openrouter"].map((id) => context.providerAccent(id, "#000000"))
-assert.equal(new Set(brandColors).size, 5)
+// Provider colours: one per provider, all different, and mid-tones a chip can use on dark and on light
+// bars (contrast against white and against a dark bar). Unknown ids fall back, including prototype keys.
+const luminance = (hex) => {
+  const channel = (offset) => {
+    const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+};
+const brandColors = context.LOCAL_PROVIDER_IDS.map((id) => context.providerAccent(id, null));
+assert.ok(brandColors.every((color) => /^#[0-9a-f]{6}$/.test(color)), "every provider has a colour");
+assert.equal(new Set(brandColors).size, context.LOCAL_PROVIDER_IDS.length, "no two providers share a colour");
+for (const id of context.LOCAL_PROVIDER_IDS) {
+  const shade = luminance(context.providerAccent(id, null));
+  assert.ok(1.05 / (shade + 0.05) >= 1.9 && (shade + 0.05) / (luminance("#16161e") + 0.05) >= 3.4, id + " reads on light and dark bars");
+}
 assert.equal(context.providerAccent("local-codex", "#ffffff"), "#ffffff")
 assert.equal(context.providerAccent("", "#ffffff"), "#ffffff")
 assert.equal(context.providerAccent("constructor", "#ffffff"), "#ffffff")
@@ -668,7 +716,13 @@ assert.equal(context.moneyCurrency({ id: "claude" }), "USD", "providers without 
 assert.equal(context.formatMoney(1234.5, "EUR"), "€1,234.50");
 assert.equal(context.formatMoney(-0.004, "USD"), "-$0.0040");
 assert.equal(context.formatMoney(3, "CHF"), "CHF 3.00", "an unknown currency keeps its code");
-assert.equal(context.LOCAL_PROVIDER_IDS.join(","), "claude,codex,kimi,opencode,openrouter,deepseek");
+assert.equal(context.formatMoney(2345678, "POINTS"), "2.35M points", "a points balance stays short on a chip");
+assert.equal(context.formatMoney(850, "CREDITS"), "850 credits");
+assert.equal(context.formatMoney(12.5, "credits"), "12.5 credits");
+assert.equal(context.formatMoney(-3, "POINTS"), "-3 points");
+assert.equal(context.LOCAL_PROVIDER_IDS.join(","), "claude,codex,kimi,opencode,antigravity,gemini,copilot,cursor,grok,kiro,jetbrains,"
+  + "factory,amp,kilo,codebuff,huggingface,zai,minimax,synthetic,chutes,ollama,warp,zenmux,clinepass,"
+  + "openrouter,deepseek,moonshot,venice,deepinfra,vercel,poe", "the backend's PROVIDER_ORDER");
 assert.equal(context.providerShortName({ id: "openrouter", name: "OpenRouter" }), "OpenRouter");
 assert.equal(context.providerShortName({ id: "claude", name: "Claude Code" }), "Claude");
 assert.equal(context.providerShortName({ id: "gemini-cli", name: "Gemini CLI" }), "Gemini CLI", "proxy providers keep their name");
@@ -700,11 +754,108 @@ console.log("Provider order: passed");
 const manifestDefaults = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8")).barWidget.defaults;
 for (const key of Object.keys(context.DEFAULT_SETTINGS))
   assert.equal(JSON.stringify(context.DEFAULT_SETTINGS[key]), JSON.stringify(manifestDefaults[key]), "reset default for " + key + " matches the manifest");
-for (const kept of ["usageSource", "cliproxyUrl", "cliproxyKeyFile", "openrouterKeyFile", "deepseekKeyFile", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers", "costPriceOverrides"])
+const keyFileSettings = context.KEY_PROVIDER_IDS.map((id) => id + "KeyFile");
+for (const kept of ["usageSource", "cliproxyUrl", "cliproxyKeyFile", ...keyFileSettings, "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers", "costPriceOverrides"])
   assert.ok(!(kept in context.DEFAULT_SETTINGS), kept + " survives a reset");
 assert.equal(context.changedFromDefaults({}).length, 0, "missing keys already read as defaults");
 assert.equal(context.changedFromDefaults({ quotaMode: "Remaining", barWindow: "auto", usageSource: "cliproxy" }).join(","), "quotaMode",
   "only preferences that differ count; connections never do");
 console.log("Reset defaults: passed");
+
+// The provider registry: every provider once, set up one of three ways, offered by name in the
+// manifest's provider lists. Sign-in providers are monitored by default; every provider gets a chip.
+const widget = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8")).barWidget;
+const schema = Object.fromEntries(widget.schema.map((entry) => [entry.key, entry]));
+const registry = [...context.LOCAL_PROVIDERS];
+const registryIds = registry.map((entry) => entry.id);
+for (const key of ["enabledProviders", "barProviders", "dismissedProviders"])
+  assert.equal(JSON.stringify(schema[key].options), JSON.stringify(registry.map((entry) => ({ value: entry.id, label: entry.name }))),
+    key + " offers every provider by name, in order");
+assert.equal(context.DEFAULT_SETTINGS.enabledProviders.join(","), registry.filter((entry) => entry.auth !== "key").map((entry) => entry.id).join(","),
+  "every provider with a sign-in of its own is monitored by default");
+assert.equal(context.DEFAULT_SETTINGS.barProviders.join(","), registryIds.join(","), "every monitored provider gets a chip");
+assert.equal(context.KEY_PROVIDER_IDS.join(","), registry.filter((entry) => entry.auth !== "signin").map((entry) => entry.id).join(","));
+for (const entry of registry) {
+  assert.ok(["signin", "key", "both"].includes(entry.auth), entry.id + " is set up by sign-in, key, or both");
+  assert.ok(entry.name && entry.short && entry.signIn, entry.id + " has a name, a short name, and a setup hint");
+  assert.equal(typeof entry.money, "boolean");
+  assert.equal(typeof entry.lightIcon, "boolean");
+  assert.ok(entry.keysUrl === "" || /^https:\/\/\S+$/.test(entry.keysUrl), entry.id + " links to an https key page");
+  if (entry.auth !== "signin") {
+    assert.match(entry.keyEnv, /^[A-Z][A-Z0-9_]*$/, entry.id + " names the environment variable that wins over a saved key");
+    assert.equal(manifestDefaults[entry.id + "KeyFile"], "", entry.id + " has a key file setting");
+  }
+}
+assert.equal(registry.filter((entry) => entry.money).map((entry) => entry.id).join(","), "openrouter,deepseek,moonshot,venice,deepinfra,vercel,poe");
+assert.equal(registry.filter((entry) => entry.lightIcon).map((entry) => entry.id).join(","),
+  "codex,antigravity,copilot,cursor,grok,jetbrains,factory,kilo,codebuff,zai,synthetic,chutes,ollama,zenmux,clinepass,moonshot,venice,deepinfra,vercel");
+console.log("Provider registry: passed");
+
+// Settings → Providers places every provider exactly once from the last refresh.
+const settingsReadings = [
+  { id: "claude", status: "ok", plan: "Max" },
+  { id: "codex", status: "error", errorKind: "expired" },
+  { id: "gemini", status: "error", errorKind: "no_credentials" },
+  { id: "amp", status: "error", errorKind: "no_credentials" },
+  { id: "kimi", status: "error", errorKind: "no_credentials" },
+  { id: "openrouter", status: "error", errorKind: "no_credentials" },
+];
+const placed = context.providerSections(context.orderProviders(context.LOCAL_PROVIDERS, '["codex"]'),
+  ["claude", "codex", "gemini", "amp", "kimi", "openrouter", "cursor"], ["deepseek"], settingsReadings,
+  ["kimi", "copilot", "deepseek"], { ampKeyFile: "/private/amp.key" });
+const placedIds = (section) => placed[section].map((entry) => entry.id).join(",");
+assert.equal(placedIds("listed"), "codex,claude,kimi,cursor,amp,openrouter",
+  "rows: connected, failing, found here though signed out, not checked yet, keyed, and key-only, in the saved order");
+assert.equal(placedIds("waiting"), "gemini", "a monitored sign-in that is not signed in waits out of sight");
+assert.equal(placedIds("found"), "copilot", "set up here, not monitored, not dismissed");
+assert.equal(placedIds("moreSignIns"), "opencode,antigravity,grok,kiro,jetbrains,factory,kilo,codebuff,huggingface");
+assert.equal(placedIds("moreKeys"), "zai,minimax,synthetic,chutes,ollama,warp,zenmux,clinepass,deepseek,moonshot,venice,deepinfra,vercel,poe",
+  "a dismissed provider stays available under More providers");
+assert.equal(["listed", "waiting", "found", "moreSignIns", "moreKeys"].reduce((total, section) => total + placed[section].length, 0),
+  registryIds.length, "no provider is listed twice or lost");
+assert.equal(context.foundProviders(["poe", "gemini", "claude"], ["claude"], ["poe"]).map((entry) => entry.id).join(","), "gemini");
+
+// The status line under a monitored provider: what the last check found and what to do.
+const statusOf = (id, reading, hasKey = false, checking = false) => context.providerStatus(context.localProvider(id), reading, hasKey, checking);
+assert.equal(statusOf("claude", { status: "ok", plan: "Max" }).text, "Connected · Max");
+assert.equal(statusOf("claude", { status: "ok", plan: "" }).text, "Connected");
+assert.equal(statusOf("claude", { status: "ok" }).tone, "ok");
+assert.equal(statusOf("gemini", { status: "error", errorKind: "no_credentials" }).text, "Not signed in — Run `gemini` and sign in with Google");
+assert.equal(statusOf("gemini", { status: "error", errorKind: "no_credentials" }).tone, "muted", "not signed in is not an error");
+assert.equal(statusOf("openrouter", { status: "error", errorKind: "no_credentials" }).text, "No key saved");
+assert.equal(statusOf("openrouter", { status: "error", errorKind: "no_credentials" }, true, true).text, "Checking…",
+  "a reading from before the key was saved is not shown as missing");
+assert.equal(statusOf("claude", { status: "error", errorKind: "expired" }).text, "Sign-in expired — Run `claude` and sign in");
+assert.equal(statusOf("claude", { status: "error", errorKind: "expired" }).tone, "error");
+assert.equal(statusOf("deepseek", { status: "error", errorKind: "expired" }).text, "Key rejected");
+assert.equal(statusOf("amp", { status: "error", errorKind: "expired" }, true).text, "Key rejected", "a saved key is what was rejected");
+assert.equal(statusOf("amp", { status: "error", errorKind: "expired" }).text, "Sign-in expired — Run `amp login` or save a key");
+assert.equal(statusOf("poe", { status: "error", errorKind: "timeout", message: "The provider did not answer in time." }).text,
+  "The provider did not answer in time.", "other failures show the backend's short message");
+assert.equal(statusOf("poe", { status: "error", errorKind: "rate_limited" }).text, "Rate limited");
+assert.equal(statusOf("poe", { status: "error", errorKind: "constructor" }).text, "Error", "unknown kinds stay generic");
+assert.equal(statusOf("poe", null, false, true).text, "Checking…");
+assert.equal(statusOf("poe", null).text, "Not checked yet");
+
+// Monitor switches keep the registry order; keys, filters, and the Limits pointer read the registry.
+assert.equal(context.withMember(["codex"], "claude", true, context.LOCAL_PROVIDER_IDS).join(","), "claude,codex", "added in registry order");
+assert.equal(context.withMember(["claude", "codex"], "claude", false, context.LOCAL_PROVIDER_IDS).join(","), "codex");
+assert.equal(context.withMember(["ghost", "codex"], "kimi", true, context.LOCAL_PROVIDER_IDS).join(","), "codex,kimi", "ids the registry does not know are dropped");
+assert.equal(context.keySaved({ poeKeyFile: "/private/poe.key" }, "poe"), true);
+assert.equal(context.keySaved({ poeKeyFile: " " }, "poe"), false);
+assert.equal(context.keySaved(null, "poe"), false);
+assert.equal(context.keyHint(context.localProvider("openrouter")), "OPENROUTER_API_KEY in the environment takes precedence.");
+assert.equal(context.keyHint(context.localProvider("amp")), "Optional: used instead of the sign-in. AMP_API_KEY in the environment takes precedence.");
+assert.equal(context.filterProviders(context.LOCAL_PROVIDERS, " DEEP ").map((entry) => entry.id).join(","), "deepseek,deepinfra");
+assert.equal(context.filterProviders(context.LOCAL_PROVIDERS, "copilot").map((entry) => entry.id).join(","), "copilot");
+assert.equal(context.filterProviders(context.LOCAL_PROVIDERS, "").length, registryIds.length);
+assert.equal(context.joinNames(["A"]), "A");
+assert.equal(context.joinNames(["A", "B", "C"]), "A, B and C");
+const providerEntries = (...ids) => ids.map((id) => context.localProvider(id));
+assert.equal(context.foundSummary([]), "", "nothing found, no line");
+assert.equal(context.foundSummary(providerEntries("gemini", "copilot")), "Gemini CLI and GitHub Copilot found on this computer");
+assert.equal(context.foundSummary(providerEntries("gemini", "copilot", "cursor")), "Gemini CLI, GitHub Copilot and Cursor found on this computer");
+assert.equal(context.foundSummary(providerEntries("gemini", "copilot", "cursor", "kiro")), "Gemini CLI, GitHub Copilot and 2 more found on this computer");
+console.log("Provider settings: passed");
 
 console.log("UsageLogic.js: all assertions passed");

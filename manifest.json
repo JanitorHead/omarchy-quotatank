@@ -24,14 +24,45 @@
         "claude",
         "codex",
         "kimi",
-        "opencode"
+        "opencode",
+        "antigravity",
+        "gemini",
+        "copilot",
+        "cursor",
+        "grok",
+        "kiro",
+        "jetbrains",
+        "factory",
+        "amp",
+        "kilo",
+        "codebuff",
+        "huggingface"
       ],
       "providerOrder": "[]",
+      "dismissedProviders": [],
       "usageSource": "direct",
       "cliproxyUrl": "http://127.0.0.1:8317",
       "cliproxyKeyFile": "",
+      "factoryKeyFile": "",
+      "ampKeyFile": "",
+      "kiloKeyFile": "",
+      "codebuffKeyFile": "",
+      "huggingfaceKeyFile": "",
+      "zaiKeyFile": "",
+      "minimaxKeyFile": "",
+      "syntheticKeyFile": "",
+      "chutesKeyFile": "",
+      "ollamaKeyFile": "",
+      "warpKeyFile": "",
+      "zenmuxKeyFile": "",
+      "clinepassKeyFile": "",
       "openrouterKeyFile": "",
       "deepseekKeyFile": "",
+      "moonshotKeyFile": "",
+      "veniceKeyFile": "",
+      "deepinfraKeyFile": "",
+      "vercelKeyFile": "",
+      "poeKeyFile": "",
       "hideAccountEmails": true,
       "squareUsageCards": true,
       "providerColors": false,
@@ -44,8 +75,33 @@
         "codex",
         "kimi",
         "opencode",
+        "antigravity",
+        "gemini",
+        "copilot",
+        "cursor",
+        "grok",
+        "kiro",
+        "jetbrains",
+        "factory",
+        "amp",
+        "kilo",
+        "codebuff",
+        "huggingface",
+        "zai",
+        "minimax",
+        "synthetic",
+        "chutes",
+        "ollama",
+        "warp",
+        "zenmux",
+        "clinepass",
         "openrouter",
-        "deepseek"
+        "deepseek",
+        "moonshot",
+        "venice",
+        "deepinfra",
+        "vercel",
+        "poe"
       ],
       "barWindow": "auto",
       "barWindowSecondary": "none",
@@ -96,6 +152,97 @@
         "description": "Managed automatically by the settings menu when saving a Management API key. Advanced users can supply an existing private key file path here."
       },
       {
+        "key": "factoryKeyFile",
+        "type": "string",
+        "label": "Droid key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Factory API key in settings. A saved key is used instead of the sign-in. FACTORY_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "ampKeyFile",
+        "type": "string",
+        "label": "Amp key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save an Amp key in settings. A saved key is used instead of the sign-in. AMP_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "kiloKeyFile",
+        "type": "string",
+        "label": "Kilo Code key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Kilo Code key in settings. A saved key is used instead of the sign-in. KILO_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "codebuffKeyFile",
+        "type": "string",
+        "label": "Codebuff key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Codebuff key in settings. A saved key is used instead of the sign-in. CODEBUFF_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "huggingfaceKeyFile",
+        "type": "string",
+        "label": "Hugging Face token file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Hugging Face token in settings. A saved token is used instead of the sign-in. HF_TOKEN in the environment takes precedence."
+      },
+      {
+        "key": "zaiKeyFile",
+        "type": "string",
+        "label": "Z.ai Coding Plan key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Z.ai API key in settings. Z_AI_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "minimaxKeyFile",
+        "type": "string",
+        "label": "MiniMax Coding Plan key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a MiniMax coding-plan key in settings. MINIMAX_CODING_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "syntheticKeyFile",
+        "type": "string",
+        "label": "Synthetic key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Synthetic API key in settings. SYNTHETIC_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "chutesKeyFile",
+        "type": "string",
+        "label": "Chutes key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Chutes API key in settings. CHUTES_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "ollamaKeyFile",
+        "type": "string",
+        "label": "Ollama Cloud key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save an Ollama API key in settings. OLLAMA_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "warpKeyFile",
+        "type": "string",
+        "label": "Warp key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Warp API key in settings. WARP_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "zenmuxKeyFile",
+        "type": "string",
+        "label": "ZenMux key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a ZenMux management key in settings. ZENMUX_MANAGEMENT_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "clinepassKeyFile",
+        "type": "string",
+        "label": "Cline key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Cline API key in settings. CLINE_API_KEY in the environment takes precedence."
+      },
+      {
         "key": "openrouterKeyFile",
         "type": "string",
         "label": "OpenRouter key file",
@@ -108,6 +255,41 @@
         "label": "DeepSeek key file",
         "defaultValue": "",
         "description": "Managed automatically when you save a DeepSeek API key in settings. The key shows the platform balance. DEEPSEEK_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "moonshotKeyFile",
+        "type": "string",
+        "label": "Moonshot key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Moonshot key in settings. MOONSHOT_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "veniceKeyFile",
+        "type": "string",
+        "label": "Venice key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Venice key in settings. VENICE_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "deepinfraKeyFile",
+        "type": "string",
+        "label": "DeepInfra key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a DeepInfra key in settings. DEEPINFRA_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "vercelKeyFile",
+        "type": "string",
+        "label": "Vercel AI Gateway key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save an AI Gateway key in settings. AI_GATEWAY_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "poeKeyFile",
+        "type": "string",
+        "label": "Poe key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Poe API key in settings. POE_API_KEY in the environment takes precedence."
       },
       {
         "key": "hideAccountEmails",
@@ -151,7 +333,7 @@
         "key": "enabledProviders",
         "type": "multiselect",
         "label": "Providers",
-        "description": "Select providers to monitor in local mode. OpenRouter and DeepSeek need an API key saved in settings. Fusebox and CLIProxyAPI discover all managed providers automatically.",
+        "description": "Select providers to monitor in local mode. Providers with a sign-in of their own appear once you sign in; API-key providers need a key saved in settings or set in the environment. Fusebox and CLIProxyAPI discover all managed providers automatically.",
         "noSelectionText": "No providers",
         "placeholderText": "Search providers...",
         "emptyText": "No providers found",
@@ -159,7 +341,19 @@
           "claude",
           "codex",
           "kimi",
-          "opencode"
+          "opencode",
+          "antigravity",
+          "gemini",
+          "copilot",
+          "cursor",
+          "grok",
+          "kiro",
+          "jetbrains",
+          "factory",
+          "amp",
+          "kilo",
+          "codebuff",
+          "huggingface"
         ],
         "options": [
           {
@@ -179,12 +373,112 @@
             "label": "OpenCode Go"
           },
           {
+            "value": "antigravity",
+            "label": "Antigravity"
+          },
+          {
+            "value": "gemini",
+            "label": "Gemini CLI"
+          },
+          {
+            "value": "copilot",
+            "label": "GitHub Copilot"
+          },
+          {
+            "value": "cursor",
+            "label": "Cursor"
+          },
+          {
+            "value": "grok",
+            "label": "Grok CLI"
+          },
+          {
+            "value": "kiro",
+            "label": "Kiro"
+          },
+          {
+            "value": "jetbrains",
+            "label": "JetBrains AI"
+          },
+          {
+            "value": "factory",
+            "label": "Droid"
+          },
+          {
+            "value": "amp",
+            "label": "Amp"
+          },
+          {
+            "value": "kilo",
+            "label": "Kilo Code"
+          },
+          {
+            "value": "codebuff",
+            "label": "Codebuff"
+          },
+          {
+            "value": "huggingface",
+            "label": "Hugging Face"
+          },
+          {
+            "value": "zai",
+            "label": "Z.ai Coding Plan"
+          },
+          {
+            "value": "minimax",
+            "label": "MiniMax Coding Plan"
+          },
+          {
+            "value": "synthetic",
+            "label": "Synthetic"
+          },
+          {
+            "value": "chutes",
+            "label": "Chutes"
+          },
+          {
+            "value": "ollama",
+            "label": "Ollama Cloud"
+          },
+          {
+            "value": "warp",
+            "label": "Warp"
+          },
+          {
+            "value": "zenmux",
+            "label": "ZenMux"
+          },
+          {
+            "value": "clinepass",
+            "label": "Cline"
+          },
+          {
             "value": "openrouter",
             "label": "OpenRouter"
           },
           {
             "value": "deepseek",
             "label": "DeepSeek"
+          },
+          {
+            "value": "moonshot",
+            "label": "Moonshot"
+          },
+          {
+            "value": "venice",
+            "label": "Venice"
+          },
+          {
+            "value": "deepinfra",
+            "label": "DeepInfra"
+          },
+          {
+            "value": "vercel",
+            "label": "Vercel AI Gateway"
+          },
+          {
+            "value": "poe",
+            "label": "Poe"
           }
         ]
       },
@@ -194,6 +488,139 @@
         "label": "Provider order",
         "defaultValue": "[]",
         "description": "Set by dragging providers under Settings → Providers. JSON array of provider IDs; listed providers come first in that order in tiles, chips, and provider cycling, the rest follow."
+      },
+      {
+        "key": "dismissedProviders",
+        "type": "multiselect",
+        "label": "Providers not suggested",
+        "description": "Managed under Settings → Providers. Providers found on this computer that you chose not to monitor, so they are not suggested again. Turning a provider on removes it from this list.",
+        "defaultValue": [],
+        "options": [
+          {
+            "value": "claude",
+            "label": "Claude Code"
+          },
+          {
+            "value": "codex",
+            "label": "OpenAI Codex"
+          },
+          {
+            "value": "kimi",
+            "label": "Kimi Code"
+          },
+          {
+            "value": "opencode",
+            "label": "OpenCode Go"
+          },
+          {
+            "value": "antigravity",
+            "label": "Antigravity"
+          },
+          {
+            "value": "gemini",
+            "label": "Gemini CLI"
+          },
+          {
+            "value": "copilot",
+            "label": "GitHub Copilot"
+          },
+          {
+            "value": "cursor",
+            "label": "Cursor"
+          },
+          {
+            "value": "grok",
+            "label": "Grok CLI"
+          },
+          {
+            "value": "kiro",
+            "label": "Kiro"
+          },
+          {
+            "value": "jetbrains",
+            "label": "JetBrains AI"
+          },
+          {
+            "value": "factory",
+            "label": "Droid"
+          },
+          {
+            "value": "amp",
+            "label": "Amp"
+          },
+          {
+            "value": "kilo",
+            "label": "Kilo Code"
+          },
+          {
+            "value": "codebuff",
+            "label": "Codebuff"
+          },
+          {
+            "value": "huggingface",
+            "label": "Hugging Face"
+          },
+          {
+            "value": "zai",
+            "label": "Z.ai Coding Plan"
+          },
+          {
+            "value": "minimax",
+            "label": "MiniMax Coding Plan"
+          },
+          {
+            "value": "synthetic",
+            "label": "Synthetic"
+          },
+          {
+            "value": "chutes",
+            "label": "Chutes"
+          },
+          {
+            "value": "ollama",
+            "label": "Ollama Cloud"
+          },
+          {
+            "value": "warp",
+            "label": "Warp"
+          },
+          {
+            "value": "zenmux",
+            "label": "ZenMux"
+          },
+          {
+            "value": "clinepass",
+            "label": "Cline"
+          },
+          {
+            "value": "openrouter",
+            "label": "OpenRouter"
+          },
+          {
+            "value": "deepseek",
+            "label": "DeepSeek"
+          },
+          {
+            "value": "moonshot",
+            "label": "Moonshot"
+          },
+          {
+            "value": "venice",
+            "label": "Venice"
+          },
+          {
+            "value": "deepinfra",
+            "label": "DeepInfra"
+          },
+          {
+            "value": "vercel",
+            "label": "Vercel AI Gateway"
+          },
+          {
+            "value": "poe",
+            "label": "Poe"
+          }
+        ]
       },
       {
         "key": "barDisplayMode",
@@ -304,8 +731,33 @@
           "codex",
           "kimi",
           "opencode",
+          "antigravity",
+          "gemini",
+          "copilot",
+          "cursor",
+          "grok",
+          "kiro",
+          "jetbrains",
+          "factory",
+          "amp",
+          "kilo",
+          "codebuff",
+          "huggingface",
+          "zai",
+          "minimax",
+          "synthetic",
+          "chutes",
+          "ollama",
+          "warp",
+          "zenmux",
+          "clinepass",
           "openrouter",
-          "deepseek"
+          "deepseek",
+          "moonshot",
+          "venice",
+          "deepinfra",
+          "vercel",
+          "poe"
         ],
         "options": [
           {
@@ -325,12 +777,112 @@
             "label": "OpenCode Go"
           },
           {
+            "value": "antigravity",
+            "label": "Antigravity"
+          },
+          {
+            "value": "gemini",
+            "label": "Gemini CLI"
+          },
+          {
+            "value": "copilot",
+            "label": "GitHub Copilot"
+          },
+          {
+            "value": "cursor",
+            "label": "Cursor"
+          },
+          {
+            "value": "grok",
+            "label": "Grok CLI"
+          },
+          {
+            "value": "kiro",
+            "label": "Kiro"
+          },
+          {
+            "value": "jetbrains",
+            "label": "JetBrains AI"
+          },
+          {
+            "value": "factory",
+            "label": "Droid"
+          },
+          {
+            "value": "amp",
+            "label": "Amp"
+          },
+          {
+            "value": "kilo",
+            "label": "Kilo Code"
+          },
+          {
+            "value": "codebuff",
+            "label": "Codebuff"
+          },
+          {
+            "value": "huggingface",
+            "label": "Hugging Face"
+          },
+          {
+            "value": "zai",
+            "label": "Z.ai Coding Plan"
+          },
+          {
+            "value": "minimax",
+            "label": "MiniMax Coding Plan"
+          },
+          {
+            "value": "synthetic",
+            "label": "Synthetic"
+          },
+          {
+            "value": "chutes",
+            "label": "Chutes"
+          },
+          {
+            "value": "ollama",
+            "label": "Ollama Cloud"
+          },
+          {
+            "value": "warp",
+            "label": "Warp"
+          },
+          {
+            "value": "zenmux",
+            "label": "ZenMux"
+          },
+          {
+            "value": "clinepass",
+            "label": "Cline"
+          },
+          {
             "value": "openrouter",
             "label": "OpenRouter"
           },
           {
             "value": "deepseek",
             "label": "DeepSeek"
+          },
+          {
+            "value": "moonshot",
+            "label": "Moonshot"
+          },
+          {
+            "value": "venice",
+            "label": "Venice"
+          },
+          {
+            "value": "deepinfra",
+            "label": "DeepInfra"
+          },
+          {
+            "value": "vercel",
+            "label": "Vercel AI Gateway"
+          },
+          {
+            "value": "poe",
+            "label": "Poe"
           }
         ]
       },
@@ -360,7 +912,7 @@
         "max": 100000,
         "step": 0.5,
         "defaultValue": 5,
-        "description": "Warn when the money an OpenRouter or DeepSeek balance can still spend falls to this amount or below, in the balance's currency."
+        "description": "Warn when the money a prepaid balance can still spend falls to this amount or below, in the balance's own currency."
       },
       {
         "key": "creditCriticalUsd",

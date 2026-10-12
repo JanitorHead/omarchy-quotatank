@@ -20,6 +20,10 @@ Column {
   property string fontFamily: Style.font.family
   property string accountDetails: ""
   property var proxyProviders: []
+  // The local backend's latest payload ({ providers, detected, generatedAt }) and whether a refresh
+  // is running: Settings → Providers shows each provider's state from them.
+  property var usagePayload: null
+  property bool usageLoading: false
   property string proxyImplementation: ""
   property var costSources: []
   // "" is the index; otherwise one of the page ids below.
@@ -33,7 +37,15 @@ Column {
   readonly property bool percentageDisplay: String(value("barDisplayMode", "Percentages")) === "Percentages"
   readonly property var enabledProviders: UsageLogic.listOrEmpty(value("enabledProviders", UsageLogic.DEFAULT_SETTINGS.enabledProviders))
   readonly property var barProviders: UsageLogic.listOrEmpty(value("barProviders", UsageLogic.DEFAULT_SETTINGS.barProviders))
-  readonly property bool moneyMonitored: !proxyMode && (monitored("openrouter") || monitored("deepseek"))
+  readonly property var dismissedProviders: UsageLogic.listOrEmpty(value("dismissedProviders", UsageLogic.DEFAULT_SETTINGS.dismissedProviders))
+  readonly property var moneyProviderNames: {
+    var names = []
+    if (proxyMode) return names
+    for (var i = 0; i < UsageLogic.LOCAL_PROVIDERS.length; i++)
+      if (UsageLogic.LOCAL_PROVIDERS[i].money && monitored(UsageLogic.LOCAL_PROVIDERS[i].id)) names.push(UsageLogic.LOCAL_PROVIDERS[i].name)
+    return names
+  }
+  readonly property bool moneyMonitored: moneyProviderNames.length > 0
   readonly property var providerOptions: UsageLogic.orderProviders(proxyMode ? UsageLogic.listOrEmpty(proxyProviders) : UsageLogic.LOCAL_PROVIDERS, value("providerOrder", "[]"))
   readonly property var allProviderIds: {
     var ids = UsageLogic.LOCAL_PROVIDER_IDS.slice()
@@ -41,6 +53,19 @@ Column {
       if (!UsageLogic.contains(ids, proxyProviders[i].id)) ids.push(proxyProviders[i].id)
     return ids
   }
+  // Saving a key clears the backend's payload until the next refresh; placing providers from the last
+  // payload that arrived keeps the rows from jumping in the meantime.
+  property var lastPayload: null
+  readonly property var shownReadings: lastPayload ? UsageLogic.listOrEmpty(lastPayload.providers) : []
+  readonly property var shownDetected: lastPayload ? UsageLogic.listOrEmpty(lastPayload.detected) : []
+  readonly property var sections: UsageLogic.providerSections(proxyMode ? [] : providerOptions,
+    enabledProviders, dismissedProviders, shownReadings, shownDetected, settings)
+  // The draggable rows: every proxy provider, or the local providers in use.
+  readonly property var providerRows: proxyMode ? providerOptions : sections.listed
+  property string providerFilter: ""
+  readonly property int moreCount: sections.moreSignIns.length + sections.moreKeys.length
+  readonly property var moreSignIns: UsageLogic.filterProviders(sections.moreSignIns, providerFilter)
+  readonly property var moreKeys: UsageLogic.filterProviders(sections.moreKeys, providerFilter)
   readonly property var pages: [
     { id: "providers", title: "Providers", summary: providersSummary() },
     { id: "bar", title: "Menu bar", summary: menuBarSummary() },
@@ -54,8 +79,6 @@ Column {
     return "Settings"
   }
   readonly property string fuseboxRepositoryUrl: "https://github.com/DigitalPals/Fusebox"
-  readonly property string openrouterKeysUrl: "https://openrouter.ai/settings/keys"
-  readonly property string deepseekKeysUrl: "https://platform.deepseek.com/api_keys"
 
   // Changes are batched per control: { key: value }. The host persists them and reports back
   // through finishSave(), which also commits or discards a staged secret.
@@ -94,14 +117,29 @@ Column {
   }
 
   function toggleProvider(key, id) {
-    var selected = UsageLogic.listOrEmpty(value(key, []))
-    var result = []
-    for (var i = 0; i < allProviderIds.length; i++) {
-      var candidate = allProviderIds[i]
-      if (UsageLogic.contains(selected, candidate) !== (candidate === id)) result.push(candidate)
-    }
-    set(key, result)
+    var current = UsageLogic.listOrEmpty(value(key, UsageLogic.DEFAULT_SETTINGS[key] || []))
+    set(key, UsageLogic.withMember(current, id, !UsageLogic.contains(current, id), allProviderIds))
   }
+
+  // Monitoring a provider also gives it a menu bar chip and forgets an earlier dismissal. Turning one
+  // off declines it, so a provider found on this computer is not suggested again.
+  function setMonitored(id, on) {
+    var values = {
+      enabledProviders: UsageLogic.withMember(enabledProviders, id, on, allProviderIds),
+      dismissedProviders: UsageLogic.withMember(dismissedProviders, id, !on, allProviderIds)
+    }
+    if (on) values.barProviders = UsageLogic.withMember(barProviders, id, true, allProviderIds)
+    setMany(values)
+  }
+
+  function dismissProvider(id) {
+    set("dismissedProviders", UsageLogic.withMember(dismissedProviders, id, true, allProviderIds))
+  }
+
+  function rememberPayload() {
+    if (usagePayload && usagePayload.generatedAt) lastPayload = usagePayload
+  }
+  onUsagePayloadChanged: rememberPayload()
 
   // ---- provider order: the list model moves rows in place (delegates survive the move), and the
   // full order is saved when a drag ends or a key moves a row.
@@ -116,16 +154,20 @@ Column {
   // Rebuilds the rows from settings, unless they already show that order (or a drag is under way).
   function syncProviderList() {
     if (providerList.draggingId !== "") return
-    var options = providerOptions
-    var ids = options.map(function (option) { return String(option.id) })
+    var rows = providerRows
+    var ids = rows.map(function (row) { return String(row.id) })
     if (ids.join(",") === providerListIds().join(",")) return
     providerListModel.clear()
-    for (var i = 0; i < options.length; i++)
-      providerListModel.append({ providerId: String(options[i].id), name: String(options[i].name || options[i].id), money: options[i].money === true })
+    for (var i = 0; i < rows.length; i++)
+      providerListModel.append({ providerId: String(rows[i].id), name: String(rows[i].name || rows[i].id), money: rows[i].money === true })
   }
-  onProviderOptionsChanged: syncProviderList()
-  Component.onCompleted: syncProviderList()
+  onProviderRowsChanged: syncProviderList()
+  Component.onCompleted: {
+    rememberPayload()
+    syncProviderList()
+  }
 
+  // Only the rows on screen are saved; providers that join them later follow in their natural order.
   function saveProviderOrder() {
     set("providerOrder", JSON.stringify(providerListIds()))
   }
@@ -158,8 +200,10 @@ Column {
   function finishProviderDrag() {
     if (providerList.draggingId === "") return
     providerList.draggingId = ""
-    var current = providerOptions.map(function (option) { return String(option.id) }).join(",")
+    var current = providerRows.map(function (row) { return String(row.id) }).join(",")
     if (providerListIds().join(",") !== current) saveProviderOrder()
+    // Rows that changed while the drag held the list back appear now.
+    syncProviderList()
   }
 
   function open(pageId) {
@@ -180,6 +224,8 @@ Column {
     errorText = ""
     priceError = ""
     page = pageId || ""
+    providerFilter = ""
+    providerFilterField.text = ""
     servers.load(String(value("costT3Servers", "[]")))
     lastPricesJson = String(value("costPriceOverrides", "{}"))
     prices.begin(lastPricesJson)
@@ -372,7 +418,7 @@ Column {
       value: String(root.value("usageSource", "direct"))
       onChanged: function(next) { root.set("usageSource", next) }
     }
-    Hint { text: root.proxyMode ? "Limits come from every account on your " + root.proxyName + " server." : "Limits come from the CLIs you are signed in to on this computer, plus any API keys saved below." }
+    Hint { text: root.proxyMode ? "Limits come from every account on your " + root.proxyName + " server." : "Limits come from the CLIs, apps, and IDEs you are signed in to on this computer, plus API keys saved here or set in the environment." }
 
     Column {
       visible: root.proxyMode
@@ -428,11 +474,69 @@ Column {
       Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
     }
 
-    Row {
+    // One click to monitor what is already set up here; Ignore stops suggesting it.
+    Column {
+      objectName: "foundProviders"
+      visible: !root.proxyMode && root.sections.found.length > 0
       width: parent.width
-      Label { width: parent.width - monitorHeading.width - barHeading.width; text: "Provider"; font.bold: true }
+      spacing: Style.spacing.md
+
+      Label { text: "Found on this computer"; font.bold: true }
+      Repeater {
+        model: root.proxyMode ? [] : root.sections.found
+        delegate: Row {
+          id: foundRow
+          required property var modelData
+          width: parent.width
+          spacing: Style.spacing.sm
+          Label {
+            width: parent.width - foundMonitor.width - foundIgnore.width - parent.spacing * 2
+            anchors.verticalCenter: parent.verticalCenter
+            text: foundRow.modelData.name
+          }
+          Ui.Button {
+            id: foundIgnore
+            objectName: "ignore-" + foundRow.modelData.id
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Ignore"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            focusable: true
+            Accessible.name: "Do not suggest " + foundRow.modelData.name
+            onClicked: root.dismissProvider(foundRow.modelData.id)
+            onActiveFocusChanged: if (activeFocus) root.revealRequested(foundIgnore)
+          }
+          Ui.Button {
+            id: foundMonitor
+            objectName: "found-" + foundRow.modelData.id
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Monitor"
+            bordered: true
+            selected: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            focusable: true
+            Accessible.name: "Monitor " + foundRow.modelData.name
+            onClicked: root.setMonitored(foundRow.modelData.id, true)
+            onActiveFocusChanged: if (activeFocus) root.revealRequested(foundMonitor)
+          }
+        }
+      }
+      Hint { text: "Set up on this computer but not monitored. Ignored providers stay under More providers." }
+    }
+
+    Row {
+      visible: root.providerRows.length > 0
+      width: parent.width
+      Label { width: parent.width - monitorHeading.width - barHeading.width; text: root.proxyMode ? "Provider" : "Monitored"; font.bold: true }
       Label { id: monitorHeading; visible: !root.proxyMode; width: visible ? Style.space(82) : 0; text: "Monitor"; horizontalAlignment: Text.AlignHCenter }
       Label { id: barHeading; visible: root.percentageDisplay; width: visible ? Style.space(82) : 0; text: "Menu bar"; horizontalAlignment: Text.AlignHCenter }
+    }
+    Hint {
+      visible: !root.proxyMode && root.providerRows.length === 0
+      text: "Nothing monitored is set up yet. Sign in to a provider's CLI or app, or turn one on below."
     }
 
     // Rows reorder by dragging their grip (or arrow keys on a focused grip). The order is the one
@@ -457,6 +561,14 @@ Column {
         required property bool money
         required property int index
         readonly property bool on: root.proxyMode || UsageLogic.contains(root.enabledProviders, providerId)
+        readonly property var entry: root.proxyMode ? null : UsageLogic.localProvider(providerId)
+        readonly property bool hasKey: UsageLogic.keySaved(root.settings, providerId)
+        readonly property var reading: UsageLogic.readingFor(root.shownReadings, providerId)
+        readonly property var status: entry ? UsageLogic.providerStatus(entry, reading, hasKey, root.usageLoading) : null
+        // A provider that also has a sign-in of its own only needs the editor while that sign-in is
+        // not what connects it.
+        readonly property bool keyEditor: !!entry && entry.auth !== "signin"
+          && (entry.auth === "key" || hasKey || !reading || reading.status !== "ok")
         readonly property bool dragging: providerList.draggingId === providerId
         width: providerList.width
         height: rowContent.implicitHeight
@@ -529,10 +641,20 @@ Column {
                 onCanceled: root.finishProviderDrag()
               }
             }
-            Label {
+            Column {
               width: parent.width - grip.width - monitorSwitch.width - barSwitch.width - parent.spacing * 3
               anchors.verticalCenter: parent.verticalCenter
-              text: providerRow.name
+              spacing: Style.spacing.xxs
+              Label { text: providerRow.name }
+              // What the last refresh found: connected, or what is missing and how to fix it.
+              Hint {
+                objectName: "status-" + providerRow.providerId
+                visible: text !== ""
+                text: providerRow.status ? providerRow.status.text : ""
+                color: providerRow.status && providerRow.status.tone === "error" ? root.urgent : Qt.darker(root.foreground, 1.5)
+                maximumLineCount: 2
+                elide: Text.ElideRight
+              }
             }
             Toggle {
               id: monitorSwitch
@@ -541,7 +663,7 @@ Column {
               objectName: "monitor-" + providerRow.providerId
               Accessible.name: "Monitor " + providerRow.name
               checked: providerRow.on
-              onToggled: root.toggleProvider("enabledProviders", providerRow.providerId)
+              onToggled: root.setMonitored(providerRow.providerId, !providerRow.on)
             }
             Toggle {
               id: barSwitch
@@ -558,7 +680,7 @@ Column {
 
           // API-key providers: the key editor sits right under the switch that needs it.
           Column {
-            visible: providerRow.money && providerRow.on && !root.proxyMode
+            visible: providerRow.keyEditor && providerRow.on
             width: parent.width
             leftPadding: Style.spacing.xl
             spacing: Style.spacing.md
@@ -568,14 +690,19 @@ Column {
               objectName: providerRow.providerId + "KeyRow"
               label: "API key"
               settingKey: providerRow.providerId + "KeyFile"
-              hint: providerRow.providerId === "openrouter"
-                ? "Any OpenRouter key shows the balance, the key's spending limit, and spend. OPENROUTER_API_KEY in the environment takes precedence."
-                : "Shows the DeepSeek platform balance. DEEPSEEK_API_KEY in the environment takes precedence."
+              hint: providerRow.entry ? UsageLogic.keyHint(providerRow.entry) : ""
             }
             LinkButton {
               objectName: providerRow.providerId + "KeysLink"
+              visible: !!providerRow.entry && providerRow.entry.keysUrl !== ""
               text: "Create a key on " + providerRow.name + " ↗"
-              url: providerRow.providerId === "openrouter" ? root.openrouterKeysUrl : root.deepseekKeysUrl
+              url: providerRow.entry ? providerRow.entry.keysUrl : ""
+            }
+            // No key page to link to: the hint says where the key is created.
+            Hint {
+              visible: !!providerRow.entry && providerRow.entry.keysUrl === ""
+              width: parent.width - parent.leftPadding
+              text: providerRow.entry ? providerRow.entry.signIn : ""
             }
           }
 
@@ -639,7 +766,75 @@ Column {
         }
       }
     }
-    Hint { text: root.proxyMode ? "Every provider on the server is monitored. Choose which ones get a menu bar chip, and open Customize to read one differently." : "Monitor reads a provider and shows it in Limits. Menu bar adds its chip to the bar. Customize overrides the defaults for one provider." }
+    Hint {
+      visible: root.providerRows.length > 0
+      text: root.proxyMode ? "Every provider on the server is monitored. Choose which ones get a menu bar chip, and open Customize to read one differently." : "Monitor reads a provider and shows it in Limits. Menu bar adds its chip to the bar. Customize overrides the defaults for one provider."
+    }
+
+    // Monitored sign-ins that are not signed in: they appear on their own once they are, so they
+    // stay folded away instead of lengthening the list above.
+    SettingsSection {
+      id: waitingSection
+      objectName: "waitingProviders"
+      visible: !root.proxyMode && root.sections.waiting.length > 0
+      width: parent.width
+      title: "Waiting for a sign-in"
+      summary: String(root.sections.waiting.length)
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onRevealRequested: function(item) { root.revealRequested(item) }
+
+      Hint { text: "Monitored, and shown in Limits as soon as you sign in. Turn off the ones you do not use." }
+      Repeater {
+        model: root.proxyMode ? [] : root.sections.waiting
+        delegate: ProviderOption {
+          id: waitingOption
+          hint: UsageLogic.providerStatus(waitingOption.modelData,
+            UsageLogic.readingFor(root.shownReadings, waitingOption.modelData.id), false, root.usageLoading).text
+          keyEditable: waitingOption.modelData.auth === "both"
+        }
+      }
+    }
+
+    SettingsSection {
+      id: moreSection
+      objectName: "moreProviders"
+      visible: !root.proxyMode && root.moreCount > 0
+      width: parent.width
+      title: "More providers"
+      summary: String(root.moreCount)
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onRevealRequested: function(item) { root.revealRequested(item) }
+
+      SettingsField {
+        id: providerFilterField
+        objectName: "providerFilterField"
+        visible: root.moreCount > 8
+        width: parent.width
+        placeholderText: "Filter providers"
+        foreground: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        Accessible.name: "Filter providers"
+        onTextEdited: root.providerFilter = text
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+      Label { visible: root.moreSignIns.length > 0; text: "Sign-ins"; font.bold: true }
+      Repeater {
+        model: root.proxyMode ? [] : root.moreSignIns
+        delegate: ProviderOption {}
+      }
+      Label { visible: root.moreKeys.length > 0; text: "API keys"; font.bold: true; topPadding: Style.spacing.md }
+      Repeater {
+        model: root.proxyMode ? [] : root.moreKeys
+        delegate: ProviderOption {}
+      }
+      Hint {
+        visible: root.moreSignIns.length + root.moreKeys.length === 0
+        text: "No provider matches “" + root.providerFilter.trim() + "”."
+      }
+    }
   }
 
   // ---- Menu bar
@@ -802,7 +997,11 @@ Column {
         onApplied: function(entered) { root.set("creditCriticalUsd", entered) }
       }
     }
-    Hint { visible: root.moneyMonitored; text: "Amounts in the balance's currency: dollars for OpenRouter and DeepSeek USD accounts." }
+    Hint {
+      visible: root.moneyMonitored
+      text: "Compared with the " + UsageLogic.joinNames(root.moneyProviderNames) + (root.moneyProviderNames.length === 1 ? " balance" : " balances")
+        + ", each in its own currency."
+    }
   }
 
   // ---- Display
@@ -1544,21 +1743,89 @@ Column {
     onActiveFocusChanged: if (activeFocus) root.revealRequested(linkButton)
   }
 
+  // A provider outside the monitored rows: its name and Monitor switch, then its setup hint and,
+  // when it takes a key, where to get one. `keyEditable` offers a key editor on request, for a
+  // provider with a sign-in of its own that can use a key instead.
+  component ProviderOption: Column {
+    id: option
+    required property var modelData
+    property string hint: modelData.signIn
+    property bool keyEditable: false
+    property bool keyOpen: false
+    readonly property bool on: UsageLogic.contains(root.enabledProviders, modelData.id)
+    objectName: "provider-" + modelData.id
+    width: parent.width
+    spacing: Style.spacing.xs
+
+    Row {
+      width: parent.width
+      Label { width: parent.width - optionSwitch.width; anchors.verticalCenter: parent.verticalCenter; text: option.modelData.name }
+      Toggle {
+        id: optionSwitch
+        objectName: "monitor-" + option.modelData.id
+        width: Style.space(82)
+        Accessible.name: "Monitor " + option.modelData.name
+        checked: option.on
+        onToggled: root.setMonitored(option.modelData.id, !option.on)
+      }
+    }
+    Row {
+      width: parent.width
+      spacing: Style.spacing.sm
+      Hint {
+        width: parent.width - (optionLink.visible ? optionLink.width + parent.spacing : 0)
+        anchors.verticalCenter: parent.verticalCenter
+        text: option.hint
+      }
+      LinkButton {
+        id: optionLink
+        objectName: option.modelData.id + "KeysLink"
+        visible: option.modelData.keysUrl !== ""
+        text: "Get a key ↗"
+        url: option.modelData.keysUrl
+      }
+    }
+    Ui.Button {
+      id: addKeyButton
+      objectName: option.modelData.id + "AddKey"
+      visible: option.keyEditable && option.on && !option.keyOpen
+      text: "Save a key…"
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      fontSize: Style.font.caption
+      horizontalPadding: Style.spacing.sm
+      verticalPadding: Style.spacing.xs
+      focusable: true
+      onClicked: option.keyOpen = true
+      onActiveFocusChanged: if (activeFocus) root.revealRequested(addKeyButton)
+    }
+    KeyRow {
+      visible: option.keyOpen
+      objectName: option.modelData.id + "KeyRow"
+      label: "API key"
+      settingKey: option.modelData.id + "KeyFile"
+      hint: UsageLogic.keyHint(option.modelData)
+    }
+  }
+
   // ---- index summaries: what each page is set to, so the index already answers most questions
   function providersSummary() {
+    var rows = proxyMode ? providerOptions : sections.listed
     var names = []
     var shown = 0
-    for (var i = 0; i < providerOptions.length; i++) {
-      var id = providerOptions[i].id
+    for (var i = 0; i < rows.length; i++) {
+      var id = rows[i].id
       if (!monitored(id)) continue
-      names.push(UsageLogic.providerShortName(providerOptions[i]))
+      names.push(UsageLogic.providerShortName(rows[i]))
       if (UsageLogic.contains(barProviders, id)) shown++
     }
-    if (names.length === 0) return proxyMode ? proxyName + " · no providers yet" : "Nothing monitored"
+    var found = proxyMode ? 0 : sections.found.length
+    if (names.length === 0)
+      return proxyMode ? proxyName + " · no providers yet" : found > 0 ? found + " found on this computer" : "Nothing set up yet"
     var list = names.length <= 3 ? names.join(", ") : names.slice(0, 2).join(", ") + " +" + (names.length - 2)
     var customized = customizedCount()
     return (proxyMode ? proxyName + " · " : "") + list + (percentageDisplay ? " · " + shown + " in menu bar" : "")
-      + (customized > 0 ? " · " + customized + " customized" : "")
+      + (customized > 0 ? " · " + customized + " customized" : "") + (found > 0 ? " · " + found + " found" : "")
   }
 
   // ---- per-provider overrides: Show limits as, Limit shown, Second limit below

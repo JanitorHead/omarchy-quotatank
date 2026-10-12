@@ -72,7 +72,7 @@ Ui.BorderSurface {
       Item {
         id: figureGroup
         anchors.right: parent.right
-        width: limitFigure.implicitWidth + limitUnit.implicitWidth + Style.spacing.sm
+        width: limitFigure.implicitWidth + (limitUnit.visible ? limitUnit.implicitWidth + Style.spacing.sm : 0)
         height: limitFigure.implicitHeight
         baselineOffset: limitFigure.baselineOffset
         readonly property var shown: root.quotaMode === "Remaining"
@@ -91,6 +91,7 @@ Ui.BorderSurface {
 
         Text {
           id: limitUnit
+          visible: figureGroup.shown !== null && figureGroup.shown !== undefined
           anchors.left: limitFigure.right
           anchors.leftMargin: Style.spacing.sm
           anchors.baseline: limitFigure.baseline
@@ -167,7 +168,9 @@ Ui.BorderSurface {
       id: paceLine
       visible: root.window !== null
       width: parent.width
-      text: UsageLogic.paceStatusText(root.pace, root.quotaMode)
+      // Usage the provider does not report has no pace either; say so rather than suggest zero.
+      text: figureGroup.shown === null || figureGroup.shown === undefined
+        ? "Usage not reported" : UsageLogic.paceStatusText(root.pace, root.quotaMode)
       color: root.pace && root.pace.runsOut ? root.urgent : root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption

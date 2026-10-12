@@ -15,6 +15,7 @@ parser.add_argument("--state-dir")
 parser.add_argument("--source", default="direct")
 parser.add_argument("--cliproxy-url")
 parser.add_argument("--cliproxy-key-file")
+parser.add_argument("--key-file", action="append", default=[])
 args = parser.parse_args()
 
 # A singleton-backend instance in the QML contract deliberately gets bad
