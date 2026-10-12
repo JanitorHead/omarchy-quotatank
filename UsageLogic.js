@@ -205,11 +205,12 @@ function severity(provider, warningThreshold, criticalThreshold, remaining) {
 // second, so one choice works across providers that name windows differently
 // (`session` vs `5-hour limit`, `Weekly limit`, and so on). The accepted
 // spellings match the AI usage widget's `barWindow` setting, so the same value
-// works for either plugin on the command line.
+// works for either plugin on the command line. A monthly window that reports
+// its real calendar period runs 28 to 31 days, so any of those lengths counts.
 var WINDOW_SELECTORS = {
   session: { seconds: 18000, keywords: ["session", "5 hour", "5-hour", "hourly"] },
   weekly: { seconds: 604800, keywords: ["week"] },
-  monthly: { seconds: 2592000, keywords: ["month"] }
+  monthly: { seconds: 2592000, minSeconds: 2419200, maxSeconds: 2678400, keywords: ["month"] }
 }
 
 function normalizeBarWindow(value) {
@@ -424,7 +425,8 @@ function windowMatches(row, selector) {
   var spec = WINDOW_SELECTORS[selector]
   if (!spec || !row) return false
   var seconds = Number(row.windowSeconds)
-  if (isFinite(seconds) && seconds > 0) return seconds === spec.seconds
+  if (isFinite(seconds) && seconds > 0)
+    return spec.minSeconds !== undefined ? seconds >= spec.minSeconds && seconds <= spec.maxSeconds : seconds === spec.seconds
   var text = (String(row.id || "") + " " + String(row.label || "")).toLowerCase()
   for (var i = 0; i < spec.keywords.length; i++) {
     if (text.indexOf(spec.keywords[i]) !== -1) return true
@@ -511,21 +513,23 @@ function remainingForWindow(provider, selector) {
 
 // Cards and chips can report either side of the same allowance. `used` is what
 // provider dashboards show; `remaining` is what the warning thresholds gate on.
-// A window that reports only one side still yields the other.
+// A window that reports only one side still yields the other. A window whose usage
+// is unknown (null on both sides, e.g. a quota pool without a reported fraction)
+// stays unknown: Number(null) is 0, so it must never pass through Number() alone.
 function windowUsed(row) {
   if (!row) return null
-  var used = Number(row.used)
-  if (isFinite(used)) return clamp(used, 0, 100)
-  var remaining = Number(row.remaining)
-  return isFinite(remaining) ? clamp(100 - remaining, 0, 100) : null
+  var used = finiteOrNull(row.used)
+  if (used !== null) return clamp(used, 0, 100)
+  var remaining = finiteOrNull(row.remaining)
+  return remaining === null ? null : clamp(100 - remaining, 0, 100)
 }
 
 function windowRemaining(row) {
   if (!row) return null
-  var remaining = Number(row.remaining)
-  if (isFinite(remaining)) return clamp(remaining, 0, 100)
-  var used = Number(row.used)
-  return isFinite(used) ? clamp(100 - used, 0, 100) : null
+  var remaining = finiteOrNull(row.remaining)
+  if (remaining !== null) return clamp(remaining, 0, 100)
+  var used = finiteOrNull(row.used)
+  return used === null ? null : clamp(100 - used, 0, 100)
 }
 
 function usedFromRemaining(remaining) {
@@ -1046,26 +1050,71 @@ function providerMark(providerId) {
   return String(providerId || "?").charAt(0).toUpperCase()
 }
 
-// Providers the widget reads on this computer, in the order they appear everywhere. `short` is the
-// tile and chip name; `money` marks providers measured in a prepaid balance rather than percentages.
+// Providers the widget reads on this computer, in scripts/usage-fetch.py's PROVIDER_ORDER, which is
+// also their default order everywhere. `short` is the tile and chip name. `auth` says how one is set
+// up: "signin" (a CLI, app, or IDE sign-in the provider owns), "key" (an API key saved here or set in
+// `keyEnv`, the first environment variable the backend reads), or "both". `keysUrl` is where a key is
+// created; `signIn` is the one-line hint shown while a provider is not set up. `money` marks providers
+// that lead with a prepaid balance rather than percentages; `lightIcon` marks dark marks that ship an
+// `assets/<id>-light.svg` for light surfaces.
 var LOCAL_PROVIDERS = [
-  { id: "claude", name: "Claude Code", short: "Claude" },
-  { id: "codex", name: "OpenAI Codex", short: "Codex" },
-  { id: "kimi", name: "Kimi Code", short: "Kimi" },
-  { id: "opencode", name: "OpenCode Go", short: "OpenCode" },
-  { id: "openrouter", name: "OpenRouter", short: "OpenRouter", money: true },
-  { id: "deepseek", name: "DeepSeek", short: "DeepSeek", money: true }
-]
+  { id: "claude", name: "Claude Code", short: "Claude", auth: "signin", signIn: "Run `claude` and sign in" },
+  { id: "codex", name: "OpenAI Codex", short: "Codex", auth: "signin", signIn: "Run `codex login`", lightIcon: true },
+  { id: "kimi", name: "Kimi Code", short: "Kimi", auth: "signin", signIn: "Run `kimi login`" },
+  { id: "opencode", name: "OpenCode Go", short: "OpenCode", auth: "signin", keyEnv: "OPENCODE_GO_API_KEY", signIn: "Run `opencode auth login`" },
+  { id: "antigravity", name: "Antigravity", short: "Antigravity", auth: "signin", signIn: "Open Antigravity, or sign in with `agy`", lightIcon: true },
+  { id: "gemini", name: "Gemini CLI", short: "Gemini", auth: "signin", signIn: "Run `gemini` and sign in with Google" },
+  { id: "copilot", name: "GitHub Copilot", short: "Copilot", auth: "signin", keyEnv: "COPILOT_API_TOKEN", signIn: "Run `gh auth login`", lightIcon: true },
+  { id: "cursor", name: "Cursor", short: "Cursor", auth: "signin", signIn: "Sign in to Cursor or run `cursor-agent login`", lightIcon: true },
+  { id: "grok", name: "Grok CLI", short: "Grok", auth: "signin", signIn: "Run `grok login`", lightIcon: true },
+  { id: "kiro", name: "Kiro", short: "Kiro", auth: "signin", signIn: "Run `kiro-cli login`" },
+  { id: "jetbrains", name: "JetBrains AI", short: "JetBrains", auth: "signin", signIn: "Use AI Assistant in a JetBrains IDE", lightIcon: true },
+  { id: "factory", name: "Droid", short: "Droid", auth: "both", keyEnv: "FACTORY_API_KEY", keysUrl: "https://app.factory.ai/settings/api-keys", signIn: "Save a Factory API key", lightIcon: true },
+  { id: "amp", name: "Amp", short: "Amp", auth: "both", keyEnv: "AMP_API_KEY", keysUrl: "https://ampcode.com/settings", signIn: "Run `amp login` or save a key" },
+  { id: "kilo", name: "Kilo Code", short: "Kilo", auth: "both", keyEnv: "KILO_API_KEY", keysUrl: "https://app.kilo.ai/profile", signIn: "Run `kilo auth login` or save a key", lightIcon: true },
+  { id: "codebuff", name: "Codebuff", short: "Codebuff", auth: "both", keyEnv: "CODEBUFF_API_KEY", keysUrl: "https://www.codebuff.com/profile", signIn: "Run `codebuff login` or save a key", lightIcon: true },
+  { id: "huggingface", name: "Hugging Face", short: "Hugging Face", auth: "both", keyEnv: "HF_TOKEN", keysUrl: "https://huggingface.co/settings/tokens", signIn: "Run `hf auth login` or save a token" },
+  { id: "zai", name: "Z.ai Coding Plan", short: "Z.ai", auth: "key", keyEnv: "Z_AI_API_KEY", keysUrl: "https://z.ai/manage-apikey/apikey-list", signIn: "Save a Z.ai API key", lightIcon: true },
+  { id: "minimax", name: "MiniMax Coding Plan", short: "MiniMax", auth: "key", keyEnv: "MINIMAX_CODING_API_KEY", keysUrl: "https://platform.minimax.io/console/plan", signIn: "Save a MiniMax Subscription Key (it starts with sk-cp-)" },
+  { id: "synthetic", name: "Synthetic", short: "Synthetic", auth: "key", keyEnv: "SYNTHETIC_API_KEY", keysUrl: "https://synthetic.new/user-settings/api", signIn: "Save a Synthetic API key", lightIcon: true },
+  { id: "chutes", name: "Chutes", short: "Chutes", auth: "key", keyEnv: "CHUTES_API_KEY", keysUrl: "https://chutes.ai/app/settings/api-keys", signIn: "Save a Chutes API key", lightIcon: true },
+  { id: "ollama", name: "Ollama Cloud", short: "Ollama", auth: "key", keyEnv: "OLLAMA_API_KEY", keysUrl: "https://ollama.com/settings/keys", signIn: "Save an Ollama API key", lightIcon: true },
+  { id: "warp", name: "Warp", short: "Warp", auth: "key", keyEnv: "WARP_API_KEY", keysUrl: "https://oz.warp.dev/settings", signIn: "Save a personal Warp API key (Warp → Settings → Cloud platform → API keys)" },
+  { id: "zenmux", name: "ZenMux", short: "ZenMux", auth: "key", keyEnv: "ZENMUX_MANAGEMENT_API_KEY", keysUrl: "https://zenmux.ai/platform/management", signIn: "Save a ZenMux management key", lightIcon: true },
+  { id: "clinepass", name: "Cline", short: "Cline", auth: "key", keyEnv: "CLINE_API_KEY", keysUrl: "https://app.cline.bot/dashboard/account?tab=api-keys", signIn: "Save a Cline API key", lightIcon: true },
+  { id: "openrouter", name: "OpenRouter", short: "OpenRouter", auth: "key", money: true, keyEnv: "OPENROUTER_API_KEY", keysUrl: "https://openrouter.ai/settings/keys", signIn: "Save an OpenRouter key" },
+  { id: "deepseek", name: "DeepSeek", short: "DeepSeek", auth: "key", money: true, keyEnv: "DEEPSEEK_API_KEY", keysUrl: "https://platform.deepseek.com/api_keys", signIn: "Save a DeepSeek key" },
+  { id: "moonshot", name: "Moonshot", short: "Moonshot", auth: "key", money: true, keyEnv: "MOONSHOT_API_KEY", keysUrl: "https://platform.kimi.ai/console/api-keys", signIn: "Save a Moonshot key", lightIcon: true },
+  { id: "venice", name: "Venice", short: "Venice", auth: "key", money: true, keyEnv: "VENICE_API_KEY", keysUrl: "https://venice.ai/settings/api", signIn: "Save a Venice Admin API key (inference keys cannot read the balance)", lightIcon: true },
+  { id: "deepinfra", name: "DeepInfra", short: "DeepInfra", auth: "key", money: true, keyEnv: "DEEPINFRA_API_KEY", keysUrl: "https://deepinfra.com/dash/api_keys", signIn: "Save a DeepInfra key", lightIcon: true },
+  { id: "vercel", name: "Vercel AI Gateway", short: "Vercel", auth: "key", money: true, keyEnv: "AI_GATEWAY_API_KEY", keysUrl: "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai-gateway%2Fapi-keys&title=AI+Gateway+API+Keys", signIn: "Save an AI Gateway key", lightIcon: true },
+  { id: "poe", name: "Poe", short: "Poe", auth: "key", money: true, keyEnv: "POE_API_KEY", keysUrl: "https://poe.com/api/keys", signIn: "Save a Poe API key" }
+].map(function (entry) {
+  // Every entry carries every field, so QML bindings never read `undefined` as text.
+  return Object.assign({ money: false, keyEnv: "", keysUrl: "", lightIcon: false }, entry)
+})
 var LOCAL_PROVIDER_IDS = LOCAL_PROVIDERS.map(function (entry) { return entry.id })
+// Providers whose key can be saved in settings, as the `<id>KeyFile` setting.
+var KEY_PROVIDER_IDS = providerIds(function (entry) { return entry.auth !== "signin" })
+
+function providerIds(keep) {
+  var result = []
+  for (var i = 0; i < LOCAL_PROVIDERS.length; i++)
+    if (keep(LOCAL_PROVIDERS[i])) result.push(LOCAL_PROVIDERS[i].id)
+  return result
+}
 
 // Preferences Settings → Advanced → Reset restores, with their defaults (the same values as
 // manifest.json). Connections and secrets are not here, so a reset never disconnects anything:
 // the source, server URLs, saved keys and tokens, T3 servers, and custom model prices are kept.
-// CLI providers are monitored by default; a provider without a sign-in simply does not appear.
-// API-key providers stay off until a key is saved, and every monitored provider gets a chip.
+// Every provider with a sign-in of its own is monitored by default; one that is not signed in
+// simply does not appear. API-key-only providers stay off until turned on, and every monitored
+// provider gets a chip. `dismissedProviders` lists providers the user chose not to monitor, so
+// one found on this computer is not suggested again.
 var DEFAULT_SETTINGS = {
-  enabledProviders: ["claude", "codex", "kimi", "opencode"],
-  barProviders: ["claude", "codex", "kimi", "opencode", "openrouter", "deepseek"],
+  enabledProviders: providerIds(function (entry) { return entry.auth !== "key" }),
+  barProviders: LOCAL_PROVIDER_IDS.slice(),
+  dismissedProviders: [],
   providerOrder: "[]",
   providerQuotaModes: "{}",
   barProviderLimits: "{}",
@@ -1112,24 +1161,193 @@ function providerShortName(provider) {
   return entry ? entry.short : String(provider && (provider.name || provider.id) || "")
 }
 
-// Brand colour per provider. The cost chart always uses these; the bar and Limits use them when providerColors is on.
+// Brand colour per provider. The cost chart always uses these; the bar and Limits use them when
+// providerColors is on. They are mid-tones, so a chip stays readable on dark and light bars, and they
+// stay apart from one another; providers whose mark is plain black or white get a hue of their own.
 var PROVIDER_COLORS = {
   claude: "#d97757",
   codex: "#10a37f",
   kimi: "#eab308",
   opencode: "#a78bfa",
+  antigravity: "#708fe6",
+  gemini: "#8e75b2",
+  copilot: "#3fb950",
+  cursor: "#94a3b8",
+  grok: "#a8a29e",
+  kiro: "#9046ff",
+  jetbrains: "#d8188b",
+  factory: "#cb720b",
+  amp: "#d5818c",
+  kilo: "#b8a01c",
+  codebuff: "#8eb620",
+  huggingface: "#fb923c",
+  zai: "#157cc1",
+  minimax: "#e73562",
+  synthetic: "#e25ff7",
+  chutes: "#20b6b6",
+  ollama: "#cfa16e",
+  warp: "#01a4ff",
+  zenmux: "#e670b7",
+  clinepass: "#0cb9e4",
   openrouter: "#6467f2",
-  deepseek: "#4d6bfe"
+  deepseek: "#4d6bfe",
+  moonshot: "#64759a",
+  venice: "#e5322d",
+  deepinfra: "#3692a1",
+  vercel: "#787878",
+  poe: "#c026d3"
+}
+
+// ---- Settings → Providers (local mode)
+
+// The latest reading of one provider in a backend payload's `providers`, or null.
+function readingFor(readings, providerId) {
+  var list = listOrEmpty(readings)
+  for (var i = 0; i < list.length; i++)
+    if (list[i] && list[i].id === providerId) return list[i]
+  return null
+}
+
+// Whether a private key file is saved for a provider (its `<id>KeyFile` setting).
+function keySaved(settings, providerId) {
+  var path = settings ? settings[String(providerId) + "KeyFile"] : ""
+  return path !== undefined && path !== null && String(path).trim() !== ""
+}
+
+// `list` with `id` present or absent, in `order`; ids that `order` does not know are dropped.
+function withMember(list, id, present, order) {
+  var result = []
+  var ids = listOrEmpty(order)
+  for (var i = 0; i < ids.length; i++)
+    if (ids[i] === id ? present : contains(list, ids[i])) result.push(ids[i])
+  return result
+}
+
+// Providers set up on this computer (the backend's `detected`) that are neither monitored nor
+// dismissed, in registry order: what Settings and Limits suggest.
+function foundProviders(detected, enabled, dismissed) {
+  var result = []
+  for (var i = 0; i < LOCAL_PROVIDERS.length; i++) {
+    var id = LOCAL_PROVIDERS[i].id
+    if (contains(detected, id) && !contains(enabled, id) && !contains(dismissed, id)) result.push(LOCAL_PROVIDERS[i])
+  }
+  return result
+}
+
+// Settings → Providers places every provider once, so 31 of them never read as one long list:
+// - listed: monitored and in use (connected, failing, keyed, found here, or not checked yet), as the
+//   draggable rows, in `ordered` (the registry in the saved order);
+// - waiting: monitored, but the last check found no sign-in; folded away until one appears, which
+//   is how every default sign-in provider a user does not have stays out of sight;
+// - found: set up on this computer but not monitored, offered with one click;
+// - moreSignIns / moreKeys: everything else, in registry order.
+function providerSections(ordered, enabled, dismissed, readings, detected, settings) {
+  var sections = { listed: [], waiting: [], found: foundProviders(detected, enabled, dismissed), moreSignIns: [], moreKeys: [] }
+  var rows = listOrEmpty(ordered)
+  for (var i = 0; i < rows.length; i++) {
+    var entry = rows[i]
+    if (!contains(enabled, entry.id)) continue
+    var reading = readingFor(readings, entry.id)
+    var inUse = entry.auth === "key" || keySaved(settings, entry.id) || contains(detected, entry.id)
+      || !reading || reading.errorKind !== "no_credentials"
+    sections[inUse ? "listed" : "waiting"].push(entry)
+  }
+  for (var j = 0; j < LOCAL_PROVIDERS.length; j++) {
+    var other = LOCAL_PROVIDERS[j]
+    if (contains(enabled, other.id) || sections.found.indexOf(other) !== -1) continue
+    sections[other.auth === "key" ? "moreKeys" : "moreSignIns"].push(other)
+  }
+  return sections
+}
+
+var STATUS_FALLBACKS = {
+  rate_limited: "Rate limited",
+  timeout: "Timed out",
+  network: "Offline",
+  malformed: "Unreadable usage data",
+  http: "Provider error",
+  config: "Setup problem",
+  cli_unavailable: "CLI not found"
+}
+
+// The line under a monitored provider in Settings: what the last check found and, when something is
+// missing, what to do. `tone` is "ok", "muted", or "error". A saved key never reports a missing
+// sign-in, so such a reading predates the key and the provider reads as still being checked.
+function providerStatus(entry, reading, hasKey, checking) {
+  var pending = { text: checking ? "Checking…" : "Not checked yet", tone: "muted" }
+  if (!reading) return pending
+  if (reading.status === "ok") {
+    var plan = String(reading.plan || "")
+    return { text: "Connected" + (plan !== "" ? " · " + plan : ""), tone: "ok" }
+  }
+  if (reading.status !== "error") return { text: "", tone: "muted" }
+  var kind = String(reading.errorKind || "")
+  if (kind === "no_credentials") {
+    if (hasKey) return pending
+    return entry.auth === "key" ? { text: "No key saved", tone: "muted" }
+      : { text: "Not signed in — " + entry.signIn, tone: "muted" }
+  }
+  if (kind === "expired")
+    return entry.auth === "key" || hasKey ? { text: "Key rejected", tone: "error" }
+      : { text: "Sign-in expired — " + entry.signIn, tone: "error" }
+  var message = String(reading.message || "")
+  if (message !== "") return { text: message, tone: "error" }
+  return { text: Object.prototype.hasOwnProperty.call(STATUS_FALLBACKS, kind) ? STATUS_FALLBACKS[kind] : "Error", tone: "error" }
+}
+
+// What the key editor says: the environment always wins, and for a provider with a sign-in of its
+// own a saved key replaces that sign-in.
+function keyHint(entry) {
+  return (entry.auth === "both" ? "Optional: used instead of the sign-in. " : "")
+    + (entry.keyEnv ? entry.keyEnv + " in the environment takes precedence." : "")
+}
+
+// Providers whose name, short name, or id contains `text`, ignoring case; all of them when blank.
+function filterProviders(entries, text) {
+  var needle = String(text || "").trim().toLowerCase()
+  var list = listOrEmpty(entries)
+  var result = []
+  for (var i = 0; i < list.length; i++) {
+    var entry = list[i]
+    var haystack = (String(entry.name) + " " + String(entry.short) + " " + String(entry.id)).toLowerCase()
+    if (needle === "" || haystack.indexOf(needle) !== -1) result.push(entry)
+  }
+  return result
+}
+
+// "A", "A and B", "A, B and C".
+function joinNames(names) {
+  var list = listOrEmpty(names)
+  if (list.length <= 1) return list.length ? String(list[0]) : ""
+  return Array.prototype.slice.call(list, 0, -1).join(", ") + " and " + list[list.length - 1]
+}
+
+// The Limits view's pointer to Settings: "Gemini CLI and GitHub Copilot found on this computer";
+// past three providers, "A, B and 2 more found on this computer". Empty when nothing is found.
+function foundSummary(entries) {
+  var list = listOrEmpty(entries)
+  if (list.length === 0) return ""
+  var names = []
+  var shown = list.length > 3 ? 2 : list.length
+  for (var i = 0; i < shown; i++) names.push(list[i].name)
+  if (list.length > shown) names.push((list.length - shown) + " more")
+  return joinNames(names) + " found on this computer"
 }
 
 var CURRENCY_PREFIX = { USD: "$", EUR: "€", GBP: "£", CNY: "¥" }
 
 // "$1,234.56" / "¥12.00": grouped the same way Qt.locale("en_US") does, without depending on the
 // QML engine, so the formatter stays a pure function. Tiny nonzero amounts keep four decimals.
+// A code that is not a three-letter currency is a unit such as POINTS or CREDITS, whose balances
+// run to millions; it reads "1.25M points", which keeps a chip short.
 function formatMoney(value, currency) {
   if (value === null || value === undefined || !isFinite(Number(value))) return "—"
   var amount = Number(value)
   var code = String(currency || "USD").toUpperCase()
+  if (!/^[A-Z]{3}$/.test(code)) {
+    var size = Math.abs(amount)
+    return (amount < 0 ? "-" : "") + (size >= 1000 ? formatTokens(size) : trimNumber(size)) + " " + code.toLowerCase()
+  }
   var prefix = Object.prototype.hasOwnProperty.call(CURRENCY_PREFIX, code) ? CURRENCY_PREFIX[code] : code + " "
   if (Math.abs(amount) > 0 && Math.abs(amount) < 0.01) return (amount < 0 ? "-" : "") + prefix + Math.abs(amount).toFixed(4)
   var parts = Math.abs(amount).toFixed(2).split(".")

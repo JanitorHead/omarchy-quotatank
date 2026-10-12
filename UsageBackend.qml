@@ -24,11 +24,21 @@ Item {
   readonly property string usageSource: String(setting("usageSource", "direct")) === "cliproxy" ? "cliproxy" : "direct"
   readonly property string cliproxyUrl: String(setting("cliproxyUrl", "http://127.0.0.1:8317"))
   readonly property string cliproxyKeyFile: String(setting("cliproxyKeyFile", ""))
-  readonly property string openrouterKeyFile: String(setting("openrouterKeyFile", ""))
-  readonly property string deepseekKeyFile: String(setting("deepseekKeyFile", ""))
+  // Private key files saved from settings, one `[id, path]` pair per API-key provider that has one.
+  readonly property var keyFiles: {
+    var result = []
+    for (var i = 0; i < UsageLogic.KEY_PROVIDER_IDS.length; i++) {
+      var id = UsageLogic.KEY_PROVIDER_IDS[i]
+      var path = String(setting(id + "KeyFile", "")).trim()
+      if (path !== "") result.push([id, path])
+    }
+    return result
+  }
   readonly property var providers: payload ? UsageLogic.listOrEmpty(payload.providers) : []
+  // Providers set up on this computer, monitored or not; Settings offers the ones not monitored yet.
+  readonly property var detected: payload ? UsageLogic.listOrEmpty(payload.detected) : []
   readonly property string proxyImplementation: String(payload && payload.proxyImplementation || "")
-  readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl, cliproxyKeyFile, openrouterKeyFile, deepseekKeyFile])
+  readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl, cliproxyKeyFile, keyFiles])
   readonly property string scriptPath: localPath(Qt.resolvedUrl("scripts/usage-fetch.py"))
   readonly property double nextRefreshAt: lastAttemptAt > 0
     ? lastAttemptAt + refreshIntervalSec * 1000 : 0
@@ -85,8 +95,7 @@ Item {
       if (cliproxyKeyFile.trim() !== "") command.push("--cliproxy-key-file", cliproxyKeyFile.trim())
     }
     if (usageSource !== "cliproxy") {
-      if (openrouterKeyFile.trim() !== "") command.push("--openrouter-key-file", openrouterKeyFile.trim())
-      if (deepseekKeyFile.trim() !== "") command.push("--deepseek-key-file", deepseekKeyFile.trim())
+      for (var i = 0; i < keyFiles.length; i++) command.push("--key-file", keyFiles[i][0] + "=" + keyFiles[i][1])
     }
     fetchProcess.command = command
     fetchProcess.connectionId = connectionId

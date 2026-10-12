@@ -8,7 +8,7 @@ import qs.Ui as Ui
 
 // Provider overview in Limits: one tile per provider with its logo, name, most pressing
 // figure, and a mini meter. Every provider's state is visible at once; a click selects it.
-// Options: { value, label, name, iconUrl, figure, unit, fill, alert, failed }.
+// Options: { value, label, name, iconUrl, mark, figure, unit, fill, alert, failed }.
 Flow {
   id: root
 
@@ -18,6 +18,10 @@ Flow {
   property color urgent: Commons.Color.urgent
   property string fontFamily: Style.font.family
   property real cardRadius: 0
+  // Past six providers the tiles get smaller figures and padding, so more fit in each row and the
+  // overview does not push the limits far down.
+  readonly property bool dense: options.length > 6
+  readonly property real tilePadding: dense ? Style.spacing.md : Style.spacing.lg
   // Adaptive grid: every tile must fit the longest provider name (logo included) and figure, so the
   // row holds as many tiles as fit at that width. Rows are then balanced (five tiles that fit four
   // per row become 3 + 2, not 4 + 1), and each row stretches its tiles to the full width.
@@ -29,7 +33,7 @@ Flow {
       var figure = option.failed ? labelMetrics.advanceWidth(String(option.figure || "")) : figureMetrics.advanceWidth(String(option.figure || ""))
       widest = Math.max(widest, label, figure)
     }
-    return Math.ceil(widest) + 2 * Style.spacing.lg + 2 * Style.spacing.hairline
+    return Math.ceil(widest) + 2 * tilePadding + 2 * Style.spacing.hairline
   }
   readonly property int fitColumns: Math.max(1, Math.floor((width + spacing) / (minTileWidth + spacing)))
   readonly property int rows: Math.max(1, Math.ceil(options.length / Math.max(1, Math.min(fitColumns, options.length))))
@@ -46,7 +50,7 @@ Flow {
   FontMetrics {
     id: figureMetrics
     font.family: root.fontFamily
-    font.pixelSize: Style.font.heading
+    font.pixelSize: root.dense ? Style.font.body : Style.font.heading
     font.bold: true
   }
   signal changed(string value)
@@ -69,7 +73,7 @@ Flow {
       width: root.tileWidth
       implicitHeight: tileContent.implicitHeight + contentTopInset + contentBottomInset
       radius: root.cardRadius
-      padding: Style.spacing.lg
+      padding: root.tilePadding
       color: selected ? root.alpha(Commons.Color.accent, 0.12)
         : tileMouse.containsMouse ? root.alpha(root.foreground, 0.06) : "transparent"
       borderSpec: selected
@@ -122,6 +126,17 @@ Flow {
               colorization: 1.0
               colorizationColor: tile.selected ? Commons.Color.accent : tile.figureColor
             }
+
+            // A provider without a mark file keeps its letter instead of an empty slot.
+            Text {
+              anchors.centerIn: parent
+              visible: markImage.status !== Image.Ready
+              text: String(tile.modelData.mark || "")
+              color: tile.selected ? Commons.Color.accent : tile.figureColor
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
           }
 
           Text {
@@ -150,7 +165,7 @@ Flow {
             text: tile.modelData.figure
             color: tile.figureColor
             font.family: root.fontFamily
-            font.pixelSize: tile.modelData.failed ? Style.font.bodySmall : Style.font.heading
+            font.pixelSize: tile.modelData.failed ? Style.font.bodySmall : root.dense ? Style.font.body : Style.font.heading
             font.bold: true
             fontSizeMode: tile.modelData.failed ? Text.FixedSize : Text.HorizontalFit
             minimumPixelSize: Style.font.bodySmall
