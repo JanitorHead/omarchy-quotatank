@@ -11,8 +11,9 @@
    hidden. Crop to the widget; never publish unrelated desktop content or account
    tooltips. Label fixture examples in the README.
    Update root `preview.png` separately: the marketplace reads this image, not
-   the README gallery. The current 1920×1080 composition uses the title, the
-   menu bar chips, the Claude Code Limits panel, and Costs. Check both the full image and a small
+   the README gallery. The current 1920×1080 composition uses the title, a short
+   provider tagline, the Limits panel with eight provider tiles, and the Providers
+   settings page. Check both the full image and a small
    landscape crop so the marketplace card retains the title and main views.
 6. Push the release commit, create an annotated `vX.Y.Z` tag, and publish release
    notes from `CHANGELOG.md`.

@@ -858,4 +858,20 @@ assert.equal(context.foundSummary(providerEntries("gemini", "copilot", "cursor")
 assert.equal(context.foundSummary(providerEntries("gemini", "copilot", "cursor", "kiro")), "Gemini CLI, GitHub Copilot and 2 more found on this computer");
 console.log("Provider settings: passed");
 
+// Chips in the bar: the providers closest to a limit stay, in their usual order; the rest fold away.
+const chipRow = (id, remaining) => ({ id, remaining });
+const chipPressure = (row) => row.remaining;
+const chipIds = (rows) => Array.from(rows, (row) => row.id);
+const chipRows = [chipRow("claude", 80), chipRow("codex", 5), chipRow("gemini", 60), chipRow("copilot", 30), chipRow("cursor", 90)];
+const capped = context.limitChips(chipRows, 3, chipPressure);
+assert.deepEqual(chipIds(capped.shown), ["codex", "gemini", "copilot"], "the three under most pressure, in bar order");
+assert.deepEqual(chipIds(capped.hidden), ["claude", "cursor"], "the rest go to the overflow chip");
+assert.deepEqual(chipIds(context.limitChips(chipRows, 0, chipPressure).shown), chipIds(chipRows), "0 shows every chip");
+assert.equal(context.limitChips(chipRows, 5, chipPressure).hidden.length, 0, "a cap the bar does not reach hides nothing");
+assert.deepEqual(chipIds(context.limitChips([chipRow("a", 50), chipRow("b", 50), chipRow("c", 50)], 2, chipPressure).shown),
+  ["a", "b"], "ties keep the earlier provider, so chips do not shuffle");
+assert.deepEqual(chipIds(context.limitChips([chipRow("a", null), chipRow("b", 40)], 1, (row) => row.remaining === null ? NaN : row.remaining).shown),
+  ["b"], "unknown pressure counts as untouched");
+console.log("Chip cap: passed");
+
 console.log("UsageLogic.js: all assertions passed");

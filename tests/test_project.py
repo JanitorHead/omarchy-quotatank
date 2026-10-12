@@ -53,7 +53,7 @@ class ProjectContractTests(unittest.TestCase):
             "warningThreshold", "criticalThreshold", "liveAccountActivity",
             "usageSource", "cliproxyUrl", "cliproxyKeyFile", "hideAccountEmails", "squareUsageCards", "providerColors", "notifyLimitThresholds", "costPriceOverrides",
             "costLocalProviders", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers",
-            "creditWarningUsd", "creditCriticalUsd", "hideExhaustedProviders", "providerQuotaModes", "providerOrder", "dismissedProviders",
+            "creditWarningUsd", "creditCriticalUsd", "hideExhaustedProviders", "barMaxChips", "providerQuotaModes", "providerOrder", "dismissedProviders",
         } | key_files)
         self.assertEqual(set(manifest["barWidget"]["defaults"]), keys, "every setting has a default")
 

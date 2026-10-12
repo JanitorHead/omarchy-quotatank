@@ -4,17 +4,31 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 1.6.0
 
 ### Added
 
-- **Reset to defaults** under Settings → Advanced. It asks once, in place, and says how many settings differ. Preferences go back to their defaults, including provider order and Customize overrides; the source, server URLs, saved keys and tokens, T3 servers, and custom prices are kept.
+- **25 more providers.** Sign-ins read on this computer: **Antigravity** (natively now, from the running app's or IDE's language server or `agy`'s usage report), **Gemini CLI**, **GitHub Copilot**, **Cursor**, **Grok CLI**, **Kiro**, **JetBrains AI**, **Droid**, **Amp**, **Kilo Code**, **Codebuff**, and **Hugging Face**. API keys: **Z.ai Coding Plan** (and BigModel), **MiniMax Coding Plan**, **Synthetic**, **Chutes**, **Ollama Cloud**, **Warp**, **Cline**, **ZenMux**, **Moonshot**, **Venice**, **DeepInfra**, **Vercel AI Gateway**, and **Poe**. Every provider is read-only and never writes authentication state; Gemini CLI refreshes an expired access token in memory only. Claude Code, Codex, OpenCode Go, OpenRouter, and Copilot are checked against live accounts; the rest are tested against recorded responses.
+- **Found on this computer.** Each refresh checks, without network calls, which providers are set up here. Settings → Providers offers the ones not monitored yet with **Monitor** and **Ignore**, and Limits names them in one quiet line that opens that page.
+- **Provider status in Settings.** Each monitored provider says what the last check found: connected with its plan, not signed in with the command that fixes it, a rejected key, or the error.
+- **Reset to defaults** under Settings → Advanced. It asks once, in place, and says how many settings differ. Preferences go back to their defaults, including provider order, Customize overrides, and ignored providers; the source, server URLs, saved keys and tokens, T3 servers, and custom prices are kept.
+- **Chips in the bar** (`barMaxChips`, Menu bar, four by default): past that many, the bar keeps the providers closest to a limit and folds the rest into a `+N` chip, so a long provider list never pushes into the clock.
+- `configureProviders` IPC call, which opens Settings → Providers.
 
 ### Changed
 
+- **Settings → Providers stays short.** Monitored providers in use come first; monitored sign-ins that are not signed in fold into **Waiting for a sign-in**, and everything else into **More providers**, grouped as sign-ins and API keys, with a filter and a **Get a key ↗** link each. Any provider that takes a key gets the key editor; `<id>KeyFile` holds each saved key, and the backend takes `--key-file <id>=<path>`.
 - **Providers reorder by dragging** a six-dot grip at the start of each row, with the open-hand cursor; a focused grip also moves with the arrow keys. The ▲ ▼ buttons are gone.
 - **Pacing reworked.** The tick and the ahead/behind badge need only the clock, so they show as soon as a limit has usage, including while a 5-hour limit is still collecting samples or its data is stale. Weekly and monthly limits now project from this window's average (over at least a day) blended evenly with the last 24 hours, instead of a two-hour recent rate: a single busy hour no longer predicts a weekly run-out, a quiet weekend no longer hides a heavy week, and a weekly projection works on the first refresh without history. Limits of a day or less keep following their recent rate, with a half-life of an eighth of the window (about 40 minutes for a 5-hour session) instead of two hours. The tick tooltip names the basis (`At your recent rate` or `At this window's pace`), and the pacing help explains both.
-- **Defaults**: every provider is allowed a menu bar chip, so OpenRouter and DeepSeek appear in the bar as soon as they are monitored, and local OpenCode history joins Claude Code and Codex in Costs. A provider with no history or no sign-in still shows nothing.
+- **Defaults**: every provider with a sign-in of its own is monitored and shows up once it is signed in; API-key providers stay off. Every provider is allowed a menu bar chip, and local OpenCode history joins Claude Code and Codex in Costs.
+- With many providers, tiles in Limits get a smaller figure and padding so more fit in a row.
+- Low-balance alerts cover every prepaid provider. Balances in points or credits read as such (`1.25M points`), and credit packs beside a plan never raise a low-balance alert.
+
+### Fixed
+
+- A limit whose usage is not reported (`used: null`) showed as 0% used. It now shows no meter and says `Usage not reported`.
+- In CLIProxyAPI mode, OpenCode, OpenRouter, and DeepSeek accounts were looked up as Antigravity; they now read as unsupported like other providers without a quota lookup.
+- A chip no longer repeats the same limit on both lines when the most constrained limit is also the one picked for the second line.
 
 ## 1.5.3
 
@@ -306,6 +320,7 @@ All notable changes to this project will be documented here. The format follows
   for horizontal and vertical bars.
 - Fixture, contract, QML lint, and live Quickshell runtime tests.
 
+[1.6.0]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.6.0
 [1.5.3]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.3
 [1.5.2]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.2
 [1.5.1]: https://github.com/JanitorHead/omarchy-quotatank/releases/tag/v1.5.1

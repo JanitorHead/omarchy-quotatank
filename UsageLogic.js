@@ -965,6 +965,27 @@ function barProviders(providers, selector) {
   return result
 }
 
+// At most `max` chips (0 = no cap): the providers under the most pressure, kept in their usual
+// order so chips do not jump around as figures change. `pressure(provider)` is lower when the
+// provider is closer to a limit; ties keep the earlier provider. The rest are returned as
+// `hidden` for the overflow chip.
+function limitChips(providers, max, pressure) {
+  var list = listOrEmpty(providers)
+  var cap = Math.floor(Number(max))
+  if (!isFinite(cap) || cap <= 0 || list.length <= cap) return { shown: list.slice(), hidden: [] }
+  var ranked = list.map(function (provider, index) { return { index: index, pressure: Number(pressure(provider)) } })
+  ranked.sort(function (a, b) {
+    var pa = isFinite(a.pressure) ? a.pressure : 100
+    var pb = isFinite(b.pressure) ? b.pressure : 100
+    return pa - pb || a.index - b.index
+  })
+  var keep = {}
+  for (var i = 0; i < cap; i++) keep[ranked[i].index] = true
+  var result = { shown: [], hidden: [] }
+  for (var j = 0; j < list.length; j++) result[keep[j] ? "shown" : "hidden"].push(list[j])
+  return result
+}
+
 var ERROR_REASON_LABELS = {
   rate_limited: "rate limited",
   expired: "sign in",
@@ -1125,6 +1146,7 @@ var DEFAULT_SETTINGS = {
   barResetTimeFormat: "24h",
   barResetDateFormat: "DD/MM",
   hideExhaustedProviders: false,
+  barMaxChips: 4,
   quotaMode: "Used",
   providerColors: false,
   squareUsageCards: true,

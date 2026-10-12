@@ -4,24 +4,64 @@
 
 ## Providers and authentication
 
-Quotatank is a monitor, not an authentication manager. Its backend code reads credentials already owned by each official CLI, performs read-only calls, and does not write authentication state. A provider CLI may continue managing its own credentials when it is started normally—for example, Codex owns the app-server process used for its account RPC.
+Quotatank is a monitor, not an authentication manager. Its backend reads credentials already owned by each tool, performs read-only calls, and never writes, refreshes-and-saves, or deletes authentication state. A tool may keep managing its own credentials when it runs—Codex owns the app-server process used for its account RPC, and `agy` may refresh its own sign-in while it prints its usage report.
 
-| Provider | Usage source | Sign-in command |
+### Sign-ins on this computer
+
+| Provider | Usage source | Credentials read |
 |---|---|---|
-| Claude Code | Claude OAuth usage endpoint, including structured/scoped limits and extra usage | `claude auth login` |
-| OpenAI Codex | `codex app-server` account/rate-limit RPC in a read-only sandbox | `codex login` |
-| Kimi Code | Kimi's current `/usages` and optional `/me` endpoints | `kimi login` |
-| OpenCode Go | OpenCode's Go usage endpoint (`https://opencode.ai/zen/go/v1/usage`), read-only | `opencode auth login` (or `OPENCODE_GO_API_KEY`) |
-| OpenRouter | OpenRouter's `GET /api/v1/key` and `GET /api/v1/credits`, read-only | Key saved under **Settings → Providers** (or `OPENROUTER_API_KEY`) |
-| DeepSeek | DeepSeek's `GET /user/balance`, read-only | Key saved under **Settings → Providers** (or `DEEPSEEK_API_KEY`) |
+| Claude Code | Claude OAuth usage endpoint, including structured/scoped limits and extra usage | `$CLAUDE_CONFIG_DIR/.credentials.json` (`claude auth login`) |
+| OpenAI Codex | `codex app-server` account/rate-limit RPC in a read-only sandbox | Codex's own sign-in (`codex login`; `CODEX_HOME`) |
+| Kimi Code | Kimi's `/usages` and optional `/me` endpoints | `$KIMI_CODE_HOME/credentials/kimi-code.json` (`kimi login`) |
+| OpenCode Go | `https://opencode.ai/zen/go/v1/usage` | The key in `$XDG_DATA_HOME/opencode/auth.json`, or `OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY` |
+| Antigravity | The running Antigravity app's or IDE's local language server on `127.0.0.1` (`RetrieveUserQuotaSummary`, `GetUserStatus`); otherwise `agy -p /usage --output-format json` (agy 1.1.11 or later) | The session token the language server was started with, read from its own command line in `/proc`; `agy` uses its own sign-in. `ANTIGRAVITY_CLI_PATH` points at a non-standard `agy` |
+| Gemini CLI | Cloud Code Assist `loadCodeAssist` and `retrieveUserQuota` | `${GEMINI_CLI_HOME:-~}/.gemini/oauth_creds.json` (`gemini`, signed in with Google). An expired access token is refreshed in memory for that check only; nothing is written |
+| GitHub Copilot | `GET https://api.github.com/copilot_internal/user` | `COPILOT_API_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, the editor sign-in in `~/.config/github-copilot/{apps,hosts}.json`, GitHub CLI's `hosts.yml` (`GH_CONFIG_DIR`), then `gh auth token` |
+| Cursor | `https://cursor.com/api/usage-summary` | Cursor's access token from its `state.vscdb` (opened read-only) or `cursor-agent`'s `auth.json` |
+| Grok CLI | `https://cli-chat-proxy.grok.com/v1/billing` | `${GROK_HOME:-~/.grok}/auth.json` (`grok login`) |
+| Kiro | AWS `GetUsageLimits` | `kiro-cli`'s `data.sqlite3`, opened read-only (`KIRO_DATA_DIR`) |
+| JetBrains AI | No network: the IDE's `AIAssistantQuotaManager2.xml` and its newest `idea.log` quota line | Nothing; the IDE's own files under `~/.config/JetBrains` and `~/.cache/JetBrains` |
+| Droid (Factory) | Factory's billing limits API | A saved key or `FACTORY_API_KEY`, then `FACTORY_API_KEY` in `~/.factory/.env` |
+| Amp | Amp's balance API | A saved key or `AMP_API_KEY`, then Amp's `secrets.json` |
+| Kilo Code | Kilo's credit and Kilo Pass API | A saved key or `KILO_API_KEY`, then Kilo's `auth.json` |
+| Codebuff | Codebuff's usage API | A saved key or `CODEBUFF_API_KEY`, then `~/.config/manicode/credentials.json` |
+| Hugging Face | Hugging Face billing usage | A saved token, `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN`, then the `hf auth login` token file (`HF_HOME`, `HF_TOKEN_PATH`) |
 
-Environment overrides owned by the CLIs are honored: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`, `KIMI_CODE_BASE_URL`, and `KIMI_SHARE_DIR`.
+### API keys
+
+Each of these is off until turned on under **Settings → Providers**. Save a key in the editor that appears under it; the key is written to a private file (`0600`, in a `0700` directory) and never loaded back into the form. The environment variable takes precedence, and `<ID>_API_KEY_FILE` (for example `ZAI_API_KEY_FILE`) points at an existing private key file.
+
+| Provider | Usage source | Environment |
+|---|---|---|
+| Z.ai Coding Plan | `GET /api/monitor/usage/quota/limit` on `api.z.ai`, then `open.bigmodel.cn` when the key belongs there | `Z_AI_API_KEY`, `ZAI_API_KEY` |
+| MiniMax Coding Plan | `GET /v1/token_plan/remains` on `api.minimax.io`, then `api.minimaxi.com`; only Subscription Keys (`sk-cp-…`) carry plan limits | `MINIMAX_CODING_API_KEY`, `MINIMAX_API_KEY` |
+| Synthetic | `GET https://api.synthetic.new/v2/quotas` | `SYNTHETIC_API_KEY` |
+| Chutes | `GET https://api.chutes.ai/users/me/subscription_usage` | `CHUTES_API_KEY` |
+| Ollama Cloud | `GET https://ollama.com/api/balance` | `OLLAMA_API_KEY` |
+| Warp | Warp's `GetRequestLimitInfo` GraphQL query | `WARP_API_KEY`, `WARP_TOKEN` |
+| ZenMux | Management API subscription detail and pay-as-you-go balance | `ZENMUX_MANAGEMENT_API_KEY` |
+| Cline | `GET https://api.cline.bot/api/v1/users/me/plan/usage-limits` | `CLINE_API_KEY`, `CLINEPASS_API_KEY` |
+| OpenRouter | `GET /api/v1/key` and `GET /api/v1/credits` | `OPENROUTER_API_KEY` |
+| DeepSeek | `GET /user/balance` | `DEEPSEEK_API_KEY` |
+| Moonshot | `GET /v1/users/me/balance` on `api.moonshot.ai`, then `api.moonshot.cn` | `MOONSHOT_API_KEY` |
+| Venice | `GET https://api.venice.ai/api/v1/billing/balance` (needs an Admin key) | `VENICE_API_KEY` |
+| DeepInfra | Payment checklist and this month's usage | `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN` |
+| Vercel AI Gateway | `GET https://ai-gateway.vercel.sh/v1/credits` | `AI_GATEWAY_API_KEY` |
+| Poe | `GET https://api.poe.com/usage/current_balance` | `POE_API_KEY` |
+
+A key is only ever sent to its own provider. Where a company runs an international and a China platform (Z.ai/BigModel, MiniMax, Moonshot), the international host is asked first and the other one only when the key is rejected.
+
+### Found on this computer
+
+Every refresh also checks, without any network call, which providers are set up here: a credential file or IDE quota file exists, a key is in the environment or saved, or the Antigravity language server is running. Settings lists those that are not monitored under **Found on this computer**, with **Monitor** and **Ignore**, and Limits mentions them in one line until each is handled. **Ignore** adds the provider to `dismissedProviders`.
+
+Environment overrides owned by the tools are honored: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`, `KIMI_CODE_BASE_URL`, `KIMI_SHARE_DIR`, `GEMINI_CLI_HOME`, `GH_CONFIG_DIR`, `GROK_HOME`, `KIRO_DATA_DIR`, `HF_HOME`, and `HF_TOKEN_PATH`.
 
 The OpenCode provider reads the key the CLI stored in `$XDG_DATA_HOME/opencode/auth.json` (`opencode-go`), or `OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY` when either is set. `OPENCODE_API_BASE_URL` overrides the endpoint and must use `https`; the key is never sent over plain HTTP. Cost history is read from the OpenCode usage database, chosen from `OPENCODE_DB` / `OPENCODE_DATABASE` or the freshest `opencode*.db` under `$XDG_DATA_HOME/opencode`, plus the Oh My Pi harness session transcripts under `${OMP_SESSIONS_DIR:-~/.omp/agent/sessions}` when that directory exists. Each Oh My Pi message is attributed to the provider it was billed to, not to OpenCode: `opencode*` → OpenCode, `openai-codex` → Codex, `anthropic` → Claude (only while `claude` is in `costLocalProviders`); other providers are not counted.
 
 ### OpenRouter
 
-OpenRouter has no CLI sign-in and is off by default. Turn on its **Monitor** switch under **Settings → Providers**, then paste a key in the **API key** editor that appears under it and press **Save**; the key is written to a private file (`0600`, in a `0700` directory) and never loaded back into the form. `OPENROUTER_API_KEY` in the environment takes precedence, and `OPENROUTER_API_KEY_FILE` points at an existing private key file. OpenRouter is read only in local mode; Fusebox and CLIProxyAPI do not report it.
+OpenRouter has no CLI sign-in and is off by default. Turn on its **Monitor** switch under **Settings → Providers**, then paste a key in the **API key** editor that appears under it and press **Save**. OpenRouter is read only in local mode; Fusebox and CLIProxyAPI do not report it.
 
 OpenRouter is measured in money as well as limits:
 
@@ -118,19 +158,19 @@ Open the popup and click the **gear** beside Refresh. Settings is an index of si
 
 There is no Save button. Every switch, selector, and valid number writes to the widget's entry in `~/.config/omarchy/shell.json` the moment it changes and applies immediately, so the bar and Limits can be compared without leaving the page. An out-of-range or malformed number stays in its field with the reason underneath and leaves the saved value untouched; free text such as a server URL saves when editing finishes (Enter or leaving the field) and is valid. Keys and tokens are the exception: they have an explicit **Save** that writes the secret to a private file, after which the page shows **Saved on this device** with **Replace** and **Remove**. **‹ Settings** returns to the index; Escape goes back, then closes.
 
-**Providers** holds the source (local sign-ins or a Fusebox / CLIProxyAPI server with its connection and account activity), one row per provider with a grip (six dots) to drag it into place, or to move it with the arrow keys once focused (the order the tiles, chips, and provider cycling use), **Monitor** (read it and show it in Limits) and **Menu bar** (give it a chip), the API key editor right under OpenRouter and DeepSeek once they are monitored, and a **Customize** disclosure under each monitored provider. Customize is where one provider overrides the defaults: **Show limits as** (read this provider as used or left while the others follow Display), **Limit shown**, and **Second limit below** (pin this chip's limits while the others follow Menu bar); its header summarizes the overrides (`Left (%) · 5-hour`) or reads `Default`, and the index counts customized providers. In CLIProxyAPI mode every discovered provider is monitored and only the **Menu bar** column remains. **Menu bar** chooses chips or the widget icon, which limit each chip shows, reset times and their formats, and hiding used-up providers. **Alerts** holds notifications, the percentage thresholds, and the low-balance amounts shown once a money provider is monitored. **Display** holds used or left, provider colors, square cards, and hidden account emails. **Costs** holds local history switches, **Remote T3 servers**, **Custom prices**, and **Last scan**. **Advanced** holds the refresh interval, diagnostics, and **Reset to defaults**. Reset asks once, in place, then returns every preference to its default, including provider order and Customize overrides; the source, server URLs, saved keys and tokens, T3 servers, and custom prices are kept. Defaults: the four CLI providers monitored, every provider allowed a chip, the most constrained limit, used percentages, warning at 25% and critical at 10% left, low-balance alerts at 5 and 1, refresh every 15 minutes, and local Claude Code, Codex, and OpenCode cost history.
+**Providers** holds the source (local sign-ins or a Fusebox / CLIProxyAPI server with its connection and account activity) and then, in local mode, up to four groups. **Found on this computer** offers providers that are set up here but not monitored, each with **Monitor** and **Ignore**. **Monitored** is one row per provider in use, with a status line from the last check (`Connected · ChatGPT Plus`, `Not signed in — Run gemini and sign in with Google`, `Sign-in expired — …`, `Key rejected`, `No key saved`), a grip (six dots) to drag it into place, or to move it with the arrow keys once focused (the order the tiles, chips, and provider cycling use), **Monitor** (read it and show it in Limits) and **Menu bar** (give it a chip), the API key editor right under providers that take a key, and a **Customize** disclosure. **Waiting for a sign-in** folds away monitored providers whose last check found no sign-in; each moves up on its own once it is signed in. **More providers** folds away everything else, split into sign-ins and API keys, with a filter field and a **Get a key ↗** link per provider. Customize is where one provider overrides the defaults: **Show limits as** (read this provider as used or left while the others follow Display), **Limit shown**, and **Second limit below** (pin this chip's limits while the others follow Menu bar); its header summarizes the overrides (`Left (%) · 5-hour`) or reads `Default`, and the index counts customized providers. In CLIProxyAPI mode every discovered provider is monitored and only the **Menu bar** column remains. **Menu bar** chooses chips or the widget icon, which limit each chip shows, reset times and their formats, and hiding used-up providers. **Alerts** holds notifications, the percentage thresholds, and the low-balance amounts shown once a money provider is monitored. **Display** holds used or left, provider colors, square cards, and hidden account emails. **Costs** holds local history switches, **Remote T3 servers**, **Custom prices**, and **Last scan**. **Advanced** holds the refresh interval, diagnostics, and **Reset to defaults**. Reset asks once, in place, then returns every preference to its default, including provider order, Customize overrides, and ignored providers; the source, server URLs, saved keys and tokens, T3 servers, and custom prices are kept. Defaults: every provider with a sign-in of its own monitored (one that is not signed in stays out of sight), API-key providers off, every provider allowed a chip, the most constrained limit, used percentages, warning at 25% and critical at 10% left, low-balance alerts at 5 and 1, refresh every 15 minutes, and local Claude Code, Codex, and OpenCode cost history.
 
 In **Settings → Costs → Custom prices**, add the exact model ID and its input/output prices in **USD per million tokens**. Model IDs in the Costs breakdown are selectable for copying. Matching preserves case, provider prefixes, and bracketed variants. Cache-read and cache-write prices are optional; blank fields use the input price, while `0` explicitly means free. A complete row applies at once to recorded activity, including offline or otherwise unknown models; an incomplete row is explained underneath and not saved. Remove a row to restore automatic pricing. A T3 server is saved once it has a name and a URL; its token can be saved after that.
 
 | Key | Default | Meaning |
 |---|---:|---|
 | `refreshIntervalSec` | `900` | Automatic refresh interval; clamped to 60–3600 seconds |
-| `enabledProviders` | all three | Local CLI providers queried and displayed; proxy discovery is automatic |
+| `enabledProviders` | every sign-in provider | Local providers queried and displayed; API-key providers are off by default. Proxy discovery is automatic |
+| `dismissedProviders` | `[]` | Providers set up on this computer that **Ignore** stopped suggesting |
 | `usageSource` | `direct` | `direct` CLI sign-ins or `cliproxy` managed accounts for quotas |
 | `cliproxyUrl` | `http://127.0.0.1:8317` | CLIProxyAPI server or management URL |
 | `cliproxyKeyFile` | empty | Set automatically when saving a key in the GUI; can also point to an existing private key file |
-| `openrouterKeyFile` | empty | Private OpenRouter key file, set when saving a key in the GUI. `OPENROUTER_API_KEY` takes precedence |
-| `deepseekKeyFile` | empty | Private DeepSeek key file, set when saving a key in the GUI. `DEEPSEEK_API_KEY` takes precedence |
+| `<id>KeyFile` | empty | Private key file of an API-key provider (`zaiKeyFile`, `openrouterKeyFile`, …), set when saving a key in the GUI. The provider's environment variable takes precedence |
 | `hideAccountEmails` | `true` | Replace account identities with numbered labels and hide them in settings |
 | `squareUsageCards` | `true` | Use square corners for cards in Limits; otherwise follow the theme |
 | `providerColors` | `false` | Color each provider's bar chip logo and limit meters with its brand colour instead of the Omarchy theme colour. A line that is warning or critical keeps its figure in the alert colour, so the brand colour does not hide the alert. The cost chart always uses provider colours |
@@ -144,12 +184,13 @@ In **Settings → Costs → Custom prices**, add the exact model ID and its inpu
 | `barProviderLimits` | `"{}"` | JSON string managed by **Providers → Customize** in settings. Maps provider IDs to a `top` and/or `bottom` limit using the same values as `barWindow` and `barWindowSecondary`. A missing slot inherits the global value |
 | `barShowResets` | `false` | Append each chip's limit reset. Windows of a day or less (5h) show a time; longer windows (weekly, monthly) show a date |
 | `hideExhaustedProviders` | `false` | Remove a provider's chip while one of its weekly or monthly limits (a window of a week or longer) is used up. The chip returns when that limit resets; Limits keeps the provider, and its headline reads `Weekly limit is used up · back in 5d 10h` |
+| `barMaxChips` | `4` | Most chips the bar holds (`0` for all). Past it, the bar keeps the providers closest to a limit (failures first), in their usual order, and folds the rest into a `+N` chip whose tooltip names them |
 | `barResetTimeFormat` | `24h` | Time format for limits that reset within a day: `24h` (14:30) or `12h` (2:30 PM) |
 | `barResetDateFormat` | `DD/MM` | Date format for weekly and monthly resets: `DD/MM` (22/04), `MM/DD` (04/22) or `D MMM` (22 Apr) |
-| `barProviders` | all six | Enabled providers allowed to show percentage chips; independent of popup visibility |
+| `barProviders` | every provider | Enabled providers allowed to show percentage chips; independent of popup visibility |
 | `warningThreshold` | `25` | Warn when a limit has this much or less left. Stored as % left; Settings show it as % used under `Used` (25 left is 75 used) |
 | `criticalThreshold` | `10` | Critical when this much or less is left. Stored as % left; must not be looser than `warningThreshold` |
-| `creditWarningUsd` | `5` | Low-balance warning for OpenRouter and DeepSeek: what can still be spent, in the balance's currency, at or below this amount |
+| `creditWarningUsd` | `5` | Low-balance warning for prepaid providers (OpenRouter, DeepSeek, Moonshot, Venice, DeepInfra, Vercel AI Gateway, Poe): what can still be spent, in the balance's currency or unit, at or below this amount |
 | `creditCriticalUsd` | `1` | Low-balance critical amount; must not be above `creditWarningUsd` |
 | `costPriceOverrides` | `"{}"` | JSON string managed by Custom model prices; exact IDs mapped to USD-per-million rates |
 | `costLocalProviders` | `["claude", "codex", "opencode"]` | Local cost sources (`claude`, `codex`, `opencode`), independent of quota providers |
