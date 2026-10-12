@@ -635,6 +635,7 @@ Ui.Panel {
     function limits(): string { root.showLimits(); return "ok" }
     function costs(): string { root.showCosts(); return "ok" }
     function configureCosts(): string { root.showCostSettings(); return "ok" }
+    function configureProviders(): string { root.showSettings("providers"); return "ok" }
     function configure(): string { root.showSettings(); return "ok" }
     function exportJson(): string { return UsageLogic.exportSnapshot(root.providers, Date.now() / 1000, root.hideAccountEmails) }
   }

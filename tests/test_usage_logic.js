@@ -820,16 +820,16 @@ const statusOf = (id, reading, hasKey = false, checking = false) => context.prov
 assert.equal(statusOf("claude", { status: "ok", plan: "Max" }).text, "Connected · Max");
 assert.equal(statusOf("claude", { status: "ok", plan: "" }).text, "Connected");
 assert.equal(statusOf("claude", { status: "ok" }).tone, "ok");
-assert.equal(statusOf("gemini", { status: "error", errorKind: "no_credentials" }).text, "Not signed in — Run `gemini` and sign in with Google");
+assert.equal(statusOf("gemini", { status: "error", errorKind: "no_credentials" }).text, "Not signed in — " + context.localProvider("gemini").signIn);
 assert.equal(statusOf("gemini", { status: "error", errorKind: "no_credentials" }).tone, "muted", "not signed in is not an error");
 assert.equal(statusOf("openrouter", { status: "error", errorKind: "no_credentials" }).text, "No key saved");
 assert.equal(statusOf("openrouter", { status: "error", errorKind: "no_credentials" }, true, true).text, "Checking…",
   "a reading from before the key was saved is not shown as missing");
-assert.equal(statusOf("claude", { status: "error", errorKind: "expired" }).text, "Sign-in expired — Run `claude` and sign in");
+assert.equal(statusOf("claude", { status: "error", errorKind: "expired" }).text, "Sign-in expired — " + context.localProvider("claude").signIn);
 assert.equal(statusOf("claude", { status: "error", errorKind: "expired" }).tone, "error");
 assert.equal(statusOf("deepseek", { status: "error", errorKind: "expired" }).text, "Key rejected");
 assert.equal(statusOf("amp", { status: "error", errorKind: "expired" }, true).text, "Key rejected", "a saved key is what was rejected");
-assert.equal(statusOf("amp", { status: "error", errorKind: "expired" }).text, "Sign-in expired — Run `amp login` or save a key");
+assert.equal(statusOf("amp", { status: "error", errorKind: "expired" }).text, "Sign-in expired — " + context.localProvider("amp").signIn);
 assert.equal(statusOf("poe", { status: "error", errorKind: "timeout", message: "The provider did not answer in time." }).text,
   "The provider did not answer in time.", "other failures show the backend's short message");
 assert.equal(statusOf("poe", { status: "error", errorKind: "rate_limited" }).text, "Rate limited");
