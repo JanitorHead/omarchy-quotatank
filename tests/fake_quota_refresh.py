@@ -12,6 +12,7 @@ parser.add_argument("--source")
 parser.add_argument("--timeout")
 parser.add_argument("--cliproxy-url")
 parser.add_argument("--cliproxy-key-file")
+parser.add_argument("--key-file", action="append", default=[])
 args = parser.parse_args()
 with Path(os.environ["MODEL_USAGE_QUOTA_REQUESTS"]).open("a") as stream:
     stream.write(json.dumps(vars(args)) + "\n")

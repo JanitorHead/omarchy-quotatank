@@ -26,6 +26,15 @@ def interrupted(_signum, _frame):
 
 
 KEY_NAME = re.compile(r"key-[0-9a-f]{32}\.key")
+# API-key providers whose key Settings → Providers saves, each under the setting `<id>KeyFile`. The
+# same list as the key-capable providers in UsageLogic.js and PROVIDER_KEY_ENV in usage-fetch.py;
+# tests/test_project.py keeps the three in step.
+KEY_PROVIDERS = (
+    "factory", "amp", "kilo", "codebuff", "huggingface",
+    "zai", "minimax", "synthetic", "chutes", "ollama", "warp", "zenmux", "clinepass",
+    "openrouter", "deepseek", "moonshot", "venice", "deepinfra", "vercel", "poe",
+)
+SETTING_NAMES = frozenset({"cliproxyKeyFile", "costKeeperPasswordFile"} | {provider + "KeyFile" for provider in KEY_PROVIDERS})
 
 
 def unlink_previous(directory: Path, directory_fd: int, previous: Path) -> bool:
@@ -66,7 +75,7 @@ def main() -> int:
         keys = request.pop("keys") if batch else {"key": request.pop("key")}
         if not isinstance(keys, dict) or not 1 <= len(keys) <= 4:
             raise ValueError
-        allowed = {"cliproxyKeyFile", "costKeeperPasswordFile", "openrouterKeyFile", "deepseekKeyFile"} if batch else {"key"}
+        allowed = SETTING_NAMES if batch else {"key"}
         previous_paths = request.get("previousPaths", {}) if batch else {"key": request.get("previousPath", "")}
         if not isinstance(previous_paths, dict):
             raise ValueError

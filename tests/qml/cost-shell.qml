@@ -16,6 +16,7 @@ ShellRoot {
   property int responses: 0
   property int phase: 0
   readonly property string custom: '{"vendor/Example[1m]":{"inputCostPerMillionTokens":2,"outputCostPerMillionTokens":8,"cacheReadCostPerMillionTokens":0}}'
+  readonly property var sixProviders: ["claude", "codex", "kimi", "opencode", "openrouter", "deepseek"]
 
   function check(condition, message) {
     if (!condition) throw new Error("COST TEST FAILED: " + message)
@@ -53,7 +54,7 @@ ShellRoot {
   }
 
   Component.onCompleted: {
-    form = create("UsageSettings.qml", { width: 420, settings: { costPriceOverrides: custom } })
+    form = create("UsageSettings.qml", { width: 420, settings: { costPriceOverrides: custom, enabledProviders: root.sixProviders } })
     form.changeRequested.connect(host)
     form.begin("costs")
     view = create("UsageCosts.qml", {width: 420, payload: {
@@ -109,7 +110,7 @@ ShellRoot {
         root.form.resetToDefaults()
         root.check(root.saved.providerOrder === "[]" && root.saved.quotaMode === "Used", "reset restores order and preferences")
         root.check(root.saved.costPriceOverrides === root.custom, "reset keeps custom prices")
-        root.form.settings = { costPriceOverrides: root.custom }
+        root.form.settings = { costPriceOverrides: root.custom, enabledProviders: root.sixProviders }
         root.saves = 0
         root.check(!root.find(root.overview, "costModelDetails").visible, "model breakdown starts collapsed")
         root.check(!root.find(root.overview, "costTokenDetails").visible, "cost overview starts without token details")
@@ -175,6 +176,35 @@ ShellRoot {
         root.check(root.saves === dragSaves, "a drag does not save until it ends")
         root.form.finishProviderDrag()
         root.check(JSON.parse(root.saved.providerOrder).join(",") === "claude,codex,opencode,kimi,openrouter,deepseek", "releasing saves the dragged order")
+        // The last local refresh places every provider once: in use as a row, a missing sign-in folded
+        // away, set up here but unmonitored offered with one click, the rest under More providers.
+        root.form.settings = Object.assign({}, root.form.settings, { enabledProviders: ["claude", "codex", "gemini", "openrouter"] })
+        root.form.usagePayload = { generatedAt: "2030-01-15T12:00:00Z", detected: ["claude", "copilot", "deepseek"], providers: [
+          { id: "claude", status: "ok", plan: "Max" },
+          { id: "codex", status: "error", errorKind: "expired", message: "Expired." },
+          { id: "gemini", status: "error", errorKind: "no_credentials", message: "No sign-in." },
+          { id: "openrouter", status: "error", errorKind: "no_credentials", message: "No key." }
+        ] }
+        list.forceLayout()
+        root.check(root.form.providerRows.map(function (row) { return row.id }).join(",") === "claude,codex,openrouter", "rows show the providers in use, in the saved order")
+        root.check(root.find(root.form, "status-claude").text === "Connected · Max", "a connected provider names its plan")
+        root.check(root.find(root.form, "status-codex").text.indexOf("Sign-in expired — ") === 0, "an expired sign-in says how to fix it")
+        root.check(root.find(root.form, "status-openrouter").text === "No key saved", "a key provider without a key says so")
+        root.check(root.find(root.form, "openrouterKeyRow").visible, "the key editor sits under a key provider")
+        root.check(root.form.sections.waiting.length === 1 && root.find(root.form, "provider-gemini") !== null, "a missing sign-in waits out of sight")
+        root.check(root.form.sections.found.map(function (entry) { return entry.id }).join(",") === "copilot,deepseek", "set-up providers that are not monitored are offered")
+        var foundSaves = root.saves
+        root.find(root.form, "found-copilot").clicked()
+        root.check(root.saves === foundSaves + 1 && root.saved.enabledProviders.indexOf("copilot") >= 0
+          && root.saved.barProviders.indexOf("copilot") >= 0, "Monitor turns a found provider on, with a chip, in one save")
+        root.find(root.form, "ignore-deepseek").clicked()
+        root.check(root.saved.dismissedProviders.join(",") === "deepseek" && root.form.sections.found.length === 0, "Ignore stops the suggestion")
+        root.form.setMonitored("claude", false)
+        root.check(root.saved.dismissedProviders.join(",") === "claude,deepseek", "turning a provider off declines it")
+        root.edit("providerFilterField", "deep")
+        root.check(root.form.moreKeys.map(function (entry) { return entry.id }).join(",") === "deepseek,deepinfra"
+          && root.form.moreSignIns.length === 0, "the filter narrows More providers by name")
+        root.form.usagePayload = null
         root.form.page = "costs"
         root.savesBeforeBlankRow = root.saves
         root.check(root.find(root.overview, "costModel-9") !== null, "expanded breakdown includes models beyond the former top eight")

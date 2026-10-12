@@ -204,6 +204,27 @@ class ManagementKeyTests(unittest.TestCase):
             self.assertFalse(path.exists())
             self.assertTrue(custom.exists(), "files the widget did not create are left alone")
 
+    def test_every_api_key_provider_setting_is_accepted_and_nothing_else(self):
+        for name, accepted in (("huggingfaceKeyFile", True), ("poeKeyFile", True), ("factoryKeyFile", True),
+                               ("claudeKeyFile", False), ("KeyFile", False), ("poeKeyFile ", False)):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as config:
+                process = subprocess.Popen(
+                    [sys.executable, "-u", str(HELPER)], stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                    env={**os.environ, "XDG_CONFIG_HOME": config})
+                self.addCleanup(self.stop, process)
+                process.stdin.write(json.dumps({"keys": {name: "synthetic-provider-secret"}, "previousPaths": {}}) + "\n")
+                process.stdin.flush()
+                if accepted:
+                    paths = json.loads(process.stdout.readline())["paths"]
+                    self.assertEqual(list(paths), [name])
+                    process.communicate("commit\n", timeout=3)
+                    self.assertEqual(Path(paths[name]).read_text(), "synthetic-provider-secret\n")
+                else:
+                    stdout, stderr = process.communicate(timeout=3)
+                    self.assertEqual((process.returncode, stdout, stderr), (1, "", ""))
+                    self.assertEqual(list(Path(config).rglob("*.key")), [])
+
 
 if __name__ == "__main__":
     unittest.main()
