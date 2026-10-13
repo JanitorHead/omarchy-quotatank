@@ -149,10 +149,16 @@ class FailureAndIsolationTests(unittest.TestCase):
             root = Path(temporary)
             claude_dir = root / "claude"
             kimi_dir = root / "kimi"
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            # Claude Code is installed but cannot renew the sign-in (its refresh token is gone too).
+            claude = bin_dir / "claude"
+            claude.write_text("#!/bin/sh\nexit 1\n")
+            claude.chmod(0o755)
             with mock.patch.dict(os.environ, {
                 "CLAUDE_CONFIG_DIR": str(claude_dir),
                 "KIMI_CODE_HOME": str(kimi_dir),
-            }):
+            }), mock.patch.object(usage, "runtime_environment", return_value={**os.environ, "PATH": str(bin_dir)}):
                 self.assertEqual(usage.fetch_claude(1)["errorKind"], "no_credentials")
                 self.assertEqual(usage.fetch_kimi(1)["errorKind"], "no_credentials")
 
@@ -166,6 +172,34 @@ class FailureAndIsolationTests(unittest.TestCase):
                 }))
                 self.assertEqual(usage.fetch_claude(1)["errorKind"], "expired")
                 self.assertEqual(usage.fetch_kimi(1)["errorKind"], "expired")
+
+    def test_expired_claude_sign_in_is_renewed_by_claude_code(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            claude_dir = root / "claude"
+            claude_dir.mkdir()
+            credentials = claude_dir / ".credentials.json"
+            credentials.write_text(json.dumps({"claudeAiOauth": {"accessToken": "stale", "expiresAt": 1}}))
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            # Only `claude doctor` renews here: a model request would spend the user's quota.
+            fresh = json.dumps({"claudeAiOauth": {"accessToken": "fresh", "expiresAt": (int(time.time()) + 28_800) * 1000}})
+            claude = bin_dir / "claude"
+            claude.write_text(f"#!/bin/sh\n[ \"$*\" = doctor ] || exit 1\nprintf '%s' '{fresh}' > \"$CLAUDE_CONFIG_DIR/.credentials.json\"\n")
+            claude.chmod(0o755)
+            captured = {}
+
+            def usage_response(url, headers, timeout):
+                captured["authorization"] = headers["Authorization"]
+                return fixture("claude-usage.json")
+
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_dir)}), \
+                    mock.patch.object(usage, "runtime_environment", return_value={**os.environ, "PATH": str(bin_dir)}), \
+                    mock.patch.object(usage.Path, "home", return_value=root), \
+                    mock.patch.object(usage, "http_json", side_effect=usage_response):
+                result = usage.fetch_claude(5)
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(captured["authorization"], "Bearer fresh")
 
     def test_opencode_key_resolution_and_request_headers(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -208,11 +208,17 @@ ShellRoot {
         root.check(root.saved.dismissedProviders.join(",") === "deepseek" && root.form.sections.found.length === 0, "Ignore stops the suggestion")
         root.form.setMonitored("claude", false)
         root.check(root.saved.dismissedProviders.join(",") === "claude,deepseek", "turning a provider off declines it")
+        root.check(root.find(root.form, "providerFilterFieldInput") === null, "a collapsed section keeps no live input")
+        root.find(root.form, "moreProviders").expanded = true
+        root.check(root.find(root.form, "providerFilterFieldInput") !== null, "a shown settings field has a live input")
         root.edit("providerFilterField", "deep")
         root.check(root.form.moreKeys.map(function (entry) { return entry.id }).join(",") === "deepseek,deepinfra"
           && root.form.moreSignIns.length === 0, "the filter narrows More providers by name")
         root.form.usagePayload = null
         root.form.page = "costs"
+        root.check(root.find(root.form, "providerFilterFieldInput") === null
+          && root.find(root.form, "cliproxyUrlFieldInput") === null
+          && root.find(root.form, "refreshMinutesFieldInput") === null, "fields on hidden pages keep no live input")
         root.savesBeforeBlankRow = root.saves
         root.check(root.find(root.overview, "costModel-9") !== null, "expanded breakdown includes models beyond the former top eight")
         root.check(root.find(root.overview, "costModelDetails").visible, "expanded models render")

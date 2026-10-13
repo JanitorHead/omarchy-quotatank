@@ -4,13 +4,13 @@
 
 ## Providers and authentication
 
-Quotatank is a monitor, not an authentication manager. Its backend reads credentials already owned by each tool, performs read-only calls, and never writes, refreshes-and-saves, or deletes authentication state. A tool may keep managing its own credentials when it runs—Codex owns the app-server process used for its account RPC, and `agy` may refresh its own sign-in while it prints its usage report.
+Quotatank is a monitor, not an authentication manager. Its backend reads credentials already owned by each tool, performs read-only calls, and never writes, refreshes-and-saves, or deletes authentication state. A tool may keep managing its own credentials when it runs—Codex owns the app-server process used for its account RPC, `agy` may refresh its own sign-in while it prints its usage report, and `claude doctor` renews an expired Claude Code sign-in.
 
 ### Sign-ins on this computer
 
 | Provider | Usage source | Credentials read |
 |---|---|---|
-| Claude Code | Claude OAuth usage endpoint, including structured/scoped limits and extra usage | `$CLAUDE_CONFIG_DIR/.credentials.json` (`claude auth login`) |
+| Claude Code | Claude OAuth usage endpoint, including structured/scoped limits and extra usage | `$CLAUDE_CONFIG_DIR/.credentials.json` (`claude auth login`). Its access token lasts about eight hours; when the saved one has expired, Quotatank runs `claude doctor` once so Claude Code renews and saves its own sign-in, then reads the file again. Quotatank never uses the refresh token itself: Anthropic rotates it on every use, so that would sign Claude Code out |
 | OpenAI Codex | `codex app-server` account/rate-limit RPC in a read-only sandbox | Codex's own sign-in (`codex login`; `CODEX_HOME`) |
 | Kimi Code | Kimi's `/usages` and optional `/me` endpoints | `$KIMI_CODE_HOME/credentials/kimi-code.json` (`kimi login`) |
 | OpenCode Go | `https://opencode.ai/zen/go/v1/usage` | The key in `$XDG_DATA_HOME/opencode/auth.json`, or `OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY` |
