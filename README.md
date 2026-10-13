@@ -149,6 +149,7 @@ Privacy:
 - Gemini CLI access tokens last an hour. When the saved one has expired, Quotatank exchanges Gemini CLI's refresh token for a new access token that lives only in memory for that check, using the sign-in client of the Gemini CLI installed on this computer; nothing is written back.
 - **Sign in** and **Install and sign in** only run when you press them, in a terminal you can see, with the provider's own sign-in command.
 - Antigravity is read from its own running language server on `127.0.0.1`, using the session token that process was started with, or from `agy`'s usage report. GitHub Copilot can fall back to `gh auth token`. Both commands run without a shell, with a timeout and no browser.
+- Claude Code access tokens last about eight hours. When the saved one has expired, Quotatank runs `claude doctor`, which renews and saves Claude Code's own sign-in without a prompt or a model request, so a computer where you rarely open Claude Code stays signed in. Quotatank never uses Claude's refresh token itself.
 - Applying a banked Codex reset is a separate action in CLIProxyAPI mode, and it asks for confirmation first.
 - API keys, management keys, and T3 tokens are saved in private files (`0600`, in a `0700` directory), never in widget settings or command-line arguments. **Remove** deletes the file.
 - Cost history stores token counts, timestamps, model names, and hashed transcript identifiers. It never stores prompts, responses, or tool output.

@@ -506,6 +506,35 @@ def detect_claude() -> bool:
     return (claude_config_dir() / ".credentials.json").is_file()
 
 
+def read_claude_login(credentials_path: Path) -> dict[str, Any]:
+    raw = read_json(credentials_path)
+    login = raw.get("claudeAiOauth") if isinstance(raw, dict) else None
+    if not isinstance(login, dict) or not isinstance(login.get("accessToken"), str):
+        raise ValueError("missing OAuth record")
+    return login
+
+
+def claude_login_expired(login: dict[str, Any]) -> bool:
+    expires_at = epoch_seconds(login.get("expiresAt"))
+    return expires_at is not None and expires_at <= int(time.time())
+
+
+def renew_claude_login(timeout: float) -> None:
+    """Let Claude Code renew its own sign-in. Its access token lasts about eight hours, and only
+    Claude Code may spend the refresh token: Anthropic rotates it on every use, so a renewal by
+    anyone else would sign Claude Code out. `claude doctor` renews an expired token and saves it
+    itself, without a prompt, a trust dialog, or a model request."""
+    env = runtime_environment()
+    claude = shutil.which("claude", path=env.get("PATH"))
+    if not claude:
+        return
+    with tempfile.TemporaryDirectory(prefix="quotatank-claude-") as cwd:
+        try:
+            run_cli([claude, "doctor"], min(timeout, 10.0), env=env, cwd=cwd)
+        except (OSError, TimeoutError, ValueError):
+            pass
+
+
 @provider_fetcher("claude")
 def fetch_claude(timeout: float) -> dict[str, Any]:
     provider_id = "claude"
@@ -514,15 +543,13 @@ def fetch_claude(timeout: float) -> dict[str, Any]:
     if not credentials_path.is_file():
         return error_provider(provider_id, "no_credentials", "No Claude Code sign-in was found.")
     try:
-        raw = read_json(credentials_path)
-        login = raw.get("claudeAiOauth") if isinstance(raw, dict) else None
-        if not isinstance(login, dict) or not isinstance(login.get("accessToken"), str):
-            raise ValueError("missing OAuth record")
+        login = read_claude_login(credentials_path)
+        if claude_login_expired(login):
+            renew_claude_login(timeout)
+            login = read_claude_login(credentials_path)
     except (OSError, ValueError, json.JSONDecodeError):
         return error_provider(provider_id, "no_credentials", "Claude Code credentials could not be read.")
-
-    expires_at = epoch_seconds(login.get("expiresAt"))
-    if expires_at is not None and expires_at <= int(time.time()):
+    if claude_login_expired(login):
         return error_provider(provider_id, "expired", "The Claude Code sign-in has expired.")
 
     try:

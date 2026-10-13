@@ -76,8 +76,11 @@ exchanged for a fresh one held in memory for that check only, using the installe
 client read from the Gemini CLI installed on this computer (none is shipped here),
 and Antigravity's language server is reached on `127.0.0.1` with its self-signed
 certificate accepted, using the session token read from that same user's process
-command line in `/proc`. `agy` and `gh auth token` run without a shell, with a
-timeout and closed stdin; `agy` also gets browser launchers replaced by stubs that fail.
+command line in `/proc`. `agy`, `gh auth token`, and `claude doctor` run without a
+shell, with a timeout and closed stdin; `agy` also gets browser launchers replaced by
+stubs that fail. `claude doctor` runs only when the saved Claude Code access token has
+expired, so that Claude Code renews and saves its own sign-in; Quotatank never sends
+Claude's refresh token anywhere.
 
 **Sign in** and **Install and sign in** run only on a click, in a visible Omarchy
 terminal, with a fixed command from the plugin's own provider list (a sign-in

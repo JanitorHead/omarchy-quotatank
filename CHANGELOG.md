@@ -4,6 +4,13 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.7.1
+
+### Fixed
+
+- Settings text fields exist only while they are on screen. A hidden page, a collapsed section, or the closed panel no longer keeps an editable input alive, so the shell no longer reads clipboard text that other applications offer for fields nobody can see. Typed text is kept, and hiding a field you are editing still finishes the edit.
+- Claude Code no longer asks you to sign in again every eight hours on a computer where you rarely open it. When its saved access token has expired, Quotatank runs `claude doctor`, which renews and saves Claude Code's own sign-in without a prompt or a model request, and reads it again. Quotatank still never uses Claude's refresh token: Anthropic rotates it on every use, so a renewal outside Claude Code would sign Claude Code out.
+
 ## 1.7.0
 
 ### Added
