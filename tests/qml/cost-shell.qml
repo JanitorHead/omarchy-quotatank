@@ -45,16 +45,28 @@ ShellRoot {
     field.textEdited()
     if (done) field.editingFinished()
   }
-  // Press keys in a shown field: strings are typed characters, numbers are Qt key codes.
+  // Press keys in a shown field: strings are typed characters, numbers are Qt key codes. The plain
+  // input edits natively, so it is driven the way typing changes it; the read-only secret input
+  // takes its keys through the field's key handler.
   function type(name, keys) {
     var field = find(form, name)
     var input = find(form, name + "Input")
     check(field !== null && input !== null, "shown field exists: " + name)
     for (var i = 0; i < keys.length; i++) {
       var typed = typeof keys[i] === "string"
-      field.handleKey(input, { key: typed ? 0 : keys[i], text: typed ? keys[i] : "", modifiers: 0,
+      if (!input.readOnly && typed) input.insert(input.cursorPosition, keys[i])
+      else if (!input.readOnly) input.remove(input.cursorPosition - 1, input.cursorPosition)
+      else field.handleKey(input, { key: typed ? 0 : keys[i], text: typed ? keys[i] : "", modifiers: 0,
         accepted: false, matches: function() { return false } })
     }
+  }
+  // Editable TextInputs (what TextField is built on) fetch the clipboard on every change in Qt 6.11
+  // and 6.12.0; a TextEdit or a read-only TextInput does not.
+  function editableTextInputs(item) {
+    var count = item.echoMode !== undefined && item.readOnly === false ? 1 : 0
+    var children = item.children || []
+    for (var i = 0; i < children.length; i++) count += editableTextInputs(children[i])
+    return count
   }
   // The host: persist a change batch into the live settings and acknowledge it.
   function host(values) {
@@ -223,8 +235,13 @@ ShellRoot {
         root.find(root.form, "moreProviders").expanded = true
         var filterInput = root.find(root.form, "providerFilterFieldInput")
         root.check(filterInput !== null, "a shown settings field has a live input")
-        root.check(filterInput.readOnly, "the live input stays read-only, so it never reads the clipboard on its own")
+        var keyInput = root.find(root.form, "openrouterKeyRowFieldInput")
+        root.check(filterInput.echoMode === undefined && !filterInput.readOnly, "a plain field edits in a TextEdit")
+        root.check(keyInput !== null && keyInput.readOnly, "a secret field keeps a read-only input")
+        root.check(root.editableTextInputs(root.form) === 0, "no settings field is an editable TextInput")
         root.type("providerFilterField", ["d", "e", "e", "p", "x", Qt.Key_Backspace])
+        root.type("openrouterKeyRowField", ["k", "e", "y", "x", Qt.Key_Backspace])
+        root.check(root.find(root.form, "openrouterKeyRowField").text === "key", "a secret field takes typing and Backspace")
         root.check(root.form.moreKeys.map(function (entry) { return entry.id }).join(",") === "deepseek,deepinfra"
           && root.form.moreSignIns.length === 0, "the filter narrows More providers by name")
         root.form.usagePayload = null
@@ -305,6 +322,20 @@ ShellRoot {
         root.check(!root.find(root.form, "t3Credential-0Field").visible, "saved token does not show an empty editor")
         root.form.begin("costs")
         root.check(JSON.parse(root.form.settings.costT3Servers)[0].tokenFile === remote.tokenFile, "saved token path round trips")
+        // Paste goes through the bounded reader (tests/fake-bin/wl-paste offers a short text, then
+        // one past the 64 KiB limit).
+        root.form.page = "advanced"
+        var refresh = root.find(root.form, "refreshMinutesField")
+        refresh.text = ""
+        refresh.paste(root.find(refresh, "refreshMinutesFieldInput"))
+        root.phase++
+      } else if (root.phase === 9 && !root.find(root.form, "refreshMinutesField").pasting) {
+        var pasted = root.find(root.form, "refreshMinutesField")
+        root.check(pasted.text === "seek", "an explicit paste inserts the clipboard text, got " + JSON.stringify(pasted.text))
+        pasted.paste(root.find(pasted, "refreshMinutesFieldInput"))
+        root.phase++
+      } else if (root.phase === 10 && !root.find(root.form, "refreshMinutesField").pasting) {
+        root.check(root.find(root.form, "refreshMinutesField").text === "seek", "a paste over 64 KiB is refused")
         console.log("Cost QML contract: passed")
         Qt.quit()
       }

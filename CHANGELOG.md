@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.7.3
+
+### Changed
+
+- Settings text fields edit natively again: undo and redo, input methods, word movement, and selection work as in any text box. Plain fields use a single-line `TextEdit`, which does not fetch the clipboard on its own, unlike Qt's `TextField` in Qt 6.11 and 6.12.0. Key fields stay masked in a read-only input that the widget types into.
+
+### Fixed
+
+- Pasting can no longer stall the shell. Ctrl+V and Shift+Insert read the clipboard with `wl-paste` in a separate process, limited to 64 KiB and two seconds, and refuse a larger paste. Middle-click and dropped text are not accepted.
+
 ## 1.7.2
 
 ### Fixed

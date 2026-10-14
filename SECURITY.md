@@ -87,11 +87,15 @@ terminal, with a fixed command from the plugin's own provider list (a sign-in
 command, optionally preceded by `mise use -g <package>`); no user input or backend
 data is put into the command.
 
-Settings text fields never read the clipboard on their own. An editable Qt text
-input fetches the text of every clipboard change in the shell process, so each
-field's input is read-only, exists only while the field is on screen, and the
-plugin applies the typing itself; the clipboard is read only on an explicit paste
-(Ctrl+V or Shift+Insert) into a focused field.
+Settings text fields never read the clipboard on their own. In Qt 6.11 and 6.12.0
+an editable `TextInput` (what `TextField` is built on) fetches the whole text of
+every clipboard change, without a size or time limit, in the shell process. Plain
+fields therefore edit in a single-line `TextEdit`, which does not, and secret fields
+keep a `TextField` that stays read-only, with the typing applied by the plugin.
+Inputs exist only while their field is on screen. The clipboard is read only on an
+explicit paste (Ctrl+V or Shift+Insert) into a focused field, by `wl-paste` in a
+separate process limited to 64 KiB and two seconds; a larger paste is refused.
+Middle-click and dropped text are not accepted.
 
 Banked resets use fixed upstream URLs and explicit managed account selection.
 The account identity is checked again before consumption. Each logical reset
