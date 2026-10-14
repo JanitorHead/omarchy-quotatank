@@ -549,8 +549,9 @@ def fetch_claude(timeout: float) -> dict[str, Any]:
             login = read_claude_login(credentials_path)
     except (OSError, ValueError, json.JSONDecodeError):
         return error_provider(provider_id, "no_credentials", "Claude Code credentials could not be read.")
-    if claude_login_expired(login):
-        return error_provider(provider_id, "expired", "The Claude Code sign-in has expired.")
+    # A token Claude Code could not renew is still sent: when renewal failed for want of a network,
+    # as at the first check after login, that reads as a connection error rather than a sign-in
+    # prompt, and a sign-in that is really gone comes back as 401 (expired).
 
     try:
         payload = http_json(

@@ -4,6 +4,14 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.7.2
+
+### Fixed
+
+- Settings text fields no longer read the clipboard on their own, even while shown. An editable Qt text input fetches every text another application copies, so the field's input stays read-only and the widget applies typing, Backspace, Delete, Cut, and Enter itself. The clipboard is read only when you paste with Ctrl+V or Shift+Insert. Undo inside a field is not available.
+- Claude no longer asks you to sign in after turning the computer on. The first check of a session runs before the network is up, so Claude Code could not renew the expired sign-in, and the widget treated that as signed out. A token that could not be renewed is now still sent, so offline reads as a connection error and only a rejected sign-in asks you to sign in again.
+- When a check finds providers unreachable (network errors or timeouts), the widget tries once more a minute later instead of waiting for the next refresh interval.
+
 ## 1.7.1
 
 ### Fixed

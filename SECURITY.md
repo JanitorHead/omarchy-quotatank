@@ -87,6 +87,12 @@ terminal, with a fixed command from the plugin's own provider list (a sign-in
 command, optionally preceded by `mise use -g <package>`); no user input or backend
 data is put into the command.
 
+Settings text fields never read the clipboard on their own. An editable Qt text
+input fetches the text of every clipboard change in the shell process, so each
+field's input is read-only, exists only while the field is on screen, and the
+plugin applies the typing itself; the clipboard is read only on an explicit paste
+(Ctrl+V or Shift+Insert) into a focused field.
+
 Banked resets use fixed upstream URLs and explicit managed account selection.
 The account identity is checked again before consumption. Each logical reset
 attempt has a UUID reused for retries; automatic polling cannot consume a reset.
