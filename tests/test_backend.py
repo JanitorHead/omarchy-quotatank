@@ -151,7 +151,7 @@ class FailureAndIsolationTests(unittest.TestCase):
             kimi_dir = root / "kimi"
             bin_dir = root / "bin"
             bin_dir.mkdir()
-            # Claude Code is installed but cannot renew the sign-in (its refresh token is gone too).
+            # Claude Code is installed but cannot renew the sign-in (offline, or its refresh token is gone).
             claude = bin_dir / "claude"
             claude.write_text("#!/bin/sh\nexit 1\n")
             claude.chmod(0o755)
@@ -170,7 +170,14 @@ class FailureAndIsolationTests(unittest.TestCase):
                 (kimi_dir / "credentials" / "kimi-code.json").write_text(json.dumps({
                     "access_token": "secret", "expires_at": 1
                 }))
-                self.assertEqual(usage.fetch_claude(1)["errorKind"], "expired")
+                # The endpoint decides what a token renewal could not fix: offline right after login
+                # is a connection error, not a sign-in prompt; a rejected token is an expired sign-in.
+                offline = usage.ProviderFailure("network", "Could not reach the usage endpoint.")
+                rejected = usage.ProviderFailure("expired", "The saved sign-in is no longer accepted.")
+                with mock.patch.object(usage, "http_json", side_effect=offline):
+                    self.assertEqual(usage.fetch_claude(1)["errorKind"], "network")
+                with mock.patch.object(usage, "http_json", side_effect=rejected):
+                    self.assertEqual(usage.fetch_claude(1)["errorKind"], "expired")
                 self.assertEqual(usage.fetch_kimi(1)["errorKind"], "expired")
 
     def test_expired_claude_sign_in_is_renewed_by_claude_code(self):

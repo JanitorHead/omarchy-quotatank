@@ -108,6 +108,8 @@ Item {
   function settle() {
     launchPending = false
     loading = false
+    var wasRetry = networkRetry.retrying
+    networkRetry.retrying = false
     if (fetchProcess.connectionId !== connectionId) {
       pendingRefresh = true
     } else if (fetchProcess.outputTooLarge) {
@@ -132,6 +134,13 @@ Item {
           fetchError = ""
           var generated = new Date(String(parsed.generatedAt || "")).getTime()
           lastSuccessAt = isFinite(generated) ? generated : Date.now()
+          // The first check of a session often runs before the network is up; try once more soon
+          // instead of leaving the cards on a connection error until the next interval.
+          var unreachable = UsageLogic.listOrEmpty(parsed.providers).some(function(provider) {
+            return provider && (provider.errorKind === "network" || provider.errorKind === "timeout")
+          })
+          if (!unreachable) networkRetry.stop()
+          else if (!wasRetry) networkRetry.start()
           refreshed()
         }
       }
@@ -207,6 +216,17 @@ Item {
     onTriggered: {
       fetchProcess.timedOut = true
       fetchProcess.running = false
+    }
+  }
+
+  Timer {
+    id: networkRetry
+    property bool retrying: false
+    interval: 60000
+    repeat: false
+    onTriggered: {
+      retrying = true
+      root.requestRefresh(false)
     }
   }
 

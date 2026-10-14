@@ -45,6 +45,17 @@ ShellRoot {
     field.textEdited()
     if (done) field.editingFinished()
   }
+  // Press keys in a shown field: strings are typed characters, numbers are Qt key codes.
+  function type(name, keys) {
+    var field = find(form, name)
+    var input = find(form, name + "Input")
+    check(field !== null && input !== null, "shown field exists: " + name)
+    for (var i = 0; i < keys.length; i++) {
+      var typed = typeof keys[i] === "string"
+      field.handleKey(input, { key: typed ? 0 : keys[i], text: typed ? keys[i] : "", modifiers: 0,
+        accepted: false, matches: function() { return false } })
+    }
+  }
   // The host: persist a change batch into the live settings and acknowledge it.
   function host(values) {
     root.saves++
@@ -210,8 +221,10 @@ ShellRoot {
         root.check(root.saved.dismissedProviders.join(",") === "claude,deepseek", "turning a provider off declines it")
         root.check(root.find(root.form, "providerFilterFieldInput") === null, "a collapsed section keeps no live input")
         root.find(root.form, "moreProviders").expanded = true
-        root.check(root.find(root.form, "providerFilterFieldInput") !== null, "a shown settings field has a live input")
-        root.edit("providerFilterField", "deep")
+        var filterInput = root.find(root.form, "providerFilterFieldInput")
+        root.check(filterInput !== null, "a shown settings field has a live input")
+        root.check(filterInput.readOnly, "the live input stays read-only, so it never reads the clipboard on its own")
+        root.type("providerFilterField", ["d", "e", "e", "p", "x", Qt.Key_Backspace])
         root.check(root.form.moreKeys.map(function (entry) { return entry.id }).join(",") === "deepseek,deepinfra"
           && root.form.moreSignIns.length === 0, "the filter narrows More providers by name")
         root.form.usagePayload = null

@@ -174,7 +174,7 @@ In **Settings → Costs → Custom prices**, add the exact model ID and its inpu
 
 | Key | Default | Meaning |
 |---|---:|---|
-| `refreshIntervalSec` | `900` | Automatic refresh interval; clamped to 60–3600 seconds |
+| `refreshIntervalSec` | `900` | Automatic refresh interval; clamped to 60–3600 seconds. A check that finds providers unreachable is retried once a minute later |
 | `enabledProviders` | every sign-in provider | Local providers queried and displayed; API-key providers are off by default. Proxy discovery is automatic |
 | `dismissedProviders` | `[]` | Providers set up on this computer that **Ignore** stopped suggesting |
 | `usageSource` | `direct` | `direct` CLI sign-ins or `cliproxy` managed accounts for quotas |
