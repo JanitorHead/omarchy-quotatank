@@ -140,6 +140,13 @@ class ProjectContractTests(unittest.TestCase):
         for relative in screenshots:
             self.assertEqual((ROOT / relative).read_bytes()[:8], b"\x89PNG\r\n\x1a\n", relative)
 
+        # The marketplace rejects a release whose manifest fields exceed its listing limits
+        # (omarchy-plugin-marketplace scripts/build-catalog.mjs, manifestFieldLimits).
+        manifest = json.loads((ROOT / "manifest.json").read_text())
+        limits = {"id": 128, "name": 120, "version": 64, "author": 120, "description": 500, "license": 120}
+        for field, limit in limits.items():
+            self.assertLessEqual(len(manifest[field]), limit, field)
+
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
         self.assertIn('python-version: ["3.10"', workflow)
         self.assertIn('"3.14"]', workflow)
