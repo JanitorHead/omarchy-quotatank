@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "janitorhead.quotatank",
   "name": "Quotatank",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "author": "JanitorHead",
   "license": "MIT",
   "description": "Menu-bar AI usage tracker for coding agents, 49 providers. Shows how much of your Claude Code (Anthropic), Codex (ChatGPT), Gemini CLI, Antigravity, GitHub Copilot, Cursor, Kimi, Grok, Kiro, Z.ai GLM, MiniMax, Qwen or OpenCode subscription is left: 5-hour and weekly rate limits, quotas, resets, pace. Tracks prepaid credits and balances for OpenRouter, DeepSeek, Moonshot and more. Finds your sign-ins on its own. A Costs tab charts tokens and LLM spend per model, like ccusage.",
