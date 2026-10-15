@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Test panels load Panel.qml with synthetic readings; their threshold alerts must never reach the desktop
+# running the tests. Records the arguments when a test asks for them.
+set -euo pipefail
+if [[ -n ${MODEL_USAGE_NOTIFY_LOG:-} ]]; then
+  /usr/bin/python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@" >>"$MODEL_USAGE_NOTIFY_LOG"
+fi
