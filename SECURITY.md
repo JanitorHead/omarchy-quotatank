@@ -123,6 +123,40 @@ Sign-ins owned by other tools are never read into a backup.
 Omarchy subscription accounts are read from Omarchy's registry; a login folder is
 used only when it resolves inside Omarchy's accounts folder for that provider.
 
+omp (Oh My Pi) is read only when the user has set it up: Quotatank runs `omp` only if
+omp's own `agent.db` already exists (it is never opened), so it never makes omp create
+state for someone who merely has the binary. It runs `omp usage --json` and, for live
+activity, `omp usage reset --json` without a target, which lists saved resets and never
+spends one; the listing waits for omp 18.9 or later and refreshes only when a request names
+an account it does not know, at most every ten minutes. Each omp process runs with fixed
+arguments, no secrets, a timeout and an output ceiling, in a private `0700` working folder
+under Quotatank's state. Its process group is ended when the Python helper gets SIGTERM,
+SIGHUP or SIGINT or its output closes, and the kernel ends it if the helper is killed.
+`~/.omp/agent/agent.db` (omp's credential store) is never read.
+
+Live omp activity (`scripts/omp-live.py`) tails omp's session files for new lines and
+emits only numbers and names: provider, model, token count, cost, credential number and
+time. Prompts, responses, tool output, paths and session ids never leave the helper.
+Symlinks, FIFOs and lines over 64 KiB are skipped, and each pass is capped in files and
+bytes.
+
+On another computer, Quotatank reads two services the user starts there. From an
+`omp stats` dashboard it requests only `/api/stats/overview`, `/providers`, `/models`,
+`/folders` and the `/api/events` feed; that dashboard has no authentication and also
+serves conversations, so the settings say to keep it on Tailscale or behind an SSH tunnel.
+From an omp auth gateway it requests only `/v1/usage`. The gateway token can also send
+model requests: it is saved like the management key (stdin to `management-key.py`, a
+`0600` file, only the path in settings) and goes over plain HTTP only to this computer or
+to a Tailscale address this computer reaches through Tailscale; anything else needs HTTPS.
+omp URLs are a scheme, a host and an optional port only, redirects are refused,
+environment proxies are ignored for these requests, and bodies and event lines are capped.
+
+Three desktop actions run only when the user asks: **Use** on an Omarchy account runs
+`omarchy agent account use <provider> <id>` (Omarchy changes which login new sessions use;
+no credential is touched), **Copy** beside a setup command runs `wl-copy` with that fixed
+command as its argument, and the motion setting reads `hyprctl -j getoption
+animations:enabled`. None goes through a shell.
+
 Banked resets use fixed upstream URLs and explicit managed account selection.
 The account identity is checked again before consumption. Each logical reset
 attempt has a UUID reused for retries; automatic polling cannot consume a reset.
