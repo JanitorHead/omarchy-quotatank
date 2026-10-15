@@ -1,0 +1,297 @@
+import QtQuick
+import Quickshell
+
+// Menu bar chip contract (DESIGN §1–2). The "components" phase runs offscreen in a window of its own, so
+// animations really run: motion tokens and reduced motion, rolling digits, account dots, hints, the
+// clock pie and the hover card, each driven from UsageLogic's helpers by synthetic accounts. The "panel"
+// phase needs a Wayland session (Panel.qml creates a layer-shell panel): it loads Panel.qml with the
+// synthetic multi-account backend and counts the chips it renders in both account modes.
+ShellRoot {
+  id: root
+
+  readonly property string repoUrl: Quickshell.env("MODEL_USAGE_REPO_URL")
+  readonly property string phaseName: Quickshell.env("MODEL_USAGE_BAR_PHASE") || "components"
+  readonly property real now: Math.floor(Date.now() / 1000)
+  readonly property var thresholds: ({ warningThreshold: 25, criticalThreshold: 10 })
+  property var logic: null
+  property var stage: null
+  property var motion: null
+  property var number: null
+  property var dots: null
+  property var card: null
+  property var widget: null
+  property var live: null
+  property int step: 0
+  property int ticks: 0
+  property int waited: 0
+
+  Item {
+    id: panelHost
+    width: 800
+    height: 26
+  }
+
+  function check(condition, message) {
+    if (condition) return
+    console.error("BAR TEST FAILED: " + message)
+    Qt.exit(1)
+    throw new Error("bar contract stopped")
+  }
+
+  function create(name, parent, props) {
+    var component = Qt.createComponent(repoUrl + "/" + name)
+    check(component.status === Component.Ready, name + ": " + component.errorString())
+    var object = component.createObject(parent, props || {})
+    check(object !== null, "create " + name)
+    return object
+  }
+
+  function namedChild(item, name) {
+    if (!item) return null
+    if (item.objectName === name) return item
+    var children = item.children || []
+    for (var i = 0; i < children.length; i++) {
+      var found = namedChild(children[i], name)
+      if (found) return found
+    }
+    return null
+  }
+
+  function namedChildren(item, prefix, out) {
+    if (!item) return out
+    if (String(item.objectName).indexOf(prefix) === 0) out.push(item)
+    var children = item.children || []
+    for (var i = 0; i < children.length; i++) namedChildren(children[i], prefix, out)
+    return out
+  }
+
+  function win(id, label, used, resetIn, seconds) {
+    return { id: id, label: label, used: used, remaining: 100 - used, resetsAt: now + resetIn, windowSeconds: seconds }
+  }
+
+  function account(id, label, used, extra) {
+    return Object.assign({ id: "claude", accountId: id, label: label, status: "ok", origin: "omarchy",
+      windows: [win("session", "5-hour limit", used, 7200, 18000), win("weekly", "Weekly limit", 30, 300000, 604800)],
+      activity: {}, history: { h24: [10, 20, 30, 40, 50, used], d7: [] } }, extra || {})
+  }
+
+  function provider(accounts, extra) {
+    return Object.assign({ id: "claude", name: "Claude Code", status: "ok", windows: accounts[0].windows,
+      accounts: accounts }, extra || {})
+  }
+
+  function strip(data, counted, mode, extra) {
+    return logic.strip(data, counted, mode, Object.assign({ selector: "auto", nowSeconds: now }, thresholds, extra || {}))
+  }
+
+  // Runs one step per tick; a step returns false to wait for animations or processes.
+  readonly property var componentSteps: [
+    function () {
+      root.stage = Qt.createQmlObject('import QtQuick; import Quickshell; FloatingWindow { visible: true; implicitWidth: 520; '
+        + 'implicitHeight: 360; color: "transparent"; property alias host: host; Item { id: host; anchors.fill: parent } }',
+        root, "barStage")
+      root.logic = Qt.createQmlObject('import QtQuick; import "' + repoUrl + '/UsageLogic.js" as UsageLogic; QtObject { '
+        + 'function strip(p, c, m, o) { return UsageLogic.barAccountStrip(p, c, m, o) } '
+        + 'function hover(p, c, m, o) { return UsageLogic.barHoverModel(p, c, m, o) } }', root, "barLogic")
+      root.motion = create("Motion.qml", root, {})
+      return true
+    },
+    function () {
+      if (motion.probe.running || waited < 2) return false
+      check(!motion.systemReduced && !motion.reduced, "Hyprland with animations on keeps motion")
+      check(motion.duration(motion.row) === 260 && motion.duration(motion.ping) === 700, "tokens pass through")
+      motion.applyOption('{"option":"animations:enabled","int":0,"set":true}')
+      check(motion.reduced && motion.duration(motion.digit) === 0, "Hyprland animations off reduce motion")
+      motion.applyOption('{"option":"animations:enabled","int":1,"set":true}')
+      motion.preference = "reduced"
+      var tokens = [motion.micro, motion.row, motion.morph, motion.digit, motion.popIn, motion.popOut, motion.flash, motion.ping]
+      for (var i = 0; i < tokens.length; i++) check(motion.duration(tokens[i]) === 0, "reduced motion zeroes token " + tokens[i])
+      motion.preference = "system"
+      check(!motion.reduced && motion.duration(motion.micro) === 160, "the setting follows Hyprland again")
+      root.number = create("RollingNumber.qml", stage.host, { text: "72%", motion: motion })
+      number.font.pixelSize = 11
+      return true
+    },
+    function () {
+      check(number.renderedText() === "72%" && number.implicitWidth > 0, "first value shows without rolling")
+      check(number.directionOf("72%", "75%") === 1 && number.directionOf("75%", "72%") === -1, "direction follows the value")
+      check(number.directionOf("$1,234.50", "$1,234.00") === -1 && number.directionOf("—", "5%") === 0, "money and dashes")
+      number.text = "75%"
+      check(number.rolling, "a changed digit rolls")
+      return true
+    },
+    function () {
+      if (number.rolling) return false
+      check(number.renderedText() === "75%", "rolled digits settle on the new value, got " + number.renderedText())
+      number.text = "100%"
+      return true
+    },
+    function () {
+      if (number.rolling) return false
+      check(number.renderedText() === "100%", "a longer value slides in whole, got " + number.renderedText())
+      number.text = "9%"
+      return true
+    },
+    function () {
+      if (number.rolling) return false
+      check(number.renderedText() === "9%", "a shorter value slides in whole, got " + number.renderedText())
+      motion.preference = "reduced"
+      number.text = "42%"
+      check(!number.rolling && number.renderedText() === "42%", "reduced motion changes digits at once")
+      motion.preference = "system"
+      var two = provider([account("main", "Work", 72, { active: true }), account("personal", "Personal", 3)],
+        { accountSwitch: { mode: "manual", threshold: 95 } })
+      root.dots = create("AccountDots.qml", stage.host, { y: 40, motion: motion, strip: strip(two, [0], "single") })
+      return true
+    },
+    function () {
+      check(dots.dotCount === 2, "two accounts, two dots")
+      var first = namedChild(dots, "accountDot-0")
+      var second = namedChild(dots, "accountDot-1")
+      check(first.counted && !first.dashed, "the account in use is counted")
+      check(!second.counted && !second.dashed && second.dotState === "ok", "the other account is a hollow ok ring")
+      check(namedChild(dots, "accountDotsFill").shown && namedChild(dots, "accountDotsFill").x === 0, "filled dot on the first slot")
+      check(!namedChild(dots, "accountDotsMore").visible, "no +N with two accounts")
+      check(!namedChild(dots, "accountDotsHint").shown, "no hint while the account in use has room")
+      check(!namedChild(dots, "accountDotsPie").shown, "no pie while accounts have room")
+      var switched = provider([account("main", "Work", 72), account("personal", "Personal", 3, { active: true })])
+      dots.strip = strip(switched, [1], "single")
+      return true
+    },
+    function () {
+      var fill = namedChild(dots, "accountDotsFill")
+      if (fill.x !== dots.pitch) return waited < 40 ? false : check(false, "filled dot slides to the new account")
+      var five = provider([0, 1, 2, 3, 4].map(function (i) { return account("a" + i, "Account " + (i + 1), 10 + i * 10) }))
+      dots.strip = strip(five, [4], "single")
+      return true
+    },
+    function () {
+      check(dots.dotCount === 3, "five accounts show three dots")
+      check(namedChild(dots, "accountDot-2").counted && namedChild(dots, "accountDot-2").info.index === 4,
+        "the counted fifth account keeps a dot")
+      var more = namedChild(dots, "accountDotsMore")
+      check(more.visible && more.text === "+2", "and +2 for the rest")
+      var failing = provider([account("main", "Work", 40, { active: true }),
+        account("broken", "Lab", 0, { status: "error", errorKind: "expired", windows: [] })])
+      dots.strip = strip(failing, [0], "single")
+      return true
+    },
+    function () {
+      check(namedChild(dots, "accountDot-1").dashed && namedChild(dots, "accountDot-1").dotState === "error",
+        "a failed account is a dashed ring")
+      check(!namedChild(dots, "accountDot-0").dashed, "a healthy account keeps a solid ring")
+      dots.stale = true
+      check(namedChild(dots, "accountDot-0").dashed && !namedChild(dots, "accountDotsFill").shown,
+        "a stale reading dashes every ring and drops the fill")
+      dots.stale = false
+      // Hint rules: the counted Omarchy login is critical and another login is below warning.
+      var busy = [account("main", "Work", 92, { active: true }), account("personal", "Personal", 3)]
+      dots.strip = strip(provider(busy, { accountSwitch: { mode: "manual", threshold: 95 } }), [0], "single")
+      var hint = namedChild(dots, "accountDotsHint")
+      check(hint.shown && hint.text === "→ Personal", "manual switching suggests the login with room")
+      dots.strip = strip(provider(busy, { accountSwitch: { mode: "auto", threshold: 95 } }), [0], "single")
+      check(!hint.shown, "no hint when Omarchy switches by itself")
+      dots.strip = strip(provider(busy), [0], "single")
+      check(!hint.shown, "no hint without Omarchy switching")
+      var warm = [account("main", "Work", 92, { active: true }), account("personal", "Personal", 80)]
+      dots.strip = strip(provider(warm, { accountSwitch: { mode: "manual", threshold: 95 } }), [0], "single")
+      check(!hint.shown, "no hint when the other login is at warning too")
+      dots.strip = strip(provider(busy, { accountSwitch: { mode: "manual", threshold: 95 } }), [0, 1], "together")
+      check(!hint.shown, "no hint when accounts are used together")
+      dots.strip = strip(provider(busy, { accountSwitch: { mode: "manual", threshold: 95 } }), [0], "single", { stale: true })
+      check(!hint.shown, "no hint from a stale reading")
+      // Every account used up: one clock pie towards the earliest reset, and the time left beside it.
+      var spent = [account("main", "Work", 100, { active: true }),
+        account("personal", "Personal", 100, { windows: [win("session", "5-hour limit", 100, 3600, 18000)] })]
+      dots.strip = strip(provider(spent), [0], "single")
+      check(dots.allUsedUp && namedChild(dots, "accountDotsPie").shown, "all used up shows the pie")
+      check(Math.abs(namedChild(dots, "accountDotsPie").fraction - 0.8) < 0.01, "pie fills towards the earliest reset")
+      check(hint.shown && hint.text === "1h 0m", "the hint names the time to that reset, got " + hint.text)
+      return true
+    },
+    function () {
+      if (namedChild(dots, "accountDotsPie").opacity !== 1) return waited < 40 ? false : check(false, "pie fades in")
+      var spending = account("main", "Work", 64, { active: true, activity: { lastIncreaseAt: now - 60, lastDelta: 4, lastReadingAt: now - 60 } })
+      var data = provider([spending, account("personal", "Personal", 100, { windows: [win("session", "5-hour limit", 100, 3600, 18000)] })],
+        { accountSwitch: { mode: "auto", threshold: 95 } })
+      var model = logic.hover(data, [0], "single", Object.assign({ selector: "auto", nowSeconds: now, readAtSeconds: now - 120,
+        formatClock: function (seconds) { return Qt.formatTime(new Date(seconds * 1000), "HH:mm") } }, thresholds))
+      root.card = create("AccountHoverCard.qml", stage.host, { y: 70, model: model, motion: motion, open: true })
+      return true
+    },
+    function () {
+      if (card.opacity !== 1) return waited < 40 ? false : check(false, "hover card fades in")
+      check(namedChild(card, "hoverCardTitle").text === "Claude · 2 accounts", "card names the provider and count")
+      check(namedChild(card, "hoverCardMode").text === "Omarchy · switches at 95%", "card says how Omarchy switches")
+      check(namedChild(card, "hoverCardStatus-0").text === "spending now", "spending account says so")
+      check(namedChild(card, "hoverCardStatus-1").text.indexOf("used up · back ") === 0, "used-up account says when it is back")
+      check(namedChild(card, "hoverCardRead").text.indexOf("Read at ") === 0, "footer says when the reading was taken")
+      check(namedChildren(card, "hoverCardRow-", []).length === 2, "one row per account")
+      card.open = false
+      return true
+    },
+    function () {
+      if (card.opacity !== 0) return waited < 40 ? false : check(false, "hover card fades out")
+      console.log("Bar QML contract: passed (components)")
+      Qt.quit()
+      return false
+    }
+  ]
+
+  readonly property var panelSteps: [
+    function () {
+      root.live = Qt.createQmlObject('import QtQuick; QtObject { signal request(var event); property var recentByAccount: ({}) }', root, "live")
+      root.widget = create("Panel.qml", panelHost, { moduleName: "test.bar", ipcTarget: "test.bar",
+        settings: { enabledProviders: ["claude", "codex"], barProviders: ["claude", "codex"], barAccountMode: "chips",
+          refreshIntervalSec: 3600 } })
+      widget.liveActivity = live
+      return true
+    },
+    function () {
+      if (widget.providers.length < 2) return waited < 150 ? false : check(false, "synthetic accounts load")
+      var chips = namedChildren(widget, "barChip-", [])
+      check(chips.length === 6, "chips per account: 2 Claude logins and 4 of 5 Codex accounts, got " + chips.length)
+      var underlined = chips.filter(function (chip) {
+        var line = namedChild(chip, "barAccountUnderline")
+        return chip.objectName.indexOf("barChip-claude@") === 0 && line && line.visible
+      })
+      check(underlined.length === 1 && underlined[0].objectName === "barChip-claude@main", "the login in use is underlined")
+      check(namedChild(chips[0], "barAccountInitial").visible, "account chips carry the account's initial")
+      widget.settings = Object.assign({}, widget.settings, { barAccountMode: "dots" })
+      return true
+    },
+    function () {
+      var chips = namedChildren(widget, "barChip-", [])
+      check(chips.length === 2, "one chip per provider with dots, got " + chips.length)
+      var claudeDots = namedChild(namedChild(widget, "barChip-claude"), "barAccountDots")
+      var codexDots = namedChild(namedChild(widget, "barChip-codex"), "barAccountDots")
+      check(claudeDots.visible && claudeDots.dotCount === 2, "Claude shows two dots")
+      check(codexDots.visible && codexDots.dotCount === 3 && codexDots.extra === 2, "Codex shows three dots and +2")
+      check(namedChild(namedChild(widget, "barChip-claude"), "barAccountRemaining").text === "72%", "value of the login in use")
+      check(namedChild(widget, "barChip-claude").tooltipText === "", "the hover card replaces the tooltip")
+      live.request({ type: "request", provider: "claude", accountId: "main", at: now })
+      check(claudeDots.lastPingAt["0"] !== undefined, "a live request rings from the account's dot")
+      console.log("Bar QML contract: passed (panel chips)")
+      Qt.quit()
+      return false
+    }
+  ]
+
+  Timer {
+    interval: 40
+    running: true
+    repeat: true
+    onTriggered: {
+      root.ticks++
+      root.check(root.ticks < 400, "timed out at step " + root.step + " of " + root.phaseName)
+      var steps = root.phaseName === "panel" ? root.panelSteps : root.componentSteps
+      if (root.step >= steps.length) return
+      if (steps[root.step]()) {
+        root.step++
+        root.waited = 0
+      } else {
+        root.waited++
+      }
+    }
+  }
+}

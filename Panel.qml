@@ -861,14 +861,6 @@ Ui.Panel {
     costBackend: costBackend
   }
 
-  // One motion helper for the whole widget (stand-in until QmlBar's Motion.qml lands; same API).
-  Motion {
-    id: motion
-    preference: String(root.setting("motion", "system"))
-    panelOpen: root.opened
-  }
-  readonly property alias motionHelper: motion
-
   // A first open with nothing read yet shows placeholder blocks, but only once reading takes over a
   // second; a quick first reading never flashes them.
   property bool skeletonDue: false
@@ -909,6 +901,274 @@ Ui.Panel {
     function exportJson(): string { return UsageLogic.exportSnapshot(root.providers, Date.now() / 1000, root.hideAccountEmails) }
   }
 
+  // ---- Menu bar chips ----
+  Motion {
+    id: motion
+    preference: String(root.setting("motion", "system"))
+    panelOpen: root.opened
+  }
+  // Children take `motion: root.motionHelper`: inside a child, a bare `motion` names its own property.
+  readonly property alias motionHelper: motion
+
+  // Several accounts in the bar: "dots" keeps one chip per provider with a dot per account, "chips"
+  // gives each account its own chip (at most four per provider).
+  readonly property string barAccountMode: String(setting("barAccountMode", "dots")) === "chips" ? "chips" : "dots"
+  // The bar's own clock: ages readings and counts resets down while the panel is closed.
+  property double barNowMs: Date.now()
+
+  // Live activity the bar reads: a ring per request, recent spending per account. Tests swap it.
+  property QtObject liveActivity: ompActivity
+  signal barLivePing(string providerId, string accountId)
+
+  // Last activity per account ("<provider>@<accountId>" → epoch seconds): live omp requests, plus the
+  // proxy's last-used account.
+  readonly property var barRecentByAccount: {
+    var result = Object.assign({}, liveActivity && liveActivity.recentByAccount ? liveActivity.recentByAccount : {})
+    if (!proxyMode) return result
+    var rows = UsageLogic.listOrEmpty(activityBackend.providers)
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].status !== "ok" || !rows[i].accountId) continue
+      var key = String(rows[i].id) + "@" + String(rows[i].accountId)
+      result[key] = Math.max(Number(result[key]) || 0, Number(rows[i].lastUsedAt) || 0)
+    }
+    return result
+  }
+
+  readonly property var barProviderMap: {
+    var map = {}
+    for (var i = 0; i < percentageProviders.length; i++) map[String(percentageProviders[i].id)] = percentageProviders[i]
+    return map
+  }
+  readonly property var barChipEntries: UsageLogic.barChipEntries(root.percentageProviders, barAccountMode,
+    function (provider) { return root.chipCounted(provider, root.chipAccountMode(provider)) }, setting("extraKeys", "{}"))
+  onBarChipEntriesChanged: syncBarChips()
+
+  function chipAccountMode(provider) {
+    return UsageLogic.accountMode(provider, setting("accountModes", "{}"), proxyMode, barNowMs / 1000, barRecentByAccount)
+  }
+
+  // Accounts a chip counts. A proxy picks accounts itself, so there it is the account that served the
+  // last request, when one is known.
+  function chipCounted(provider, mode) {
+    var accounts = UsageLogic.listOrEmpty(provider && provider.accounts)
+    if (accounts.length < 2) return []
+    if (proxyMode) {
+      var last = lastAccount(provider)
+      var index = last.reading ? accounts.indexOf(last.reading) : -1
+      return index >= 0 ? [index] : []
+    }
+    return UsageLogic.countedAccounts(provider, mode, barNowMs / 1000, barRecentByAccount)
+  }
+
+  // Keeps one row per chip key, moved and updated in place, so chips survive readings.
+  function syncBarChips() {
+    var wanted = barChipEntries
+    var keys = wanted.map(function (entry) { return entry.key })
+    for (var r = barChipModel.count - 1; r >= 0; r--)
+      if (keys.indexOf(barChipModel.get(r).chipKey) === -1) barChipModel.remove(r)
+    for (var i = 0; i < wanted.length; i++) {
+      var entry = wanted[i]
+      var row = { chipKey: entry.key, providerId: entry.providerId, accountIndex: entry.accountIndex, initial: entry.initial }
+      var at = -1
+      for (var j = i; j < barChipModel.count && at < 0; j++) if (barChipModel.get(j).chipKey === entry.key) at = j
+      if (at < 0) {
+        barChipModel.insert(i, row)
+        continue
+      }
+      if (at !== i) barChipModel.move(at, i, 1)
+      var current = barChipModel.get(i)
+      if (current.accountIndex !== entry.accountIndex || current.initial !== entry.initial) barChipModel.set(i, row)
+    }
+  }
+
+  ListModel {
+    id: barChipModel
+    Component.onCompleted: root.syncBarChips()
+  }
+
+  // When a provider's reading was taken, for the hover card.
+  function readingSeconds(provider) {
+    var fetched = new Date(String(provider && provider.fetchedAt || "")).getTime()
+    return isFinite(fetched) && fetched > 0 ? fetched / 1000 : backend.lastSuccessAt / 1000
+  }
+
+  // A time today or tomorrow in the user's clock format, a date further out.
+  function barClockText(epochSeconds) {
+    var date = new Date(epochSeconds * 1000)
+    if (Math.abs(epochSeconds * 1000 - barNowMs) < 86400000) return Qt.formatTime(date, tickTimeFormat)
+    return Qt.formatDate(date, UsageLogic.barResetFormat("date", setting("barResetTimeFormat", "24h"), setting("barResetDateFormat", "DD/MM")))
+  }
+
+  Timer {
+    interval: 30000
+    running: root.percentageMode
+    repeat: true
+    onTriggered: root.barNowMs = Date.now()
+  }
+
+  Connections {
+    target: backend
+    function onRefreshed() { root.barNowMs = Date.now() }
+  }
+
+  Connections {
+    target: root.liveActivity
+    ignoreUnknownSignals: true
+    function onRequest(event) {
+      if (event) root.barLivePing(String(event.provider || ""), String(event.accountId || ""))
+    }
+  }
+
+  // Hover card: opens 350 ms after the pointer settles on a chip with several accounts, closes 150 ms
+  // after it leaves both the chip and the card, and stays out of the way while the panel is open.
+  property Item hoverChip: null
+  property Item hoverCandidate: null
+  property bool hoverCardOpen: false
+  property alias hoverCard: hoverCardSurface
+
+  function chipHoverChanged(chip, hovered) {
+    if (hovered && !opened) {
+      hoverCandidate = chip
+      hoverCloseTimer.stop()
+      if (hoverCardOpen) hoverChip = chip
+      else hoverOpenTimer.restart()
+    } else if (hoverCandidate === chip) {
+      hoverCandidate = null
+      hoverOpenTimer.stop()
+      if (hoverCardOpen) hoverCloseTimer.restart()
+    }
+  }
+
+  function closeHoverCard() {
+    hoverOpenTimer.stop()
+    hoverCandidate = null
+    hoverCardOpen = false
+  }
+
+  Timer {
+    id: hoverOpenTimer
+    interval: 350
+    onTriggered: if (root.hoverCandidate && !root.opened) {
+      root.hoverChip = root.hoverCandidate
+      root.hoverCardOpen = true
+    }
+  }
+
+  Timer {
+    id: hoverCloseTimer
+    interval: 150
+    onTriggered: if (!root.hoverCandidate && !hoverCardHover.hovered) root.hoverCardOpen = false
+  }
+
+  PopupWindow {
+    id: hoverCardWindow
+    readonly property Item chip: root.hoverChip
+    readonly property var chipWindow: chip ? chip.QsWindow.window : null
+    property real anchorX: 0
+    property real anchorY: 0
+    visible: !!chip && !!chipWindow && (hoverCardSurface.open || hoverCardSurface.opacity > 0)
+    color: "transparent"
+    implicitWidth: Math.ceil(hoverCardSurface.implicitWidth)
+    implicitHeight: Math.ceil(hoverCardSurface.implicitHeight)
+
+    // Centred under the chip (over it on a bottom bar) and kept inside the bar's window, like Omarchy's
+    // popup cards; the anchor's defaults slide it back on screen.
+    function place() {
+      if (!chip || !chipWindow) return
+      var margin = Style.gapsOut
+      var localX = chip.width / 2 - implicitWidth / 2
+      var localY = root.bar && root.bar.position === "bottom" ? -implicitHeight - margin : chip.height + margin
+      var point = chipWindow.contentItem.mapFromItem(chip, localX, localY)
+      anchorX = Math.round(Math.max(margin, Math.min(point.x, chipWindow.width - implicitWidth - margin)))
+      anchorY = Math.round(point.y)
+    }
+
+    anchor {
+      window: hoverCardWindow.chipWindow
+      rect.x: hoverCardWindow.anchorX
+      rect.y: hoverCardWindow.anchorY
+      rect.width: 1
+      rect.height: 1
+      onAnchoring: hoverCardWindow.place()
+    }
+
+    AccountHoverCard {
+      id: hoverCardSurface
+      objectName: "accountHoverCard"
+      anchors.fill: parent
+      open: root.hoverCardOpen && !root.opened && !!hoverCardWindow.chip
+      model: hoverCardWindow.chip ? hoverCardWindow.chip.hoverModel : null
+      motion: root.motionHelper
+      quotaMode: hoverCardWindow.chip ? hoverCardWindow.chip.quotaMode : root.quotaMode
+      warningThreshold: root.warningThreshold
+      criticalThreshold: root.criticalThreshold
+      fontFamily: root.fontFamily
+      clockFormat: root.tickTimeFormat
+      endSeconds: hoverCardWindow.chip ? root.readingSeconds(hoverCardWindow.chip.modelData) : 0
+      barPosition: root.bar ? String(root.bar.position) : "top"
+
+      HoverHandler {
+        id: hoverCardHover
+        onHoveredChanged: {
+          if (hovered) hoverCloseTimer.stop()
+          else if (!root.hoverCandidate && root.hoverCardOpen) hoverCloseTimer.restart()
+        }
+      }
+    }
+  }
+
+  // One line of a chip: period tag, the value (its digits roll) and the reset time, spaced as one text.
+  component ChipLine: Row {
+    id: chipLine
+    property string tag: ""
+    property string value: ""
+    property string suffix: ""
+    property string valueName: ""
+    property color color: root.foreground
+    property int pixelSize: Style.font.bodySmall
+    readonly property real spaceWidth: Math.round(lineMetrics.advanceWidth(" "))
+    spacing: 0
+
+    FontMetrics {
+      id: lineMetrics
+      font.family: root.fontFamily
+      font.pixelSize: chipLine.pixelSize
+      font.weight: Font.Medium
+    }
+
+    Text {
+      visible: chipLine.tag !== ""
+      anchors.baseline: chipValue.baseline
+      rightPadding: chipLine.spaceWidth
+      text: chipLine.tag
+      color: chipLine.color
+      font.family: root.fontFamily
+      font.pixelSize: chipLine.pixelSize
+      font.weight: Font.Medium
+    }
+
+    RollingNumber {
+      id: chipValue
+      objectName: chipLine.valueName
+      text: chipLine.value
+      color: chipLine.color
+      font.family: root.fontFamily
+      font.pixelSize: chipLine.pixelSize
+      font.weight: Font.Medium
+      motion: root.motionHelper
+    }
+
+    Text {
+      visible: chipLine.suffix !== ""
+      anchors.baseline: chipValue.baseline
+      text: " · " + chipLine.suffix
+      color: chipLine.color
+      font.family: root.fontFamily
+      font.pixelSize: chipLine.pixelSize
+      font.weight: Font.Medium
+    }
+  }
+
   Ui.BarIconButton {
     id: iconButton
     anchors.fill: parent
@@ -934,18 +1194,43 @@ Ui.Panel {
       spacing: 0
 
       Repeater {
-        model: root.percentageProviders
+        id: chipRepeater
+        // Rows come from UsageLogic.barChipEntries(root.percentageProviders, …), kept by syncBarChips().
+        model: barChipModel
 
         delegate: Ui.WidgetButton {
           id: providerChip
-          required property var modelData
+          objectName: "barChip-" + chipKey
+          required property string chipKey
+          required property string providerId
+          required property int accountIndex
+          required property string initial
+          // A chip outlives readings, so digits can roll and flashes fire once; its data follows the
+          // latest reading of its provider.
+          readonly property var modelData: root.barProviderMap[providerId]
+            || ({ id: providerId, name: providerId, status: "none", windows: [] })
+          readonly property var accounts: UsageLogic.listOrEmpty(modelData.accounts)
+          readonly property bool multiAccount: accounts.length >= 2
+          // Chips per account: this chip is one account of its provider.
+          readonly property bool accountChip: accountIndex >= 0 && accountIndex < accounts.length
+          readonly property string accountMode: multiAccount ? root.chipAccountMode(modelData) : "single"
+          readonly property var counted: multiAccount ? root.chipCounted(modelData, accountMode) : []
+          readonly property bool countedAccount: accountChip && counted.indexOf(accountIndex) !== -1
 
           readonly property var lastAccount: root.lastAccount(modelData)
-          readonly property bool usingPoolQuota: root.proxyMode && !lastAccount.reading
-          readonly property var reading: root.proxyMode && lastAccount.reading ? lastAccount.reading : modelData
+          readonly property bool usingPoolQuota: root.proxyMode && !lastAccount.reading && !accountChip
+          // The account whose figure the chip shows: its own on a per-account chip, else the counted
+          // account with the least headroom; -1 shows the provider's summary reading.
+          readonly property int valueIndex: accountChip ? accountIndex
+            : !multiAccount ? -1
+            : root.proxyMode ? (counted.length > 0 ? counted[0] : -1)
+            : UsageLogic.barValueIndex(modelData, counted, limits.top)
+          readonly property var reading: valueIndex >= 0 ? accounts[valueIndex]
+            : root.proxyMode && lastAccount.reading ? lastAccount.reading : modelData
           readonly property var limits: root.barLimitsFor(modelData.id)
           readonly property string quotaMode: root.quotaModeFor(modelData.id)
-          readonly property bool failed: String(modelData.status) === "error"
+          readonly property var failure: accountChip ? reading : modelData
+          readonly property bool failed: String(failure.status) === "error"
           readonly property string blocking: failed ? "" : UsageLogic.blockingWindow(
             limits.top, UsageLogic.exactRemainingForWindow(reading, limits.top),
             limits.bottom, UsageLogic.exactRemainingForWindow(reading, limits.bottom))
@@ -984,10 +1269,16 @@ Ui.Panel {
           readonly property string percentTag: topTag !== "" || !moneyChip ? topTag
             : UsageLogic.rowPeriodTag(UsageLogic.windowRowFor(reading, topWindow, true))
           readonly property string percentLine: (percentTag ? percentTag + " " : "") + shownText + (topReset ? " · " + topReset : "")
-          readonly property string topText: failed ? UsageLogic.errorReasonLabel(modelData.errorKind)
+          readonly property string topText: failed ? UsageLogic.errorReasonLabel(failure.errorKind)
             : moneyChip ? moneyShown.text : percentLine
           readonly property string bottomText: moneyChip ? percentLine
             : (bottomTag ? bottomTag + " " : "") + secondaryText + (bottomReset ? " · " + bottomReset : "")
+          // The same lines in parts: the value rolls, the tag and reset time stay put.
+          readonly property var topParts: failed ? { tag: "", value: topText, suffix: "" }
+            : moneyChip ? { tag: "", value: moneyShown.text, suffix: "" }
+            : { tag: percentTag, value: shownText, suffix: topReset }
+          readonly property var bottomParts: moneyChip ? { tag: percentTag, value: shownText, suffix: topReset }
+            : { tag: bottomTag, value: secondaryText, suffix: bottomReset }
           readonly property string topSeverity: moneyChip ? moneySeverity : severity
           readonly property string secondarySeverity: moneyChip ? (stacked ? severity : "none")
             : secondaryRemaining === null ? "none"
@@ -1003,15 +1294,25 @@ Ui.Panel {
           readonly property color topColor: brandColor !== "" && !failed && topStressed ? stressColor : contentColor
           readonly property color bottomColor: brandColor !== "" && !failed && bottomStressed ? stressColor : contentColor
 
-          bar: root.bar
-          text: ""
-          labelVisible: false
-          hasVisualContent: true
-          fixedWidth: providerChipContent.implicitWidth + Style.space(10)
-          active: stressed || failed
-          horizontalMargin: 0
-          tooltipText: failed
-            ? String(modelData.name || modelData.id) + " · " + root.errorBody(modelData)
+          // An old reading fades the chip: the last refresh failed, or it is two intervals old.
+          readonly property bool stale: UsageLogic.barReadingStale(root.barNowMs, backend.lastSuccessAt,
+            backend.refreshIntervalSec, backend.fetchError !== "", reading)
+          readonly property var strip: multiAccount && !accountChip ? UsageLogic.barAccountStrip(modelData, counted, accountMode, {
+            selector: topWindow, warningThreshold: root.warningThreshold, criticalThreshold: root.criticalThreshold,
+            nowSeconds: root.barNowMs / 1000, recentByAccount: root.barRecentByAccount, stale: stale,
+            extraKeys: root.setting("extraKeys", "{}") }) : null
+          // A provider with several accounts gets the hover card instead of the plain tooltip.
+          readonly property bool hoverCardEligible: multiAccount
+          readonly property var hoverModel: root.hoverChip === providerChip && multiAccount
+            ? UsageLogic.barHoverModel(modelData, counted, accountMode, {
+              selector: topWindow, warningThreshold: root.warningThreshold, criticalThreshold: root.criticalThreshold,
+              nowSeconds: root.barNowMs / 1000, recentByAccount: root.barRecentByAccount, proxyMode: root.proxyMode,
+              extraKeys: root.setting("extraKeys", "{}"), readAtSeconds: root.readingSeconds(modelData), stale: stale,
+              formatClock: root.barClockText,
+              note: usingPoolQuota ? "Figure shown: the account with the most room left" : "" })
+            : null
+          readonly property string plainTooltip: failed
+            ? String(modelData.name || modelData.id) + " · " + root.errorBody(failure)
             : String(modelData.name || modelData.id)
             + (moneyChip ? (moneyShown.unit === "used" ? "\nSpent: " + moneyShown.text + " of " + UsageLogic.formatMoney(moneyShown.total, moneyShown.currency) : "")
               + "\nCan spend now: " + UsageLogic.formatMoney(money, moneyShown.currency) : "")
@@ -1024,14 +1325,85 @@ Ui.Panel {
                   ? secondaryRemaining : UsageLogic.usedFromRemaining(secondaryRemaining), providerChip.quotaMode)) : "")
             + (root.proxyMode ? "\n" + root.lastAccountTooltip(lastAccount) : "")
             + (usingPoolQuota ? "\nQuota shown: account with the most remaining capacity." : "")
+
+          // One-shot flash: worse severity, or the same account's window reset. Seeded at creation, so
+          // existing limits never flash on startup.
+          property var flashSeed: null
+          readonly property var flashReading: ({ key: String(valueIndex) + "|" + topWindow, severity: topSeverity,
+            used: failed || moneyChip ? null : UsageLogic.usedForWindow(reading, topWindow) })
+          onFlashReadingChanged: {
+            var kind = UsageLogic.barFlashKind(flashSeed, flashReading)
+            flashSeed = flashReading
+            if (kind !== "") flash(kind)
+          }
+          Component.onCompleted: flashSeed = flashReading
+
+          function flash(kind) {
+            flashFill.tint = kind === "reset" ? Commons.Color.accent : root.urgent
+            flashAnimation.restart()
+          }
+
+          bar: root.bar
+          text: ""
+          labelVisible: false
+          hasVisualContent: true
+          fixedWidth: providerChipContent.implicitWidth + Style.space(10)
+          active: stressed || failed
+          horizontalMargin: 0
+          tooltipText: hoverCardEligible ? "" : plainTooltip
+          Accessible.role: Accessible.Button
+          Accessible.name: multiAccount
+            ? UsageLogic.barAccessibleName(modelData, { selector: topWindow, quotaMode: quotaMode, extraKeys: root.setting("extraKeys", "{}") })
+            : plainTooltip.split("\n").join(", ")
           onPressed: function(buttonCode) {
+            root.closeHoverCard()
             root.handleProviderChipPress(String(providerChip.modelData.id), buttonCode)
+          }
+          onTooltipHoveredChanged: root.chipHoverChanged(providerChip, tooltipHovered && hoverCardEligible)
+
+          Connections {
+            target: root
+            function onBarLivePing(pingProvider, pingAccount) {
+              if (pingProvider !== String(providerChip.modelData.id) || providerChip.strip === null) return
+              var index = -1
+              for (var i = 0; i < providerChip.accounts.length; i++)
+                if (String(providerChip.accounts[i].accountId) === pingAccount) index = i
+              accountDots.ping(index)
+            }
+          }
+
+          // Background of the one-shot flash; the bar shows through between flashes.
+          Rectangle {
+            id: flashFill
+            property color tint: root.urgent
+            anchors.fill: parent
+            anchors.topMargin: Style.space(3)
+            anchors.bottomMargin: Style.space(3)
+            radius: Style.cornerRadius
+            color: Qt.rgba(tint.r, tint.g, tint.b, 0.32)
+            opacity: 0
+            visible: flashAnimation.running
+
+            OpacityAnimator {
+              id: flashAnimation
+              target: flashFill
+              from: 1
+              to: 0
+              duration: root.motionHelper.duration(root.motionHelper.flash)
+              easing.type: Easing.OutCubic
+            }
           }
 
           Row {
             id: providerChipContent
-            anchors.centerIn: parent
+            x: Math.round((parent.width - width) / 2)
+            y: Math.round((parent.height - height) / 2)
             spacing: Style.spacing.sm
+            opacity: providerChip.stale ? 0.5 : 1
+
+            Behavior on opacity {
+              OpacityAnimator { duration: root.motionHelper.duration(root.motionHelper.row); easing.type: Easing.InOutCubic }
+            }
 
             Item {
               id: providerMark
@@ -1069,43 +1441,87 @@ Ui.Panel {
               }
             }
 
-            Text {
-              objectName: "barAccountRemaining"
-              visible: !providerChip.stacked
+            // Chips per account: the account's initial, underlined on the account the chip counts.
+            Item {
+              id: accountInitial
+              objectName: "barAccountInitial"
+              readonly property bool counted: providerChip.countedAccount
+              visible: providerChip.accountChip
               y: Math.round((parent.height - height) / 2)
-              text: providerChip.topText
-              color: providerChip.topColor
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.weight: Font.Medium
-            }
-
-            Column {
-              visible: providerChip.stacked
-              y: Math.round((parent.height - height) / 2)
-              spacing: 0
+              width: Math.ceil(initialLabel.implicitWidth)
+              height: Math.ceil(initialLabel.implicitHeight)
 
               Text {
-                objectName: "barAccountRemainingTop"
-                text: providerChip.topText
+                id: initialLabel
+                text: providerChip.initial
                 color: providerChip.topColor
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
-                font.weight: Font.Medium
-                height: 12
-                verticalAlignment: Text.AlignVCenter
+                font.weight: Font.DemiBold
               }
 
-              Text {
-                objectName: "barAccountRemainingBottom"
-                text: providerChip.bottomText
-                color: providerChip.bottomColor
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.weight: Font.Medium
-                height: 12
-                verticalAlignment: Text.AlignVCenter
+              Rectangle {
+                objectName: "barAccountUnderline"
+                visible: accountInitial.counted
+                y: Math.round(initialLabel.baselineOffset + Style.space(2))
+                width: parent.width
+                height: Math.max(1, Style.spacing.hairline)
+                color: providerChip.topColor
               }
+            }
+
+            ChipLine {
+              visible: !providerChip.stacked
+              y: Math.round((parent.height - height) / 2)
+              valueName: "barAccountRemaining"
+              tag: providerChip.topParts.tag
+              value: providerChip.topParts.value
+              suffix: providerChip.topParts.suffix
+              color: providerChip.topColor
+              pixelSize: Style.font.bodySmall
+            }
+
+            // Two caption lines, twelve pixels apart, so the pair fits the bar.
+            Column {
+              visible: providerChip.stacked
+              y: Math.round((parent.height - height) / 2)
+              spacing: 12 - topLine.height
+
+              ChipLine {
+                id: topLine
+                valueName: "barAccountRemainingTop"
+                tag: providerChip.topParts.tag
+                value: providerChip.topParts.value
+                suffix: providerChip.topParts.suffix
+                color: providerChip.topColor
+                pixelSize: Style.font.caption
+              }
+
+              ChipLine {
+                valueName: "barAccountRemainingBottom"
+                tag: providerChip.bottomParts.tag
+                value: providerChip.bottomParts.value
+                suffix: providerChip.bottomParts.suffix
+                color: providerChip.bottomColor
+                pixelSize: Style.font.caption
+              }
+            }
+
+            AccountDots {
+              id: accountDots
+              objectName: "barAccountDots"
+              visible: providerChip.strip !== null
+              y: Math.round((parent.height - height) / 2)
+              strip: providerChip.strip
+              mode: providerChip.accountMode
+              stale: providerChip.stale
+              motion: root.motionHelper
+              foreground: root.foreground
+              urgent: root.urgent
+              accent: Commons.Color.accent
+              dim: root.dim
+              fontFamily: root.fontFamily
+              fontSize: providerChip.stacked ? Style.font.caption : Style.font.bodySmall
             }
           }
         }

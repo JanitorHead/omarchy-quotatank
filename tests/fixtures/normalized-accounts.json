@@ -1,0 +1,466 @@
+{
+ "schemaVersion": 1,
+ "generatedAt": "2026-10-15T12:00:00+00:00",
+ "providers": [
+  {
+   "id": "claude",
+   "name": "Claude Code",
+   "status": "ok",
+   "errorKind": "",
+   "message": "",
+   "authCommand": "claude auth login",
+   "plan": "Claude Max 5x",
+   "account": "main@example.invalid",
+   "source": "Claude OAuth usage API",
+   "origin": "omarchy",
+   "accountId": "main",
+   "label": "Work",
+   "active": true,
+   "primary": true,
+   "credits": null,
+   "notice": "",
+   "fetchedAt": "",
+   "windows": [
+    {
+     "id": "session",
+     "label": "5-hour limit",
+     "used": 72,
+     "remaining": 28,
+     "resetsAt": 4102444800,
+     "windowSeconds": 18000,
+     "detail": "",
+     "samples": []
+    },
+    {
+     "id": "weekly",
+     "label": "Weekly limit",
+     "used": 31,
+     "remaining": 69,
+     "resetsAt": 4102444800,
+     "windowSeconds": 604800,
+     "detail": "",
+     "samples": []
+    }
+   ],
+   "history": {
+    "h24": [],
+    "d7": []
+   },
+   "activity": {
+    "lastIncreaseAt": null,
+    "lastDelta": 0,
+    "lastReadingAt": null
+   },
+   "accountCount": 2,
+   "accounts": [
+    {
+     "id": "claude",
+     "name": "Claude Code",
+     "status": "ok",
+     "errorKind": "",
+     "message": "",
+     "authCommand": "claude auth login",
+     "plan": "Claude Max 5x",
+     "account": "main@example.invalid",
+     "source": "Claude OAuth usage API",
+     "origin": "omarchy",
+     "accountId": "main",
+     "label": "Work",
+     "active": true,
+     "primary": true,
+     "credits": null,
+     "notice": "",
+     "fetchedAt": "",
+     "windows": [
+      {
+       "id": "session",
+       "label": "5-hour limit",
+       "used": 72,
+       "remaining": 28,
+       "resetsAt": 4102444800,
+       "windowSeconds": 18000,
+       "detail": "",
+       "samples": []
+      },
+      {
+       "id": "weekly",
+       "label": "Weekly limit",
+       "used": 31,
+       "remaining": 69,
+       "resetsAt": 4102444800,
+       "windowSeconds": 604800,
+       "detail": "",
+       "samples": []
+      }
+     ],
+     "history": {
+      "h24": [],
+      "d7": []
+     },
+     "activity": {
+      "lastIncreaseAt": null,
+      "lastDelta": 0,
+      "lastReadingAt": null
+     }
+    },
+    {
+     "id": "claude",
+     "name": "Claude Code",
+     "status": "ok",
+     "errorKind": "",
+     "message": "",
+     "authCommand": "claude auth login",
+     "plan": "Claude Max 5x",
+     "account": "personal@example.invalid",
+     "source": "Claude OAuth usage API",
+     "origin": "omarchy",
+     "accountId": "personal",
+     "label": "Personal",
+     "active": false,
+     "primary": false,
+     "credits": null,
+     "notice": "",
+     "fetchedAt": "",
+     "windows": [
+      {
+       "id": "session",
+       "label": "5-hour limit",
+       "used": 3,
+       "remaining": 97,
+       "resetsAt": 4102444800,
+       "windowSeconds": 18000,
+       "detail": "",
+       "samples": []
+      },
+      {
+       "id": "weekly",
+       "label": "Weekly limit",
+       "used": 31,
+       "remaining": 69,
+       "resetsAt": 4102444800,
+       "windowSeconds": 604800,
+       "detail": "",
+       "samples": []
+      }
+     ],
+     "history": {
+      "h24": [],
+      "d7": []
+     },
+     "activity": {
+      "lastIncreaseAt": null,
+      "lastDelta": 0,
+      "lastReadingAt": null
+     }
+    }
+   ],
+   "accountSwitch": {
+    "mode": "manual",
+    "threshold": 95
+   }
+  },
+  {
+   "id": "codex",
+   "name": "OpenAI Codex",
+   "status": "ok",
+   "errorKind": "",
+   "message": "",
+   "authCommand": "codex login",
+   "plan": "ChatGPT Plus",
+   "account": "codex-0@example.invalid",
+   "source": "Codex app-server RPC",
+   "origin": "signin",
+   "accountId": "",
+   "label": "",
+   "active": false,
+   "primary": false,
+   "credits": null,
+   "notice": "",
+   "fetchedAt": "",
+   "windows": [
+    {
+     "id": "codex-primary",
+     "label": "5-hour limit",
+     "used": 22,
+     "remaining": 78,
+     "resetsAt": 4102444800,
+     "windowSeconds": 18000,
+     "detail": "",
+     "samples": []
+    },
+    {
+     "id": "codex-secondary",
+     "label": "Weekly limit",
+     "used": 40,
+     "remaining": 60,
+     "resetsAt": 4102444800,
+     "windowSeconds": 604800,
+     "detail": "",
+     "samples": []
+    }
+   ],
+   "history": {
+    "h24": [],
+    "d7": []
+   },
+   "activity": {
+    "lastIncreaseAt": null,
+    "lastDelta": 0,
+    "lastReadingAt": null
+   },
+   "accountCount": 5,
+   "accounts": [
+    {
+     "id": "codex",
+     "name": "OpenAI Codex",
+     "status": "ok",
+     "errorKind": "",
+     "message": "",
+     "authCommand": "codex login",
+     "plan": "ChatGPT Plus",
+     "account": "codex-0@example.invalid",
+     "source": "omp usage report",
+     "origin": "omp",
+     "accountId": "omp-000000000000",
+     "label": "",
+     "active": false,
+     "primary": false,
+     "credits": null,
+     "notice": "",
+     "fetchedAt": "",
+     "windows": [
+      {
+       "id": "codex-primary",
+       "label": "5-hour limit",
+       "used": 22,
+       "remaining": 78,
+       "resetsAt": 4102444800,
+       "windowSeconds": 18000,
+       "detail": "",
+       "samples": []
+      },
+      {
+       "id": "codex-secondary",
+       "label": "Weekly limit",
+       "used": 40,
+       "remaining": 60,
+       "resetsAt": 4102444800,
+       "windowSeconds": 604800,
+       "detail": "",
+       "samples": []
+      }
+     ],
+     "history": {
+      "h24": [],
+      "d7": []
+     },
+     "activity": {
+      "lastIncreaseAt": null,
+      "lastDelta": 0,
+      "lastReadingAt": null
+     }
+    },
+    {
+     "id": "codex",
+     "name": "OpenAI Codex",
+     "status": "ok",
+     "errorKind": "",
+     "message": "",
+     "authCommand": "codex login",
+     "plan": "ChatGPT Plus",
+     "account": "codex-1@example.invalid",
+     "source": "omp usage report",
+     "origin": "omp",
+     "accountId": "omp-000000000001",
+     "label": "",
+     "active": false,
+     "primary": false,
+     "credits": null,
+     "notice": "",
+     "fetchedAt": "",
+     "windows": [
+      {
+       "id": "codex-primary",
+       "label": "5-hour limit",
+       "used": 48,
+       "remaining": 52,
+       "resetsAt": 4102444800,
+       "windowSeconds": 18000,
+       "detail": "",
+       "samples": []
+      },
+      {
+       "id": "codex-secondary",
+       "label": "Weekly limit",
+       "used": 40,
+       "remaining": 60,
+       "resetsAt": 4102444800,
+       "windowSeconds": 604800,
+       "detail": "",
+       "samples": []
+      }
+     ],
+     "history": {
+      "h24": [],
+      "d7": []
+     },
+     "activity": {
+      "lastIncreaseAt": null,
+      "lastDelta": 0,
+      "lastReadingAt": null
+     }
+    },
+    {
+     "id": "codex",
+     "name": "OpenAI Codex",
+     "status": "ok",
+     "errorKind": "",
+     "message": "",
+     "authCommand": "codex login",
+     "plan": "ChatGPT Plus",
+     "account": "codex-2@example.invalid",
+     "source": "omp usage report",
+     "origin": "omp",
+     "accountId": "omp-000000000002",
+     "label": "",
+     "active": false,
+     "primary": false,
+     "credits": null,
+     "notice": "",
+     "fetchedAt": "",
+     "windows": [
+      {
+       "id": "codex-primary",
+       "label": "5-hour limit",
+       "used": 61,
+       "remaining": 39,
+       "resetsAt": 4102444800,
+       "windowSeconds": 18000,
+       "detail": "",
+       "samples": []
+      },
+      {
+       "id": "codex-secondary",
+       "label": "Weekly limit",
+       "used": 40,
+       "remaining": 60,
+       "resetsAt": 4102444800,
+       "windowSeconds": 604800,
+       "detail": "",
+       "samples": []
+      }
+     ],
+     "history": {
+      "h24": [],
+      "d7": []
+     },
+     "activity": {
+      "lastIncreaseAt": null,
+      "lastDelta": 0,
+      "lastReadingAt": null
+     }
+    },
+    {
+     "id": "codex",
+     "name": "OpenAI Codex",
+     "status": "ok",
+     "errorKind": "",
+     "message": "",
+     "authCommand": "codex login",
+     "plan": "ChatGPT Plus",
+     "account": "codex-3@example.invalid",
+     "source": "omp usage report",
+     "origin": "omp",
+     "accountId": "omp-000000000003",
+     "label": "",
+     "active": false,
+     "primary": false,
+     "credits": null,
+     "notice": "",
+     "fetchedAt": "",
+     "windows": [
+      {
+       "id": "codex-primary",
+       "label": "5-hour limit",
+       "used": 9,
+       "remaining": 91,
+       "resetsAt": 4102444800,
+       "windowSeconds": 18000,
+       "detail": "",
+       "samples": []
+      },
+      {
+       "id": "codex-secondary",
+       "label": "Weekly limit",
+       "used": 40,
+       "remaining": 60,
+       "resetsAt": 4102444800,
+       "windowSeconds": 604800,
+       "detail": "",
+       "samples": []
+      }
+     ],
+     "history": {
+      "h24": [],
+      "d7": []
+     },
+     "activity": {
+      "lastIncreaseAt": null,
+      "lastDelta": 0,
+      "lastReadingAt": null
+     }
+    },
+    {
+     "id": "codex",
+     "name": "OpenAI Codex",
+     "status": "ok",
+     "errorKind": "",
+     "message": "",
+     "authCommand": "codex login",
+     "plan": "ChatGPT Plus",
+     "account": "codex-4@example.invalid",
+     "source": "omp usage report",
+     "origin": "omp",
+     "accountId": "omp-000000000004",
+     "label": "",
+     "active": false,
+     "primary": false,
+     "credits": null,
+     "notice": "",
+     "fetchedAt": "",
+     "windows": [
+      {
+       "id": "codex-primary",
+       "label": "5-hour limit",
+       "used": 35,
+       "remaining": 65,
+       "resetsAt": 4102444800,
+       "windowSeconds": 18000,
+       "detail": "",
+       "samples": []
+      },
+      {
+       "id": "codex-secondary",
+       "label": "Weekly limit",
+       "used": 40,
+       "remaining": 60,
+       "resetsAt": 4102444800,
+       "windowSeconds": 604800,
+       "detail": "",
+       "samples": []
+      }
+     ],
+     "history": {
+      "h24": [],
+      "d7": []
+     },
+     "activity": {
+      "lastIncreaseAt": null,
+      "lastDelta": 0,
+      "lastReadingAt": null
+     }
+    }
+   ]
+  }
+ ]
+}

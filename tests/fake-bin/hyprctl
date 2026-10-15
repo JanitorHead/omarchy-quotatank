@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Hyprland stand-in for the QML contracts: Motion.qml asks whether animations are on. The answer is
+# MODEL_USAGE_FAKE_ANIMATIONS (default 1), so a test never depends on the desktop it runs on.
+set -euo pipefail
+
+if [[ ${1:-} == -j && ${2:-} == getoption && ${3:-} == animations:enabled ]]; then
+  printf '{"option":"animations:enabled","int":%s,"set":true}\n' "${MODEL_USAGE_FAKE_ANIMATIONS:-1}"
+  exit 0
+fi
+exit 1

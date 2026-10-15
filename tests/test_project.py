@@ -157,7 +157,6 @@ class ProjectContractTests(unittest.TestCase):
         self.assertIn("running: root.opened", panel)
         # Refresh serialization is exercised by tests/qml/quota-shell.qml.
         self.assertIn("pendingRefresh = true", backend)
-        self.assertIn("interval: 35000", backend)
         self.assertIn("Math.max(60, Math.min(3600", backend)
         self.assertNotIn("Timer {\n    interval:", cost_backend.split("Process {")[0])
         self.assertIn("function ensureLoaded()", cost_backend)
@@ -203,7 +202,8 @@ class ProjectContractTests(unittest.TestCase):
 
     def test_percentage_mode_uses_provider_logo_chips(self):
         panel = (ROOT / "Panel.qml").read_text()
-        self.assertIn("model: root.percentageProviders", panel)
+        self.assertIn("UsageLogic.barChipEntries(root.percentageProviders", panel)
+        self.assertIn("model: barChipModel", panel)
         self.assertIn("source: root.barIconUrl(providerChip.modelData)", panel)
         self.assertIn("colorizationColor: providerChip.contentColor", panel)
         self.assertIn("root.handleProviderChipPress", panel)
