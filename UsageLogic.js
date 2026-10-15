@@ -655,7 +655,9 @@ function paceForWindow(row, nowSeconds) {
     runsOut: false,
     etaSeconds: null,
     observedSeconds: 0,
-    idleSeconds: null
+    idleSeconds: null,
+    // Percent per second the projection uses; 0 while there is none.
+    rate: 0
   }
 
   if (used >= 100) {
@@ -701,6 +703,7 @@ function paceForWindow(row, nowSeconds) {
   // Time from now until 100 % at that rate.
   var etaSeconds = (100 - used) / rate
   result.state = "projecting"
+  result.rate = rate
   if (etaSeconds < untilReset) {
     result.runsOut = true
     result.etaSeconds = etaSeconds
@@ -2121,10 +2124,11 @@ function costLiveFold(state, event, scanSeconds, providerIds) {
 // adapts a ListModel: count(), keyAt(index), move(from, to), insert(index, key). Entries `keys` no
 // longer names end up after keys.length, in their previous relative order, for the caller to drop.
 function syncKeyedOrder(list, keys) {
+  keys = listOrEmpty(keys).map(String)
   for (var target = 0; target < keys.length; target++) {
     var found = -1
     for (var i = target; i < list.count(); i++) {
-      if (list.keyAt(i) === keys[target]) {
+      if (String(list.keyAt(i)) === keys[target]) {
         found = i
         break
       }
@@ -2673,4 +2677,629 @@ function setAccountMode(raw, providerId, mode) {
 
 function accountModeLabel(mode) {
   return mode === "single" ? "One at a time" : mode === "together" ? "Together" : "Automatic"
+}
+
+// ---- 1.9 QmlLimits ----
+// Several accounts per provider (Omarchy logins, extra keys, omp accounts, proxy accounts): which ones
+// the chip counts, the order of the Limits rows, what each row says, where each limit is heading at the
+// current pace, how long the accounts last until the binding short window resets, and the changes
+// between two readings that deserve one notice.
+
+var ACCOUNT_TOGETHER_SECONDS = 3600     // two accounts rising within this time are used together
+var ACCOUNT_SPENDING_SECONDS = 900      // a reading that rose this recently means "spending now"
+var ACCOUNT_LIVE_SECONDS = 120          // a live request this recent means "spending now"
+var ACCOUNT_EVENT_SECONDS = 3 * 60 * 60 // a row mentions a switch or a reset for this long
+var ACCOUNT_SOURCE_RANK = { omarchy: 0, signin: 0, proxy: 0, key: 1, omp: 2 }
+var ACCOUNT_ERROR_TEXT = {
+  expired: "sign-in expired", no_credentials: "signed out", rate_limited: "rate limited",
+  timeout: "timed out", network: "offline", config: "needs setup", cli_unavailable: "CLI missing"
+}
+
+function providerAccounts(provider) {
+  return listOrEmpty(provider && provider.accounts)
+}
+
+// The mode chosen in Settings for one provider (`accountModes`, JSON keyed by provider id), or "" for
+// automatic. Settings owns writing it; anything but "single" or "together" counts as automatic.
+function accountModeChoice(raw, providerId) {
+  var parsed = raw
+  if (typeof raw === "string") {
+    if (raw.length > 65536) return ""
+    try { parsed = JSON.parse(raw) } catch (error) { return "" }
+  }
+  if (!parsed || typeof parsed !== "object" || isListLike(parsed)) return ""
+  var value = parsed[String(providerId)]
+  return value === "single" || value === "together" ? value : ""
+}
+
+// Key of an account in omp's live request map: "<provider>@<accountId>".
+function accountKey(account) {
+  return String(account && account.id || "") + "@" + String(account && account.accountId || "")
+}
+
+function accountLiveAt(account, recentByAccount) {
+  if (!account || !recentByAccount || typeof recentByAccount !== "object") return null
+  return finiteOrNull(recentByAccount[accountKey(account)])
+}
+
+function accountLastRise(account) {
+  return finiteOrNull(account && account.activity ? account.activity.lastIncreaseAt : null)
+}
+
+// `at` lies within `seconds` before `now`; a minute of clock skew into the future still counts.
+function withinSeconds(at, now, seconds) {
+  return at !== null && now !== null && now - at <= seconds && at - now <= 60
+}
+
+// An account is spending now when its reading rose in the last 15 minutes or omp sent a request for
+// it in the last two.
+function spendingNow(account, nowSeconds, recentByAccount) {
+  var now = finiteOrNull(nowSeconds)
+  if (!account || now === null) return false
+  return withinSeconds(accountLastRise(account), now, ACCOUNT_SPENDING_SECONDS)
+    || withinSeconds(accountLiveAt(account, recentByAccount), now, ACCOUNT_LIVE_SECONDS)
+}
+
+// "single": new sessions use one account at a time (Omarchy's in-use login). "together": several
+// accounts are spent at once (a proxy, omp's pool, or two accounts rising within the last hour).
+// The Settings choice for the provider wins. A provider whose logins Omarchy switches between
+// (`accountSwitch`) stays one at a time: right after a switch the old account still rises from the
+// sessions left running on it, yet new sessions use only the new one.
+function accountMode(provider, modesRaw, proxyMode, nowSeconds, recentByAccount) {
+  var chosen = accountModeChoice(modesRaw, provider ? provider.id : "")
+  if (chosen !== "") return chosen
+  if (proxyMode) return "together"
+  if (provider && provider.pool && typeof provider.pool === "object") return "together"
+  if (provider && provider.accountSwitch && typeof provider.accountSwitch === "object") return "single"
+  var now = finiteOrNull(nowSeconds)
+  var accounts = providerAccounts(provider)
+  var recent = 0
+  for (var i = 0; i < accounts.length; i++) {
+    if (withinSeconds(accountLastRise(accounts[i]), now, ACCOUNT_TOGETHER_SECONDS)
+        || withinSeconds(accountLiveAt(accounts[i], recentByAccount), now, ACCOUNT_TOGETHER_SECONDS)) recent++
+  }
+  return recent >= 2 ? "together" : "single"
+}
+
+// The account the provider-level fields were read from: the active login or key, else the entry with
+// the provider's accountId (a proxy's summary), else the first. -1 without accounts.
+function summaryAccountIndex(provider) {
+  var accounts = providerAccounts(provider)
+  for (var i = 0; i < accounts.length; i++)
+    if (accounts[i] && accounts[i].active === true) return i
+  var id = provider ? provider.accountId : undefined
+  if (id !== undefined && id !== null && id !== "")
+    for (var j = 0; j < accounts.length; j++)
+      if (accounts[j] && accounts[j].accountId === id) return j
+  return accounts.length > 0 ? 0 : -1
+}
+
+// Of `indexes` (every account when null), the one closest to a limit that still has room. When none
+// has room, the first used-up one; -1 when no account reports usage. A used-up account is skipped
+// while another has room: together, new sessions spend from the ones that still can.
+function leastHeadroomIndex(accounts, indexes) {
+  var list = listOrEmpty(accounts)
+  var all = indexes === null || indexes === undefined
+  var count = all ? list.length : listOrEmpty(indexes).length
+  var best = -1
+  var low = Infinity
+  var empty = -1
+  for (var k = 0; k < count; k++) {
+    var i = all ? k : indexes[k]
+    var headroom = minRemaining(list[i])
+    if (headroom === null) continue
+    if (headroom <= 0) {
+      if (empty < 0) empty = i
+      continue
+    }
+    if (headroom < low) {
+      low = headroom
+      best = i
+    }
+  }
+  return best >= 0 ? best : empty
+}
+
+// Indexes (ascending) of the accounts the chip counts. One at a time: the in-use account, else the
+// summary's. Together: every account spending now, else the one with the least headroom.
+function countedAccounts(provider, mode, nowSeconds, recentByAccount) {
+  var accounts = providerAccounts(provider)
+  if (accounts.length === 0) return []
+  if (mode !== "together") return [summaryAccountIndex(provider)]
+  var spending = []
+  for (var i = 0; i < accounts.length; i++)
+    if (spendingNow(accounts[i], nowSeconds, recentByAccount)) spending.push(i)
+  if (spending.length > 0) return spending
+  var least = leastHeadroomIndex(accounts, null)
+  return [least >= 0 ? least : summaryAccountIndex(provider)]
+}
+
+// Where an account's reading comes from (its `origin`): "omarchy" (a login in Omarchy's registry),
+// "signin" (the one native sign-in next to omp accounts), "key", "omp", or "proxy". Readings from a
+// backend without `origin` are told apart by their ids. `source` is the API's description, not a kind.
+function accountSourceKind(account, proxyMode) {
+  if (!account) return ""
+  var origin = String(account.origin || "")
+  if (origin === "omarchy" || origin === "signin" || origin === "key" || origin === "omp" || origin === "proxy") return origin
+  if (proxyMode) return "proxy"
+  var id = String(account.accountId || "")
+  if (id === "primary" || /^k-[0-9a-f]{8}$/.test(id)) return "key"
+  if (/^omp-/.test(id)) return "omp"
+  return "omarchy"
+}
+
+function accountSourceLabel(kind) {
+  if (kind === "omp") return "omp"
+  if (kind === "key") return "key"
+  if (kind === "omarchy") return "Omarchy"
+  if (kind === "signin") return "sign-in"
+  if (kind === "proxy") return "proxy"
+  return ""
+}
+
+// Row order as account indexes. One at a time keeps the stable order (Omarchy's registry order, then
+// keys, then omp). Together puts the account with the least headroom first; accounts without a reading
+// go last. Ties keep the stable order, so rows only move when headroom really changes places.
+function accountOrder(accounts, mode, proxyMode) {
+  var list = listOrEmpty(accounts)
+  var rows = []
+  for (var i = 0; i < list.length; i++) {
+    var headroom = minRemaining(list[i])
+    var rank = ACCOUNT_SOURCE_RANK[accountSourceKind(list[i], proxyMode)]
+    rows.push({ index: i, rank: rank === undefined ? 0 : rank, headroom: headroom === null ? Infinity : headroom })
+  }
+  rows.sort(function (a, b) {
+    if (mode === "together" && a.headroom !== b.headroom) return a.headroom < b.headroom ? -1 : 1
+    if (a.rank !== b.rank) return a.rank - b.rank
+    return a.index - b.index
+  })
+  return rows.map(function (row) { return row.index })
+}
+
+// The two limits an account row shows: its short window (the 5-hour session, else the shortest of a
+// day or less) and its main long window (the overall weekly, else another weekly, else monthly).
+// Windows that report no usage are skipped; either side may be null.
+function accountMeterRows(account) {
+  var rows = listOrEmpty(account && account.windows)
+  var short = null
+  for (var i = 0; i < rows.length && short === null; i++)
+    if (windowUsed(rows[i]) !== null && windowMatches(rows[i], "session")) short = rows[i]
+  for (var j = 0; j < rows.length && short === null; j++) {
+    var seconds = finiteOrNull(rows[j] && rows[j].windowSeconds)
+    if (windowUsed(rows[j]) === null || seconds === null || seconds <= 0 || seconds > 86400) continue
+    if (short === null || seconds < Number(short.windowSeconds)) short = rows[j]
+  }
+  var long = null
+  var candidates = accountWindows(account, false)
+  for (var k = 0; k < candidates.length && long === null; k++) {
+    var row = candidates[k]
+    var span = finiteOrNull(row && row.windowSeconds)
+    if (row !== short && windowUsed(row) !== null && (span === null || span > 86400)) long = row
+  }
+  return { short: short, long: long }
+}
+
+// When an account that used up a limit is usable again: the latest reset among its used-up windows
+// (each must refill), 0 when one has no reset time, null when nothing is used up.
+function accountUsedUpUntil(account) {
+  if (!account || account.status !== "ok") return null
+  var rows = listOrEmpty(account.windows)
+  var until = null
+  for (var i = 0; i < rows.length; i++) {
+    var used = windowUsed(rows[i])
+    if (used === null || used < 100) continue
+    var at = finiteOrNull(rows[i].resetsAt)
+    until = Math.max(until === null ? 0 : until, at === null ? 0 : at)
+  }
+  return until
+}
+
+// One status line for an account row, most useful first: a failed or paused reading, a limit used up
+// (with when it is back), a last-known reading, spending now, a recent switch or reset, the plan, the
+// source. `event` is this account's newest {kind: "switch"|"reset", at}, or null. Returns
+// {kind, text, at, tone}; tone is "urgent", "accent" or "dim", and `at` is a time to append.
+function accountStatusLine(account, nowSeconds, recentByAccount, event, proxyMode) {
+  if (!account) return { kind: "", text: "", at: null, tone: "dim" }
+  var status = String(account.status || "")
+  if (status === "error") {
+    var kind = String(account.errorKind || "")
+    return { kind: "error", at: null, tone: "urgent",
+      text: Object.prototype.hasOwnProperty.call(ACCOUNT_ERROR_TEXT, kind) ? ACCOUNT_ERROR_TEXT[kind] : "unavailable" }
+  }
+  if (status === "disabled") return { kind: "paused", text: "paused", at: null, tone: "dim" }
+  var usedUp = accountUsedUpUntil(account)
+  if (usedUp !== null) return { kind: "usedup", text: "used up", at: usedUp > 0 ? usedUp : null, tone: "urgent" }
+  if (account.stale === true) return { kind: "stale", text: "last known reading", at: null, tone: "dim" }
+  if (spendingNow(account, nowSeconds, recentByAccount)) return { kind: "spending", text: "spending now", at: null, tone: "accent" }
+  var now = finiteOrNull(nowSeconds)
+  var eventAt = event ? finiteOrNull(event.at) : null
+  if (event && (event.kind === "switch" || event.kind === "reset") && withinSeconds(eventAt, now, ACCOUNT_EVENT_SECONDS))
+    return { kind: event.kind, text: event.kind === "switch" ? "switched" : "reset", at: eventAt, tone: "accent" }
+  if (account.plan || account.planType) return { kind: "plan", text: accountPlanLabel(account), at: null, tone: "dim" }
+  return { kind: "source", text: accountSourceLabel(accountSourceKind(account, proxyMode)), at: null, tone: "dim" }
+}
+
+// The command behind a row's Use button: Omarchy starts new sessions of the provider with that login.
+// The built-in default login is named "primary", as in Omarchy's registry. Null for anything that is
+// not a plain id, so nothing can be read as an option.
+function accountUseArgv(providerId, account) {
+  var provider = String(providerId || "")
+  if (!account || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(provider)) return null
+  var id = String(account.accountId || "")
+  if (account.primary === true && (id === "main" || id === "primary")) id = "primary"
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) return null
+  return ["omarchy", "agent", "account", "use", provider, id]
+}
+
+// A row offers Use in one-at-a-time mode for an Omarchy login that is not in use and can be read.
+function accountCanUse(account, mode, proxyMode) {
+  return !!account && mode === "single" && account.active !== true && account.status === "ok"
+    && accountSourceKind(account, proxyMode) === "omarchy"
+}
+
+// Right side of the ACCOUNTS header: how new sessions pick an account.
+function accountsHeaderText(provider, mode, proxyMode, proxyLabel) {
+  if (!provider) return ""
+  if (mode === "together") {
+    if (proxyMode) return "used together · " + String(proxyLabel || "proxy")
+    var accounts = providerAccounts(provider)
+    var omp = !!provider.pool
+    for (var i = 0; i < accounts.length && !omp; i++) {
+      var origins = listOrEmpty(accounts[i] && accounts[i].origins)
+      omp = accountSourceKind(accounts[i], false) === "omp" || contains(origins, "omp")
+    }
+    return "used together" + (omp ? " · omp" : "")
+  }
+  var policy = provider.accountSwitch
+  if (!policy || typeof policy !== "object") return ""
+  var threshold = finiteOrNull(policy.threshold)
+  var at = threshold === null ? "" : " at " + formatPercent(clamp(threshold, 0, 100)) + "%"
+  if (policy.mode === "auto") return "Omarchy · switches" + at
+  if (policy.mode === "manual") return "Omarchy · notifies" + at
+  return ""
+}
+
+// Dots for a provider tile: one per account in stable order, at most four. Five or more show three,
+// counted accounts first among them, and `more` for the rest. Each dot: {index, counted, severity}.
+function accountDots(provider, counted, warningThreshold, criticalThreshold) {
+  var accounts = providerAccounts(provider)
+  var marked = listOrEmpty(counted)
+  var order = accountOrder(accounts, "single", false)
+  var shown = order
+  if (order.length > 4) {
+    shown = []
+    for (var c = 0; c < order.length && shown.length < 3; c++)
+      if (contains(marked, order[c])) shown.push(order[c])
+    for (var o = 0; o < order.length && shown.length < 3; o++)
+      if (!contains(shown, order[o])) shown.push(order[o])
+    shown.sort(function (a, b) { return order.indexOf(a) - order.indexOf(b) })
+  }
+  var dots = []
+  for (var i = 0; i < shown.length; i++) {
+    var account = accounts[shown[i]]
+    dots.push({ index: shown[i], counted: contains(marked, shown[i]),
+      severity: severity(account, warningThreshold, criticalThreshold) })
+  }
+  return { dots: dots, more: order.length - shown.length }
+}
+
+// Where a limit is heading at the current pace. `projected` is the use expected at reset (at most
+// 100), `runsOutAt` when it reaches 100 before then. `rate` (percent per second) is 0 without a
+// projection (idle, collecting, stale, starting). Null without a pace.
+function windowForecast(row, nowSeconds) {
+  var pace = paceForWindow(row, nowSeconds)
+  if (!pace) return null
+  var now = Number(nowSeconds)
+  var resetsAt = Number(row.resetsAt)
+  var rate = pace.state === "projecting" && pace.rate > 0 ? pace.rate : 0
+  return {
+    pace: pace,
+    used: pace.used,
+    rate: rate,
+    resetsAt: resetsAt,
+    untilReset: Math.max(0, resetsAt - now),
+    projected: pace.exhausted ? 100 : rate > 0 ? Math.min(100, pace.used + rate * Math.max(0, resetsAt - now)) : null,
+    runsOut: pace.runsOut === true,
+    runsOutAt: pace.runsOut === true ? now + pace.etaSeconds : null
+  }
+}
+
+// The dashed stretch a meter draws for the forecast, on the side the meter shows (fractions 0-1):
+// past the fill under Used, the part of the fill that would be spent under Remaining. Null when there
+// is no projection or it would not move the meter.
+function forecastSegment(forecast, mode) {
+  if (!forecast || forecast.rate <= 0 || forecast.projected === null) return null
+  if (forecast.projected - forecast.used < 0.5) return null
+  var from = sideOfUsed(forecast.used, mode) / 100
+  var to = sideOfUsed(forecast.projected, mode) / 100
+  return { from: Math.min(from, to), to: Math.max(from, to), runsOut: forecast.runsOut }
+}
+
+// The limit card's verdict beside the reset line. `clock(epochSeconds)` formats a time.
+function forecastText(forecast, mode, clock) {
+  if (!forecast) return { text: "", urgent: false }
+  var pace = forecast.pace
+  if (pace.exhausted) return { text: "used up", urgent: true }
+  if (forecast.runsOut) return { text: "runs out " + clock(forecast.runsOutAt) + " · " + expectedText(pace, mode), urgent: true }
+  if (pace.state === "projecting") return { text: "lasts until reset", urgent: false }
+  if (pace.state === "idle") return { text: "idle " + formatDuration(pace.idleSeconds), urgent: false }
+  if (pace.state === "collecting") return { text: "measuring pace", urgent: false }
+  if (pace.state === "stale") return { text: "no recent data", urgent: false }
+  if (pace.state === "no-usage") return { text: "not used yet", urgent: false }
+  return { text: "", urgent: false }
+}
+
+// When a window's use first reached `used` in its current window, from its samples. Null when the
+// samples do not show it: never reached, or already past it at the first sample of the window.
+function firstCrossing(row, used) {
+  var resetsAt = finiteOrNull(row && row.resetsAt)
+  var seconds = finiteOrNull(row && row.windowSeconds)
+  var start = resetsAt !== null && seconds !== null ? resetsAt - seconds : -Infinity
+  var list = listOrEmpty(row && row.samples)
+  var points = []
+  for (var i = 0; i < list.length; i++) {
+    var sample = list[i]
+    var stamp = isListLike(sample) ? finiteOrNull(sample[0]) : null
+    var value = isListLike(sample) ? finiteOrNull(sample[1]) : null
+    if (stamp !== null && value !== null && stamp >= start) points.push([stamp, value])
+  }
+  points.sort(function (a, b) { return a[0] - b[0] })
+  for (var j = 0; j < points.length; j++) {
+    if (points[j][1] < used) continue
+    return j === 0 && points[j][1] > used ? null : points[j][0]
+  }
+  return null
+}
+
+// What a point on a meter means, on the side the meter shows: at or below the fill, when use passed it
+// (from the samples); above it, when this pace gets there. Returns {kind, percent, at}; kind is
+// "passed", "earlier" (before the samples), "at", "after-reset" or "idle". Null without usage.
+function meterScrub(row, percent, mode, nowSeconds) {
+  var used = windowUsed(row)
+  if (used === null) return null
+  var shown = clamp(Math.round(Number(percent)), 0, 100)
+  var target = sideOfUsed(shown, mode)
+  if (target <= used) {
+    var at = firstCrossing(row, target)
+    return { kind: at === null ? "earlier" : "passed", percent: shown, at: at }
+  }
+  var forecast = windowForecast(row, nowSeconds)
+  if (!forecast || forecast.rate <= 0) return { kind: "idle", percent: shown, at: null }
+  var when = Number(nowSeconds) + (target - used) / forecast.rate
+  return { kind: when > forecast.resetsAt ? "after-reset" : "at", percent: shown, at: when }
+}
+
+function scrubText(scrub, mode, clock) {
+  if (!scrub) return ""
+  var figure = scrub.percent + "%" + (mode === "Remaining" ? " left" : "")
+  if (scrub.kind === "passed") return figure + " · passed " + clock(scrub.at)
+  if (scrub.kind === "earlier") return figure + " · passed earlier"
+  if (scrub.kind === "at") return figure + " · at " + clock(scrub.at) + " at this pace"
+  if (scrub.kind === "after-reset") return figure + " · not before the reset at this pace"
+  return figure + " · not being used now"
+}
+
+// "5-hour", "weekly", "monthly" or "daily" for a window; its label otherwise.
+function windowPhrase(row) {
+  var tag = rowPeriodTag(row)
+  if (tag === "5h") return "5-hour"
+  if (tag === "7d") return "weekly"
+  if (tag === "30d") return "monthly"
+  if (tag === "1d") return "daily"
+  return String(row && row.label || "limit").toLowerCase()
+}
+
+// How long the accounts last until the counted account's short window resets.
+// One at a time: the in-use account runs down at the current pace, then the next one (in `order`)
+// takes over at that same pace, and so on. Together: every account runs down side by side at its own
+// pace. Times are seconds from now, capped at the reset. A provider without accounts is its own single
+// account. Null without a short window that resets in the future.
+// Lane kinds: "runs" (empties before the reset), "lasts", "takesover", "notneeded", "usedup",
+// "unavailable"; together, a lane not being spent is marked `idle`. `gap` is the time with nothing
+// left before the reset.
+function accountRunway(provider, mode, counted, nowSeconds, order) {
+  var accounts = providerAccounts(provider)
+  if (accounts.length === 0 && provider) accounts = [provider]
+  var now = finiteOrNull(nowSeconds)
+  if (accounts.length === 0 || now === null) return null
+  var countedList = listOrEmpty(counted).length > 0 ? listOrEmpty(counted) : [0]
+  var base = leastHeadroomIndex(accounts, countedList)
+  if (base < 0) base = countedList[0]
+  var baseRow = accountMeterRows(accounts[base]).short
+  var resetsAt = finiteOrNull(baseRow && baseRow.resetsAt)
+  if (!baseRow || resetsAt === null || resetsAt <= now) return null
+  var horizon = resetsAt - now
+  var sequence = []
+  var source = listOrEmpty(order).length === accounts.length ? listOrEmpty(order) : accountOrder(accounts, mode, false)
+  if (mode !== "together") sequence.push(base)
+  for (var s = 0; s < source.length; s++)
+    if (mode === "together" || source[s] !== base) sequence.push(source[s])
+
+  function reading(index) {
+    var account = accounts[index]
+    var row = account && account.status === "ok" ? accountMeterRows(account).short : null
+    if (!row) return null
+    var forecast = windowForecast(row, now)
+    return { used: windowUsed(row), rate: forecast ? forecast.rate : 0 }
+  }
+  var lanes = []
+  var demand = 0
+  var spending = false
+  var end = 0
+  if (mode === "together") {
+    var lasting = false
+    for (var t = 0; t < sequence.length; t++) {
+      var own = reading(sequence[t])
+      if (!own) {
+        lanes.push({ index: sequence[t], kind: "unavailable", start: 0, end: 0 })
+        continue
+      }
+      if (own.used >= 100) {
+        lanes.push({ index: sequence[t], kind: "usedup", start: 0, end: 0 })
+        continue
+      }
+      if (own.rate > 0) spending = true
+      var span = own.rate > 0 ? (100 - own.used) / own.rate : Infinity
+      if (span >= horizon) lasting = true
+      lanes.push({ index: sequence[t], kind: span < horizon ? "runs" : "lasts", start: 0, end: Math.min(horizon, span),
+        idle: own.rate <= 0 })
+      end = Math.max(end, Math.min(horizon, span))
+    }
+    if (lasting) end = horizon
+  } else {
+    var first = reading(base)
+    demand = first ? first.rate : 0
+    spending = demand > 0
+    var clockAt = 0
+    for (var i = 0; i < sequence.length; i++) {
+      var next = reading(sequence[i])
+      if (!next) {
+        lanes.push({ index: sequence[i], kind: "unavailable", start: clockAt, end: clockAt })
+        continue
+      }
+      if (clockAt >= horizon) {
+        lanes.push({ index: sequence[i], kind: "notneeded", start: horizon, end: horizon })
+        continue
+      }
+      if (next.used >= 100) {
+        lanes.push({ index: sequence[i], kind: "usedup", start: clockAt, end: clockAt })
+        continue
+      }
+      var lasts = demand > 0 ? (100 - next.used) / demand : Infinity
+      var stop = Math.min(horizon, clockAt + lasts)
+      var kind = clockAt + lasts < horizon ? "runs" : clockAt > 0 ? "takesover" : "lasts"
+      lanes.push({ index: sequence[i], kind: kind, start: clockAt, end: stop })
+      clockAt = stop
+    }
+    end = clockAt
+  }
+  for (var l = 0; l < lanes.length; l++) {
+    lanes[l].startAt = now + lanes[l].start
+    lanes[l].endAt = now + lanes[l].end
+  }
+  var gap = lanes.some(function (lane) { return lane.kind === "runs" || lane.kind === "lasts" || lane.kind === "takesover" })
+    ? Math.max(0, horizon - end) : horizon
+  return {
+    mode: mode === "together" ? "together" : "single",
+    window: baseRow,
+    windowSeconds: finiteOrNull(baseRow.windowSeconds),
+    resetsAt: resetsAt,
+    horizon: horizon,
+    base: base,
+    spending: spending,
+    lanes: lanes,
+    gap: gap > 0.5 ? gap : 0,
+    gapStart: gap > 0.5 ? horizon - gap : horizon
+  }
+}
+
+// "Pool: 1.57 of 2 accounts left this 5-hour window", from omp's capacity for the runway's window.
+function poolLine(pool, row) {
+  var rows = listOrEmpty(pool && pool.windows)
+  var seconds = finiteOrNull(row && row.windowSeconds)
+  for (var i = 0; i < rows.length; i++) {
+    var entry = rows[i]
+    var accounts = finiteOrNull(entry && entry.accounts)
+    var left = finiteOrNull(entry && entry.remainingAccounts)
+    if (seconds === null || finiteOrNull(entry && entry.windowSeconds) !== seconds) continue
+    if (accounts === null || left === null || accounts <= 0) continue
+    var shown = Math.round(clamp(left, 0, accounts) * 100) / 100
+    return "Pool: " + shown + " of " + accounts + " account" + (accounts === 1 ? "" : "s")
+      + " left this " + windowPhrase(row) + " window"
+  }
+  return ""
+}
+
+// Changes between two readings worth one notice: Omarchy moving new sessions to another login, a
+// limit that reset after it was nearly used up, and omp losing a sign-in it was renewing. The first
+// reading of a provider only seeds `state`. Returns {state, events}; each event is
+// {id, kind, provider, accountId, from, fromUsed, label, at}.
+function accountEvents(previous, providers, nowSeconds, warningThreshold) {
+  var state = {}
+  var events = []
+  var now = finiteOrNull(nowSeconds)
+  var last = previous && typeof previous === "object" ? previous : {}
+  var warning = clamp(warningThreshold === undefined ? 25 : warningThreshold, 0, 100)
+  var list = listOrEmpty(providers)
+  for (var p = 0; p < list.length; p++) {
+    var provider = list[p]
+    if (!provider || !provider.id) continue
+    var id = String(provider.id)
+    var before = last[id] || null
+    var accounts = providerAccounts(provider)
+    var readings = accounts.length > 0 ? accounts : [provider]
+    var entry = { active: "", windows: {}, expired: {}, seen: {} }
+    // Only Omarchy's registry names an account new sessions start with; a proxy's summary account
+    // follows headroom and is no switch.
+    var activeIndex = -1
+    for (var x = 0; x < accounts.length; x++)
+      if (accounts[x] && accounts[x].active === true) activeIndex = x
+    var active = accounts.length > 1 && activeIndex >= 0
+      && accountSourceKind(accounts[activeIndex], false) === "omarchy" ? accounts[activeIndex] : null
+    entry.active = active ? String(active.accountId || "") : ""
+    if (before && before.active && entry.active && before.active !== entry.active) {
+      var from = null
+      for (var f = 0; f < accounts.length; f++)
+        if (String(accounts[f].accountId) === before.active) from = accounts[f]
+      var fromLeft = from ? minRemaining(from) : null
+      events.push({ id: "switch|" + id + "|" + entry.active + "|" + now, kind: "switch", provider: id,
+        accountId: entry.active, from: before.active, fromUsed: fromLeft === null ? null : 100 - fromLeft,
+        label: "", at: now })
+    }
+    for (var a = 0; a < readings.length; a++) {
+      var account = readings[a]
+      var accountId = accounts.length > 0 ? String(account.accountId || "") : ""
+      entry.seen[accountId] = true
+      if (account.status === "error" && account.errorKind === "expired" && accountSourceKind(account, false) === "omp") {
+        entry.expired[accountId] = true
+        if (before && before.seen && before.seen[accountId] === true && before.expired && before.expired[accountId] !== true)
+          events.push({ id: "omp-expired|" + id + "|" + accountId + "|" + now, kind: "omp-expired", provider: id,
+            accountId: accountId, from: "", fromUsed: null, label: "", at: now })
+      }
+      var rows = account.status === "ok" ? listOrEmpty(account.windows) : []
+      for (var w = 0; w < rows.length; w++) {
+        var row = rows[w]
+        var used = windowUsed(row)
+        if (!row || used === null) continue
+        var key = accountId + "|" + String(row.id || row.label || w)
+        var reading = { used: used, resetsAt: finiteOrNull(row.resetsAt) }
+        entry.windows[key] = reading
+        var old = before && before.windows ? before.windows[key] : null
+        if (!old || old.resetsAt === null || reading.resetsAt === null || now === null) continue
+        if (reading.resetsAt > old.resetsAt + 60 && old.resetsAt <= now + 300 && used < old.used
+            && old.used >= 100 - warning)
+          events.push({ id: "reset|" + id + "|" + key + "|" + old.resetsAt, kind: "reset", provider: id,
+            accountId: accountId, from: "", fromUsed: old.used, label: String(row.label || "Usage limit"),
+            at: Math.min(old.resetsAt, now) })
+      }
+    }
+    state[id] = entry
+  }
+  return { state: state, events: events }
+}
+
+// The notice for one event. `names` maps accountId to the name the panel shows; `clock` formats a
+// time; `manual` says the switch came from the panel's Use button.
+function eventNoticeText(event, provider, names, clock, manual) {
+  if (!event) return ""
+  var who = function (accountId) { return names && names[accountId] ? String(names[accountId]) : "an account" }
+  var service = providerShortName(provider || { id: event.provider })
+  if (event.kind === "switch") {
+    var policy = provider && provider.accountSwitch
+    var running = " Running sessions stay on " + who(event.from) + "."
+    if (manual || (policy && policy.mode === "manual"))
+      return "New " + service + " sessions now use " + who(event.accountId) + "." + running
+    var reached = event.fromUsed === null || event.fromUsed === undefined ? ""
+      : ": " + who(event.from) + " reached " + formatPercent(Math.round(event.fromUsed)) + "%"
+    return "Omarchy moved new " + service + " sessions to " + who(event.accountId) + " at " + clock(event.at)
+      + reached + "." + running
+  }
+  if (event.kind === "reset") {
+    var owner = event.accountId !== "" ? who(event.accountId) : service
+    return owner + "'s " + String(event.label || "limit").replace(/^./, function (c) { return c.toLowerCase() })
+      + " reset at " + clock(event.at) + "."
+  }
+  if (event.kind === "omp-expired")
+    return "omp can no longer renew " + who(event.accountId) + "'s sign-in. Sign in again in omp."
+  return ""
 }

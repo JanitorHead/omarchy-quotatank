@@ -32,15 +32,15 @@ Ui.Panel {
   readonly property var foundProviders: proxyMode ? [] : UsageLogic.foundProviders(backend.detected,
     backend.enabledProviderIds, UsageLogic.listOrEmpty(setting("dismissedProviders", UsageLogic.DEFAULT_SETTINGS.dismissedProviders)))
   property string selectedProviderId: ""
-  property bool expandedAccountLimits: false
   property string historyMode: "h24"
   property string viewMode: "limits"
   property string settingsReturnView: "limits"
-  readonly property bool historyAvailable: viewMode === "limits" && !accountOverview && !!provider
-    && !!provider.history
-    && ((UsageLogic.isListLike(provider.history.h24) && provider.history.h24.length > 0)
-      || (UsageLogic.isListLike(provider.history.d7) && provider.history.d7.length > 0))
-  readonly property bool tokensAvailable: viewMode === "limits" && !accountOverview && !!provider
+  // History follows the reading the detail shows: the selected account, or the provider.
+  readonly property bool historyAvailable: viewMode === "limits" && !!detail
+    && !!detail.history
+    && ((UsageLogic.isListLike(detail.history.h24) && detail.history.h24.length > 0)
+      || (UsageLogic.isListLike(detail.history.d7) && detail.history.d7.length > 0))
+  readonly property bool tokensAvailable: viewMode === "limits" && !!provider
     && provider.status !== "error" && providerModels.length > 0
   readonly property bool configuring: viewMode === "settings"
   property alias settingsForm: configForm
@@ -124,14 +124,184 @@ Ui.Panel {
     costBackend.payload ? costBackend.payload.models : [], provider ? provider.id : "")
   readonly property var proxyAccounts: UsageLogic.listOrEmpty(providerSummary && providerSummary.accounts)
   // A proxy always shows its accounts; locally a provider lists them once it has more than one
-  // (Omarchy subscription accounts, or extra API keys).
+  // (Omarchy subscription accounts, extra API keys, accounts omp reads).
   readonly property bool accountOverview: proxyAccounts.length > (proxyMode ? 0 : 1)
-  property alias accountCards: accountRepeater
+  property alias accountList: accountListView
+  property alias limitCards: limitCards
   readonly property var providerOptions: {
     var result = []
     for (var i = 0; i < providers.length; i++) result.push(providerTile(providers[i]))
     return result
   }
+
+  // omp's live requests by "<provider>@<accountId>" (epoch seconds), from the omp activity helper.
+  readonly property var recentByAccount: ompActivity.recentByAccount || ({})
+  readonly property real nowSeconds: nowMs / 1000
+  // A request in flight through the proxy means its account is spending now, like an omp request.
+  readonly property var liveRecent: {
+    var merged = Object.assign({}, recentByAccount || {})
+    if (proxyMode && activityBackend.useLive) {
+      var rows = UsageLogic.listOrEmpty(activityBackend.liveAccounts)
+      for (var i = 0; i < rows.length; i++)
+        if (rows[i] && Number(rows[i].inFlight) > 0) merged[rows[i].provider + "@" + rows[i].accountId] = nowSeconds
+    }
+    return merged
+  }
+  readonly property var accountModes: setting("accountModes", "{}")
+  function accountModeOf(reading) {
+    return UsageLogic.accountMode(reading, accountModes, proxyMode, nowSeconds, liveRecent)
+  }
+  // One at a time ("single") or used together, for the provider on screen.
+  readonly property string accountMode: accountModeOf(providerSummary)
+  readonly property var countedIndexes: UsageLogic.countedAccounts(providerSummary, accountMode, nowSeconds, liveRecent)
+  readonly property var accountOrderIndexes: UsageLogic.accountOrder(proxyAccounts, accountMode, proxyMode)
+  readonly property var accountNames: {
+    var names = []
+    for (var i = 0; i < proxyAccounts.length; i++) names.push(accountRowName(proxyAccounts[i], i + 1))
+    return names
+  }
+  // The account the detail shows. Empty follows the account the chip counts.
+  property string selectedAccountId: ""
+  readonly property int selectedAccountIndex: {
+    for (var i = 0; i < proxyAccounts.length; i++)
+      if (selectedAccountId !== "" && String(proxyAccounts[i].accountId) === selectedAccountId) return i
+    var counted = UsageLogic.leastHeadroomIndex(proxyAccounts, countedIndexes)
+    return counted >= 0 ? counted : countedIndexes.length > 0 ? countedIndexes[0] : (proxyAccounts.length > 0 ? 0 : -1)
+  }
+  readonly property var selectedAccount: accountOverview && selectedAccountIndex >= 0 ? proxyAccounts[selectedAccountIndex] : null
+  // The reading the detail shows: the selected account, or the provider itself.
+  readonly property var detail: accountOverview ? selectedAccount : provider
+  readonly property string detailKey: (provider ? String(provider.id) : "") + "@"
+    + (selectedAccount ? String(selectedAccount.accountId) : "")
+  readonly property var runway: provider && provider.status === "ok"
+    ? UsageLogic.accountRunway(providerSummary, accountOverview ? accountMode : "single",
+      accountOverview ? countedIndexes : [0], nowSeconds, accountOverview ? accountOrderIndexes : [0])
+    : null
+  // With several accounts while something is spent; for any provider once the limit runs out before it resets.
+  readonly property bool runwayVisible: viewMode === "limits" && runway !== null
+    && ((accountOverview && proxyAccounts.length > 1 && runway.spending) || runway.gap > 0
+      || (runway.lanes.length > 0 && runway.lanes[0].kind === "runs"))
+  readonly property var runwayNames: accountOverview ? accountNames
+    : [provider ? UsageLogic.providerShortName(provider) : ""]
+
+  // Account names for rows and notices: the email privacy setting applies, and "in use" is a tag of its
+  // own in the row, not part of the name.
+  function accountRowName(account, number) {
+    return accountDisplayName(Object.assign({}, account, { active: false }), number)
+  }
+
+  function selectAccount(accountId) {
+    var before = selectedAccountIndex
+    selectedAccountId = String(accountId)
+    if (selectedAccountIndex !== before && before >= 0)
+      slideDetail(accountOrderIndexes.indexOf(selectedAccountIndex) < accountOrderIndexes.indexOf(before) ? -1 : 1)
+  }
+
+  // The detail of a newly chosen account fades in from the side of its row: from the left for a row
+  // above the previous one, from the right for one below.
+  property real detailSlideFrom: 0
+  function slideDetail(direction) {
+    detailSwapAnimation.stop()
+    detailSlideFrom = direction * Style.space(12)
+    detailSwapAnimation.start()
+  }
+
+  // Session details of the selected proxy account, opened from its session badge.
+  property bool accountActivityExpanded: false
+  onSelectedAccountIndexChanged: accountActivityExpanded = false
+
+  // A proxy account's banked reset: the confirmation takes over the panel, as before.
+  function resetAccount(accountId) {
+    for (var i = 0; i < proxyAccounts.length; i++) {
+      if (String(proxyAccounts[i].accountId) !== String(accountId)) continue
+      return resetBackend.begin(proxyAccounts[i], accountDisplayName(proxyAccounts[i], i + 1))
+    }
+    return false
+  }
+
+  // Up/down walks the rows in their shown order; past either end the panel scrolls instead.
+  function moveAccountSelection(step) {
+    var order = accountOrderIndexes
+    var at = order.indexOf(selectedAccountIndex)
+    var next = at + step
+    if (at < 0 || next < 0 || next >= order.length) return false
+    selectAccount(proxyAccounts[order[next]].accountId)
+    return true
+  }
+
+  // Use: Omarchy starts new sessions with that login (AccountEvents runs the command and watches for it).
+  function useAccount(accountId) {
+    if (!provider) return false
+    for (var i = 0; i < proxyAccounts.length; i++)
+      if (String(proxyAccounts[i].accountId) === String(accountId))
+        return accountEventsTracker.use(provider.id, proxyAccounts[i], accountMode, proxyMode)
+    return false
+  }
+
+  property alias accountEvents: accountEventsTracker
+  readonly property var noticeEvent: accountEventsTracker.notice
+  readonly property string noticeText: noticeEvent ? UsageLogic.eventNoticeText(noticeEvent,
+    UsageLogic.readingFor(providers, noticeEvent.provider), noticeNames(noticeEvent.provider), clockText,
+    noticeEvent.manual === true) : ""
+
+  function noticeNames(providerId) {
+    var reading = UsageLogic.readingFor(providers, providerId)
+    var accounts = UsageLogic.providerAccounts(reading)
+    var names = {}
+    for (var i = 0; i < accounts.length; i++) names[String(accounts[i].accountId)] = accountRowName(accounts[i], i + 1)
+    return names
+  }
+
+  AccountEvents {
+    id: accountEventsTracker
+    providers: backend.providers
+    warningThreshold: root.warningThreshold
+    panelOpen: root.opened
+    onRefreshRequested: backend.refresh()
+  }
+
+  // A time today reads as a clock time; later ones carry the weekday.
+  function clockText(epochSeconds) {
+    var seconds = Number(epochSeconds)
+    if (!isFinite(seconds)) return ""
+    var date = new Date(seconds * 1000)
+    return Math.abs(seconds - Date.now() / 1000) < 12 * 3600
+      ? Qt.formatTime(date, tickTimeFormat) : Qt.formatDateTime(date, "ddd " + tickTimeFormat)
+  }
+
+  // Limit cards keep their delegates across readings (keyed by account and window), so a new reading
+  // moves bars and digits instead of rebuilding the cards.
+  function detailWindowKey(row, index) {
+    return detailKey + "|" + String(row && (row.id || row.label) || index)
+  }
+
+  function detailWindowFor(key) {
+    var rows = detail ? UsageLogic.listOrEmpty(detail.windows) : []
+    for (var i = 0; i < rows.length; i++)
+      if (detailWindowKey(rows[i], i) === key) return rows[i]
+    return null
+  }
+
+  function syncLimitCards() {
+    var rows = detail && detail.status === "ok" ? UsageLogic.orderedWindows(detail.windows) : []
+    var all = detail ? UsageLogic.listOrEmpty(detail.windows) : []
+    var keys = []
+    for (var i = 0; i < rows.length; i++) {
+      var key = detailWindowKey(rows[i], Array.prototype.indexOf.call(all, rows[i]))
+      if (keys.indexOf(key) < 0) keys.push(key)
+    }
+    UsageLogic.syncKeyedOrder({
+      count: function() { return limitCardModel.count },
+      keyAt: function(index) { return limitCardModel.get(index).cardKey },
+      move: function(from, to) { limitCardModel.move(from, to, 1) },
+      insert: function(index, value) { limitCardModel.insert(index, { cardKey: value }) }
+    }, keys)
+    while (limitCardModel.count > keys.length) limitCardModel.remove(limitCardModel.count - 1)
+  }
+
+  onDetailChanged: Qt.callLater(syncLimitCards)
+
+  ListModel { id: limitCardModel }
 
   // Low-balance thresholds for providers measured in money (OpenRouter, DeepSeek), compared in the
   // balance's own currency.
@@ -144,12 +314,17 @@ Ui.Panel {
 
   // One overview tile: logo, short name, the most pressing figure on the chosen side, and a mini
   // meter. Money providers show dollars on that side too. A failed refresh shows its short reason.
+  // A provider with several accounts shows the account the chip counts, and one dot per account.
   function providerTile(provider) {
     var id = String(provider.id)
     var failed = String(provider.status) === "error"
     var mode = quotaModeFor(id)
-    var money = failed ? null : UsageLogic.moneyView(provider, mode)
-    var remaining = failed ? null : UsageLogic.minRemaining(provider)
+    var accounts = UsageLogic.providerAccounts(provider)
+    var counted = accounts.length > 1 ? UsageLogic.countedAccounts(provider, accountModeOf(provider), nowSeconds, liveRecent) : []
+    var countedPick = proxyMode ? -1 : UsageLogic.leastHeadroomIndex(accounts, counted)
+    var reading = !failed && countedPick >= 0 ? accounts[countedPick] : provider
+    var money = failed ? null : UsageLogic.moneyView(reading, mode)
+    var remaining = failed ? null : UsageLogic.minRemaining(reading)
     var shown = remaining === null ? null : (mode === "Remaining" ? remaining : UsageLogic.usedFromRemaining(remaining))
     return {
       value: id,
@@ -163,7 +338,8 @@ Ui.Panel {
       unit: money !== null ? money.unit : shown === null ? "" : (mode === "Remaining" ? "left" : "used"),
       fill: money !== null ? (money.share === null ? 0 : money.share / 100) : shown === null ? 0 : shown / 100,
       alert: providerNeedsAttention(provider),
-      failed: failed
+      failed: failed,
+      dots: accounts.length > 1 ? UsageLogic.accountDots(provider, counted, warningThreshold, criticalThreshold) : null
     }
   }
 
@@ -184,9 +360,14 @@ Ui.Panel {
 
   // The one-line answer at the top of Limits: a limit already reached, the money left and how long it
   // lasts, the soonest run-out, or that every limit lasts. `urgent` colors it; empty text hides it.
-  readonly property var headline: {
+  // With several accounts the same line heads the selected account's detail instead.
+  readonly property var headline: accountOverview ? ({ text: "", urgent: false }) : headlineFor(provider)
+  readonly property var accountHeadline: accountOverview ? headlineFor(selectedAccount) : ({ text: "", urgent: false })
+
+  function headlineFor(reading) {
     var empty = { text: "", urgent: false }
-    if (!provider || String(provider.status) !== "ok" || accountOverview) return empty
+    var provider = reading
+    if (!provider || String(provider.status) !== "ok") return empty
     var rows = UsageLogic.listOrEmpty(provider.windows)
     var soonest = null
     var reached = null
@@ -575,6 +756,13 @@ Ui.Panel {
       : message
   }
 
+  // A reading is stale once two refresh intervals pass without a new one, or the last refresh failed.
+  readonly property bool usageStale: backend.fetchError !== ""
+    || (backend.lastSuccessAt > 0 && nowMs - backend.lastSuccessAt > backend.refreshIntervalSec * 2000)
+  // Share of the time left until the next reading: 1 just after one, 0 when the next is due.
+  readonly property real readingDrain: backend.nextRefreshAt <= 0 || backend.loading ? 0
+    : clamp((backend.nextRefreshAt - nowMs) / (backend.refreshIntervalSec * 1000), 0, 1)
+
   function footerLeft() {
     if (viewMode === "costs") {
       if (costBackend.fetchError !== "") return costBackend.fetchError
@@ -582,8 +770,12 @@ Ui.Panel {
         return "Updated " + Qt.formatTime(new Date(costBackend.lastSuccessAt), "HH:mm")
       return costBackend.loading ? "Loading session history…" : "Open Costs to load session history"
     }
+    if (backend.lastSuccessAt > 0 && usageStale) {
+      var minutes = Math.max(1, Math.round((nowMs - backend.lastSuccessAt) / 60000))
+      return "Last reading " + (minutes < 60 ? minutes + " min" : UsageLogic.formatDuration(minutes * 60)) + " ago · retrying"
+    }
     if (backend.fetchError !== "") return backend.fetchError
-    if (backend.lastSuccessAt > 0) return "Updated " + Qt.formatTime(new Date(backend.lastSuccessAt), "HH:mm:ss")
+    if (backend.lastSuccessAt > 0) return "Updated " + Qt.formatTime(new Date(backend.lastSuccessAt), tickTimeFormat)
     return backend.loading ? "Refreshing…" : "Waiting for first refresh"
   }
 
@@ -591,10 +783,10 @@ Ui.Panel {
   // sources there instead.
   function footerRight() {
     if (viewMode === "costs") return costsView.sourceSummary
-    if (backend.nextRefreshAt <= 0) return ""
+    if (backend.loading || backend.nextRefreshAt <= 0) return ""
     var seconds = Math.max(0, Math.floor((backend.nextRefreshAt - nowMs) / 1000))
-    if (seconds < 60) return "Next refresh in " + Math.max(1, seconds) + " s"
-    return "Next refresh in " + Math.ceil(seconds / 60) + " min"
+    if (seconds < 60) return "Next reading in " + Math.max(1, seconds) + " s"
+    return "Next reading in " + Math.ceil(seconds / 60) + " min"
   }
 
   visible: true
@@ -605,7 +797,7 @@ Ui.Panel {
   readonly property real openPanelIndicatorWidth: implicitWidth
 
   onProvidersChanged: ensureSelection()
-  onSelectedProviderIdChanged: expandedAccountLimits = false
+  onSelectedProviderIdChanged: selectedAccountId = ""
   onOpenedChanged: if (opened) {
     nowMs = Date.now()
     costBackend.ensureLoaded()
@@ -633,6 +825,7 @@ Ui.Panel {
     onRefreshed: {
       activityBackend.refresh()
       root.checkLimitCrossings()
+      accountEventsTracker.track(Date.now() / 1000)
     }
   }
 
@@ -666,6 +859,29 @@ Ui.Panel {
     settings: root.settings
     status: backend.ompStatus
     costBackend: costBackend
+  }
+
+  // One motion helper for the whole widget (stand-in until QmlBar's Motion.qml lands; same API).
+  Motion {
+    id: motion
+    preference: String(root.setting("motion", "system"))
+    panelOpen: root.opened
+  }
+  readonly property alias motionHelper: motion
+
+  // A first open with nothing read yet shows placeholder blocks, but only once reading takes over a
+  // second; a quick first reading never flashes them.
+  property bool skeletonDue: false
+  readonly property bool waitingForFirstReading: providers.length === 0 && backend.loading && backend.lastSuccessAt <= 0
+  onWaitingForFirstReadingChanged: {
+    skeletonDue = false
+    if (waitingForFirstReading) skeletonTimer.restart()
+    else skeletonTimer.stop()
+  }
+  Timer {
+    id: skeletonTimer
+    interval: 1000
+    onTriggered: root.skeletonDue = root.waitingForFirstReading
   }
 
   Timer {
@@ -932,7 +1148,8 @@ Ui.Panel {
         if (dx !== 0 && root.viewMode === "limits" && root.providers.length > 1) {
           root.selectProvider(root.providerIndex + dx)
         }
-        if (dy !== 0) {
+        // Up/down walks the account rows while there are some; past either end it scrolls.
+        if (dy !== 0 && !(root.viewMode === "limits" && root.accountOverview && root.moveAccountSelection(dy))) {
           var target = panelFlick.contentY + dy * Style.space(56)
           panelFlick.contentY = root.clamp(target, 0,
             Math.max(0, panelFlick.contentHeight - panelFlick.height))
@@ -1073,8 +1290,7 @@ Ui.Panel {
               text: {
                 if (root.viewMode === "costs")
                   return costBackend.loading ? "Loading session history…" : ""
-                var context = root.accountOverview
-                  ? root.proxyAccounts.length + " connected accounts" : root.heroMeta(root.provider)
+                var context = root.accountOverview ? "" : root.heroMeta(root.provider)
                 if (root.providers.length === 1 && root.provider)
                   context = root.provider.name + (context ? " · " + context : "")
                 return context + (backend.loading ? (context ? " · " : "") + "Refreshing…" : "")
@@ -1117,6 +1333,7 @@ Ui.Panel {
             proxyImplementation: backend.proxyImplementation
             costSources: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sources) : []
             ompActivity: ompActivity
+            motion: root.motionHelper
             onSetupRequested: function(entry, action) { root.startSetup(entry, action) }
             onChangeRequested: function(values) { root.saveSettings(values) }
             onCloseRequested: root.leaveSettings()
@@ -1124,6 +1341,20 @@ Ui.Panel {
               settingsRevealTimer.item = item
               settingsRevealTimer.restart()
             }
+          }
+
+          EventNotice {
+            id: eventNotice
+            objectName: "eventNotice"
+            width: parent.width
+            shown: root.viewMode === "limits" && root.noticeText !== ""
+            text: root.noticeText
+            foreground: root.foreground
+            accent: Commons.Color.accent
+            fontFamily: root.fontFamily
+            cardRadius: root.usageCardRadius
+            motion: root.motionHelper
+            onDismissed: root.accountEvents.dismiss()
           }
 
           Column {
@@ -1135,7 +1366,7 @@ Ui.Panel {
             Text {
               objectName: "liveActivityStatus"
               width: parent.width
-              visible: activityBackend.useLive
+              visible: activityBackend.useLive && text !== ""
               text: activityBackend.liveNotice
               textFormat: Text.PlainText
               color: root.dim
@@ -1144,234 +1375,429 @@ Ui.Panel {
               wrapMode: Text.WordWrap
             }
 
-            Repeater {
-              id: accountRepeater
-              model: root.proxyAccounts
-              ProxyAccountCard {
-                required property var modelData
-                required property int index
-                width: accountOverviewSection.width
-                account: modelData
-                accountNumber: index + 1
-              }
-            }
-
-            Ui.Button {
-              text: "Additional limits " + (root.expandedAccountLimits ? "▴" : "▾")
-              focusable: true
-              horizontalPadding: Style.spacing.sm
-              Accessible.name: root.expandedAccountLimits ? "Hide additional limits" : "Show additional limits"
+            AccountList {
+              id: accountListView
+              objectName: "accountList"
+              width: parent.width
+              providerId: root.provider ? String(root.provider.id) : ""
+              accounts: root.proxyAccounts
+              names: root.accountNames
+              mode: root.accountMode
+              counted: root.countedIndexes
+              order: root.accountOrderIndexes
+              selectedId: root.selectedAccount ? String(root.selectedAccount.accountId) : ""
+              nowSeconds: root.nowSeconds
+              recentByAccount: root.liveRecent
+              events: root.accountEvents.eventLog
+              proxyMode: root.proxyMode
+              resetsActionable: root.proxyMode && !resetBackend.active && !resetBackend.busy
+              useBusyId: root.accountEvents.useBusyId
+              headerText: UsageLogic.accountsHeaderText(root.provider, root.accountMode, root.proxyMode,
+                UsageLogic.proxyName(backend.proxyImplementation))
+              quotaMode: root.selectedQuotaMode
+              warningThreshold: root.warningThreshold
+              criticalThreshold: root.criticalThreshold
               foreground: root.foreground
+              urgent: root.urgent
               fontFamily: root.fontFamily
-              fontSize: Style.font.bodySmall
-              onClicked: root.expandedAccountLimits = !root.expandedAccountLimits
+              clockFormat: root.tickTimeFormat
+              cardRadius: root.usageCardRadius
+              motion: root.motionHelper
+              onAccountSelected: function(accountId) { root.selectAccount(accountId) }
+              onUseRequested: function(accountId) { root.useAccount(accountId) }
+              onResetRequested: function(accountId) { root.resetAccount(accountId) }
+            }
+          }
+
+          // A slow first reading: placeholder blocks where the tiles and cards will be.
+          Column {
+            objectName: "limitsSkeleton"
+            visible: root.viewMode === "limits" && root.skeletonDue && root.providers.length === 0
+            width: parent.width
+            spacing: Style.spacing.lg
+
+            Repeater {
+              model: [{ width: 1, height: 40 }, { width: 0.55, height: 14 }, { width: 1, height: 74 }, { width: 1, height: 74 }]
+
+              Rectangle {
+                required property var modelData
+                width: Math.round(parent.width * modelData.width)
+                height: Style.space(modelData.height)
+                radius: root.usageCardRadius
+                color: root.alpha(root.foreground, 0.06)
+              }
             }
           }
 
           Text {
-            visible: root.viewMode === "limits" && root.providers.length === 0
+            visible: root.viewMode === "limits" && root.providers.length === 0 && (!backend.loading || root.skeletonDue)
             width: parent.width
-            topPadding: Style.spacing.huge
-            bottomPadding: Style.spacing.huge
+            topPadding: root.skeletonDue ? 0 : Style.spacing.huge
+            bottomPadding: root.skeletonDue ? 0 : Style.spacing.huge
             text: backend.loading
               ? "Reading your limits…"
               : root.proxyMode ? "No enabled managed accounts found. Check the accounts configured in " + UsageLogic.proxyName(backend.proxyImplementation) + "."
               : "Nothing to show yet. Sign in to a provider's CLI or app, or turn one on under Settings → Providers."
             color: root.dim
             font.family: root.fontFamily
-            font.pixelSize: Style.font.body
+            font.pixelSize: root.skeletonDue ? Style.font.caption : Style.font.body
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.WordWrap
           }
 
-          Ui.BorderSurface {
-            id: errorCard
-            visible: root.viewMode === "limits" && !root.accountOverview && !!root.provider && root.provider.status === "error"
+          // What the selected account (or the provider itself) says: header, hero line, limits, runway,
+          // history and tokens. Choosing another account cross-fades it in from the side of that row.
+          Column {
+            id: detailColumn
+            objectName: "accountDetail"
+            visible: root.viewMode === "limits" && !!root.detail
             width: parent.width
-            implicitHeight: errorColumn.implicitHeight + errorCard.contentTopInset + errorCard.contentBottomInset
-            color: root.alpha(root.urgent, 0.09)
-            borderSpec: Border.flat(root.alpha(root.urgent, 0.4), Style.spacing.hairline)
-            padding: Style.spacing.xxl
-            radius: root.usageCardRadius
+            spacing: Style.spacing.xxl
+
+            ParallelAnimation {
+              id: detailSwapAnimation
+              OpacityAnimator {
+                target: detailColumn
+                from: 0
+                to: 1
+                duration: root.motionHelper.duration(root.motionHelper.row)
+                easing.type: Easing.OutCubic
+              }
+              XAnimator {
+                target: detailColumn
+                from: root.detailSlideFrom
+                to: 0
+                duration: root.motionHelper.duration(root.motionHelper.row)
+                easing.type: Easing.OutCubic
+              }
+            }
+
+            Ui.PanelSeparator {
+              visible: root.accountOverview && !!root.selectedAccount
+              foreground: root.foreground
+            }
 
             Column {
-              id: errorColumn
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.top: parent.top
-              anchors.leftMargin: errorCard.contentLeftInset
-              anchors.rightMargin: errorCard.contentRightInset
-              anchors.topMargin: errorCard.contentTopInset
-              spacing: Style.spacing.labelGap
+              visible: root.accountOverview && !!root.selectedAccount
+              width: parent.width
+              spacing: Style.spacing.md
+
+              Item {
+                objectName: "accountDetailHeader"
+                width: parent.width
+                implicitHeight: Math.max(detailName.implicitHeight, sessionBadge.visible ? sessionBadge.implicitHeight : 0)
+
+                Row {
+                  anchors.left: parent.left
+                  anchors.right: sessionBadge.visible ? sessionBadge.left : parent.right
+                  anchors.rightMargin: sessionBadge.visible ? Style.spacing.md : 0
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  Text {
+                    id: detailName
+                    objectName: "accountDetailName"
+                    width: Math.min(implicitWidth, parent.width * 0.6)
+                    text: root.selectedAccount ? root.accountNames[root.selectedAccountIndex] || "" : ""
+                    textFormat: Text.PlainText
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    objectName: "accountDetailMeta"
+                    width: Math.max(0, parent.width - detailName.width)
+                    anchors.baseline: detailName.baseline
+                    text: {
+                      var account = root.selectedAccount
+                      if (!account) return ""
+                      var parts = []
+                      var plan = account.plan || account.planType ? UsageLogic.accountPlanLabel(account) : ""
+                      if (plan !== "" && plan !== detailName.text) parts.push(plan)
+                      if (!root.proxyMode && root.accountMode === "single" && account.active === true) parts.push("in use")
+                      if (UsageLogic.accountSourceKind(account, root.proxyMode) === "omp") parts.push("from omp")
+                      return parts.length > 0 ? " · " + parts.join(" · ") : ""
+                    }
+                    textFormat: Text.PlainText
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    elide: Text.ElideRight
+                  }
+                }
+
+                Ui.Button {
+                  id: sessionBadge
+                  objectName: "accountSessionBadge"
+                  readonly property var load: UsageLogic.accountLoad(root.selectedAccount, activityBackend)
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: activityBackend.useLive && !!root.selectedAccount
+                  text: UsageLogic.sessionBadgeText(load)
+                  focusable: true
+                  bordered: true
+                  horizontalPadding: Style.spacing.sm
+                  verticalPadding: Style.spacing.xs
+                  foreground: load !== null && load.sessions > 0 ? root.foreground : root.dim
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  tooltipText: UsageLogic.sessionDetails(load)
+                  Accessible.name: text + (root.accountActivityExpanded ? ", hide session details" : ", show session details")
+                  onClicked: root.accountActivityExpanded = !root.accountActivityExpanded
+                }
+              }
 
               Text {
+                objectName: "accountActivityDetails"
                 width: parent.width
-                text: UsageLogic.errorTitle(root.provider)
-                color: root.urgent
+                visible: activityBackend.useLive && root.accountActivityExpanded
+                text: UsageLogic.sessionDetails(sessionBadge.load)
+                textFormat: Text.PlainText
+                color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.body
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+
+              Text {
+                objectName: "accountHeadline"
+                width: parent.width
+                visible: text !== ""
+                text: root.accountHeadline.text
+                textFormat: Text.PlainText
+                color: root.accountHeadline.urgent ? root.urgent : root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.heading
                 font.bold: true
                 wrapMode: Text.WordWrap
               }
+            }
 
-              Text {
-                width: parent.width
-                text: root.errorBody(root.provider)
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                textFormat: Text.PlainText
-                wrapMode: Text.WordWrap
-              }
+            Ui.BorderSurface {
+              id: errorCard
+              visible: !!root.detail && root.detail.status === "error"
+              width: parent.width
+              implicitHeight: errorColumn.implicitHeight + errorCard.contentTopInset + errorCard.contentBottomInset
+              color: root.alpha(root.urgent, 0.09)
+              borderSpec: Border.flat(root.alpha(root.urgent, 0.4), Style.spacing.hairline)
+              padding: Style.spacing.xxl
+              radius: root.usageCardRadius
 
-              // The same one-click fix Settings offers, right where the failure is reported.
-              Ui.Button {
-                id: errorSetupButton
-                objectName: "errorSetupButton"
-                readonly property var entry: root.proxyMode || !root.provider ? null : UsageLogic.localProvider(root.provider.id)
-                readonly property var action: UsageLogic.setupAction(entry, root.provider, backend.installed)
-                visible: action.kind === "signin" || action.kind === "install"
-                text: root.setupWatchId !== "" && entry && root.setupWatchId === entry.id ? "Waiting for the sign-in…" : action.label
-                bordered: true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                fontSize: Style.font.bodySmall
-                focusable: true
-                tooltipText: action.command
-                onClicked: root.startSetup(entry, action)
+              Column {
+                id: errorColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.leftMargin: errorCard.contentLeftInset
+                anchors.rightMargin: errorCard.contentRightInset
+                anchors.topMargin: errorCard.contentTopInset
+                spacing: Style.spacing.labelGap
+
+                Text {
+                  width: parent.width
+                  text: UsageLogic.errorTitle(root.detail)
+                  color: root.urgent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  font.bold: true
+                  wrapMode: Text.WordWrap
+                }
+
+                Text {
+                  width: parent.width
+                  text: root.errorBody(root.detail)
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  textFormat: Text.PlainText
+                  wrapMode: Text.WordWrap
+                }
+
+                // The same one-click fix Settings offers, right where the failure is reported. An account
+                // of several signs in from its own folder, so only the provider's own failure offers it.
+                Ui.Button {
+                  id: errorSetupButton
+                  objectName: "errorSetupButton"
+                  readonly property var entry: root.proxyMode || root.accountOverview || !root.provider ? null : UsageLogic.localProvider(root.provider.id)
+                  readonly property var action: UsageLogic.setupAction(entry, root.provider, backend.installed)
+                  visible: action.kind === "signin" || action.kind === "install"
+                  text: root.setupWatchId !== "" && entry && root.setupWatchId === entry.id ? "Waiting for the sign-in…" : action.label
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.bodySmall
+                  focusable: true
+                  tooltipText: action.command
+                  onClicked: root.startSetup(entry, action)
+                }
               }
             }
-          }
 
-          Text {
-            visible: root.viewMode === "limits" && !root.accountOverview && !!root.provider && root.provider.status !== "error"
-              && String(root.provider.notice || "") !== ""
-            width: parent.width
-            text: root.provider ? String(root.provider.notice || "") : ""
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
-          }
+            Text {
+              objectName: "detailNotice"
+              visible: text !== ""
+              width: parent.width
+              text: {
+                var reading = root.detail
+                if (!reading || reading.status === "error") return ""
+                var notice = String(reading.notice || "")
+                if (notice !== "") return notice
+                if (!root.accountOverview) return ""
+                if (reading.status === "disabled") return "This account is paused in " + UsageLogic.proxyName(backend.proxyImplementation) + "."
+                if (reading.status !== "ok") return "Quota unavailable"
+                if (UsageLogic.listOrEmpty(reading.windows).length === 0 && UsageLogic.spendable(reading) === null)
+                  return "No subscription limits reported."
+                return ""
+              }
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
 
-          Ui.PanelSeparator {
-            visible: root.viewMode === "limits" && (balanceCard.visible || limitsSection.visible || creditsSection.visible)
-            foreground: root.foreground
-          }
+            Ui.PanelSeparator {
+              visible: !root.accountOverview && (balanceCard.visible || limitsSection.visible || creditsSection.visible)
+              foreground: root.foreground
+            }
 
-          BalanceCard {
-            id: balanceCard
-            visible: root.viewMode === "limits" && !root.accountOverview && !!root.provider
-              && root.provider.status === "ok" && UsageLogic.spendable(root.provider) !== null
-            width: parent.width
-            provider: visible ? root.provider : null
-          }
+            BalanceCard {
+              id: balanceCard
+              visible: !!root.detail && root.detail.status === "ok" && UsageLogic.spendable(root.detail) !== null
+              width: parent.width
+              provider: visible ? root.detail : null
+            }
 
-          Column {
-            id: limitsSection
-            visible: root.viewMode === "limits" && !root.accountOverview && !!root.provider && root.provider.status === "ok"
-              && UsageLogic.isListLike(root.provider.windows) && root.provider.windows.length > 0
-            width: parent.width
-            spacing: Style.spacing.lg
+            Column {
+              id: limitsSection
+              objectName: "limitsSection"
+              visible: !!root.detail && root.detail.status === "ok" && limitCardModel.count > 0
+              width: parent.width
+              spacing: Style.spacing.lg
 
-            Repeater {
-              model: root.provider ? UsageLogic.orderedWindows(root.provider.windows) : []
+              Repeater {
+                id: limitCards
+                model: limitCardModel
 
-              LimitCard {
-                required property var modelData
-                width: limitsSection.width
-                window: modelData
-                severity: root.windowSeverity(modelData)
-                resetLabel: root.resetText(modelData)
-                quotaMode: root.selectedQuotaMode
+                LimitCard {
+                  required property string cardKey
+                  readonly property var row: root.detailWindowFor(cardKey)
+                  objectName: "limitCard-" + (row ? String(row.id || row.label || "") : "")
+                  width: limitsSection.width
+                  window: row
+                  severity: root.windowSeverity(row)
+                  resetLabel: root.resetText(row)
+                  quotaMode: root.selectedQuotaMode
+                  foreground: root.foreground
+                  urgent: root.urgent
+                  providerColor: root.providerColors ? UsageLogic.providerAccent(String(root.provider ? root.provider.id : ""), root.foreground) : root.foreground
+                  dim: root.dim
+                  fontFamily: root.fontFamily
+                  cardRadius: root.usageCardRadius
+                  nowSeconds: root.nowSeconds
+                  clockFormat: root.tickTimeFormat
+                  warningThreshold: root.warningThreshold
+                  criticalThreshold: root.criticalThreshold
+                  motion: root.motionHelper
+                }
+              }
+              PacingLegend {
                 foreground: root.foreground
-                urgent: root.urgent
-                providerColor: root.providerColors ? UsageLogic.providerAccent(String(root.provider ? root.provider.id : ""), root.foreground) : root.foreground
                 dim: root.dim
                 fontFamily: root.fontFamily
-                cardRadius: root.usageCardRadius
-                nowSeconds: root.nowMs / 1000
-                clockFormat: root.tickTimeFormat
               }
             }
-            PacingLegend {
-              foreground: root.foreground
-              dim: root.dim
-              fontFamily: root.fontFamily
-            }
-          }
 
-          Column {
-            id: creditsSection
-            visible: root.viewMode === "limits" && !root.accountOverview && !!root.provider
-              && root.provider.status === "ok" && !!root.provider.credits && !balanceCard.visible
-            width: parent.width
-            spacing: Style.spacing.lg
+            RunwayCard {
+              id: runwayCard
+              objectName: "runwayCard"
+              visible: root.runwayVisible
+              width: parent.width
+              runway: root.runway
+              names: root.runwayNames
+              counted: root.accountOverview ? root.countedIndexes : [0]
+              poolText: root.runway && root.provider ? UsageLogic.poolLine(root.provider.pool, root.runway.window) : ""
+              nowSeconds: root.nowSeconds
+              clockFormat: root.tickTimeFormat
+              foreground: root.foreground
+              urgent: root.urgent
+              fontFamily: root.fontFamily
+              cardRadius: root.usageCardRadius
+              motion: root.motionHelper
+            }
+
+            Column {
+              id: creditsSection
+              visible: !!root.detail && root.detail.status === "ok" && !!root.detail.credits && !balanceCard.visible
+              width: parent.width
+              spacing: Style.spacing.lg
+
+              UsageDisclosure {
+                id: creditsToggle
+                width: parent.width
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                text: root.detail && root.detail.credits
+                  ? String(root.detail.credits.label || "Credits") : "Credits"
+              }
+
+              CreditsCard {
+                width: parent.width
+                credits: root.detail ? root.detail.credits : null
+                visible: creditsToggle.checked
+              }
+            }
+
+            Ui.PanelSeparator {
+              visible: root.historyAvailable
+              foreground: root.foreground
+            }
 
             UsageDisclosure {
-              id: creditsToggle
+              id: historyToggle
+              visible: root.historyAvailable
               width: parent.width
               foreground: root.foreground
               fontFamily: root.fontFamily
-              text: root.provider && root.provider.credits
-                ? String(root.provider.credits.label || "Credits") : "Credits"
+              text: "History"
             }
 
-            CreditsCard {
+            UsageHistory {
+              id: history
+              visible: historyToggle.checked && root.historyAvailable
               width: parent.width
-              credits: root.provider ? root.provider.credits : null
-              visible: creditsToggle.checked
+              history: root.detail && root.detail.history ? root.detail.history : ({ h24: [], d7: [] })
+              mode: root.historyMode
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onModeChanged: root.historyMode = mode
             }
-          }
 
-          Ui.PanelSeparator {
-            visible: root.historyAvailable
-            foreground: root.foreground
-          }
+            Ui.PanelSeparator {
+              visible: root.tokensAvailable
+              foreground: root.foreground
+            }
 
-          UsageDisclosure {
-            id: historyToggle
-            visible: root.historyAvailable
-            width: parent.width
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            text: "History"
-          }
+            UsageDisclosure {
+              id: tokensToggle
+              visible: root.tokensAvailable
+              width: parent.width
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              text: "Tokens by model"
+            }
 
-          UsageHistory {
-            id: history
-            visible: historyToggle.checked && root.historyAvailable
-            width: parent.width
-            history: root.provider ? root.provider.history : ({ h24: [], d7: [] })
-            mode: root.historyMode
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onModeChanged: root.historyMode = mode
-          }
-
-          Ui.PanelSeparator {
-            visible: root.tokensAvailable
-            foreground: root.foreground
-          }
-
-          UsageDisclosure {
-            id: tokensToggle
-            visible: root.tokensAvailable
-            width: parent.width
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            text: "Tokens by model"
-          }
-
-          UsageTokenModels {
-            id: tokensByModel
-            visible: tokensToggle.checked && root.tokensAvailable
-            width: parent.width
-            models: root.providerModels
-            periodLabel: costBackend.payload && costBackend.payload.period
-              ? String(costBackend.payload.period.label || "") : ""
-            foreground: root.foreground
-            fontFamily: root.fontFamily
+            UsageTokenModels {
+              id: tokensByModel
+              visible: tokensToggle.checked && root.tokensAvailable
+              width: parent.width
+              models: root.providerModels
+              periodLabel: costBackend.payload && costBackend.payload.period
+                ? String(costBackend.payload.period.label || "") : ""
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
           }
 
           UsageCosts {
@@ -1387,6 +1813,8 @@ Ui.Panel {
             surface: root.surface
             fontFamily: root.fontFamily
             clockFormat: root.tickTimeFormat
+            motion: root.motionHelper
+            ompActivity: ompActivity
             onPeriodRequested: function(days) { costBackend.selectPeriod(days) }
             onMenuClosed: Qt.callLater(function() {
               if (root.opened && !root.configuring && !resetBackend.active)
@@ -1419,7 +1847,19 @@ Ui.Panel {
             }
           }
 
-          Ui.PanelSeparator { visible: !root.configuring; foreground: root.foreground }
+          // The rule above the footer drains, in accent, until the next reading is due.
+          Ui.PanelSeparator {
+            visible: !root.configuring
+            foreground: root.foreground
+
+            Rectangle {
+              objectName: "readingDrain"
+              visible: root.viewMode === "limits" && root.readingDrain > 0 && !root.usageStale
+              height: parent.height
+              width: Math.round(parent.width * root.readingDrain)
+              color: Commons.Color.accent
+            }
+          }
 
           Item {
             visible: !root.configuring
@@ -1428,19 +1868,23 @@ Ui.Panel {
 
             Text {
               id: footerLeft
+              objectName: "footerLeft"
               HoverHandler { id: footerHover }
               Ui.PanelToolTip {
-                visible: footerHover.hovered && root.viewMode === "costs" && costBackend.lastSuccessAt > 0
-                text: "Updated " + Qt.formatDateTime(new Date(costBackend.lastSuccessAt), "MMM d, HH:mm:ss")
-                  + (costBackend.payload && Number(costBackend.payload.scanDurationMs) > 0
-                    ? " · Scan " + costBackend.payload.scanDurationMs + "ms" : "")
+                visible: footerHover.hovered && (root.viewMode === "costs" ? costBackend.lastSuccessAt > 0
+                  : root.usageStale && backend.fetchError !== "" && backend.lastSuccessAt > 0)
+                text: root.viewMode === "costs"
+                  ? "Updated " + Qt.formatDateTime(new Date(costBackend.lastSuccessAt), "MMM d, HH:mm:ss")
+                    + (costBackend.payload && Number(costBackend.payload.scanDurationMs) > 0
+                      ? " · Scan " + costBackend.payload.scanDurationMs + "ms" : "")
+                  : backend.fetchError
                 fontFamily: root.fontFamily
               }
               anchors.left: parent.left
               anchors.right: footerRight.left
               anchors.rightMargin: Style.spacing.controlGap
               text: root.footerLeft()
-              color: (root.viewMode === "costs" ? costBackend.fetchError : backend.fetchError) !== ""
+              color: (root.viewMode === "costs" ? costBackend.fetchError !== "" : root.usageStale)
                 ? root.urgent : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -1449,6 +1893,7 @@ Ui.Panel {
 
             Text {
               id: footerRight
+              objectName: "footerRight"
               anchors.right: parent.right
               text: root.footerRight()
               color: root.dim
@@ -1457,259 +1902,6 @@ Ui.Panel {
             }
           }
         }
-      }
-    }
-  }
-
-  component ProxyAccountCard: Ui.BorderSurface {
-    id: accountCard
-    objectName: "proxyAccountCard"
-    property var account: ({})
-    property int accountNumber: 0
-    property bool activityExpanded: false
-    readonly property var load: UsageLogic.accountLoad(account, activityBackend)
-    readonly property var windows: UsageLogic.accountWindows(account, root.expandedAccountLimits)
-    readonly property bool healthy: account.status === "ok"
-    implicitHeight: accountContent.implicitHeight + contentTopInset + contentBottomInset
-    color: Style.normalFillFor(root.foreground, Commons.Color.accent, root.urgent)
-    borderSpec: Border.flat(root.alpha(root.foreground, 0.22), Style.spacing.hairline)
-    padding: Style.spacing.xxl
-    radius: root.usageCardRadius
-
-    Column {
-      id: accountContent
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.top: parent.top
-      anchors.leftMargin: accountCard.contentLeftInset
-      anchors.rightMargin: accountCard.contentRightInset
-      anchors.topMargin: accountCard.contentTopInset
-      spacing: Style.spacing.md
-
-      Item {
-        width: parent.width
-        implicitHeight: Math.max(accountLogo.height, accountPlan.implicitHeight,
-          resetBadge.visible ? resetBadge.implicitHeight : 0,
-          sessionBadge.visible ? sessionBadge.implicitHeight : 0)
-
-        Item {
-          id: accountLogo
-          anchors.left: parent.left
-          anchors.verticalCenter: parent.verticalCenter
-          width: Style.font.body * 1.2
-          height: width
-
-          Image {
-            id: accountLogoImage
-            anchors.fill: parent
-            source: root.iconUrl(accountCard.account)
-            sourceSize.width: accountLogo.width * 2
-            sourceSize.height: accountLogo.height * 2
-            fillMode: Image.PreserveAspectFit
-          }
-
-          Text {
-            anchors.centerIn: parent
-            visible: accountLogoImage.status !== Image.Ready
-            text: UsageLogic.providerMark(accountCard.account.id)
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
-        }
-
-        Text {
-          id: accountPlan
-          anchors.left: accountLogo.right
-          anchors.leftMargin: Style.spacing.md
-          anchors.verticalCenter: parent.verticalCenter
-          width: Math.max(0, parent.width - accountLogo.width - Style.spacing.md
-            - (resetBadge.visible ? resetBadge.width + Style.spacing.md : 0)
-            - (sessionBadge.visible ? sessionBadge.width + Style.spacing.md : 0))
-          text: UsageLogic.accountPlanLabel(accountCard.account)
-          textFormat: Text.PlainText
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
-          font.bold: true
-          verticalAlignment: Text.AlignVCenter
-          wrapMode: Text.WordWrap
-        }
-
-        Ui.Button {
-          id: sessionBadge
-          objectName: "accountSessionBadge"
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          visible: activityBackend.useLive
-          text: UsageLogic.sessionBadgeText(accountCard.load)
-          focusable: true
-          bordered: true
-          horizontalPadding: Style.spacing.sm
-          verticalPadding: Style.spacing.xs
-          foreground: accountCard.load !== null && accountCard.load.sessions > 0 ? root.foreground : root.dim
-          fontFamily: root.fontFamily
-          fontSize: Style.font.caption
-          tooltipText: UsageLogic.sessionDetails(accountCard.load)
-          Accessible.name: text + (accountCard.activityExpanded ? ", hide session details" : ", show session details")
-          onClicked: accountCard.activityExpanded = !accountCard.activityExpanded
-        }
-
-        Rectangle {
-          id: resetBadge
-          objectName: "accountResetBadge"
-          anchors.right: sessionBadge.visible ? sessionBadge.left : parent.right
-          anchors.rightMargin: sessionBadge.visible ? Style.spacing.md : 0
-          anchors.verticalCenter: parent.verticalCenter
-          visible: resetLabel.text !== ""
-          implicitWidth: resetLabel.implicitWidth + Style.spacing.lg * 2
-          implicitHeight: resetLabel.implicitHeight + Style.spacing.sm * 2
-          radius: height / 2
-          color: resetClick.containsMouse && resetClick.enabled || activeFocus ? root.alpha(root.foreground, 0.08) : "transparent"
-          border.color: root.alpha(root.foreground, activeFocus ? 0.6 : 0.18)
-          activeFocusOnTab: resetClick.enabled
-          Accessible.role: Accessible.Button
-          Accessible.name: resetLabel.text + ": apply a reset"
-          Keys.onReturnPressed: resetClick.activate()
-          Keys.onSpacePressed: resetClick.activate()
-
-          MouseArea {
-            id: resetClick
-            objectName: "accountResetAction"
-            anchors.fill: parent
-            enabled: root.proxyMode && accountCard.account.status === "ok"
-              && accountCard.account.supportsBankedReset !== false
-              && Number(accountCard.account.credits && accountCard.account.credits.resetCreditsAvailable) > 0
-              && !resetBackend.active && !resetBackend.busy
-            hoverEnabled: true
-            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            function activate() {
-              if (enabled) resetBackend.begin(accountCard.account,
-                root.accountDisplayName(accountCard.account, accountCard.accountNumber))
-            }
-            onClicked: activate()
-          }
-
-          ToolTip.visible: resetClick.containsMouse
-          ToolTip.text: resetClick.enabled ? "Apply a banked reset to this account" : "No reset available"
-
-          Text {
-            id: resetLabel
-            objectName: "accountResetLabel"
-            anchors.centerIn: parent
-            text: UsageLogic.accountResetLabel(accountCard.account)
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-        }
-      }
-      Text {
-        objectName: "accountName"
-        width: parent.width
-        text: root.accountDisplayName(accountCard.account, accountCard.accountNumber)
-        textFormat: Text.PlainText
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        elide: Text.ElideMiddle
-      }
-      Text {
-        objectName: "accountActivityDetails"
-        width: parent.width
-        visible: activityBackend.useLive && accountCard.activityExpanded
-        text: UsageLogic.sessionDetails(accountCard.load)
-        textFormat: Text.PlainText
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        wrapMode: Text.WordWrap
-      }
-
-      Repeater {
-        model: accountCard.healthy ? accountCard.windows : []
-        Column {
-          id: accountWindow
-          required property var modelData
-          objectName: "proxyAccountWindow"
-          readonly property bool known: modelData.remaining !== null && modelData.remaining !== undefined
-            && isFinite(Number(modelData.remaining))
-          readonly property bool stressed: root.windowSeverity(modelData) === "warning" || root.windowSeverity(modelData) === "critical"
-          width: accountContent.width
-          spacing: Style.spacing.sm
-          Item {
-            width: parent.width
-            implicitHeight: accountFigure.implicitHeight
-            readonly property var shown: root.selectedQuotaMode === "Remaining"
-              ? UsageLogic.windowRemaining(accountWindow.modelData)
-              : UsageLogic.windowUsed(accountWindow.modelData)
-            Text {
-              anchors.left: parent.left
-              anchors.right: accountFigure.left
-              anchors.rightMargin: Style.spacing.controlGap
-              anchors.baseline: accountFigure.baseline
-              text: String(accountWindow.modelData.label || "Usage limit")
-              textFormat: Text.PlainText
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              elide: Text.ElideRight
-            }
-            Text {
-              id: accountFigure
-              anchors.right: accountUnit.left
-              anchors.rightMargin: accountUnit.visible ? Style.spacing.sm : 0
-              text: accountWindow.known ? UsageLogic.formatPercent(parent.shown) + "%" : "—"
-              color: accountWindow.stressed ? root.urgent : root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.title
-              font.bold: true
-            }
-            Text {
-              id: accountUnit
-              visible: accountWindow.known
-              anchors.right: parent.right
-              anchors.baseline: accountFigure.baseline
-              text: !accountWindow.known ? "" : root.selectedQuotaMode === "Remaining" ? "left" : "used"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-          }
-          BlockMeter {
-            visible: accountWindow.known
-            width: parent.width
-            height: Style.space(10)
-            value: UsageLogic.meterFill(accountWindow.modelData, root.selectedQuotaMode) || 0
-            fillColor: accountWindow.stressed ? root.urgent : root.foreground
-            trackColor: root.alpha(root.foreground, 0.14)
-          }
-          Text {
-            width: parent.width
-            visible: text !== ""
-            text: root.resetText(accountWindow.modelData)
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-          }
-        }
-      }
-
-      Text {
-        width: parent.width
-        visible: text !== ""
-        text: accountCard.account.status === "error" ? root.errorBody(accountCard.account)
-          : accountCard.account.stale || !accountCard.healthy ? String(accountCard.account.notice || "Quota unavailable")
-          : accountCard.windows.length === 0 && UsageLogic.spendable(accountCard.account) !== null
-            ? UsageLogic.formatMoney(UsageLogic.spendable(accountCard.account), UsageLogic.moneyCurrency(accountCard.account)) + " left"
-          : accountCard.windows.length === 0 ? "No subscription limits reported." : ""
-        textFormat: Text.PlainText
-        color: accountCard.account.status === "error" ? root.urgent : root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        wrapMode: Text.WordWrap
       }
     }
   }

@@ -1247,4 +1247,250 @@ console.log("Provider setup: passed");
 }
 console.log("omp settings, live feed and account modes: passed");
 
+// ---- 1.9 QmlLimits ----
+{
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+  // A 5-hour window, half elapsed, rising at `perSecond` over its last 50 minutes (a steady recent rate).
+  const rising = (used, perSecond, extra = {}) => {
+    const samples = [];
+    for (let t = NOW - 3000; t <= NOW; t += 300) samples.push([t, used - perSecond * (NOW - t)]);
+    return { id: "session", label: "5-hour limit", used, remaining: 100 - used, windowSeconds: SESSION,
+      resetsAt: NOW + SESSION / 2, samples, ...extra };
+  };
+  const quiet = (used) => ({ id: "session", label: "5-hour limit", used, remaining: 100 - used,
+    windowSeconds: SESSION, resetsAt: NOW + SESSION / 2, samples: [] });
+  const week = (used) => ({ id: "weekly", label: "Weekly limit", used, remaining: 100 - used,
+    windowSeconds: WEEK, resetsAt: NOW + 3 * DAY, samples: [] });
+  const login = (accountId, windows, extra = {}) => ({ id: "claude", name: "Claude Code", status: "ok",
+    accountId, label: accountId, windows, ...extra });
+
+  // Spending now: a rise in the last 15 minutes, or a live omp request in the last two.
+  const rose = (seconds) => ({ id: "claude", accountId: "work", activity: { lastIncreaseAt: NOW - seconds } });
+  assert.equal(context.spendingNow(rose(900), NOW, {}), true);
+  assert.equal(context.spendingNow(rose(901), NOW, {}), false, "older than 15 minutes is not spending now");
+  assert.equal(context.spendingNow({ id: "claude", accountId: "work" }, NOW, { "claude@work": NOW - 120 }), true);
+  assert.equal(context.spendingNow({ id: "claude", accountId: "work" }, NOW, { "claude@work": NOW - 121 }), false);
+  assert.equal(context.spendingNow({ id: "claude", accountId: "work" }, NOW, { "codex@work": NOW }), false, "keys include the provider");
+  assert.equal(context.spendingNow(rose(10), null, {}), false, "no clock, no claim");
+
+  // Mode: the Settings choice wins; a proxy, an omp pool, or two accounts rising within an hour mean together.
+  const pair = (a, b) => ({ id: "claude", accounts: [rose(a), { ...rose(b), accountId: "personal" }] });
+  assert.equal(context.accountMode(pair(10, 5000), "{}", false, NOW, {}), "single");
+  assert.equal(context.accountMode(pair(10, 3500), "{}", false, NOW, {}), "together");
+  assert.equal(context.accountMode({ ...pair(10, 3500), accountSwitch: { mode: "auto", threshold: 95 } }, "{}", false, NOW, {}),
+    "single", "Omarchy switching logins: sessions left on the old one do not make it used together");
+  assert.equal(context.accountMode(pair(10, 3500), '{"claude":"single"}', false, NOW, {}), "single", "the user's choice wins");
+  assert.equal(context.accountMode(pair(10, 5000), '{"claude":"together"}', false, NOW, {}), "together");
+  assert.equal(context.accountMode(pair(10, 5000), '{"claude":"sideways"}', false, NOW, {}), "single", "unknown choices are automatic");
+  assert.equal(context.accountMode(pair(10, 5000), "not json", false, NOW, {}), "single");
+  assert.equal(context.accountMode(pair(9000, 9000), "{}", true, NOW, {}), "together", "a proxy spends its accounts together");
+  assert.equal(context.accountMode({ ...pair(9000, 9000), pool: { source: "omp", windows: [] } }, "{}", false, NOW, {}), "together");
+  assert.equal(context.accountMode(pair(10, 9000), "{}", false, NOW, { "claude@personal": NOW - 3000 }), "together",
+    "a live omp request counts as activity");
+
+  // Counted accounts: the in-use one alone; together, every account spending now, else the least headroom.
+  const work = login("work", [rising(70, 0.01), week(31)], { active: true, activity: { lastIncreaseAt: NOW - 60 } });
+  const personal = login("personal", [quiet(3), week(39)], { active: false });
+  const spare = login("spare", [quiet(100), week(90)], { active: false });
+  const claude = { id: "claude", name: "Claude Code", status: "ok", accountId: "work", accounts: [work, personal, spare] };
+  assert.deepEqual(Array.from(context.countedAccounts(claude, "single", NOW, {})), [0]);
+  const noActive = { ...claude, accountId: "personal", accounts: [{ ...work, active: undefined }, personal, spare] };
+  assert.deepEqual(Array.from(context.countedAccounts(noActive, "single", NOW, {})), [1], "falls back to the summary's account");
+  assert.deepEqual(Array.from(context.countedAccounts(claude, "together", NOW, { "claude@spare": NOW - 30 })), [0, 2],
+    "together counts every account spending now, in account order");
+  const idle = { ...claude, accounts: [{ ...work, activity: null }, personal, spare] };
+  assert.deepEqual(Array.from(context.countedAccounts(idle, "together", NOW, {})), [0],
+    "nothing spending: the least headroom that still has room, not the used-up one");
+  const allOut = { ...claude, accounts: [login("a", [quiet(100)]), login("b", [quiet(100)])] };
+  assert.deepEqual(Array.from(context.countedAccounts(allOut, "together", NOW, {})), [0]);
+  assert.deepEqual(Array.from(context.countedAccounts({ id: "claude" }, "single", NOW, {})), []);
+
+  // Row order: stable (Omarchy logins, keys, omp) one at a time; least headroom first together.
+  const mixed = [login("omp-1a2b3c4d5e6f", [quiet(10)], { origin: "omp" }), login("k-0123abcd", [quiet(50)]),
+    login("main", [quiet(95)]), login("broken", [], { status: "error" })];
+  assert.deepEqual(Array.from(context.accountOrder(mixed, "single", false)), [2, 3, 1, 0]);
+  assert.deepEqual(Array.from(context.accountOrder(mixed, "together", false)), [2, 1, 0, 3], "unknown headroom goes last");
+  assert.deepEqual(Array.from(context.accountOrder([login("a", [quiet(40)]), login("b", [quiet(40)])], "together", false)), [0, 1],
+    "ties keep the stable order, so rows do not shuffle");
+
+  // A keyed list reaches the wanted order by moves and inserts; kept items survive.
+  const items = ["a", "b", "c", "d"].map((key) => ({ key }));
+  const keep = items[2];
+  const adapter = {
+    count: () => items.length, keyAt: (i) => items[i].key,
+    move: (from, to) => items.splice(to, 0, items.splice(from, 1)[0]),
+    insert: (i, key) => items.splice(i, 0, { key }),
+  };
+  context.syncKeyedOrder(adapter, ["c", "a", "e"]);
+  assert.deepEqual(items.slice(0, 3).map((item) => item.key), ["c", "a", "e"]);
+  assert.equal(items[0], keep, "a moved item is the same object");
+  assert.deepEqual(items.slice(3).map((item) => item.key).sort(), ["b", "d"], "stale items are left at the end");
+
+  // Status line priority: failure > used up > spending now > recent event > plan > source.
+  const clock = (epoch) => "@" + (epoch - NOW);
+  const line = (account, event = null) => plain(context.accountStatusLine(account, NOW, {}, event, false));
+  assert.equal(line(login("w", [], { status: "error", errorKind: "expired" })).text, "sign-in expired");
+  const exhausted = login("w", [{ ...quiet(100), resetsAt: NOW + 600 }, { ...week(100), resetsAt: NOW + DAY }],
+    { activity: { lastIncreaseAt: NOW - 30 }, plan: "Claude Max 5x" });
+  assert.deepEqual(line(exhausted), { kind: "usedup", text: "used up", at: NOW + DAY, tone: "urgent" },
+    "used up beats spending now; back when every used-up window has reset");
+  assert.equal(line({ ...work, plan: "Claude Max 5x" }, { kind: "switch", at: NOW - 60 }).kind, "spending");
+  assert.deepEqual(line(login("p", [quiet(3)], { plan: "Claude Max 20x" }), { kind: "switch", at: NOW - 600 }),
+    { kind: "switch", text: "switched", at: NOW - 600, tone: "accent" });
+  assert.equal(line(login("p", [quiet(3)], { plan: "Claude Max 20x" }), { kind: "reset", at: NOW - 4 * HOUR }).text,
+    "Claude Max 20x", "an event older than three hours gives way to the plan");
+  assert.equal(line(login("omp-0123456789ab", [quiet(3)], { origin: "omp" })).text, "omp");
+  assert.equal(line(login("k-0123abcd", [quiet(3)])).text, "key");
+  assert.equal(line(login("w", [quiet(3)], { status: "ok", stale: true, plan: "Pro" })).kind, "stale");
+
+  // Use: Omarchy's switch command, never anything an option parser could misread.
+  assert.deepEqual(Array.from(context.accountUseArgv("claude", { accountId: "personal" })),
+    ["omarchy", "agent", "account", "use", "claude", "personal"]);
+  assert.deepEqual(Array.from(context.accountUseArgv("claude", { accountId: "main", primary: true })),
+    ["omarchy", "agent", "account", "use", "claude", "primary"], "the built-in login is Omarchy's primary");
+  assert.equal(context.accountUseArgv("claude", { accountId: "--help" }), null);
+  assert.equal(context.accountUseArgv("claude", { accountId: "two words" }), null);
+  assert.equal(context.accountUseArgv("../x", { accountId: "work" }), null);
+  assert.equal(context.accountCanUse(personal, "single", false), true);
+  assert.equal(context.accountCanUse(work, "single", false), false, "the account in use offers no Use");
+  assert.equal(context.accountCanUse(personal, "together", false), false);
+  assert.equal(context.accountCanUse(login("k-0123abcd", [quiet(3)]), "single", false), false, "keys have no Use");
+  assert.equal(context.accountCanUse(personal, "single", true), false, "proxy accounts have no Use");
+
+  // The ACCOUNTS header says how new sessions pick an account.
+  assert.equal(context.accountsHeaderText({ ...claude, accountSwitch: { mode: "auto", threshold: 95 } }, "single", false, ""),
+    "Omarchy · switches at 95%");
+  assert.equal(context.accountsHeaderText({ ...claude, accountSwitch: { mode: "manual", threshold: 90 } }, "single", false, ""),
+    "Omarchy · notifies at 90%");
+  assert.equal(context.accountsHeaderText(claude, "single", false, ""), "");
+  assert.equal(context.accountsHeaderText({ ...claude, pool: { source: "omp" } }, "together", false, ""), "used together · omp");
+  assert.equal(context.accountsHeaderText(claude, "together", true, "Fusebox"), "used together · Fusebox");
+  assert.equal(context.accountsHeaderText({ ...claude, accounts: [{ ...work, origins: ["omarchy", "omp"] }, personal] },
+    "together", false, ""), "used together · omp", "an account omp also reads counts as omp");
+  assert.equal(context.accountSourceKind({ accountId: "work", source: "Claude OAuth usage API" }, false), "omarchy",
+    "source describes the API; only origin names the kind");
+  assert.equal(context.accountSourceKind({ accountId: "a1", origin: "proxy" }, false), "proxy");
+  assert.equal(context.accountSourceKind({ accountId: "a1" }, true), "proxy");
+
+  // Tile dots: four at most; five or more show three with the counted ones kept, plus "+N".
+  const many = { id: "claude", accounts: ["a", "b", "c", "d", "e"].map((id) => login(id, [quiet(10)])) };
+  const dots = plain(context.accountDots(many, [4], 25, 10));
+  assert.deepEqual(dots.dots.map((dot) => dot.index), [0, 1, 4]);
+  assert.equal(dots.more, 2);
+  assert.equal(dots.dots[2].counted, true);
+  assert.equal(plain(context.accountDots(claude, [0], 25, 10)).dots.map((dot) => dot.severity).join(","), "ok,ok,critical");
+
+  // Forecast: where this pace takes a limit by its reset.
+  const hot = context.windowForecast(rising(70, 0.01), NOW);
+  assert.ok(Math.abs(hot.rate - 0.01) < 1e-9, "the projection's rate is exposed");
+  assert.equal(hot.runsOut, true);
+  assert.ok(Math.abs(hot.runsOutAt - (NOW + 3000)) < 1);
+  assert.equal(hot.projected, 100);
+  assert.deepEqual(plain(context.forecastSegment(hot, "Used")), { from: 0.7, to: 1, runsOut: true });
+  assert.deepEqual(plain(context.forecastSegment(hot, "Remaining")), { from: 0, to: 0.3, runsOut: true },
+    "Remaining: the part of the fill this pace spends");
+  assert.deepEqual(plain(context.forecastText(hot, "Used", clock)), { text: "runs out @3000 · pace 50%", urgent: true });
+  const calm = context.windowForecast(rising(20, 0.002), NOW);
+  assert.equal(calm.runsOut, false);
+  assert.ok(Math.abs(calm.projected - 38) < 0.01, "20% + 0.002%/s over 9000 s");
+  assert.equal(context.forecastText(calm, "Used", clock).text, "lasts until reset");
+  assert.equal(context.forecastSegment(context.windowForecast(quiet(20), NOW), "Used"), null, "no rate, no forecast segment");
+  assert.equal(context.forecastText(context.windowForecast({ ...quiet(100) }, NOW), "Used", clock).text, "used up");
+
+  // Scrub: below the fill, when use passed that point; above it, when this pace gets there.
+  const scrubbed = rising(70, 0.01);
+  assert.deepEqual(plain(context.meterScrub(scrubbed, 50, "Used", NOW)), { kind: "passed", percent: 50, at: NOW - 1800 });
+  assert.equal(context.scrubText(context.meterScrub(scrubbed, 50, "Used", NOW), "Used", clock), "50% · passed @-1800");
+  assert.deepEqual(plain(context.meterScrub(scrubbed, 85, "Used", NOW)), { kind: "at", percent: 85, at: NOW + 1500 });
+  assert.equal(context.scrubText(context.meterScrub(scrubbed, 85, "Used", NOW), "Used", clock), "85% · at @1500 at this pace");
+  assert.equal(context.meterScrub(rising(20, 0.002), 90, "Used", NOW).kind, "after-reset");
+  assert.equal(context.meterScrub(quiet(20), 90, "Used", NOW).kind, "idle");
+  assert.equal(context.scrubText(context.meterScrub(quiet(20), 90, "Used", NOW), "Used", clock), "90% · not being used now");
+  assert.equal(context.meterScrub(scrubbed, 10, "Used", NOW).kind, "earlier", "before the first sample of the window");
+  assert.equal(context.scrubText(context.meterScrub(scrubbed, 50, "Remaining", NOW), "Remaining", clock),
+    "50% left · passed @-1800", "Remaining reads the same point as what was left");
+
+  // Runway, one at a time: the in-use account runs out, the next takes over at the same pace.
+  const runwayOf = (accounts, mode, counted) => plain(context.accountRunway({ id: "claude", accounts }, mode, counted, NOW,
+    context.accountOrder(accounts, mode, false)));
+  const first = login("work", [rising(70, 0.01), week(31)], { active: true });
+  const takeover = runwayOf([first, login("personal", [quiet(20), week(39)])], "single", [0]);
+  assert.equal(takeover.horizon, SESSION / 2);
+  assert.deepEqual(takeover.lanes.map((lane) => [lane.index, lane.kind, Math.round(lane.start), Math.round(lane.end)]),
+    [[0, "runs", 0, 3000], [1, "takesover", 3000, 9000]]);
+  assert.equal(takeover.gap, 0, "Personal lasts until the reset");
+  assert.equal(takeover.spending, true);
+  const gap = runwayOf([first, login("personal", [quiet(60), week(39)])], "single", [0]);
+  assert.deepEqual(gap.lanes.map((lane) => [lane.kind, Math.round(lane.end)]), [["runs", 3000], ["runs", 7000]]);
+  assert.equal(Math.round(gap.gap), 2000, "both run out 2000 s before the reset");
+  const blocked = runwayOf([login("work", [quiet(100)], { active: true }), login("personal", [quiet(90)])], "single", [0]);
+  assert.deepEqual(blocked.lanes.map((lane) => lane.kind), ["usedup", "lasts"], "the next account takes over at once");
+  assert.equal(blocked.gap, 0);
+  const empty = runwayOf([login("work", [quiet(100)], { active: true }), login("personal", [quiet(100)])], "single", [0]);
+  assert.equal(empty.gap, SESSION / 2, "every account used up: the whole wait is a gap");
+  const restful = runwayOf([login("work", [quiet(10)], { active: true }), login("personal", [quiet(20)])], "single", [0]);
+  assert.deepEqual(restful.lanes.map((lane) => lane.kind), ["lasts", "notneeded"]);
+  assert.equal(restful.spending, false);
+  // Together: every account runs down side by side, each at its own pace.
+  const both = runwayOf([first, login("personal", [rising(60, 0.005), week(39)])], "together", [0, 1]);
+  assert.deepEqual(both.lanes.map((lane) => [lane.index, lane.kind, Math.round(lane.start), Math.round(lane.end)]),
+    [[0, "runs", 0, 3000], [1, "runs", 0, 8000]]);
+  assert.equal(Math.round(both.gap), 1000);
+  const oneIdle = runwayOf([first, login("personal", [quiet(60)])], "together", [0]);
+  assert.equal(oneIdle.gap, 0, "an account not being spent lasts, so there is no gap");
+  assert.deepEqual(oneIdle.lanes.map((lane) => !!lane.idle), [false, true], "the account not being spent is marked idle");
+  // A provider without accounts is its own single lane.
+  const solo = plain(context.accountRunway({ id: "claude", status: "ok", windows: [rising(70, 0.01)] }, "single", [], NOW, []));
+  assert.deepEqual(solo.lanes.map((lane) => lane.kind), ["runs"]);
+  assert.equal(Math.round(solo.gap), 6000);
+  assert.equal(context.accountRunway({ id: "kimi", status: "ok", windows: [week(40)] }, "single", [], NOW, []), null,
+    "no short window, no runway");
+  assert.equal(context.poolLine({ windows: [{ windowSeconds: SESSION, accounts: 2, usedAccounts: 0.43, remainingAccounts: 1.57 }] },
+    quiet(10)), "Pool: 1.57 of 2 accounts left this 5-hour window");
+  assert.equal(context.poolLine({ windows: [{ windowSeconds: WEEK, accounts: 2, remainingAccounts: 1 }] }, quiet(10)), "");
+
+  // Events: the first reading seeds; then a switch, a reset after heavy use, and an omp sign-in lost.
+  const team = (active, workUsed) => ({ id: "claude", name: "Claude Code", status: "ok", accounts: [
+    login("work", [quiet(workUsed), week(31)], { active: active === "work" }),
+    login("personal", [quiet(3), week(39)], { active: active === "personal" }),
+  ] });
+  const seeded = context.accountEvents({}, [team("work", 90)], NOW, 25);
+  assert.equal(seeded.events.length, 0, "the first reading only seeds");
+  const switched = context.accountEvents(seeded.state, [team("personal", 96)], NOW + 900, 25);
+  assert.equal(switched.events.length, 1);
+  assert.deepEqual(plain(switched.events[0]), { id: "switch|claude|personal|" + (NOW + 900), kind: "switch",
+    provider: "claude", accountId: "personal", from: "work", fromUsed: 96, label: "", at: NOW + 900 });
+  const names = { work: "Work", personal: "Personal" };
+  assert.equal(context.eventNoticeText(switched.events[0], team("personal", 96), names, () => "16:27", false),
+    "Omarchy moved new Claude sessions to Personal at 16:27: Work reached 96%. Running sessions stay on Work.");
+  assert.equal(context.eventNoticeText(switched.events[0], team("personal", 96), names, () => "16:27", true),
+    "New Claude sessions now use Personal. Running sessions stay on Work.");
+  const proxyPair = (best) => ({ id: "codex", status: "ok", accountId: best, accounts: [
+    { id: "codex", accountId: "a1", status: "ok", windows: [quiet(10)] },
+    { id: "codex", accountId: "a2", status: "ok", windows: [quiet(20)] }] });
+  const proxySeed = context.accountEvents({}, [proxyPair("a1")], NOW, 25);
+  assert.equal(context.accountEvents(proxySeed.state, [proxyPair("a2")], NOW + 900, 25).events.length, 0,
+    "a proxy's summary following headroom is no switch");
+  const before = { id: "codex", name: "OpenAI Codex", status: "ok", windows: [{ ...quiet(92), id: "primary", resetsAt: NOW - 30 }] };
+  const after = { id: "codex", name: "OpenAI Codex", status: "ok", windows: [{ ...quiet(2), id: "primary", resetsAt: NOW + SESSION - 30 }] };
+  const resetSeed = context.accountEvents({}, [before], NOW - 60, 25);
+  const reset = context.accountEvents(resetSeed.state, [after], NOW, 25);
+  assert.equal(reset.events.length, 1);
+  assert.equal(reset.events[0].kind, "reset");
+  assert.equal(reset.events[0].at, NOW - 30, "a reset happened when the old window ended");
+  assert.equal(context.eventNoticeText(reset.events[0], after, {}, () => "18:02", false), "Codex's 5-hour limit reset at 18:02.");
+  const lightSeed = context.accountEvents({}, [{ ...before, windows: [{ ...quiet(40), id: "primary", resetsAt: NOW - 30 }] }], NOW - 60, 25);
+  assert.equal(context.accountEvents(lightSeed.state, [after], NOW, 25).events.length, 0, "a lightly used limit resets quietly");
+  const ompAccount = (status) => ({ id: "claude", status: "ok", accounts: [
+    login("main", [quiet(5)], { active: true, origin: "signin" }),
+    { id: "claude", accountId: "omp-0123456789ab", origin: "omp", status, errorKind: status === "error" ? "expired" : "", windows: [] }] });
+  const ompSeed = context.accountEvents({}, [ompAccount("ok")], NOW, 25);
+  const expired = context.accountEvents(ompSeed.state, [ompAccount("error")], NOW + 900, 25);
+  assert.equal(expired.events.length, 1);
+  assert.equal(context.eventNoticeText(expired.events[0], ompAccount("error"), { "omp-0123456789ab": "Team" }, clock, false),
+    "omp can no longer renew Team's sign-in. Sign in again in omp.");
+  assert.equal(context.accountEvents(expired.state, [ompAccount("error")], NOW + 1800, 25).events.length, 0, "said once");
+}
+console.log("1.9 QmlLimits accounts, forecast and runway: passed");
+
 console.log("UsageLogic.js: all assertions passed");

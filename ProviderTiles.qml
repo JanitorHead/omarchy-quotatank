@@ -2,13 +2,15 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Effects
+import QtQuick.Shapes
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui as Ui
 
 // Provider overview in Limits: one tile per provider with its logo, name, most pressing
 // figure, and a mini meter. Every provider's state is visible at once; a click selects it.
-// Options: { value, label, name, iconUrl, mark, figure, unit, fill, alert, failed }.
+// Options: { value, label, name, iconUrl, mark, figure, unit, fill, alert, failed, dots }.
+// `dots` ({dots: [{counted, severity}], more}) marks a provider with several accounts, like its chip.
 Flow {
   id: root
 
@@ -30,6 +32,10 @@ Flow {
     for (var i = 0; i < options.length; i++) {
       var option = options[i]
       var label = Style.space(12) + Style.spacing.sm + labelMetrics.advanceWidth(String(option.label || ""))
+      var dots = option.dots ? option.dots.dots.length : 0
+      if (dots > 0)
+        label += Style.spacing.sm + dots * Style.space(5) + (dots - 1) * Style.space(3)
+          + (Number(option.dots.more) > 0 ? Style.space(3) + labelMetrics.advanceWidth("+" + option.dots.more) : 0)
       var figure = option.failed ? labelMetrics.advanceWidth(String(option.figure || "")) : figureMetrics.advanceWidth(String(option.figure || ""))
       widest = Math.max(widest, label, figure)
     }
@@ -82,6 +88,7 @@ Flow {
 
       Accessible.role: Accessible.PageTab
       Accessible.name: modelData.name + ", " + (modelData.failed ? modelData.figure : modelData.figure + " " + modelData.unit)
+        + (modelData.dots ? ", " + (modelData.dots.dots.length + modelData.dots.more) + " accounts" : "")
         + (modelData.alert ? ", needs attention" : "")
       Accessible.selected: selected
       activeFocusOnTab: true
@@ -140,7 +147,7 @@ Flow {
           }
 
           Text {
-            width: parent.width - mark.width - parent.spacing
+            width: parent.width - mark.width - parent.spacing - (accountDots.visible ? accountDots.width + parent.spacing : 0)
             anchors.verticalCenter: parent.verticalCenter
             text: tile.modelData.label
             color: tile.selected ? Commons.Color.accent : root.foreground
@@ -148,6 +155,73 @@ Flow {
             font.pixelSize: Style.font.caption
             font.weight: Font.DemiBold
             elide: Text.ElideRight
+          }
+
+          // One dot per account: filled for the ones the chip counts, a ring in the account's state
+          // colour for the others (dashed when its reading failed).
+          Row {
+            id: accountDots
+            objectName: "tileDots-" + tile.modelData.value
+            readonly property var dotList: tile.modelData.dots ? tile.modelData.dots.dots : []
+            readonly property int more: tile.modelData.dots ? Number(tile.modelData.dots.more) || 0 : 0
+            visible: dotList.length > 0
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(3)
+
+            Repeater {
+              model: accountDots.dotList
+
+              Item {
+                id: dot
+                required property var modelData
+                readonly property bool dashed: modelData.severity === "error"
+                readonly property color ring: modelData.severity === "critical" ? root.urgent
+                  : modelData.severity === "warning" ? root.alpha(root.urgent, 0.7)
+                  : dashed ? Qt.darker(root.foreground, 1.55) : root.alpha(root.foreground, 0.55)
+                width: Style.space(5)
+                height: width
+
+                Rectangle {
+                  anchors.fill: parent
+                  visible: !dot.dashed
+                  radius: width / 2
+                  color: dot.modelData.counted ? tile.figureColor : "transparent"
+                  border.width: dot.modelData.counted ? 0 : Style.spacing.hairline
+                  border.color: dot.ring
+                }
+
+                Shape {
+                  anchors.fill: parent
+                  visible: dot.dashed
+                  preferredRendererType: Shape.CurveRenderer
+
+                  ShapePath {
+                    strokeColor: dot.ring
+                    strokeWidth: Style.spacing.hairline
+                    strokeStyle: ShapePath.DashLine
+                    dashPattern: [1.5, 1.5]
+                    fillColor: "transparent"
+
+                    PathAngleArc {
+                      centerX: dot.width / 2
+                      centerY: dot.height / 2
+                      radiusX: dot.width / 2 - 0.5
+                      radiusY: dot.height / 2 - 0.5
+                      sweepAngle: 360
+                    }
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: accountDots.more > 0
+              anchors.verticalCenter: parent.verticalCenter
+              text: "+" + accountDots.more
+              color: Qt.darker(root.foreground, 1.55)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
           }
         }
 

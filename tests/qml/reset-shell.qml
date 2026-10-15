@@ -113,16 +113,19 @@ ShellRoot {
         root.phase++
       } else if (root.phase === 6 && root.widget.providers.length > 0) {
         root.widget.selectProviderId("codex")
-        root.check(root.widget.accountCards.count === 3, "account badge integration fixture loaded")
-        var zero = root.namedChild(root.widget.accountCards.itemAt(0), "accountResetAction")
-        var action = root.namedChild(root.widget.accountCards.itemAt(1), "accountResetAction")
+        root.phase++
+      } else if (root.phase === 7 && root.widget.accountList.view.count > 0) {
+        // Rows follow the accounts once the list has synced its model.
+        root.check(root.widget.accountList.view.count === 3, "account badge integration fixture loaded")
+        var zero = root.namedChild(root.widget.accountList.rowFor("0"), "accountResetAction")
+        var action = root.namedChild(root.widget.accountList.rowFor("1"), "accountResetAction")
         root.check(zero && !zero.enabled, "zero resets badge is disabled")
         root.check(action && action.enabled, "nonzero resets badge is actionable")
         action.activate()
         root.check(root.widget.resetAction.accountId === "1", "badge targets the clicked account")
         root.check(root.widget.resetAction.accountLabel === "Account 2", "badge preserves email privacy")
         root.phase++
-      } else if (root.phase === 7 && root.widget.resetAction.state === "ready") {
+      } else if (root.phase === 8 && root.widget.resetAction.state === "ready") {
         root.check(!root.widget.resetAction.busy, "badge click only prepares confirmation")
         root.widget.resetAction.cancel()
         root.check(!root.widget.resetAction.active, "panel confirmation cancels without consuming")
