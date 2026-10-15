@@ -2,7 +2,8 @@
 
 `scripts/cost-fetch.py` writes schema-v1 JSON. Costs combines local Codex/Claude
 history selected by `--providers claude,codex,opencode` with enabled servers in
-`--t3-servers`. The latter is a JSON array of at most four objects:
+`--t3-servers` and, optionally, one omp stats server in `--omp-stats-url` (see
+[Remote omp stats](#remote-omp-stats)). `--t3-servers` is a JSON array of at most four objects:
 `{"id":"home","name":"Home T3","url":"https://t3.example","tokenFile":"/private/token","enabled":true}`.
 `costLocalProviders` and `costT3Servers` are independent of quota settings.
 Legacy `costSource` and `costLocalBackfill` settings are ignored. Keeper is used
@@ -83,10 +84,12 @@ over fresh partial and stale ones, with local preferred on ties. Missing/failed
 sources cannot suppress a healthy duplicate. This identifies shared folders, not
 transcript copies on distinct computers; replicated histories can still overlap.
 
-Top-level `sources` contains `id`, `name`, `kind` (`local`/`t3`), optional `provider`,
-`status` (`ok`, `partial`, `missing`, `failed`, `stale`, `unavailable`, `duplicate`),
-`included`, nullable `updatedAt` in Unix milliseconds, and safe `message`.
-Raw source hostnames, paths and server error bodies never enter the output/cache.
+Top-level `sources` contains `id`, `name`, `kind` (`local`/`t3`/`omp-remote`), optional
+`provider` or `providers`, `status` (`ok`, `partial`, `missing`, `failed`, `stale`,
+`unavailable`, `duplicate`, and for omp stats also `error` and `off`), `included`, nullable
+`updatedAt` in Unix milliseconds, and safe `message`. Raw source hostnames, paths and server
+error bodies never enter the output/cache; the omp stats entry repeats only the host name of
+the configured URL.
 
 Normalized remote snapshots are private, keyed by URL, credential identity,
 period and timezone. On failure a snapshot up to 32 days old is reused, clipped
@@ -210,9 +213,73 @@ window starts before the 32-day local retention (always for 30D), or when a remo
 remote servers report only the selected period. Error payloads carry empty `projects`/`agents`, empty heatmap
 arrays, and a `null` `previous`.
 
+## Remote omp stats
+
+`--omp-stats-url URL` adds the aggregates of an `omp stats` dashboard (Oh My Pi 18),
+typically running on another computer as `omp stats --host <address> --port <port>`.
+The URL follows the omp gateway rule: HTTPS to any host; plain HTTP only to loopback,
+private (RFC 1918, IPv6 unique-local) and Tailscale (`100.64.0.0/10`, `*.ts.net`)
+addresses or single-label host names; never a user name, query or fragment. The
+dashboard has no authentication and also serves session transcripts, so
+`scripts/omp_stats.py` sends exactly four `GET` requests and nothing else:
+`/api/stats/overview`, `/api/stats/providers`, `/api/stats/models` and
+`/api/stats/folders`, each with `?range=24h|7d|30d` for the 1/7/30-day period. They
+run concurrently with each other and with the local scan, each with a 15-second
+timeout, a 2 MiB body limit and at most 4,096 rows per list. Redirects are refused,
+HTTPS certificates are verified, and nothing is cached.
+
+Only counters, omp's own costs, provider and model ids and folder names are read.
+omp provider ids map to Quotatank ids (`anthropic` → `claude`, `openai-codex` →
+`codex`, `opencode-go` → `opencode`, `kimi-code` → `kimi`, `zai`/`zai-coding-plan` →
+`zai`, `google-antigravity` → `antigravity`, `cursor`, `github-copilot` → `copilot`,
+`minimax`/`minimax-code`/`minimax-coding-plan` → `minimax`); every other provider
+counts as `other` ("Other providers"). Remote rows are not filtered by `--providers`.
+
+- `totals` adds `overview.overall`, and each `providers` row the matching
+  `providers.providers` rows. Providers only omp reports get their own rows, `other` last.
+- `periods` add `providers.series`. omp buckets are hourly for 24H and UTC days for
+  7D/30D; each counts in the local bucket that contains its midpoint, so a UTC day lands
+  on the local day holding most of it. omp's windows are rolling (the last 24, 7×24 or
+  30×24 hours), so a bucket may start before the first local bucket; it counts in the
+  first bucket, and a bucket that ends after now counts in the last one. Periods
+  therefore add up to the remote totals. omp reports only a token total per bucket, so
+  period cells gain `totalTokens` without the per-kind split.
+- `models` gains separate rows from `/api/stats/models`, marked `"origin": "omp-remote"`.
+  A model omp did not name is "Unknown model"; rows past 512 fold into "Other models".
+- `projects` adds `/api/stats/folders`, named by the last segment of the omp folder
+  name (`-dev-app` → `app`). omp writes `/` as `-`, so a hyphenated project name keeps
+  only its last part; the home folder and unnamed folders count as "Other". Folder
+  names never enter the output.
+- `agents` adds `overview.byAgentType`: omp's `main` (or null) is `main`, every other
+  kind (`subagent`, `advisor`) is `subagent`.
+
+omp priced each request with the rates of the provider that served it, and its buckets
+carry no per-model token split, so remote costs are kept as reported
+(`providerReported`) and neither the public table nor custom prices reprice them.
+Requests omp could not price stay unpriced; an agent row with zero cost counts as
+unpriced because omp reports no unpriced count per agent. Cache savings of remote models
+use the custom or public input and cache-read rates, as for local records; period cells
+gain none. Remote requests count in `remoteRecords`, and every cell or provider with
+remote data reports `sessions: null`.
+
+The `sources` entry has `id` and `kind` `omp-remote`, `name` "Oh My Pi stats", `host`
+(the URL's host name; empty when the URL is absent or invalid), `providers` (the ids it
+supplied) and `status`:
+
+- `off`: no URL is configured.
+- `ok`: the data is included.
+- `error`: nothing is included; `errorKind` is `invalid_url`, `network`, `timeout`,
+  `not_found` (HTTP 404, e.g. an omp without these endpoints), `malformed` (not JSON,
+  unexpected shape or inconsistent counters), `too_large`, or `http` (any other status,
+  including a refused redirect). Like any failed source, it marks empty periods as
+  history `unavailable`.
+- `duplicate`: nothing is included because the URL's host is loopback or resolves,
+  within 2 seconds, to an address of this computer while local omp sessions are being
+  scanned, so the server would repeat local history.
+
 ## Pricing and custom rates
 
-The combined collector uses exact custom model rates, then the public model rate for every source. Transcript-reported costs are retained only in the parser cache for compatibility and are cleared before aggregation. `pricing.basis` is `currentBaseRates`; `pricing.customModels` counts configured overrides. Every totals/provider/model/period cell includes `customPricedRecords`, `providerReportedRecords`, `basePricedRecords`, and `variantPricedRecords`. The first three sum to `pricedRecords`; `variantPricedRecords` is a subset of `basePricedRecords` whose bracketed suffix was removed for lookup. Mixed sources or unpriced records yield `costSource: "mixed"`. These fields are additive to schema v1; older payloads without them remain readable.
+The combined collector uses exact custom model rates, then the public model rate for every source except remote omp stats, whose costs stay as omp reported them (see [Remote omp stats](#remote-omp-stats)). Transcript-reported costs are retained only in the parser cache for compatibility and are cleared before aggregation. `pricing.basis` is `currentBaseRates`; `pricing.customModels` counts configured overrides. Every totals/provider/model/period cell includes `customPricedRecords`, `providerReportedRecords`, `basePricedRecords`, and `variantPricedRecords`. The first three sum to `pricedRecords`; `variantPricedRecords` is a subset of `basePricedRecords` whose bracketed suffix was removed for lookup. Mixed sources or unpriced records yield `costSource: "mixed"`. These fields are additive to schema v1; older payloads without them remain readable.
 
 Public lookup keeps full lowercase provider-qualified IDs and canonical bare names. A bare alias is added only when no canonical entry exists and all qualified entries agree on all four rates. Unknown provider prefixes do not fall back to another provider's price. Bracketed model variants use the base model's rates; current base prices do not account for historical rates, context thresholds, or priority/flex/batch tiers. The UI labels this limitation. Negative, non-finite, or incomplete input/output rates are rejected; missing cache rates use the input rate.
 
