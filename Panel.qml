@@ -660,6 +660,14 @@ Ui.Panel {
     settings: root.settings
   }
 
+  // omp's live feed: requests as they happen, with their accounts (OmpActivity.qml).
+  OmpActivity {
+    id: ompActivity
+    settings: root.settings
+    status: backend.ompStatus
+    costBackend: costBackend
+  }
+
   Timer {
     interval: 1000
     running: root.opened
@@ -1108,6 +1116,7 @@ Ui.Panel {
             usageLoading: backend.loading
             proxyImplementation: backend.proxyImplementation
             costSources: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sources) : []
+            ompActivity: ompActivity
             onSetupRequested: function(entry, action) { root.startSetup(entry, action) }
             onChangeRequested: function(values) { root.saveSettings(values) }
             onCloseRequested: root.leaveSettings()

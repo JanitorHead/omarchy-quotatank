@@ -1204,7 +1204,11 @@ var DEFAULT_SETTINGS = {
   creditCriticalUsd: 1,
   refreshIntervalSec: 900,
   costLocalProviders: ["claude", "codex", "opencode"],
-  liveAccountActivity: true
+  liveAccountActivity: true,
+  ompLocal: true,
+  barAccountMode: "dots",
+  motion: "system",
+  accountModes: "{}"
 }
 
 // The keys of `settings` that differ from their default; what Reset would change.
@@ -2129,4 +2133,544 @@ function syncKeyedOrder(list, keys) {
     if (found > target) list.move(found, target)
     else list.insert(target, keys[target])
   }
+}
+
+// ---- 1.9 QmlSettings ----
+// omp (Oh My Pi) as a source of limits, costs and live activity: the flags each backend gets, what
+// Settings says about omp, the Test results, and the lines of omp's live feed (scripts/omp-live.py).
+// Then the per-provider account mode that Providers → Customize sets.
+
+// Quotatank ids of the subscriptions omp signs in to (OMP_PROVIDERS in scripts/model_usage_common.py).
+var OMP_PROVIDER_IDS = ["claude", "codex", "kimi", "opencode", "antigravity", "copilot", "cursor", "zai", "minimax"]
+var OMP_STATS_PORT = 3847
+var OMP_GATEWAY_PORT = 4000
+var OMP_RECENT_SECONDS = 3600       // an account counts as recently used this long after a request
+var OMP_RECENT_LIMIT = 256          // accounts kept in recentByAccount
+var OMP_SPEND_SECONDS = 6 * 3600    // live requests kept to add up the spend since the last cost scan
+var OMP_SPEND_LIMIT = 4096
+var OMP_LINE_LIMIT = 65536          // characters in one live line
+var OMP_URL_PROBLEM = "Enter an HTTP or HTTPS address without a user name, query, or fragment."
+var OMP_HTTP_PROBLEM = "Use HTTPS, or plain HTTP only to this computer, a private network, or Tailscale."
+
+// The omp settings with their defaults. `local` reads omp on this computer unless turned off.
+function ompSettings(settings) {
+  var source = settings && typeof settings === "object" ? settings : {}
+  function text(key) {
+    var value = source[key]
+    return value === undefined || value === null ? "" : String(value).trim()
+  }
+  return { local: source.ompLocal !== false, gatewayUrl: text("ompGatewayUrl"),
+    gatewayKeyFile: text("ompGatewayKeyFile"), statsUrl: text("ompStatsUrl") }
+}
+
+// usage-fetch.py flags: omp on this computer (the backend reports when omp is missing), and omp's
+// auth gateway once both its URL and its token are saved, since the gateway answers nothing without
+// the token. The caller leaves them out for a proxy source.
+function ompUsageArguments(settings) {
+  var omp = ompSettings(settings)
+  var args = []
+  if (omp.local) args.push("--omp", "local")
+  if (omp.gatewayUrl !== "" && omp.gatewayKeyFile !== "")
+    args.push("--omp-gateway-url", omp.gatewayUrl, "--omp-gateway-key-file", omp.gatewayKeyFile)
+  return args
+}
+
+// cost-fetch.py flags: omp stats on another computer.
+function ompCostArguments(settings) {
+  var url = ompSettings(settings).statsUrl
+  return url === "" ? [] : ["--omp-stats-url", url]
+}
+
+// Whether omp is on this computer, from the usage backend's `omp` status: true, false, or null while
+// nothing says.
+function ompFound(status) {
+  if (!status || typeof status !== "object") return null
+  if (status.installed === true || status.local === "ok" || status.local === "error") return true
+  if (status.installed === false || status.local === "missing") return false
+  return null
+}
+
+// omp-live.py flags, or [] while there is nothing to follow: omp's sessions here once omp is found
+// (with --accounts, the map that names the account behind each request), and omp stats elsewhere.
+function ompLiveArguments(settings, status) {
+  var omp = ompSettings(settings)
+  var args = []
+  if (omp.local && ompFound(status) === true) args.push("--local", "--accounts")
+  if (omp.statsUrl !== "") args.push("--stats-url", omp.statsUrl)
+  return args
+}
+
+// "host", "host:port" or "[v6]:port" → { host (lower case, no brackets), port }, or null.
+function ompSplitHost(text) {
+  var host = String(text || "")
+  var port = ""
+  if (host.charAt(0) === "[") {
+    var end = host.indexOf("]")
+    if (end < 0) return null
+    var rest = host.slice(end + 1)
+    host = host.slice(1, end)
+    if (rest !== "" && rest.charAt(0) !== ":") return null
+    port = rest.slice(1)
+    if (!/^[0-9a-f:.]+$/i.test(host)) return null
+  } else {
+    var colon = host.indexOf(":")
+    if (colon >= 0) {
+      port = host.slice(colon + 1)
+      host = host.slice(0, colon)
+    }
+  }
+  if (host === "" || (port !== "" && (!/^[0-9]{1,5}$/.test(port) || Number(port) > 65535))) return null
+  return { host: host.toLowerCase(), port: port }
+}
+
+function ompLoopbackHost(host) {
+  return host === "localhost" || host === "::1" || /^127\.[0-9]+\.[0-9]+\.[0-9]+$/.test(host)
+}
+
+// Plain HTTP stays on networks the user controls (plain_http_allowed in model_usage_common.py):
+// loopback, private LANs, Tailscale addresses, MagicDNS names and single-label names.
+function ompPlainHttpHost(host) {
+  var octet = "(0|[1-9][0-9]{0,2})"
+  var v4 = new RegExp("^" + octet + "\\." + octet + "\\." + octet + "\\." + octet + "$").exec(host)
+  if (v4) {
+    for (var i = 1; i <= 4; i++) if (Number(v4[i]) > 255) return false
+    var a = Number(v4[1])
+    var b = Number(v4[2])
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+      || (a === 100 && b >= 64 && b <= 127)
+  }
+  if (host.indexOf(":") >= 0) return host === "::1" || /^(?:0{1,4}:){7}0{0,3}1$/.test(host) || /^f[cd][0-9a-f]{0,2}:/.test(host)
+  return /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(host)
+    || /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+ts\.net$/.test(host)
+}
+
+// What is wrong with an omp server address, or "" when the backends take it (normalize_server_url
+// in scripts/model_usage_common.py): HTTPS anywhere, plain HTTP only to this computer, a private
+// network or Tailscale; no user name, query, fragment, or dot segments. Empty turns the server off.
+function ompServerUrlProblem(text) {
+  var value = String(text === undefined || text === null ? "" : text).trim()
+  if (value === "") return ""
+  var match = /^(https?):\/\/([^\s\/?#@]+)(\/[^\s?#]*)?$/i.exec(value)
+  if (!match || /[\x00-\x1f\x7f]/.test(value)) return OMP_URL_PROBLEM
+  var address = ompSplitHost(match[2])
+  if (!address) return OMP_URL_PROBLEM
+  var segments = (match[3] || "").split("/")
+  for (var i = 0; i < segments.length; i++) {
+    var segment = segments[i]
+    try { segment = decodeURIComponent(segment) } catch (error) { return OMP_URL_PROBLEM }
+    if (segment === "." || segment === "..") return OMP_URL_PROBLEM
+  }
+  if (match[1].toLowerCase() === "https" || ompPlainHttpHost(address.host)) return ""
+  return OMP_HTTP_PROBLEM
+}
+
+// The computer an omp server address names, for "omp stats on talos": MagicDNS names drop the
+// tailnet ("talos.tail1234.ts.net" → "talos"); "" when the address has no host.
+function ompHost(url) {
+  var match = /^https?:\/\/([^\s\/?#@]+)/i.exec(String(url || "").trim())
+  var address = match ? ompSplitHost(match[1]) : null
+  if (!address) return ""
+  var tailnet = /^([a-z0-9-]+)\.[a-z0-9-]+\.ts\.net$/.exec(address.host)
+  return tailnet ? tailnet[1] : address.host
+}
+
+// " on talos" for a remote address; "" for this computer (an SSH tunnel's end) or no address.
+function ompOnHost(url) {
+  var host = ompHost(url)
+  return host === "" || ompLoopbackHost(host) ? "" : " on " + host
+}
+
+function ompShortVersion(version) {
+  var match = /([0-9]+)\.([0-9]+)/.exec(String(version || ""))
+  return match ? match[1] + "." + match[2] : ""
+}
+
+// "1 account", "18,811 requests".
+function ompCount(count, one, many) {
+  var value = Math.max(0, Math.round(Number(count) || 0))
+  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " " + (value === 1 ? one : many)
+}
+
+function ompLine(tone, text) {
+  return { tone: tone, text: text }
+}
+
+// Settings → Providers → omp: what the last refresh found on this computer, as { text, tone } with
+// tone "ok", "off", "error" or "pending"; text "" while there is nothing to say.
+function ompLocalStatus(status, localOn, loading) {
+  var found = ompFound(status)
+  if (!localOn)
+    return ompLine("off", found === true ? "omp found · its accounts are not read" : "Reading omp's accounts is off")
+  if (!status || typeof status !== "object" || status.local === undefined || status.local === "off")
+    return ompLine("pending", loading ? "Looking for omp on this computer…" : "")
+  if (status.local === "missing") return ompLine("off", "omp not found on this computer")
+  var version = ompShortVersion(status.version)
+  var name = "omp " + (version !== "" ? version + " " : "") + "found"
+  if (status.local === "error") return ompLine("error", name + " · its accounts could not be read")
+  var count = typeof status.localAccounts === "number" ? status.localAccounts
+    : (typeof status.accounts === "number" && (status.gateway === undefined || status.gateway === "off") ? status.accounts : null)
+  if (count === null) return ompLine("ok", name)
+  return ompLine("ok", name + " · " + (count === 0 ? "no accounts signed in" : ompCount(count, "account", "accounts")))
+}
+
+// The local part of omp's status message (the backend puts the local part first, then the gateway's).
+function ompLocalMessage(status) {
+  var sentences = String(status && status.message || "").split(/\.\s+/)
+  var kept = []
+  for (var i = 0; i < sentences.length; i++)
+    if (sentences[i] !== "" && !/gateway/.test(sentences[i])) kept.push(sentences[i].replace(/\.$/, ""))
+  return kept.length ? kept.join(". ") + "." : ""
+}
+
+// A gateway failure, from the backend's message, with what to do next: { summary, text }. The summary
+// stays short; it follows the host in the section's title.
+function ompGatewayProblem(message, url) {
+  var text = String(message || "")
+  var on = ompOnHost(url)
+  var host = ompHost(url)
+  if (/refused the token/.test(text))
+    return { summary: "token refused", text: "The gateway refused the token. Copy a fresh one with omp auth-gateway token" + on + ", then save it here." }
+  if (/asks for a token/.test(text))
+    return { summary: "token needed", text: "The gateway asks for a token. Save the one omp auth-gateway token prints" + on + "." }
+  if (/Could not reach the omp gateway/.test(text))
+    return { summary: "not answering", text: "Nothing answers there. Is omp auth-gateway serve running" + (on || " on the other computer") + "?" }
+  if (/gateway did not answer in time/.test(text))
+    return { summary: "not answering", text: "The gateway did not answer in time. Check that " + (host !== "" && !ompLoopbackHost(host) ? host : "the other computer") + " is awake and on the network." }
+  if (/rate limiting/.test(text))
+    return { summary: "rate limited", text: "The gateway is rate limiting usage checks. Try again in a minute." }
+  var http = /gateway answered HTTP ([0-9]{3})/.exec(text)
+  if (http)
+    return { summary: "HTTP " + http[1], text: "The gateway answered HTTP " + http[1] + ". Check that the URL points at omp auth-gateway (port " + OMP_GATEWAY_PORT + " unless you chose another)." }
+  if (/unreadable usage data/.test(text))
+    return { summary: "not a gateway", text: "That address did not answer like omp's auth gateway. Check the URL, and update omp there if it is older." }
+  var sentences = text.split(/\.\s+/)
+  var kept = []
+  for (var i = 0; i < sentences.length; i++)
+    if (/gateway/.test(sentences[i])) kept.push(sentences[i].replace(/\.$/, ""))
+  return { summary: "not read", text: kept.length ? kept.join(". ") + "." : "The gateway could not be read." }
+}
+
+// The title summary of "omp on another computer (limits)".
+function ompGatewaySummary(settings, status) {
+  var omp = ompSettings(settings)
+  if (omp.gatewayUrl === "") return "Not set up"
+  var host = ompHost(omp.gatewayUrl) || "Set"
+  if (omp.gatewayKeyFile === "") return host + " · token needed"
+  if (!status || typeof status !== "object" || status.gateway === undefined || status.gateway === "off") return host
+  if (status.gateway === "error") return host + " · " + ompGatewayProblem(status.message, omp.gatewayUrl).summary
+  return host + (typeof status.gatewayAccounts === "number" ? " · " + ompCount(status.gatewayAccounts, "account", "accounts") : " · answers")
+}
+
+// The omp accounts a provider reading holds: entries whose kind (`origin`, or `origins` once merged
+// with a native entry) is omp, or the provider itself when omp is all it has.
+function ompFromOmp(entry) {
+  return !!entry && (entry.origin === "omp" || contains(entry.origins, "omp"))
+}
+
+function ompAccountCount(provider) {
+  if (!provider || typeof provider !== "object") return 0
+  var accounts = listOrEmpty(provider.accounts)
+  var count = 0
+  for (var i = 0; i < accounts.length; i++) if (ompFromOmp(accounts[i])) count++
+  return count === 0 && accounts.length === 0 && ompFromOmp(provider) ? 1 : count
+}
+
+// A Test that did not get an answer: { probeError: "timeout" | "tooLarge" }, or nothing at all.
+function ompProbeLines(reply, seconds) {
+  if (reply && reply.probeError === "timeout")
+    return [ompLine("error", "No answer within " + seconds + " s. Check the URL, and that the other computer is awake.")]
+  if (reply && reply.probeError === "tooLarge") return [ompLine("error", "The answer was too large to read.")]
+  if (!reply || reply.schemaVersion !== 1)
+    return [ompLine("error", "The test did not run. Check that Python 3 is installed, then try again.")]
+  if (reply.backendError) return [ompLine("error", String(reply.backendError).slice(0, 300))]
+  return null
+}
+
+// Settings → Providers → omp on another computer → Test, from usage-fetch.py --omp-only run with the
+// gateway's flags: lines { tone: "ok" | "info" | "error", text } that name what the gateway has.
+function ompGatewayTestLines(reply, url, monitored) {
+  var failed = ompProbeLines(reply, 40)
+  if (failed) return failed
+  var omp = reply.omp && typeof reply.omp === "object" ? reply.omp : {}
+  if (omp.gateway === "error") return [ompLine("error", ompGatewayProblem(omp.message, url).text)]
+  if (omp.gateway !== "ok")
+    return [ompLine("error", "This version of the backend cannot read an omp gateway. Update Quotatank, then try again.")]
+  var parts = []
+  var unmonitored = []
+  var total = 0
+  var providers = listOrEmpty(reply.providers)
+  for (var i = 0; i < providers.length; i++) {
+    var count = ompAccountCount(providers[i])
+    if (count === 0) continue
+    var name = providerShortName(providers[i])
+    total += count
+    parts.push(name + " " + count)
+    if (monitored && !contains(monitored, providers[i].id)) unmonitored.push(name)
+  }
+  if (total === 0)
+    return [ompLine("ok", "Gateway answers"), ompLine("info", "omp there has no signed-in accounts with limits that Quotatank reads.")]
+  var lines = [ompLine("ok", "Gateway answers · " + ompCount(total, "account", "accounts") + ": " + parts.join(", "))]
+  if (unmonitored.length > 0)
+    lines.push(ompLine("info", "Not monitored here: " + joinNames(unmonitored) + ". Monitor " + (unmonitored.length === 1 ? "it" : "them")
+      + " to see " + (unmonitored.length === 1 ? "its" : "their") + " accounts in Limits."))
+  return lines
+}
+
+// An omp stats failure from cost-fetch.py's omp-remote source, with what to do next.
+function ompStatsProblem(source, url) {
+  var message = String(source && source.message || "")
+  var kind = String(source && source.errorKind || "")
+  var on = ompOnHost(url)
+  if (kind === "network")
+    return on !== "" ? "Nothing answers there. Is omp stats running" + on + "?"
+      : "Nothing answers there. Is the SSH tunnel open, and omp stats running on the other computer?"
+  if (kind === "http") return (message || "omp stats returned an error.") + " Check that the URL is the dashboard's address, without a path."
+  return message || "omp stats could not be read."
+}
+
+// Settings → Costs → omp on another computer → Test, from cost-fetch.py --providers "" --days 7 run
+// with only the omp stats flag: what the server reported for the last 7 days.
+function ompStatsTestLines(reply, url) {
+  var failed = ompProbeLines(reply, 75)
+  if (failed) return failed
+  var source = readingFor(reply.sources, "omp-remote")
+  if (!source)
+    return [ompLine("error", "This version of the backend cannot read omp stats. Update Quotatank, then try again.")]
+  var on = ompOnHost(url)
+  if (source.status === "error") return [ompLine("error", ompStatsProblem(source, url))]
+  if (source.status === "duplicate")
+    return [ompLine("ok", "omp stats" + on + " answers"), ompLine("info", "It runs on this computer, so its sessions are already counted here.")]
+  if (source.status !== "ok") return [ompLine("error", "omp stats was not read. Check the URL, then try again.")]
+  var totals = reply.totals && typeof reply.totals === "object" ? reply.totals : {}
+  var records = Math.max(0, Math.round(Number(totals.records) || 0))
+  var cost = typeof totals.costUsd === "number" && isFinite(totals.costUsd) ? totals.costUsd : null
+  var lines = [ompLine("ok", "omp stats" + on + " answers")]
+  if (records === 0) lines.push(ompLine("info", "No requests in the last 7 days."))
+  else lines.push(ompLine("ok", ompCount(records, "request", "requests") + " · " + (cost === null ? "unpriced" : formatUsd(cost)) + " in the last 7 days"))
+  return lines
+}
+
+// The Test's line about omp's live feed for that server, from OmpActivity; null when it is not
+// following that server.
+function ompLiveFeedLine(state, message) {
+  if (state === "live") return ompLine("ok", "Live feed on · new activity shows within 10 s")
+  if (state === "connecting" || state === "reconnecting") return ompLine("info", "Live feed connecting…")
+  if (state === "unavailable")
+    return ompLine("error", "Live feed unavailable." + (message ? " " + String(message).slice(0, 200) : ""))
+  return null
+}
+
+// The title summary of Settings → Costs → "omp on another computer".
+function ompStatsSummary(settings, source, liveState) {
+  var url = ompSettings(settings).statsUrl
+  if (url === "") return "Not set up"
+  var host = ompHost(url) || "Set"
+  if (source && source.status === "error") return host + " · not answering"
+  if (source && source.status === "duplicate") return host + " · counted here"
+  return host + (liveState === "live" ? " · live" : "")
+}
+
+// "omp sessions on this computer" in Settings → Costs → Local history: what the last scan did, in a
+// word or two that fit under the switches.
+function ompLocalCostState(sources, localProviders) {
+  if (listOrEmpty(localProviders).length === 0) return "Off"
+  var list = listOrEmpty(sources)
+  if (list.length === 0) return "Not yet read"
+  var source = readingFor(list, "local-omp")
+  if (!source) return "None found"
+  var labels = { ok: "Included", partial: "Partial", missing: "None found", failed: "Unavailable",
+    unavailable: "Unavailable", duplicate: "Included" }
+  return labels[source.status] || "Included"
+}
+
+// How to reach omp stats on another computer (Tailscale or an SSH tunnel): where each command runs
+// ("other" or "here"), and the user units that start them at login. A unit's first line names its file;
+// long lines use systemd's backslash continuation, and "$$" is systemd's literal dollar sign.
+function ompStatsRecipe(via) {
+  var port = String(OMP_STATS_PORT)
+  function unit(name, description, execStart, restart) {
+    return "# ~/.config/systemd/user/" + name + ".service\n[Unit]\nDescription=" + description
+      + "\n\n[Service]\nExecStart=" + execStart + "\nRestart=" + restart + "\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n"
+  }
+  function enable(name) {
+    return "systemctl --user daemon-reload\nsystemctl --user enable --now " + name
+  }
+  if (via === "ssh") {
+    return {
+      url: "http://127.0.0.1:" + port,
+      steps: [
+        { where: "other", command: "omp stats --host 127.0.0.1 --port " + port },
+        { where: "here", command: "ssh -N -L " + port + ":127.0.0.1:" + port + " other-computer" }
+      ],
+      units: [
+        { where: "other", enable: enable("omp-stats"), text: unit("omp-stats", "omp stats for Quotatank",
+          "/bin/sh -lc 'exec omp stats \\\n  --host 127.0.0.1 --port " + port + "'", "on-failure") },
+        { where: "here", enable: enable("omp-stats-tunnel"), text: unit("omp-stats-tunnel", "SSH tunnel to omp stats for Quotatank",
+          "/usr/bin/ssh -N \\\n  -o ExitOnForwardFailure=yes \\\n  -o ServerAliveInterval=30 \\\n  -L " + port + ":127.0.0.1:" + port + " other-computer", "always") }
+      ]
+    }
+  }
+  return {
+    url: "http://other-computer:" + port,
+    steps: [{ where: "other", command: "omp stats --host \"$(tailscale ip -4)\" --port " + port }],
+    units: [
+      { where: "other", enable: enable("omp-stats"), text: unit("omp-stats", "omp stats for Quotatank",
+        "/bin/sh -lc 'exec omp stats \\\n  --host \"$$(tailscale ip -4)\" --port " + port + "'", "on-failure") }
+    ]
+  }
+}
+
+// The commands that start omp's auth gateway on the other computer and print its token.
+function ompGatewayRecipe() {
+  // The serve line breaks before its flag with a shell continuation: it reads in two lines and pastes as one.
+  return [
+    { where: "other", command: "omp auth-gateway serve \\\n  --bind=\"$(tailscale ip -4):" + OMP_GATEWAY_PORT + "\"" },
+    { where: "other", command: "omp auth-gateway token" }
+  ]
+}
+
+function ompLiveId(value) {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(value)
+}
+
+function ompOptionalNumber(value, integer) {
+  if (value === null || value === undefined) return { ok: true, value: null }
+  if (typeof value !== "number" || !isFinite(value) || value < 0 || (integer && Math.floor(value) !== value)) return { ok: false }
+  return { ok: true, value: value }
+}
+
+// One NDJSON line from scripts/omp-live.py, checked and reduced to what the widget uses; null when it
+// is not JSON or breaks the shape of its type. A type this widget does not know comes back as
+// { type: "other" }, so a newer helper does not stop an older widget.
+function parseOmpLiveLine(line) {
+  if (typeof line !== "string" || line.length > OMP_LINE_LIMIT) return null
+  var raw
+  try { raw = JSON.parse(line) } catch (error) { return null }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null
+  if (raw.schemaVersion !== undefined && raw.schemaVersion !== 1) return null
+  if (raw.heartbeat === true) return { type: "heartbeat" }
+  if (raw.type === "request") {
+    var credential = ompOptionalNumber(raw.credentialId, true)
+    var cost = ompOptionalNumber(raw.costUsd, false)
+    var tokens = ompOptionalNumber(raw.tokens, false)
+    if (!ompLiveId(raw.provider) || typeof raw.at !== "number" || !isFinite(raw.at) || raw.at <= 0
+        || !credential.ok || !cost.ok || !tokens.ok) return null
+    return { type: "request", source: raw.source === "remote" ? "remote" : "local", provider: raw.provider,
+      model: typeof raw.model === "string" ? raw.model.slice(0, 256) : "", credentialId: credential.value,
+      costUsd: cost.value, tokens: tokens.value === null ? 0 : Math.floor(tokens.value), subagent: raw.subagent === true, at: raw.at }
+  }
+  if (raw.type === "activity") {
+    if (typeof raw.at !== "number" || !isFinite(raw.at) || raw.at <= 0) return null
+    return { type: "activity", source: "remote", version: typeof raw.version === "number" && isFinite(raw.version) ? raw.version : 0, at: raw.at }
+  }
+  if (raw.type === "accounts") {
+    if (!raw.map || typeof raw.map !== "object" || Array.isArray(raw.map)) return null
+    var keys = Object.keys(raw.map)
+    if (keys.length > 512) return null
+    var map = {}
+    for (var i = 0; i < keys.length; i++) {
+      var entry = raw.map[keys[i]]
+      if (!/^[0-9]{1,12}$/.test(keys[i]) || !entry || typeof entry !== "object" || !ompLiveId(entry.provider)
+          || typeof entry.accountId !== "string" || !/^omp-[0-9a-f]{12}(?:-[0-9]{1,3})?$/.test(entry.accountId)) continue
+      map[keys[i]] = { provider: entry.provider, accountId: entry.accountId }
+    }
+    return { type: "accounts", map: map }
+  }
+  if (raw.type === "state") {
+    if (["live", "reconnecting", "unavailable"].indexOf(raw.state) < 0) return null
+    return { type: "state", state: raw.state, message: typeof raw.message === "string" ? raw.message.slice(0, 256) : "" }
+  }
+  return { type: "other" }
+}
+
+// A request with the account that served it, when omp's credential map names its credential:
+// `accountId`, and `accountKey` ("<provider>@<accountId>", the key of recentByAccount).
+function resolveOmpRequest(event, map) {
+  var result = {}
+  for (var key in event) result[key] = event[key]
+  var entry = event && event.credentialId !== null && event.credentialId !== undefined && map
+    ? map[String(event.credentialId)] : null
+  if (entry && entry.provider === event.provider) {
+    result.accountId = entry.accountId
+    result.accountKey = event.provider + "@" + entry.accountId
+  }
+  return result
+}
+
+// recentByAccount after a request: the newest request time per account (never in the future), only
+// the last hour, at most OMP_RECENT_LIMIT accounts.
+function noteOmpRequest(recent, event, nowSeconds) {
+  var next = {}
+  var cutoff = nowSeconds - OMP_RECENT_SECONDS
+  for (var key in recent) if (Number(recent[key]) >= cutoff) next[key] = Number(recent[key])
+  if (event && event.accountKey) {
+    var at = Math.min(Number(event.at), nowSeconds)
+    if (at >= cutoff && !(next[event.accountKey] >= at)) next[event.accountKey] = at
+  }
+  var keys = Object.keys(next)
+  if (keys.length > OMP_RECENT_LIMIT) {
+    keys.sort(function (a, b) { return next[a] - next[b] })
+    for (var i = 0; i < keys.length - OMP_RECENT_LIMIT; i++) delete next[keys[i]]
+  }
+  return next
+}
+
+// The live spend log after a request: [at, costUsd, provider] per priced request, oldest first, only
+// the last OMP_SPEND_SECONDS, at most OMP_SPEND_LIMIT entries.
+function noteOmpSpend(log, event, nowSeconds) {
+  var list = listOrEmpty(log)
+  var cutoff = nowSeconds - OMP_SPEND_SECONDS
+  var next = []
+  for (var i = Math.max(0, list.length - OMP_SPEND_LIMIT + 1); i < list.length; i++)
+    if (list[i][0] >= cutoff) next.push(list[i])
+  if (event && typeof event.costUsd === "number" && event.costUsd > 0)
+    next.push([Math.min(Number(event.at), nowSeconds), event.costUsd, String(event.provider)])
+  return next
+}
+
+// What the live requests after `sinceSeconds` (the last cost scan) add up to, counting only the
+// providers that scan reads; `providers` null counts every provider.
+function ompCostSince(log, sinceSeconds, providers) {
+  var list = listOrEmpty(log)
+  var total = 0
+  for (var i = 0; i < list.length; i++) {
+    if (list[i][0] <= sinceSeconds) continue
+    if (providers && !contains(providers, list[i][2])) continue
+    total += list[i][1]
+  }
+  return Math.round(total * 1000000) / 1000000
+}
+
+// One omp-live.py per omp setup, shared like the proxy's live connection (see acquireLive). The
+// component is created here, in the library's context, so the shared object outlives its first panel.
+function acquireOmpLive(key, properties) {
+  if (liveConnections[key]) return acquireLive(key, null, properties)
+  return acquireLive(key, Qt.createComponent("OmpLiveConnection.qml"), properties)
+}
+
+// Per-provider account mode (`accountModes`, a JSON object of provider id → "single" | "together");
+// a provider without one follows the automatic rule.
+function parseAccountModes(raw) {
+  var parsed
+  try { parsed = JSON.parse(String(raw === undefined || raw === null ? "{}" : raw)) }
+  catch (error) { return {} }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
+  var result = {}
+  var ids = Object.keys(parsed)
+  for (var i = 0; i < ids.length; i++)
+    if (/^[a-z0-9][a-z0-9_-]{0,63}$/.test(ids[i]) && (parsed[ids[i]] === "single" || parsed[ids[i]] === "together"))
+      result[ids[i]] = parsed[ids[i]]
+  return result
+}
+
+// `mode` "auto" follows the automatic rule again.
+function setAccountMode(raw, providerId, mode) {
+  var modes = parseAccountModes(raw)
+  if (mode === "single" || mode === "together") modes[providerId] = mode
+  else delete modes[providerId]
+  return JSON.stringify(modes)
+}
+
+function accountModeLabel(mode) {
+  return mode === "single" ? "One at a time" : mode === "together" ? "Together" : "Automatic"
 }
