@@ -21,6 +21,7 @@ All notable changes to this project will be documented here. The format follows
 - Proxy accounts appear as account rows; their banked resets and session counts stay.
 - Each account keeps its own history, so trends and pace work per account.
 - When a single sign-in has expired but omp has a working account for the provider, that account leads instead of the error.
+- The README, screenshots, and marketplace preview show several accounts, run-out forecasts, omp, and the new Costs tab.
 
 ### Security
 
