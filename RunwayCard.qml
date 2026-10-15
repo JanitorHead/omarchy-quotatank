@@ -197,11 +197,12 @@ Ui.BorderSurface {
             readonly property real noteWidth: noteMetrics.advanceWidth(note)
             readonly property real noteGap: Style.spacing.sm
             readonly property real markWidth: kind === "usedup" ? Math.max(2, Style.space(2)) : 0
-            // The note goes after the bar when it fits there, else before a bar that starts late, else
-            // inside a bar long enough to hold it.
+            // The note goes after the bar when it fits there, else before a bar that starts late. An account bar
+            // that runs to the reset needs no note: reaching the dashed reset line already says it lasts. The
+            // gap's note can sit on its own bar, which is translucent.
             readonly property string placement: endX + markWidth + noteGap + noteWidth <= laneArea.trackWidth ? "after"
               : startX >= noteWidth + noteGap * 2 ? "before"
-              : endX - startX >= noteWidth + Style.spacing.md * 2 ? "inside" : "after"
+              : gap && endX - startX >= noteWidth + Style.spacing.md * 2 ? "inside" : "none"
             readonly property real noteX: placement === "before" ? startX - noteGap - noteWidth
               : placement === "inside" ? endX - noteWidth - Style.spacing.md
               : Math.min(endX + markWidth + noteGap, Math.max(0, laneArea.trackWidth - noteWidth))
@@ -268,14 +269,14 @@ Ui.BorderSurface {
 
               Text {
                 objectName: "runwayNote"
+                visible: lane.placement !== "none"
                 anchors.verticalCenter: parent.verticalCenter
                 x: lane.noteX
                 text: lane.note
-                color: lane.placement === "inside" ? (lane.gap ? root.foreground : Commons.Color.background)
+                color: lane.placement === "inside" ? root.foreground
                   : lane.gap || lane.kind === "usedup" || (lane.kind === "runs" && lane.primary) ? root.urgent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
-                font.weight: lane.placement === "inside" ? Font.DemiBold : Font.Normal
               }
             }
           }
