@@ -3303,3 +3303,330 @@ function eventNoticeText(event, provider, names, clock, manual) {
     return "omp can no longer renew " + who(event.accountId) + "'s sign-in. Sign in again in omp."
   return ""
 }
+
+// ---- 1.9 QmlBar ----
+// The menu bar chip of a provider with several accounts (DESIGN §2): which accounts it counts, its
+// account dots, its hint, the clock pie once every account is used up, one chip per account, the
+// hover card, and the one-shot flashes.
+
+// What kind of account a reading is: "omarchy" (an Omarchy login), "key", "omp", "proxy" or "signin".
+// The backend's `origin` says; without it the kind is told from the account id.
+function barAccountOrigin(account) {
+  if (!account) return ""
+  var origin = String(account.origin || "")
+  if (["omarchy", "key", "omp", "proxy", "signin"].indexOf(origin) !== -1) return origin
+  var id = String(account.accountId || "")
+  if (id === "primary" || /^k-[0-9a-f]{8}$/.test(id)) return "key"
+  if (id.indexOf("omp-") === 0) return "omp"
+  if (account.proxyImplementation) return "proxy"
+  return account.label || id === "main" ? "omarchy" : "signin"
+}
+
+// An account's name for the bar and the hover card: the name it was given, else "Account N". Never an
+// email, whatever the privacy setting: the bar is on screen all day.
+function barAccountName(account, index, extraRaw) {
+  if (!account) return ""
+  return String(accountName(account, extraRaw, true, index + 1)).replace(/ · in use$/, "")
+}
+
+// One short mark per account for chips per account: the first letter of each name, two letters where
+// names share one, the account's number where even those match, and the number of an unnamed
+// "Account N".
+function barAccountInitials(names) {
+  var list = listOrEmpty(names)
+  var marks = "—–-·.,;:_()[]{}'\"/\\|!?*#@&%+=~^<>"
+  function letters(name, count) {
+    var numbered = /^Account (\d+)$/.exec(name)
+    if (numbered) return numbered[1]
+    var kept = ""
+    for (var c = 0; c < name.length; c++) {
+      var character = name.charAt(c)
+      if (character.trim() !== "" && marks.indexOf(character) === -1) kept += character
+    }
+    if (kept === "") return "?"
+    return kept.charAt(0).toUpperCase() + kept.substring(1, count).toLowerCase()
+  }
+  function clashes(marksSoFar, index) {
+    for (var k = 0; k < marksSoFar.length; k++)
+      if (k !== index && marksSoFar[k].toUpperCase() === marksSoFar[index].toUpperCase()) return true
+    return false
+  }
+  var single = []
+  for (var i = 0; i < list.length; i++) single.push(letters(String(list[i]), 1))
+  var paired = []
+  for (var j = 0; j < list.length; j++) paired.push(clashes(single, j) ? letters(String(list[j]), 2) : single[j])
+  var result = []
+  for (var m = 0; m < list.length; m++) result.push(clashes(paired, m) ? String(m + 1) : paired[m])
+  return result
+}
+
+// The window an account is blocked on and when it is back: the latest reset among its used-up windows.
+// Null while the account still has allowance everywhere. `resetsAt` is null when a used-up window has
+// no reset time.
+function barUsedUpWindow(account) {
+  if (!account || account.status !== "ok") return null
+  var rows = listOrEmpty(account.windows)
+  var found = null
+  for (var i = 0; i < rows.length; i++) {
+    var left = remainingOf(rows[i])
+    if (left === null || left > 0) continue
+    var at = finiteOrNull(rows[i].resetsAt)
+    if (!found || at === null || (found.resetsAt !== null && at > found.resetsAt))
+      found = { row: rows[i], resetsAt: at }
+    if (at === null) break
+  }
+  return found
+}
+
+// Ring state of one account on the chip's window: ok, warning, critical, error, or unknown without a
+// reading. An account blocked on any used-up window is critical whatever the chip's window says.
+function barAccountState(account, selector, warningThreshold, criticalThreshold) {
+  if (!account) return "unknown"
+  if (account.status === "error" || account.status === "disabled") return "error"
+  if (account.status !== "ok") return "unknown"
+  if (minRemaining(account) === 0) return "critical"
+  var level = severity(account, warningThreshold, criticalThreshold, remainingForWindow(account, selector))
+  return level === "none" ? "unknown" : level
+}
+
+// `keep` of `count` account indexes, counted accounts first so a counted account is never folded away;
+// all of them when they fit. Indexes stay in account order.
+function barPickAccounts(count, counted, keep) {
+  var result = []
+  if (count <= keep) {
+    for (var i = 0; i < count; i++) result.push(i)
+    return result
+  }
+  var wanted = listOrEmpty(counted)
+  for (var j = 0; j < wanted.length && result.length < keep; j++)
+    if (wanted[j] >= 0 && wanted[j] < count && result.indexOf(wanted[j]) === -1) result.push(wanted[j])
+  for (var k = 0; k < count && result.length < keep; k++)
+    if (result.indexOf(k) === -1) result.push(k)
+  return result.sort(function (a, b) { return a - b })
+}
+
+// Which accounts get a dot: up to four, one each; five or more show three dots and "+N".
+function barDotSlots(count, counted) {
+  return barPickAccounts(count, counted, count <= 4 ? 4 : 3)
+}
+
+// The counted account whose figure the chip shows: the one with the least headroom on the chip's
+// window, so a chip never claims more room than the busiest account has. A used-up account only wins
+// when every counted account is used up: new sessions go where there is room. -1 without a counted
+// reading.
+function barValueIndex(provider, counted, selector) {
+  var accounts = listOrEmpty(provider && provider.accounts)
+  var wanted = listOrEmpty(counted)
+  var best = -1
+  var bestRank = Infinity
+  for (var i = 0; i < wanted.length; i++) {
+    var account = accounts[wanted[i]]
+    if (!account || account.status !== "ok") continue
+    var left = remainingForWindow(account, selector)
+    var rank = (minRemaining(account) === 0 ? 1000 : 0) + (left === null ? 101 : left)
+    if (best < 0 || rank < bestRank) {
+      best = wanted[i]
+      bestRank = rank
+    }
+  }
+  return best
+}
+
+// Everything the chip's account strip shows (DESIGN §2.1). `options`: selector (the chip's window),
+// warningThreshold and criticalThreshold (% left), nowSeconds, recentByAccount, stale, extraKeys.
+// Returns { count, dots: [{ index, state, counted, spending }], extra, allUsedUp, resetAt, pieFraction,
+// hint, hintKind ("" | "switch" | "reset") }. A switch hint only appears in single mode under Omarchy's
+// manual switching, when the counted login is critical and another login is below warning.
+function barAccountStrip(provider, counted, mode, options) {
+  var opts = options || {}
+  var accounts = listOrEmpty(provider && provider.accounts)
+  var wanted = listOrEmpty(counted)
+  var now = Number(opts.nowSeconds) || 0
+  var result = { count: accounts.length, dots: [], extra: 0, allUsedUp: false, resetAt: 0, pieFraction: -1,
+                 hint: "", hintKind: "" }
+  if (accounts.length < 2) return result
+  var states = []
+  for (var i = 0; i < accounts.length; i++)
+    states.push(barAccountState(accounts[i], opts.selector, opts.warningThreshold, opts.criticalThreshold))
+  var slots = barDotSlots(accounts.length, wanted)
+  for (var s = 0; s < slots.length; s++) {
+    var index = slots[s]
+    var isCounted = wanted.indexOf(index) !== -1
+    result.dots.push({ index: index, state: states[index], counted: isCounted,
+                       spending: isCounted && spendingNow(accounts[index], now, opts.recentByAccount) })
+  }
+  result.extra = accounts.length - slots.length
+
+  var usedUp = 0
+  var soonest = null
+  for (var j = 0; j < accounts.length; j++) {
+    if (states[j] === "error") continue
+    var blocked = barUsedUpWindow(accounts[j])
+    if (!blocked) return withSwitchHint(result)
+    usedUp++
+    if (blocked.resetsAt !== null && (!soonest || blocked.resetsAt < soonest.resetsAt)) soonest = blocked
+  }
+  if (usedUp === 0) return withSwitchHint(result)
+  result.allUsedUp = true
+  result.hintKind = "reset"
+  if (!soonest) {
+    result.hint = "used up"
+    return result
+  }
+  result.resetAt = soonest.resetsAt
+  var wait = soonest.resetsAt - now
+  result.hint = wait <= 0 ? "now" : formatDuration(Math.max(60, wait))
+  var span = finiteOrNull(soonest.row.windowSeconds)
+  if (span !== null && span > 0) result.pieFraction = clamp(1 - wait / span, 0, 1)
+  return result
+
+  function withSwitchHint(strip) {
+    var choice = provider.accountSwitch
+    if (mode === "together" || opts.stale || wanted.length !== 1 || !choice || choice.mode !== "manual") return strip
+    var current = wanted[0]
+    if (states[current] !== "critical" || barAccountOrigin(accounts[current]) !== "omarchy") return strip
+    var target = -1
+    var targetLeft = -1
+    for (var k = 0; k < accounts.length; k++) {
+      if (k === current || states[k] !== "ok" || barAccountOrigin(accounts[k]) !== "omarchy") continue
+      var left = remainingForWindow(accounts[k], opts.selector)
+      if (left !== null && left > targetLeft) {
+        target = k
+        targetLeft = left
+      }
+    }
+    if (target < 0) return strip
+    strip.hint = "→ " + barAccountName(accounts[target], target, opts.extraKeys)
+    strip.hintKind = "switch"
+    return strip
+  }
+}
+
+// Chips in the bar. Under "chips", a provider with two or more accounts gets one chip per account (at
+// most four, counted accounts first when some must stay out), each with the account's initial; every
+// other provider keeps one chip. `countedFor(provider)` gives the counted account indexes. Keys are
+// stable across readings so chips keep their state: "<provider>" or "<provider>@<account id>".
+function barChipEntries(providers, barAccountMode, countedFor, extraRaw) {
+  var list = listOrEmpty(providers)
+  var result = []
+  for (var i = 0; i < list.length; i++) {
+    var provider = list[i]
+    var id = String(provider && provider.id)
+    var accounts = listOrEmpty(provider && provider.accounts)
+    if (barAccountMode !== "chips" || accounts.length < 2 || String(provider.status) === "error") {
+      result.push({ key: id, providerId: id, accountIndex: -1, initial: "", counted: false })
+      continue
+    }
+    var counted = listOrEmpty(countedFor ? countedFor(provider) : [])
+    var slots = barPickAccounts(accounts.length, counted, 4)
+    var names = []
+    for (var n = 0; n < accounts.length; n++) names.push(barAccountName(accounts[n], n, extraRaw))
+    var initials = barAccountInitials(names)
+    for (var s = 0; s < slots.length; s++) {
+      var index = slots[s]
+      var accountId = accounts[index].accountId
+      result.push({ key: id + "@" + (accountId !== undefined && accountId !== null && accountId !== "" ? String(accountId) : "#" + index),
+                    providerId: id, accountIndex: index, initial: initials[index], counted: counted.indexOf(index) !== -1 })
+    }
+  }
+  return result
+}
+
+// One-shot chip flash (DESIGN §2.2): "alert" when the chip's reading moves to a worse severity, "reset"
+// when the same account's window resets (its usage falls back), "" otherwise. Readings are
+// { key, severity, used }; the first one only seeds, and staying at a severity never flashes again.
+function barFlashKind(previous, next) {
+  if (!previous || !next) return ""
+  if (previous.key === next.key && previous.used !== null && next.used !== null
+      && Number(next.used) < Number(previous.used) - 0.5) return "reset"
+  var before = SEVERITY_RANK[previous.severity]
+  var after = SEVERITY_RANK[next.severity]
+  return before !== undefined && after !== undefined && before > 0 && after > before ? "alert" : ""
+}
+
+// A chip fades when its reading is old: the last refresh failed, the reading is a kept last-known one,
+// or the last success is more than two refresh intervals ago.
+function barReadingStale(nowMs, lastSuccessMs, intervalSeconds, refreshFailed, reading) {
+  if (refreshFailed || (reading && reading.stale === true)) return true
+  var last = Number(lastSuccessMs)
+  if (!isFinite(last) || last <= 0) return false
+  return Number(nowMs) - last > 2 * Math.max(60, Number(intervalSeconds) || 900) * 1000
+}
+
+// How long ago a reading was taken, for "Read 42 min ago".
+function barAgoText(seconds) {
+  var value = Math.max(0, Math.floor(Number(seconds) || 0))
+  if (value < 60) return "less than a minute"
+  if (value < 3600) return Math.floor(value / 60) + " min"
+  return formatDuration(value)
+}
+
+// The hover card of a chip with several accounts (DESIGN §2.4), as plain text and values. `options`:
+// selector, warningThreshold, criticalThreshold, nowSeconds, recentByAccount, proxyMode, extraKeys,
+// readAtSeconds, stale, formatClock(epochSeconds) → "18:02", note (one extra line under the header).
+function barHoverModel(provider, counted, mode, options) {
+  var opts = options || {}
+  var accounts = listOrEmpty(provider && provider.accounts)
+  var wanted = listOrEmpty(counted)
+  var now = Number(opts.nowSeconds) || 0
+  var clock = typeof opts.formatClock === "function" ? opts.formatClock : function (seconds) { return String(seconds) }
+  var modeText = ""
+  if (mode === "together") {
+    var via = provider && provider.pool ? "omp" : opts.proxyMode ? proxyName(provider && provider.proxyImplementation) : ""
+    modeText = "Used together" + (via ? " · " + via : "")
+  } else if (provider && provider.accountSwitch) {
+    var threshold = clamp(provider.accountSwitch.threshold, 0, 100)
+    if (provider.accountSwitch.mode === "auto") modeText = "Omarchy · switches at " + formatPercent(threshold) + "%"
+    else if (provider.accountSwitch.mode === "manual") modeText = "Omarchy · notifies at " + formatPercent(threshold) + "%"
+  }
+  var rows = []
+  for (var i = 0; i < accounts.length; i++) {
+    var account = accounts[i]
+    var state = barAccountState(account, opts.selector, opts.warningThreshold, opts.criticalThreshold)
+    var blocked = barUsedUpWindow(account)
+    var activity = account.activity || {}
+    var delta = finiteOrNull(activity.lastDelta)
+    var increased = finiteOrNull(activity.lastIncreaseAt)
+    var readAt = finiteOrNull(activity.lastReadingAt)
+    var status = "idle"
+    var tone = "dim"
+    if (state === "error") {
+      status = errorReasonLabel(account.errorKind)
+      tone = "urgent"
+    } else if (blocked) {
+      status = "used up" + (blocked.resetsAt !== null ? " · back " + clock(blocked.resetsAt) : "")
+      tone = "urgent"
+    } else if (spendingNow(account, now, opts.recentByAccount)) {
+      status = "spending now"
+      tone = "accent"
+    } else if (delta !== null && delta > 0 && increased !== null && readAt !== null && increased >= readAt) {
+      status = "+" + formatPercent(delta) + " last reading"
+    }
+    var history = account.history || {}
+    rows.push({ index: i, name: barAccountName(account, i, opts.extraKeys), inUse: account.active === true,
+                counted: wanted.indexOf(i) !== -1, state: state, status: status, tone: tone,
+                spark: listOrEmpty(history.h24), account: account })
+  }
+  var readAtSeconds = Number(opts.readAtSeconds) || 0
+  var readText = readAtSeconds <= 0 ? "" : opts.stale
+    ? "Read " + barAgoText(now - readAtSeconds) + " ago" : "Read at " + clock(readAtSeconds)
+  return { title: providerShortName(provider) + " · " + accounts.length + " accounts",
+           modeText: modeText, note: String(opts.note || ""), rows: rows, readText: readText, stale: !!opts.stale }
+}
+
+// What a screen reader hears for a chip: "Claude, Work in use, 72% used, Personal 3% used".
+function barAccessibleName(provider, options) {
+  var opts = options || {}
+  var parts = [providerShortName(provider)]
+  var accounts = listOrEmpty(provider && provider.accounts)
+  for (var i = 0; i < accounts.length; i++) {
+    var account = accounts[i]
+    var left = remainingForWindow(account, opts.selector)
+    var shown = left === null ? null : opts.quotaMode === "Remaining" ? left : usedFromRemaining(left)
+    var figure = account.status === "error" ? errorReasonLabel(account.errorKind)
+      : shown === null ? "no reading" : quotaText(shown, opts.quotaMode)
+    var name = barAccountName(account, i, opts.extraKeys)
+    parts.push(account.active === true ? name + " in use, " + figure : name + " " + figure)
+  }
+  return parts.join(", ")
+}

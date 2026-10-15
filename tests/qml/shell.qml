@@ -261,8 +261,12 @@ ShellRoot {
       assertTrue(namedChild(proxyWidget, "barAccountLabel") === null, "emails stay out of the bar when privacy is disabled")
       proxyWidget.accountActivity.providers = []
       assertEqual(barRemaining.text, "9%", "missing activity still shows the known pool quota")
-      assertTrue(barRemaining.parent.parent.tooltipText.indexOf("most remaining capacity") >= 0,
-        "fallback tooltip identifies the pool quota rather than claiming a last-used account")
+      var codexChip = namedChild(proxyWidget, "barChip-codex")
+      assertTrue(codexChip !== null && codexChip.tooltipText === "", "accounts get the hover card instead of the plain tooltip")
+      proxyWidget.hoverChip = codexChip
+      assertTrue(codexChip.hoverModel.note.indexOf("most room left") >= 0,
+        "fallback hover card identifies the pool quota rather than claiming a last-used account")
+      proxyWidget.hoverChip = null
       proxyWidget.accountActivity.providers = [{id: "codex", status: "ambiguous", lastUsedAt: 125}]
       assertEqual(barRemaining.text, "9%", "ambiguous activity still shows the known pool quota")
     }

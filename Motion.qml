@@ -1,27 +1,84 @@
 import QtQuick
+import Quickshell.Io
 import qs.Commons
 
-// Stand-in for the Motion helper QmlBar owns (same API): every duration goes through `duration()`,
-// which is zero when motion is reduced. The panel owns one instance and passes it down.
+// Quotatank's motion tokens. Panel owns one instance (`motion`) and hands it to every component that
+// animates, so durations and the reduced-motion choice live in one place. Omarchy 4.0.4's Style has no
+// motion tokens; a Style that reports `reduceMotion` is followed, otherwise Hyprland's
+// `animations:enabled` is read at start and whenever the panel opens. The Display setting `motion`
+// ("system" | "reduced") can force reduced motion. Reduced motion zeroes every duration: changes still
+// happen, they just do not move.
 QtObject {
   id: root
 
-  // "system" follows the desktop; "reduced" turns every animation off.
+  // Display → Motion: "system" follows Omarchy/Hyprland, "reduced" turns animation off.
   property string preference: "system"
-  // The real helper re-reads Hyprland's animation setting whenever the panel opens.
+  // Re-reads Hyprland's setting each time this turns true (Panel binds it to `opened`).
   property bool panelOpen: false
-  property bool reduced: preference === "reduced" || Style["reduceMotion"] === true
+  // Hyprland's answer; only used when Style has no reduceMotion of its own.
+  property bool systemReduced: false
+  readonly property var styleReduceMotion: Style["reduceMotion"]
+  property bool reduced: preference === "reduced"
+    || (styleReduceMotion !== undefined ? styleReduceMotion === true : systemReduced)
 
-  readonly property int micro: 160
-  readonly property int row: 260
-  readonly property int morph: 420
-  readonly property int digit: 350
-  readonly property int popIn: 180
-  readonly property int popOut: 120
-  readonly property int flash: 600
-  readonly property int ping: 700
+  readonly property int micro: 160    // hover, colour, toggles
+  readonly property int row: 260      // rows, bars, dots
+  readonly property int morph: 420    // chart, lanes
+  readonly property int digit: 350    // rolling digits
+  readonly property int popIn: 180    // hover card in
+  readonly property int popOut: 120   // hover card out
+  readonly property int flash: 600    // one-shot alerts
+  readonly property int ping: 700     // spend ring
+
+  // Enter decelerates, a move eases both ways, an exit accelerates away.
+  readonly property int easeEnter: Easing.OutCubic
+  readonly property int easeMove: Easing.InOutCubic
+  readonly property int easeExit: Easing.InCubic
 
   function duration(ms) {
-    return reduced ? 0 : ms
+    if (reduced) return 0
+    var value = Math.round(Number(ms))
+    return isFinite(value) && value > 0 ? value : 0
+  }
+
+  function refresh() {
+    if (styleReduceMotion !== undefined || probe.running) return
+    probe.body = ""
+    probe.running = true
+  }
+
+  function applyOption(text) {
+    var parsed = null
+    try { parsed = JSON.parse(String(text || "")) } catch (error) { parsed = null }
+    if (!parsed || typeof parsed !== "object") return
+    var enabled = Number(parsed.int)
+    if (isFinite(enabled)) systemReduced = enabled === 0
+  }
+
+  onPanelOpenChanged: if (panelOpen) refresh()
+  Component.onCompleted: refresh()
+
+  // hyprctl answers with one short JSON object; anything past 4 KiB is not that answer.
+  property Process probe: Process {
+    id: probe
+    property string body: ""
+    command: ["hyprctl", "-j", "getoption", "animations:enabled"]
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(data) {
+        if (probe.body.length < 4096) probe.body += String(data).slice(0, 4096 - probe.body.length)
+      }
+    }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.applyOption(probe.body)
+      probe.body = ""
+    }
+  }
+
+  // A compositor that does not answer must not leave the probe running.
+  property Timer probeTimeout: Timer {
+    interval: 3000
+    running: probe.running
+    onTriggered: probe.running = false
   }
 }

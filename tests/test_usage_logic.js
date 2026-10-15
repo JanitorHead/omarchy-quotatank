@@ -1493,4 +1493,155 @@ console.log("omp settings, live feed and account modes: passed");
 }
 console.log("1.9 QmlLimits accounts, forecast and runway: passed");
 
+// ---- 1.9 QmlBar ----
+{
+  const now = 1760000000;
+  const win = (id, used, resetIn, seconds) => ({ id, label: id === "weekly" ? "Weekly limit" : "5-hour limit", used,
+    remaining: 100 - used, resetsAt: now + resetIn, windowSeconds: seconds });
+  const login = (accountId, label, used, extra = {}) => ({ id: "claude", accountId, label, status: "ok", origin: "omarchy",
+    windows: [win("session", used, 7200, 18000), win("weekly", 30, 300000, 604800)], activity: {}, ...extra });
+  const claude = (accounts, extra = {}) => ({ id: "claude", name: "Claude Code", status: "ok", windows: accounts[0].windows,
+    accounts, ...extra });
+  const opts = (extra = {}) => ({ selector: "auto", warningThreshold: 25, criticalThreshold: 10, nowSeconds: now, ...extra });
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+
+  // Account kinds and names: never an email in the bar.
+  assert.equal(context.barAccountOrigin({ origin: "omp", accountId: "x" }), "omp");
+  assert.equal(context.barAccountOrigin({ accountId: "k-0123abcd" }), "key");
+  assert.equal(context.barAccountOrigin({ accountId: "primary" }), "key");
+  assert.equal(context.barAccountOrigin({ accountId: "omp-0123456789ab" }), "omp");
+  assert.equal(context.barAccountOrigin({ accountId: "f00d", proxyImplementation: "go" }), "proxy");
+  assert.equal(context.barAccountOrigin({ accountId: "main" }), "omarchy");
+  assert.equal(context.barAccountOrigin({ accountId: "work", label: "Work", source: "Claude OAuth usage API" }), "omarchy");
+  assert.equal(context.barAccountOrigin({ accountId: "", source: "Codex app-server RPC" }), "signin");
+  assert.equal(context.barAccountName({ id: "claude", label: "Work", active: true, account: "me@example.com" }, 0, "{}"), "Work");
+  assert.equal(context.barAccountName({ id: "codex", accountId: "f00d", account: "me@example.com" }, 2, "{}"), "Account 3");
+  assert.deepEqual(plain(context.barAccountInitials(["Work", "Wife", "Account 3", "personal", "—"])), ["Wo", "Wi", "3", "P", "?"]);
+  assert.deepEqual(plain(context.barAccountInitials(["Team A", "Team B"])), ["1", "2"], "same two letters fall back to the number");
+
+  // Ring states, used-up windows, dot slots and the value account.
+  assert.equal(context.barAccountState(login("a", "A", 50), "auto", 25, 10), "ok");
+  assert.equal(context.barAccountState(login("a", "A", 80), "auto", 25, 10), "warning");
+  assert.equal(context.barAccountState(login("a", "A", 95), "auto", 25, 10), "critical");
+  assert.equal(context.barAccountState({ ...login("a", "A", 10), status: "error" }, "auto", 25, 10), "error");
+  assert.equal(context.barAccountState({ ...login("a", "A", 10), windows: [] }, "auto", 25, 10), "unknown");
+  assert.equal(context.barAccountState({ ...login("a", "A", 10), windows: [win("session", 10, 60, 18000), win("weekly", 100, 9000, 604800)] },
+    "session", 25, 10), "critical", "blocked on a used-up weekly limit whatever the chip shows");
+  assert.equal(context.barUsedUpWindow(login("a", "A", 40)), null);
+  assert.equal(context.barUsedUpWindow({ ...login("a", "A", 0), windows: [win("session", 100, 600, 18000), win("weekly", 100, 9000, 604800)] }).resetsAt,
+    now + 9000, "back once every used-up window has reset");
+  assert.equal(context.barUsedUpWindow({ ...login("a", "A", 0), windows: [{ id: "m", used: 100, remaining: 0, resetsAt: null }] }).resetsAt, null);
+  assert.deepEqual(plain(context.barDotSlots(2, [0])), [0, 1]);
+  assert.deepEqual(plain(context.barDotSlots(4, [3])), [0, 1, 2, 3]);
+  assert.deepEqual(plain(context.barDotSlots(5, [4])), [0, 1, 4], "five accounts: three dots, the counted one kept");
+  assert.deepEqual(plain(context.barDotSlots(6, [2, 5])), [0, 2, 5]);
+  assert.deepEqual(plain(context.barPickAccounts(5, [0], 4)), [0, 1, 2, 3]);
+  assert.equal(context.barValueIndex(claude([login("a", "A", 40), login("b", "B", 70)]), [0, 1], "auto"), 1, "least headroom");
+  assert.equal(context.barValueIndex(claude([login("a", "A", 100), login("b", "B", 70)]), [0, 1], "auto"), 1,
+    "a used-up account yields to one with room");
+  assert.equal(context.barValueIndex(claude([login("a", "A", 40)]), [], "auto"), -1);
+
+  // The strip: dots, +N, the switch hint, and the clock pie once every account is used up.
+  const two = claude([login("main", "Work", 72, { active: true }), login("personal", "Personal", 3)], { accountSwitch: { mode: "manual", threshold: 95 } });
+  const twoStrip = context.barAccountStrip(two, [0], "single", opts());
+  assert.deepEqual(plain(twoStrip.dots), [{ index: 0, state: "ok", counted: true, spending: false }, { index: 1, state: "ok", counted: false, spending: false }]);
+  assert.equal(twoStrip.extra, 0);
+  assert.equal(twoStrip.hint, "", "no hint while the login in use has room");
+  const fiveStrip = context.barAccountStrip(claude([0, 1, 2, 3, 4].map((i) => login("a" + i, "", 10 + i))), [4], "single", opts());
+  assert.deepEqual(plain(fiveStrip.dots.map((dot) => dot.index)), [0, 1, 4]);
+  assert.equal(fiveStrip.extra, 2);
+  assert.equal(context.barAccountStrip(claude([login("a", "A", 10)]), [0], "single", opts()).dots.length, 0, "one account, no dots");
+  const busy = [login("main", "Work", 92, { active: true }), login("personal", "Personal", 3),
+    login("lab", "Lab", 1, { windows: [win("session", 1, 7200, 18000), win("weekly", 5, 300000, 604800)] })];
+  assert.equal(context.barAccountStrip(claude(busy, { accountSwitch: { mode: "manual", threshold: 95 } }), [0], "single", opts()).hint, "→ Lab",
+    "suggests the login with the most room");
+  assert.equal(context.barAccountStrip(claude(busy, { accountSwitch: { mode: "manual", threshold: 95 } }), [0], "single", opts()).hintKind, "switch");
+  assert.equal(context.barAccountStrip(claude(busy, { accountSwitch: { mode: "auto", threshold: 95 } }), [0], "single", opts()).hint, "");
+  assert.equal(context.barAccountStrip(claude(busy), [0], "single", opts()).hint, "", "no Omarchy switching, no hint");
+  assert.equal(context.barAccountStrip(claude(busy, { accountSwitch: { mode: "manual", threshold: 95 } }), [0, 1], "together", opts()).hint, "");
+  assert.equal(context.barAccountStrip(claude(busy, { accountSwitch: { mode: "manual", threshold: 95 } }), [0], "single", opts({ stale: true })).hint, "");
+  const keyed = [login("main", "Work", 92, { active: true }), login("k-0123abcd", "Spare key", 3, { origin: "key" })];
+  assert.equal(context.barAccountStrip(claude(keyed, { accountSwitch: { mode: "manual", threshold: 95 } }), [0], "single", opts()).hint, "",
+    "only another Omarchy login can be switched to");
+  const spent = [login("main", "Work", 100, { active: true }), { ...login("personal", "Personal", 100), windows: [win("session", 100, 3600, 18000)] }];
+  const spentStrip = context.barAccountStrip(claude(spent), [0], "single", opts());
+  assert.equal(spentStrip.allUsedUp, true);
+  assert.equal(spentStrip.resetAt, now + 3600, "the earliest reset");
+  assert.equal(spentStrip.pieFraction, 0.8);
+  assert.equal(spentStrip.hint, "1h 0m");
+  assert.equal(spentStrip.hintKind, "reset");
+  const spentAndBroken = [login("main", "Work", 100), { ...login("lab", "Lab", 0), status: "error", windows: [] }];
+  assert.equal(context.barAccountStrip(claude(spentAndBroken), [0], "single", opts()).allUsedUp, true, "a failed account cannot be used either");
+  const noReset = [{ ...login("a", "A", 0), windows: [{ id: "m", used: 100, remaining: 0, resetsAt: null }] },
+    { ...login("b", "B", 0), windows: [{ id: "m", used: 100, remaining: 0, resetsAt: null }] }];
+  assert.equal(context.barAccountStrip(claude(noReset), [0], "single", opts()).hint, "used up");
+  assert.equal(context.barAccountStrip(claude(noReset), [0], "single", opts()).pieFraction, -1);
+  console.log("Bar account strip: passed");
+
+  // Chips per account: at most four per provider, keyed so chips keep their state across readings.
+  const codex = { id: "codex", name: "OpenAI Codex", status: "ok", windows: [],
+    accounts: [0, 1, 2, 3, 4].map((i) => ({ id: "codex", accountId: "omp-00" + i, label: "", status: "ok", windows: [win("session", 10 * i, 600, 18000)] })) };
+  const firstCounted = (provider) => context.countedAccounts(provider, "single", now, {});
+  const dotsEntries = context.barChipEntries([two, codex], "dots", firstCounted, "{}");
+  assert.deepEqual(plain(dotsEntries.map((entry) => entry.key)), ["claude", "codex"]);
+  const chipEntries = context.barChipEntries([two, codex], "chips", firstCounted, "{}");
+  assert.deepEqual(plain(chipEntries.map((entry) => entry.key)),
+    ["claude@main", "claude@personal", "codex@omp-000", "codex@omp-001", "codex@omp-002", "codex@omp-003"]);
+  assert.deepEqual(plain(chipEntries.map((entry) => entry.initial)), ["W", "P", "1", "2", "3", "4"]);
+  assert.deepEqual(plain(chipEntries.filter((entry) => entry.counted).map((entry) => entry.key)), ["claude@main", "codex@omp-000"]);
+  assert.equal(context.barChipEntries([{ ...two, status: "error" }], "chips", firstCounted, "{}").length, 1, "a failed provider keeps one chip");
+  assert.equal(context.barChipEntries([claude([login("a", "A", 1)])], "chips", firstCounted, "{}")[0].accountIndex, -1);
+
+  // One-shot flashes and stale readings.
+  assert.equal(context.barFlashKind(null, { key: "0|auto", severity: "critical", used: 95 }), "", "the first reading only seeds");
+  assert.equal(context.barFlashKind({ key: "0|auto", severity: "ok", used: 70 }, { key: "0|auto", severity: "warning", used: 80 }), "alert");
+  assert.equal(context.barFlashKind({ key: "0|auto", severity: "warning", used: 80 }, { key: "0|auto", severity: "critical", used: 92 }), "alert");
+  assert.equal(context.barFlashKind({ key: "0|auto", severity: "critical", used: 92 }, { key: "0|auto", severity: "critical", used: 95 }), "",
+    "never repeated for the same crossing");
+  assert.equal(context.barFlashKind({ key: "0|auto", severity: "critical", used: 95 }, { key: "0|auto", severity: "ok", used: 2 }), "reset");
+  assert.equal(context.barFlashKind({ key: "0|auto", severity: "critical", used: 95 }, { key: "1|auto", severity: "ok", used: 3 }), "",
+    "an account switch is not a reset");
+  assert.equal(context.barFlashKind({ key: "0|auto", severity: "none", used: null }, { key: "0|auto", severity: "critical", used: 95 }), "");
+  assert.equal(context.barReadingStale(now * 1000, now * 1000 - 1000, 900, true, null), true, "the last refresh failed");
+  assert.equal(context.barReadingStale(now * 1000, now * 1000 - 1000, 900, false, { stale: true }), true, "a kept last-known reading");
+  assert.equal(context.barReadingStale(now * 1000, now * 1000 - 1801000, 900, false, null), true, "older than two intervals");
+  assert.equal(context.barReadingStale(now * 1000, now * 1000 - 1799000, 900, false, null), false);
+  assert.equal(context.barReadingStale(now * 1000, 0, 900, false, null), false, "no reading yet is not stale");
+  assert.equal(context.barAgoText(30), "less than a minute");
+  assert.equal(context.barAgoText(42 * 60), "42 min");
+  assert.equal(context.barAgoText(2 * 3600 + 300), "2h 5m");
+
+  // Hover card text.
+  const clock = (seconds) => "T+" + (seconds - now);
+  const hoverAccounts = [
+    login("main", "Work", 64, { active: true, activity: { lastIncreaseAt: now - 60, lastDelta: 4, lastReadingAt: now - 60 } }),
+    login("personal", "Personal", 20, { activity: { lastIncreaseAt: now - 3600, lastDelta: 4, lastReadingAt: now - 3600 } }),
+    { ...login("lab", "Lab", 100), windows: [win("session", 100, 3600, 18000)] },
+    { ...login("old", "Old", 0), status: "error", errorKind: "expired", windows: [] },
+    login("spare", "Spare", 10, { activity: { lastIncreaseAt: now - 7200, lastDelta: 2, lastReadingAt: now - 60 } }),
+  ];
+  const hover = context.barHoverModel(claude(hoverAccounts, { accountSwitch: { mode: "auto", threshold: 95 } }), [0], "single",
+    opts({ readAtSeconds: now - 60, formatClock: clock }));
+  assert.equal(hover.title, "Claude · 5 accounts");
+  assert.equal(hover.modeText, "Omarchy · switches at 95%");
+  assert.deepEqual(plain(hover.rows.map((row) => row.status)), ["spending now", "+4 last reading", "used up · back T+3600", "sign in", "idle"]);
+  assert.deepEqual(plain(hover.rows.map((row) => row.tone)), ["accent", "dim", "urgent", "urgent", "dim"]);
+  assert.deepEqual(plain(hover.rows.map((row) => row.inUse)), [true, false, false, false, false]);
+  assert.equal(hover.readText, "Read at T+-60");
+  assert.equal(context.barHoverModel(claude(hoverAccounts, { accountSwitch: { mode: "manual", threshold: 90 } }), [0], "single", opts()).modeText,
+    "Omarchy · notifies at 90%");
+  assert.equal(context.barHoverModel(claude(hoverAccounts), [0], "single", opts()).modeText, "", "no Omarchy switching, nothing");
+  assert.equal(context.barHoverModel(claude(hoverAccounts, { pool: { source: "omp" } }), [0], "together", opts()).modeText, "Used together · omp");
+  assert.equal(context.barHoverModel({ ...claude(hoverAccounts), proxyImplementation: "go" }, [0], "together", opts({ proxyMode: true })).modeText,
+    "Used together · CLIProxyAPI");
+  assert.equal(context.barHoverModel(claude(hoverAccounts), [0], "single", opts({ readAtSeconds: now - 42 * 60, stale: true })).readText,
+    "Read 42 min ago");
+  assert.equal(context.barHoverModel(claude(hoverAccounts), [0], "single", opts({ note: "Figure shown" })).note, "Figure shown");
+  assert.equal(context.barAccessibleName(two, { selector: "session", quotaMode: "Used" }), "Claude, Work in use, 72% used, Personal 3% used");
+  assert.equal(context.barAccessibleName(two, { selector: "session", quotaMode: "Remaining" }), "Claude, Work in use, 28% left, Personal 97% left");
+  assert.equal(context.barAccessibleName(two, { selector: "auto", quotaMode: "Used" }), "Claude, Work in use, 72% used, Personal 30% used",
+    "the chip's window: here the weekly limit is Personal's tightest");
+  console.log("Bar chips, flashes and hover card: passed");
+}
+
 console.log("UsageLogic.js: all assertions passed");
