@@ -8366,11 +8366,19 @@ def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
         if not matches:
             added.append(entry)
     if added:
-        if "accounts" not in provider:
+        single_native = "accounts" not in provider
+        if single_native:
             provider.update(accountId="primary" if provider_id in KEYED_FETCHERS else PRIMARY_ACCOUNT_ID,
                             active=True, primary=True, origin=native_origin(provider, provider, cliproxy))
             provider["accounts"] = [copy.deepcopy(provider)]
         provider["accounts"].extend(added)
+        healthy = next((position for position, entry in enumerate(provider["accounts"]) if entry["status"] == "ok"), None)
+        # A broken single sign-in (expired, signed out) should not hide omp accounts that work: the first healthy
+        # one leads. Omarchy's in-use login keeps the lead even when it fails, since that is what new sessions use.
+        if single_native and provider["status"] != "ok" and healthy is not None:
+            for position, entry in enumerate(provider["accounts"]):
+                entry["active"] = position == healthy
+            return summarize_accounts(provider["accounts"], healthy)
         for entry in (provider, *provider["accounts"]):
             entry["accountCount"] = len(provider["accounts"])
     return provider

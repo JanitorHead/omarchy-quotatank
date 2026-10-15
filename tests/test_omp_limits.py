@@ -266,6 +266,17 @@ class MergeTests(unittest.TestCase):
         self.assertEqual({account["accountCount"] for account in [claude, *claude["accounts"]]}, {4})
         self.assertNotIn("origins", claude)
 
+    def test_a_failing_single_sign_in_lets_the_first_working_omp_account_lead(self):
+        expired = usage.error_provider("claude", "expired", "The saved sign-in is no longer accepted.")
+        providers = [expired]
+        self.merge(providers, ["claude"])
+        claude = providers[0]
+        base = omp_id("anthropic", "dev@example.com")
+        self.assertEqual((claude["accountId"], claude["status"], claude["origin"]), (base, "ok", "omp"))
+        self.assertEqual([account["active"] for account in claude["accounts"]], [False, True, False, False])
+        self.assertEqual((claude["accounts"][0]["accountId"], claude["accounts"][0]["errorKind"]), ("main", "expired"))
+        self.assertEqual({account["accountCount"] for account in claude["accounts"]}, {4})
+
     def test_an_api_key_reading_is_the_primary_key(self):
         providers = [native("zai")]
         self.merge(providers, ["zai"])
@@ -303,13 +314,6 @@ class MergeTests(unittest.TestCase):
         disabled_only = {"reports": [], "disabledCredentials": fixture()["disabledCredentials"]}
         usage.merge_omp(providers, ["claude"], [disabled_only], None, False)
         self.assertEqual((providers[0]["errorKind"], providers[0]["account"]), ("expired", "old@example.com"))
-
-    def test_any_other_native_failure_stays_the_summary(self):
-        providers = [usage.error_provider("codex", "expired", "Sign in to Codex again.")]
-        self.merge(providers, ["codex"])
-        self.assertEqual((providers[0]["status"], providers[0]["errorKind"]), ("error", "expired"))
-        self.assertEqual([account["accountId"] for account in providers[0]["accounts"]],
-                         ["main", omp_id("openai-codex", "work@example.com")])
 
     def test_omps_capacity_becomes_the_providers_pool(self):
         document = fixture()
