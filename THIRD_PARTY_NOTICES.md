@@ -104,6 +104,7 @@ The marks in `assets/<provider>.svg`, `assets/<provider>-bar.svg`, and `assets/<
 - Each provider's own site artwork, reduced to the 24-unit frame: DevPass (`devpass.llmgateway.io`), Neuralwatt (`neuralwatt.com`), Sofya (`sofya.co`), ClawRouter, and Aixy (`aixy-gateway.com`). xKiro (`xkiro.com`) and Charm Hyper (`hyper.charm.land`) publish raster logos only, so their marks are traced from them; Umans is redrawn from its 16-pixel favicon.
 - Droid, Codebuff, and Synthetic are self-drawn monograms (a rounded square with a letter) and use no third-party artwork.
 - Codex is redistributed from `basecamp/omarchy` as noted above.
+- The omp (Oh My Pi) mark in the marketplace preview (`preview.png`) is the gradient mark from omp.sh's `favicon.svg`, published with [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi) under the MIT licence, shown without its background square.
 
 Simple Icons is released under CC0 1.0; the Lobe Icons MIT licence follows:
 
@@ -129,4 +130,4 @@ Simple Icons is released under CC0 1.0; the Lobe Icons MIT licence follows:
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
 
-Claude, Anthropic, OpenAI, Codex, Kimi, Moonshot AI, Antigravity, Gemini, GitHub Copilot, Cursor, Grok, Kiro, JetBrains, Droid, Amp, Kilo Code, Codebuff, Hugging Face, Z.ai, MiniMax, Synthetic, Chutes, Ollama, Warp, ZenMux, Cline, Venice, DeepInfra, Vercel, Poe, OpenCode, OpenRouter, DeepSeek, Nous Research, Meta, Muse Code, Alibaba Cloud, Command Code, DevPass, LLM Gateway, xKiro, IBM, Bob, Umans, Neuralwatt, Aixy, ClawRouter, Atlas Cloud, Charm, Hyper, Sail Research, Sofya, v0, Manus, and TypeSafe names and marks are the property of their respective owners. Their inclusion identifies compatible services and does not imply affiliation or endorsement.
+Claude, Anthropic, OpenAI, Codex, Kimi, Moonshot AI, Antigravity, Gemini, GitHub Copilot, Cursor, Grok, Kiro, JetBrains, Droid, Amp, Kilo Code, Codebuff, Hugging Face, Z.ai, MiniMax, Synthetic, Chutes, Ollama, Warp, ZenMux, Cline, Venice, DeepInfra, Vercel, Poe, OpenCode, OpenRouter, DeepSeek, Nous Research, Meta, Muse Code, Alibaba Cloud, Command Code, DevPass, LLM Gateway, xKiro, IBM, Bob, Umans, Neuralwatt, Aixy, ClawRouter, Atlas Cloud, Charm, Hyper, Sail Research, Sofya, v0, Manus, TypeSafe, and omp (Oh My Pi) names and marks are the property of their respective owners. Their inclusion identifies compatible services and does not imply affiliation or endorsement.
