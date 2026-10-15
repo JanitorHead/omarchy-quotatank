@@ -15,6 +15,8 @@ ShellRoot {
   property int savesBeforeBlankRow: 0
   property int responses: 0
   property int phase: 0
+  property string backupFile: ""
+  property var backupReply: null
   readonly property string custom: '{"vendor/Example[1m]":{"inputCostPerMillionTokens":2,"outputCostPerMillionTokens":8,"cacheReadCostPerMillionTokens":0}}'
   readonly property var sixProviders: ["claude", "codex", "kimi", "opencode", "openrouter", "deepseek"]
 
@@ -336,10 +338,45 @@ ShellRoot {
         root.phase++
       } else if (root.phase === 10 && !root.find(root.form, "refreshMinutesField").pasting) {
         root.check(root.find(root.form, "refreshMinutesField").text === "seek", "a paste over 64 KiB is refused")
+        // A second OpenRouter key: named, staged privately, and saved as an extra key the backend reads.
+        root.host({ enabledProviders: ["openrouter"], openrouterKeyFile: "/private/primary.key", extraKeys: "{}" })
+        root.form.page = "providers"
+        root.find(root.form, "openrouterAddExtraKey").clicked()
+        root.check(root.find(root.form, "openrouterExtraNameInput") !== null, "Add another key opens a named editor")
+        root.find(root.form, "openrouterExtraName").text = "Work"
+        root.find(root.form, "openrouterExtraSecret").text = "synthetic-second-key"
+        root.saved = null
+        root.find(root.form, "openrouterExtraSave").clicked()
+        root.phase++
+      } else if (root.phase === 11 && root.saved && root.saved.extraKeys && root.saved.extraKeys !== "{}" && !root.form.saving) {
+        var extra = JSON.parse(root.saved.extraKeys).openrouter
+        root.check(extra.keys.length === 1 && extra.keys[0].label === "Work" && /^k-[0-9a-f]{8}$/.test(extra.keys[0].id),
+          "the named key is saved with its own id")
+        root.check(extra.keys[0].file.indexOf("/management-keys/key-") >= 0 && JSON.stringify(root.saved).indexOf("synthetic-second-key") < 0,
+          "the key itself is only in a private file")
+        root.check(root.find(root.form, "openrouterPrimaryKeyName").visible, "with two keys, the first can be named too")
+        // Back up and restore through scripts/backup.py and gpg: the widget's request line, the
+        // helper's one-line reply, and the settings it hands back pointing at fresh key files.
+        root.backupFile = Quickshell.env("XDG_CACHE_HOME") + "/contract.qtbackup"
+        root.form.runBackup({ action: "export", path: root.backupFile, passphrase: "contract passphrase",
+          settings: Object.assign({}, root.saved, { openrouterKeyFile: "" }) }, function(response) { root.backupReply = response })
+        root.phase++
+      } else if (root.phase === 12 && root.backupReply) {
+        root.check(root.backupReply.ok && root.backupReply.secrets === 2, "the backup holds the extra key and the T3 token saved earlier: " + JSON.stringify(root.backupReply))
+        root.backupReply = null
+        root.form.runBackup({ action: "restore", path: root.backupFile, passphrase: "contract passphrase" },
+          function(response) { root.backupReply = response })
+        root.phase++
+      } else if (root.phase === 13 && root.backupReply) {
+        root.check(root.backupReply.ok, "the backup restores: " + JSON.stringify(root.backupReply))
+        var restored = JSON.parse(root.backupReply.settings.extraKeys).openrouter.keys[0]
+        var original = JSON.parse(root.saved.extraKeys).openrouter.keys[0]
+        root.check(restored.label === "Work" && restored.file !== original.file && restored.file.indexOf("/management-keys/key-") >= 0,
+          "a restored key gets a new private file and keeps its name")
         console.log("Cost QML contract: passed")
         Qt.quit()
       }
     }
   }
-  Timer { interval: 8000; running: true; onTriggered: { root.check(false, "timed out at phase " + root.phase + "; responses=" + root.responses + "; error=" + root.backend.fetchError + "; loading=" + root.backend.loading + "; request=" + JSON.stringify(root.backend.payload.testRequest)); Qt.quit() } }
+  Timer { interval: 25000; running: true; onTriggered: { root.check(false, "timed out at phase " + root.phase + "; responses=" + root.responses + "; error=" + root.backend.fetchError + "; loading=" + root.backend.loading + "; request=" + JSON.stringify(root.backend.payload.testRequest)); Qt.quit() } }
 }

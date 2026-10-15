@@ -52,7 +52,7 @@ class ProjectContractTests(unittest.TestCase):
             "barProviderLimits", "barShowResets", "barResetTimeFormat", "barResetDateFormat",
             "warningThreshold", "criticalThreshold", "liveAccountActivity",
             "usageSource", "cliproxyUrl", "cliproxyKeyFile", "hideAccountEmails", "squareUsageCards", "providerColors", "notifyLimitThresholds", "costPriceOverrides",
-            "costLocalProviders", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers",
+            "costLocalProviders", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers", "extraKeys",
             "creditWarningUsd", "creditCriticalUsd", "hideExhaustedProviders", "barMaxChips", "providerQuotaModes", "providerOrder", "dismissedProviders",
         } | key_files)
         self.assertEqual(set(manifest["barWidget"]["defaults"]), keys, "every setting has a default")

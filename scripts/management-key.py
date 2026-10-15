@@ -53,6 +53,34 @@ def unlink_previous(directory: Path, directory_fd: int, previous: Path) -> bool:
     return False
 
 
+def key_directory() -> Path:
+    """Where managed API keys live; backup.py restores into the same directory."""
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    return config_home / "omarchy" / "model-usage" / "management-keys"
+
+
+def valid_key(key: str) -> bool:
+    """One printable ASCII line of at most 8191 characters, the limit for every saved key."""
+    return 0 < len(key) <= 8191 and all(32 <= ord(c) <= 126 for c in key)
+
+
+def write_key_file(directory: Path, directory_fd: int, key: str, created: list[str]) -> str:
+    """Create one new 0600 key file in the pinned directory and return its path.
+
+    backup.py calls this too, so restored keys match staged ones. The name joins `created` before the
+    write, so a caller that removes `created` also removes a partly written file.
+    """
+    filename = "key-" + uuid.uuid4().hex + ".key"
+    fd = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                 0o600, dir_fd=directory_fd)
+    created.append(filename)
+    with os.fdopen(fd, "w", encoding="ascii") as stream:
+        stream.write(key + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    return str(directory / filename)
+
+
 def main() -> int:
     directory_fd = None
     filenames = []
@@ -61,8 +89,7 @@ def main() -> int:
     try:
         input_stream = os.fdopen(sys.stdin.fileno(), "rb", buffering=0, closefd=False)
         request = json.loads(input_stream.readline(65537))
-        config_home = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
-        directory = config_home / "omarchy" / "model-usage" / "management-keys"
+        directory = key_directory()
         if "remove" in request:
             targets = request["remove"]
             if not isinstance(targets, dict) or not 1 <= len(targets) <= 4:
@@ -82,24 +109,19 @@ def main() -> int:
         if not isinstance(previous_paths, dict):
             raise ValueError
         for name, key in keys.items():
-            if (name not in allowed and not (batch and re.fullmatch(r"t3Token_[a-zA-Z0-9-]{1,64}", name))) or not isinstance(key, str):
+            # T3 tokens and a provider's extra keys are named per row: t3Token_<server>, extraKey_<provider>_k-<8 hex>.
+            if (name not in allowed and not (batch and (re.fullmatch(r"t3Token_[a-zA-Z0-9-]{1,64}", name)
+                    or re.fullmatch(r"extraKey_(" + "|".join(KEY_PROVIDERS) + r")_k-[0-9a-f]{8}", name)))) \
+                    or not isinstance(key, str):
                 raise ValueError
             key = key.strip()
-            if not key or len(key) > 8191 or any(ord(c) < 32 or ord(c) > 126 for c in key):
+            if not valid_key(key):
                 raise ValueError
             keys[name] = key
         directory_fd = open_private_directory(directory, create=True)
         paths = {}
         for name, key in keys.items():
-            filename = "key-" + uuid.uuid4().hex + ".key"
-            fd = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                         0o600, dir_fd=directory_fd)
-            filenames.append(filename)
-            with os.fdopen(fd, "w", encoding="ascii") as stream:
-                stream.write(key + "\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            paths[name] = str(directory / filename)
+            paths[name] = write_key_file(directory, directory_fd, key, filenames)
         key = ""
         keys.clear()
         print(json.dumps({"paths": paths} if batch else {"path": paths["key"]}), flush=True)

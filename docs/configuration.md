@@ -224,6 +224,7 @@ In **Settings → Costs → Custom prices**, add the exact model ID and its inpu
 | `costLocalProviders` | `["claude", "codex", "opencode"]` | Local cost sources (`claude`, `codex`, `opencode`), independent of quota providers |
 | `costKeeperUrl` | empty | Optional Keeper URL for last-used quota account activity |
 | `costT3Servers` | `"[]"` | T3 server configurations managed in Costs settings; credentials are private file references |
+| `extraKeys` | `"{}"` | A provider's further API keys, managed by **Settings → Providers → Add another key**: per provider, the first key's name and each further key's id, name, and private key file. Each key is read on its own and shown as its own account |
 | `costKeeperPasswordFile` | empty | Private Keeper password for quota account activity (legacy setting name) |
 
 Examples:
@@ -252,6 +253,20 @@ Each limit card with usage draws a pace tick on its meter at the share of the wi
 Hover the tick to read the current time, the used and pace shares, whether usage is ahead or behind by how many points, and the projection with its basis (`At your recent rate` or `At this window's pace`). The time follows **Reset time format**. Usage past the tick is shaded to show the excess over pace.
 
 Refresh intervals above one hour mark short limits `No recent data`, because their recent rate needs a sample at least hourly; weekly and monthly limits are unaffected. History keeps each limit window's samples for seven days, and idle durations are measured within that span. On a first run a short limit shows `Collecting data` until ten minutes of samples exist.
+
+## Several accounts
+
+**Omarchy subscription accounts.** Claude Code, Codex, and Grok logins added with `omarchy agent account add <provider> <name>` are read from Omarchy's registry (`~/.local/state/omarchy/agents/accounts/<provider>.json`), each from its own folder. With two or more, Limits shows one card per account with its name, marks the one new sessions start as **in use**, and the provider's chip follows that account. Once a second account exists, the first is always read from `~/.claude`, `~/.codex`, or `~/.grok`, as Omarchy does, even if `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GROK_HOME` point elsewhere.
+
+**Several API keys.** A provider with a saved key offers **Add another key…** under its card in **Settings → Providers**: name it and save it, and it is stored in its own private file like the first. Each key gets its own card in Limits; the chip and alerts follow the first key. The provider's environment variable only ever replaces the first key. **Remove** forgets a further key and deletes its file.
+
+## Back up and restore
+
+**Settings → Advanced → Back up and restore** writes every setting and every key, token, and password saved in Settings to one file (`.qtbackup`), encrypted with a passphrase of at least 12 characters. Sign-ins that belong to each tool (Claude Code, Codex, and the like) are not included; sign in again there.
+
+- **Encryption.** `gpg --symmetric` with AES-256, the OpenPGP iterated and salted S2K with SHA-512 and the maximum count (65,011,712), no compression, and an integrity check (gpg's MDC). gpg runs with a throwaway home folder, so your keyring and gpg-agent are not touched, and the passphrase reaches it through a pipe, never a command line or a file. The file is written as `0600`, through a temporary file and an atomic rename.
+- **Restore.** Enter the file and its passphrase and press **Open**: the widget says when the backup was made, by which version, and how many preferences and keys it holds, before anything changes. Pick **Preferences**, **Keys and tokens**, or both, and press **Restore**. The current settings and keys are first saved to `~/quotatank-before-restore-<date>.qtbackup` with the same passphrase, so a restore can be undone. Keys come back as new private files; the files the old settings used are then deleted. Settings this version does not know are skipped.
+- **Lost passphrase.** Without it, the keys in a backup cannot be recovered.
 
 ## Troubleshooting
 

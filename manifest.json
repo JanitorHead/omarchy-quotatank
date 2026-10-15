@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "janitorhead.quotatank",
   "name": "Quotatank",
-  "version": "1.7.4",
+  "version": "1.8.0",
   "author": "JanitorHead",
   "license": "MIT",
   "description": "Menu-bar AI usage tracker for coding agents, 49 providers. Shows how much of your Claude Code (Anthropic), Codex (ChatGPT), Gemini CLI, Antigravity, GitHub Copilot, Cursor, Kimi, Grok, Kiro, Z.ai GLM, MiniMax, Qwen or OpenCode subscription is left: 5-hour and weekly rate limits, quotas, resets, pace. Tracks prepaid credits and balances for OpenRouter, DeepSeek, Moonshot and more. Finds your sign-ins on its own. A Costs tab charts tokens and LLM spend per model, like ccusage.",
@@ -160,6 +160,7 @@
         "opencode"
       ],
       "costT3Servers": "[]",
+      "extraKeys": "{}",
       "liveAccountActivity": true
     },
     "schema": [
@@ -1370,6 +1371,13 @@
         "label": "T3 Code cost servers",
         "defaultValue": "[]",
         "description": "Managed by Costs settings. Remote servers with private token file references."
+      },
+      {
+        "key": "extraKeys",
+        "type": "string",
+        "label": "Further API keys",
+        "defaultValue": "{}",
+        "description": "Managed by Settings → Providers → Add another key. Each provider's further keys, with their names and private key file references; each is shown as its own account."
       },
       {
         "key": "liveAccountActivity",

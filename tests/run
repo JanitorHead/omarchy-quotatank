@@ -15,6 +15,7 @@ python3 -m py_compile "$repo_root/scripts/proxy-activity.py"
 python3 -m py_compile "$repo_root/scripts/proxy-live.py"
 python3 -m py_compile "$repo_root/scripts/management-key.py"
 python3 -m py_compile "$repo_root/scripts/reset-credit.py"
+python3 -m py_compile "$repo_root/scripts/backup.py"
 python3 -m unittest discover -s "$repo_root/tests" -p 'test_*.py' -v
 node "$repo_root/tests/test_usage_logic.js"
 
@@ -134,7 +135,7 @@ LIVEPY
   MODEL_USAGE_COST_FIXTURE="$repo_root/tests/fixtures/normalized-costs.json" \
   PATH="$repo_root/tests/fake-bin:$PATH" \
   QML_IMPORT_PATH="$quattro_root/shell${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}" \
-    timeout 12 quickshell -p "$cost_root" --no-color >"$cost_root/runtime.log" 2>&1 || {
+    timeout 30 quickshell -p "$cost_root" --no-color >"$cost_root/runtime.log" 2>&1 || {
       cat "$cost_root/runtime.log"
       exit 1
     }

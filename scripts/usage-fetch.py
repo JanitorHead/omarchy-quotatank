@@ -12,6 +12,8 @@ import argparse
 import base64
 import calendar
 import concurrent.futures
+import contextvars
+import copy
 import functools
 import hashlib
 import http.client
@@ -314,8 +316,20 @@ def provider_key_path(provider_id: str) -> Path:
     return config_home() / "omarchy" / "model-usage" / (provider_id + ".key")
 
 
+# Set while an `--extra-key` file is read. That key's file is its only source, so the environment, which belongs
+# to the primary key, is skipped. A context variable keeps the flag to the reading thread.
+EXTRA_KEY_READ: contextvars.ContextVar[bool] = contextvars.ContextVar("extra_key_read", default=False)
+
+
+def key_env_names(provider_id: str) -> tuple[str, ...]:
+    """The environment variables that may supply a provider's key. None while an --extra-key file is read."""
+    if EXTRA_KEY_READ.get():
+        return ()
+    return PROVIDER_KEY_ENV.get(provider_id, ())
+
+
 def provider_env_key(provider_id: str) -> str:
-    for name in PROVIDER_KEY_ENV.get(provider_id, ()):
+    for name in key_env_names(provider_id):
         value = os.environ.get(name)
         if value and value.strip():
             return value.strip()
@@ -558,12 +572,22 @@ def claude_login_expired(login: dict[str, Any]) -> bool:
     return expires_at is not None and expires_at <= int(time.time())
 
 
-def renew_claude_login(timeout: float) -> None:
+def claude_account_file(home: Path | None) -> Path:
+    """The Claude Code account record for a login: `~/.claude.json` for the primary login, and `.claude.json`
+    inside each other login's folder, as Omarchy lays them out."""
+    if home is None or home == primary_home("claude"):
+        return Path.home() / ".claude.json"
+    return home / ".claude.json"
+
+
+def renew_claude_login(timeout: float, home: Path | None = None) -> None:
     """Let Claude Code renew its own sign-in. Its access token lasts about eight hours, and only
     Claude Code may spend the refresh token: Anthropic rotates it on every use, so a renewal by
     anyone else would sign Claude Code out. `claude doctor` renews an expired token and saves it
     itself, without a prompt, a trust dialog, or a model request."""
     env = runtime_environment()
+    if home is not None:
+        env["CLAUDE_CONFIG_DIR"] = str(home)
     claude = shutil.which("claude", path=env.get("PATH"))
     if not claude:
         return
@@ -587,16 +611,20 @@ def request_claude_usage(login: dict[str, Any], timeout: float) -> Any:
 
 
 @provider_fetcher("claude")
-def fetch_claude(timeout: float) -> dict[str, Any]:
+def fetch_claude_accounts(timeout: float) -> dict[str, Any]:
+    return omarchy_account_result("claude", fetch_claude, timeout)
+
+
+def fetch_claude(timeout: float, home: Path | None = None) -> dict[str, Any]:
     provider_id = "claude"
-    config_dir = claude_config_dir()
+    config_dir = claude_config_dir() if home is None else home
     credentials_path = config_dir / ".credentials.json"
     if not credentials_path.is_file():
         return error_provider(provider_id, "no_credentials", "No Claude Code sign-in was found.")
     try:
         login = read_claude_login(credentials_path)
         if claude_login_expired(login):
-            renew_claude_login(timeout)
+            renew_claude_login(timeout, home)
             login = read_claude_login(credentials_path)
     except (OSError, ValueError, json.JSONDecodeError):
         return error_provider(provider_id, "no_credentials", "Claude Code credentials could not be read.")
@@ -611,7 +639,7 @@ def fetch_claude(timeout: float) -> dict[str, Any]:
         except ProviderFailure as exc:
             if exc.kind != "expired" or not claude_login_expired(login):
                 raise
-            renew_claude_login(timeout)
+            renew_claude_login(timeout, home)
             try:
                 login = read_claude_login(credentials_path)
             except (OSError, ValueError, json.JSONDecodeError):
@@ -625,7 +653,7 @@ def fetch_claude(timeout: float) -> dict[str, Any]:
 
     account = ""
     try:
-        account_data = read_json(Path.home() / ".claude.json")
+        account_data = read_json(claude_account_file(home))
         oauth_account = account_data.get("oauthAccount") if isinstance(account_data, dict) else None
         if isinstance(oauth_account, dict):
             account = str(oauth_account.get("emailAddress") or "")
@@ -894,9 +922,15 @@ def detect_codex() -> bool:
 
 
 @provider_fetcher("codex")
-def fetch_codex(timeout: float) -> dict[str, Any]:
+def fetch_codex_accounts(timeout: float) -> dict[str, Any]:
+    return omarchy_account_result("codex", fetch_codex, timeout)
+
+
+def fetch_codex(timeout: float, home: Path | None = None) -> dict[str, Any]:
     provider_id = "codex"
     env = runtime_environment()
+    if home is not None:
+        env["CODEX_HOME"] = str(home)
     codex = shutil.which("codex", path=env.get("PATH"))
     if not codex:
         return error_provider(provider_id, "cli_unavailable", "The Codex CLI was not found in PATH.")
@@ -2612,9 +2646,13 @@ def detect_grok() -> bool:
 
 
 @provider_fetcher("grok")
-def fetch_grok(timeout: float) -> dict[str, Any]:
+def fetch_grok_accounts(timeout: float) -> dict[str, Any]:
+    return omarchy_account_result("grok", fetch_grok, timeout)
+
+
+def fetch_grok(timeout: float, home: Path | None = None) -> dict[str, Any]:
     provider_id = "grok"
-    path = grok_auth_path()
+    path = grok_auth_path() if home is None else home / "auth.json"
     if not path.is_file():
         return error_provider(provider_id, "no_credentials", "No Grok CLI sign-in was found. Run `grok login`.")
     try:
@@ -4046,7 +4084,7 @@ def minimax_subscription_key(key_file: Path | None) -> tuple[str, bool]:
     Other tools read a pay-as-you-go key from MINIMAX_API_KEY; it must not hide a Subscription Key
     saved in widget settings, so every candidate is checked rather than only the first."""
     found = False
-    for name in PROVIDER_KEY_ENV["minimax"]:
+    for name in key_env_names("minimax"):
         value = os.environ.get(name, "").strip()
         if value.startswith("sk-cp-"):
             return value, True
@@ -7684,6 +7722,179 @@ def update_and_attach_history(
             pass
 
 
+# --------------------------------------------------------------- Accounts
+# A provider can have several logins: Omarchy's registry of subscription accounts (Claude, Codex, Grok) and
+# extra API keys from `--extra-key`. Each login is read on its own. The summary is the active login's reading,
+# and every login's reading is listed under `accounts`.
+ACCOUNT_READ_WORKERS = 4
+MAX_ACCOUNT_LABEL_CHARS = 40
+PRIMARY_ACCOUNT_ID = "main"
+# `main` is Omarchy's id for the primary login and `primary` the accountId of the primary API key (see
+# `key_account_result`). Neither may name a second account, or two readings would share one id.
+RESERVED_ACCOUNT_IDS = frozenset({PRIMARY_ACCOUNT_ID, "primary"})
+EXTRA_KEY_ID = re.compile(r"k-[0-9a-f]{8}")
+
+
+def accounts_root() -> Path:
+    """Omarchy's account registry folder, resolved on each call the way Omarchy resolves it."""
+    return Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state")) / "omarchy" / "agents" / "accounts"
+
+
+def primary_home(provider_id: str) -> Path:
+    """Where Omarchy keeps the primary login: the provider's usual folder, whatever its environment variable says."""
+    return Path.home() / f".{provider_id}"
+
+
+def registry_home(provider_id: str, raw: object) -> Path | None:
+    """A registry account's folder, only when it lies strictly inside that provider's folder in the registry.
+    Anything else is never read: a registry entry must not point the reader at arbitrary folders."""
+    if not isinstance(raw, str) or not os.path.isabs(raw):
+        return None
+    root = Path(os.path.realpath(accounts_root() / provider_id))
+    home = Path(os.path.realpath(raw))
+    return home if home != root and home.is_relative_to(root) else None
+
+
+def registry_account(provider_id: str, entry: object) -> dict[str, Any] | None:
+    """One registry entry as a login to read, or None when it is malformed or has no usable folder."""
+    if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not entry["id"]:
+        return None
+    account_id = entry["id"]
+    primary = bool(entry.get("primary"))
+    if primary and not entry.get("home"):
+        home: Path | None = primary_home(provider_id)
+    else:
+        home = registry_home(provider_id, entry.get("home"))
+    if home is None or (not primary and account_id in RESERVED_ACCOUNT_IDS):
+        return None
+    raw_label = entry.get("label")
+    label = clean_message(raw_label)[:MAX_ACCOUNT_LABEL_CHARS].strip() if isinstance(raw_label, str) else ""
+    return {"id": account_id, "label": label or account_id, "home": home, "primary": primary}
+
+
+def omarchy_accounts(provider_id: str) -> list[dict[str, Any]]:
+    """Every login in Omarchy's registry for this provider, with the active one marked. A missing or unreadable
+    registry means the primary login alone, exactly as before accounts existed."""
+    try:
+        data = read_json(accounts_root() / f"{provider_id}.json")
+    except (OSError, ValueError, RecursionError):
+        data = None
+    if not isinstance(data, dict):
+        data = {}
+    entries = data.get("accounts")
+    accounts: list[dict[str, Any]] = []
+    for entry in (entries if isinstance(entries, list) else []):
+        account = registry_account(provider_id, entry)
+        if account is None or any(known["id"] == account["id"] for known in accounts):
+            continue
+        if account["primary"] and any(known["primary"] for known in accounts):
+            continue
+        accounts.append(account)
+    if not any(account["primary"] for account in accounts):
+        accounts.insert(0, {"id": PRIMARY_ACCOUNT_ID, "label": "Main", "home": primary_home(provider_id), "primary": True})
+    active = find_account(accounts, data.get("active"))
+    for account in accounts:
+        account["active"] = account is active
+    return accounts
+
+
+def find_account(accounts: list[dict[str, Any]], name: object) -> dict[str, Any]:
+    """The login Omarchy marks active: the one with that id, where `primary` names the primary login. Omarchy
+    falls back to the first login when none matches."""
+    for account in accounts:
+        if (name == "primary" and account["primary"]) or name == account["id"]:
+            return account
+    return accounts[0]
+
+
+def read_concurrently(provider_id: str, reads: list[Callable[[float], dict[str, Any]]], timeout: float) -> list[dict[str, Any]]:
+    """Read up to ACCOUNT_READ_WORKERS logins at a time. They share one deadline, so the whole set takes no longer
+    than `timeout`, and one login's failure stays that login's error."""
+    deadline = time.monotonic() + timeout
+
+    def run(read: Callable[[float], dict[str, Any]]) -> dict[str, Any]:
+        try:
+            return read(max(0.0, deadline - time.monotonic()))
+        except ProviderFailure as exc:
+            return error_provider(provider_id, exc.kind, exc.message)
+        except Exception:
+            return error_provider(provider_id, "internal", "The provider collector could not read usage data.")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(ACCOUNT_READ_WORKERS, len(reads))) as pool:
+        return list(pool.map(run, reads))
+
+
+def summarize_accounts(entries: list[dict[str, Any]], index: int) -> dict[str, Any]:
+    """The reading of the login at `index`, with every login's reading listed under `accounts`."""
+    for entry in entries:
+        entry["accountCount"] = len(entries)
+    summary = copy.deepcopy(entries[index])
+    summary["accounts"] = entries
+    return summary
+
+
+def omarchy_account_result(provider_id: str, fetch: Callable[..., dict[str, Any]], timeout: float) -> dict[str, Any]:
+    """The active login's reading. With two or more Omarchy logins, each login is read and listed under `accounts`;
+    with one, the reading is exactly what `fetch` gives on its own, as before accounts existed."""
+    accounts = omarchy_accounts(provider_id)
+    if len(accounts) < 2:
+        return fetch(timeout)
+    reads = [functools.partial(fetch, home=account["home"]) for account in accounts]
+    readings = read_concurrently(provider_id, reads, timeout)
+    entries = [dict(reading, accountId=account["id"], label=account["label"], primary=account["primary"],
+                    active=account["active"]) for account, reading in zip(accounts, readings)]
+    return summarize_accounts(entries, [account["active"] for account in accounts].index(True))
+
+
+def key_account_result(provider_id: str, primary: Callable[[float], dict[str, Any]],
+                       keyed: Callable[[float, Path | None], dict[str, Any]],
+                       extras: list[tuple[str, Path]], timeout: float) -> dict[str, Any]:
+    """The primary API key's reading, with one reading per `--extra-key` key listed under `accounts`. When the
+    primary has no key at all, the summary is the first extra key that reads, and the primary is left out."""
+    reads = [primary] + [functools.partial(read_extra_key, keyed, path) for _key_id, path in extras]
+    readings = read_concurrently(provider_id, reads, timeout)
+    logins = [("primary", True, readings[0])]
+    logins += [(key_id, False, reading) for (key_id, _path), reading in zip(extras, readings[1:])]
+    index = 0
+    if readings[0].get("errorKind") == "no_credentials":
+        logins = logins[1:]
+        readable = [position for position, (_key_id, _primary, reading) in enumerate(logins) if reading.get("status") == "ok"]
+        index = readable[0] if readable else 0
+    entries = [dict(reading, accountId=key_id, primary=is_primary, active=position == index)
+               for position, (key_id, is_primary, reading) in enumerate(logins)]
+    return summarize_accounts(entries, index)
+
+
+def read_extra_key(keyed: Callable[[float, Path | None], dict[str, Any]], path: Path, timeout: float) -> dict[str, Any]:
+    """One extra key's reading. The environment belongs to the primary key, so it is hidden while this key is read."""
+    token = EXTRA_KEY_READ.set(True)
+    try:
+        return keyed(timeout, path)
+    finally:
+        EXTRA_KEY_READ.reset(token)
+
+
+def parse_extra_keys(values: list[str]) -> dict[str, list[tuple[str, Path]]]:
+    """`--extra-key PROVIDER=KEYID=PATH` triples for API-key providers, grouped by provider. Unknown providers and
+    malformed KEYIDs are ignored, and a KEYID given twice keeps its first path."""
+    extra_keys: dict[str, list[tuple[str, Path]]] = {}
+    for value in values:
+        provider_text, separator, rest = str(value).partition("=")
+        key_id, path_separator, path = rest.partition("=")
+        provider_id = provider_text.strip().lower()
+        key_id = key_id.strip()
+        path = path.strip()
+        if not separator or not path_separator or not path or provider_id not in KEYED_FETCHERS:
+            continue
+        if not EXTRA_KEY_ID.fullmatch(key_id):
+            continue
+        entries = extra_keys.setdefault(provider_id, [])
+        if any(known == key_id for known, _path in entries):
+            continue
+        entries.append((key_id, Path(path).expanduser()))
+    return extra_keys
+
+
 # --------------------------------------------------------------- Orchestration
 
 
@@ -7699,7 +7910,8 @@ def safe_fetch(provider_id: str, timeout: float,
 
 
 def collect_providers(provider_ids: list[str], timeout: float,
-                      key_files: dict[str, Path] | None = None) -> list[dict[str, Any]]:
+                      key_files: dict[str, Path] | None = None,
+                      extra_keys: dict[str, list[tuple[str, Path]]] | None = None) -> list[dict[str, Any]]:
     if not provider_ids:
         return []
     fetchers = dict(FETCHERS)
@@ -7707,6 +7919,10 @@ def collect_providers(provider_ids: list[str], timeout: float,
         keyed = KEYED_FETCHERS.get(provider_id)
         if keyed is not None and FETCHERS.get(provider_id) is keyed:
             fetchers[provider_id] = (lambda seconds, fetch=keyed, file=path: fetch(seconds, file))
+    for provider_id, extras in (extra_keys or {}).items():
+        keyed = KEYED_FETCHERS.get(provider_id)
+        if keyed is not None and FETCHERS.get(provider_id) is keyed:
+            fetchers[provider_id] = functools.partial(key_account_result, provider_id, fetchers[provider_id], keyed, extras)
     results: dict[str, dict[str, Any]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(provider_ids)) as executor:
         futures = {executor.submit(safe_fetch, provider_id, timeout, fetchers): provider_id for provider_id in provider_ids}
@@ -7739,6 +7955,7 @@ def build_payload(
     provider_ids: list[str], timeout: float, state_dir: Path | None,
     source: str = "direct", cliproxy_url: str = "http://127.0.0.1:8317",
     key_file: Path | None = None, key_files: dict[str, Path] | None = None,
+    extra_keys: dict[str, list[tuple[str, Path]]] | None = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     if source == "cliproxy":
@@ -7750,7 +7967,7 @@ def build_payload(
         server_id = hashlib.sha256(server.encode("utf-8")).hexdigest()[:16]
         state_dir = history_path(state_dir).parent / ("cliproxy-" + server_id)
     else:
-        providers = collect_providers(provider_ids, timeout, key_files)
+        providers = collect_providers(provider_ids, timeout, key_files, extra_keys)
     update_and_attach_history(providers, state_dir)
     return {
         "schemaVersion": SCHEMA_VERSION,
@@ -7773,14 +7990,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cliproxy-key-file", type=lambda value: Path(value).expanduser())
     parser.add_argument("--key-file", action="append", default=[], metavar="PROVIDER=PATH",
                         help="Private key file saved from widget settings for an API-key provider.")
+    parser.add_argument("--extra-key", action="append", default=[], metavar="PROVIDER=KEYID=PATH",
+                        help="Another private key for an API-key provider, read as its own account. "
+                             "KEYID is the id of a key saved in widget settings (k- and eight hex digits).")
     args = parser.parse_args(argv)
 
     provider_ids = parse_provider_ids(args.providers)
     timeout = clamp(args.timeout, 1.0, 30.0)
     try:
         key_files = parse_key_files(args.key_file)
+        extra_keys = parse_extra_keys(args.extra_key)
         payload = build_payload(provider_ids, timeout, args.state_dir, args.source, args.cliproxy_url,
-                                args.cliproxy_key_file, key_files)
+                                args.cliproxy_key_file, key_files, extra_keys)
     except Exception as exc:
         payload = {
             "schemaVersion": SCHEMA_VERSION,

@@ -206,7 +206,9 @@ class ManagementKeyTests(unittest.TestCase):
 
     def test_every_api_key_provider_setting_is_accepted_and_nothing_else(self):
         for name, accepted in (("huggingfaceKeyFile", True), ("poeKeyFile", True), ("factoryKeyFile", True),
-                               ("claudeKeyFile", False), ("KeyFile", False), ("poeKeyFile ", False)):
+                               ("claudeKeyFile", False), ("KeyFile", False), ("poeKeyFile ", False),
+                               ("extraKey_openrouter_k-0123abcd", True), ("extraKey_claude_k-0123abcd", False),
+                               ("extraKey_openrouter_k-0123ABCD", False), ("extraKey_openrouter_k-0123abcd0", False)):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as config:
                 process = subprocess.Popen(
                     [sys.executable, "-u", str(HELPER)], stdin=subprocess.PIPE,
