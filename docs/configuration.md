@@ -277,6 +277,8 @@ Refresh intervals above one hour mark short limits `No recent data`, because the
 
 **On another computer.** In **Settings → Costs → omp on another computer**, enter the address of an `omp stats` dashboard started there (`omp stats --host <Tailscale address> --port 3847`, or reached through `ssh -N -L 3847:127.0.0.1:3847 <host>`). Quotatank reads its totals, providers, models and folders, and its event feed for live activity. The dashboard has no password and also serves conversations: keep it on Tailscale or behind SSH. For limits, **Settings → Providers → omp → On another computer** takes an omp auth gateway address and its token; Quotatank asks it only for `/v1/usage`.
 
+To keep `omp stats` running after a reboot, the Costs settings page gives a systemd user unit to copy: save it as `~/.config/systemd/user/omp-stats.service` on that computer and run `systemctl --user enable --now omp-stats`. With an SSH tunnel, it gives a second unit for the tunnel on this computer. A unit finds `omp` through your login shell's `PATH`; if it does not start, put the path `command -v omp` prints in its place.
+
 ## Back up and restore
 
 **Settings → Advanced → Back up and restore** writes every setting and every key, token, and password saved in Settings to one file (`.qtbackup`), encrypted with a passphrase of at least 12 characters. Sign-ins that belong to each tool (Claude Code, Codex, and the like) are not included; sign in again there.
