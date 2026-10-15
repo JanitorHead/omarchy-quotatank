@@ -12,6 +12,7 @@
 - `UsageSettings.qml` is the whole settings surface: an index of six pages (Providers, Menu bar, Alerts, Display, Costs, Advanced), each flat. Every control saves as it changes through `changeRequested`; secrets are the exception and go through `scripts/management-key.py` with an explicit Save, committed once the path is persisted.
 - `CostPriceEditor.qml` provides validated custom-price rows inside the Costs page, with exact model matching.
 - `scripts/t3_costs.py` reads bounded T3 usage RPC responses and keeps private offline snapshots.
+- `scripts/omp_stats.py` reads the four aggregate endpoints of an `omp stats` dashboard with bounded, concurrent GET requests and keeps only counters, costs, and provider, model and folder names.
 - `UsageCosts.qml` renders the metric/period controls, time chart, token mix, pricing coverage percentages, and provider/model breakdowns without parsing raw history in QML.
 - `BlockMeter.qml` renders one track item per fixed block plus only the partial boundary fragment—there is no duplicate full-width fill layer.
 - `UsageHistory.qml` receives small pre-bucketed arrays; large history files are never parsed in QML.
