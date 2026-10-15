@@ -34,6 +34,8 @@ Item {
     }
     return result
   }
+  // A provider's further keys, each read as its own account (Settings → Providers → Add another key).
+  readonly property var extraKeyArguments: UsageLogic.extraKeyArguments(setting("extraKeys", "{}"), enabledProviderIds)
   readonly property var providers: payload ? UsageLogic.listOrEmpty(payload.providers) : []
   // Providers set up on this computer, monitored or not; Settings offers the ones not monitored yet.
   readonly property var detected: payload ? UsageLogic.listOrEmpty(payload.detected) : []
@@ -41,7 +43,7 @@ Item {
   // and Install for the rest.
   readonly property var installed: payload && payload.installed !== undefined ? UsageLogic.listOrEmpty(payload.installed) : null
   readonly property string proxyImplementation: String(payload && payload.proxyImplementation || "")
-  readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl, cliproxyKeyFile, keyFiles])
+  readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl, cliproxyKeyFile, keyFiles, extraKeyArguments])
   readonly property string scriptPath: localPath(Qt.resolvedUrl("scripts/usage-fetch.py"))
   readonly property double nextRefreshAt: lastAttemptAt > 0
     ? lastAttemptAt + refreshIntervalSec * 1000 : 0
@@ -99,6 +101,7 @@ Item {
     }
     if (usageSource !== "cliproxy") {
       for (var i = 0; i < keyFiles.length; i++) command.push("--key-file", keyFiles[i][0] + "=" + keyFiles[i][1])
+      command = command.concat(extraKeyArguments)
     }
     fetchProcess.command = command
     fetchProcess.connectionId = connectionId

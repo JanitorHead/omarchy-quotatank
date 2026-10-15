@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.8.0
+
+### Added
+
+- **Several subscriptions per provider.** Claude Code, Codex, and Grok accounts added with Omarchy (`omarchy agent account add`) are picked up on their own: Limits shows one card per account with the name you gave it, marks the account new sessions start as **in use**, and the chip in the bar follows it. For API-key providers, **Settings → Providers → Add another key…** saves a further key with a name (Work, Personal, a client); each key is read on its own, gets its own card, and stays in its own private file.
+- **Back up and restore** under **Settings → Advanced**: one file with every setting and every saved key, token, and password, encrypted with a passphrase of at least 12 characters (gpg, AES-256). Restoring shows what the file holds before anything changes, lets you bring back preferences, keys, or both, and first saves the current settings and keys to a backup with the same passphrase. Sign-ins that belong to each tool (Claude Code, Codex…) are not included. The design follows Raycast's and Bitwarden's passphrase-encrypted exports and the preview-and-safety-copy pattern of Omarchy's backup plugins.
+
+### Changed
+
+- Once a second Omarchy account exists for Claude Code, Codex, or Grok, the first one is read from its default folder (`~/.claude`, `~/.codex`, `~/.grok`), as Omarchy does, even when `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GROK_HOME` point elsewhere.
+
 ## 1.7.4
 
 ### Added

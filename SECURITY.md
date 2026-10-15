@@ -106,6 +106,22 @@ explicit paste (Ctrl+V or Shift+Insert) into a focused field, by `wl-paste` in a
 separate process limited to 64 KiB and two seconds; a larger paste is refused.
 Middle-click and dropped text are not accepted.
 
+Backups (`scripts/backup.py`) hold every widget setting and every secret saved in
+Settings, encrypted with a user passphrase of at least 12 characters by
+`gpg --symmetric` (AES-256, iterated and salted S2K with SHA-512 at the maximum count,
+MDC integrity, no compression). gpg runs with a throwaway `0700` home folder and
+`--no-autostart`, so the user's keyring and agent are untouched; the passphrase
+reaches it on a pipe (`--passphrase-fd`), never in argv, the environment, or a file,
+and the widget sends it to the helper on stdin. Backup files are written `0600`
+through a temporary file and an atomic rename, read with size caps, and validated
+strictly before anything is written. A restore writes keys to new private files with
+the same rules as `management-key.py`, removes them again if any write fails, and
+first saves the current settings and keys to a backup with the same passphrase.
+Sign-ins owned by other tools are never read into a backup.
+
+Omarchy subscription accounts are read from Omarchy's registry; a login folder is
+used only when it resolves inside Omarchy's accounts folder for that provider.
+
 Banked resets use fixed upstream URLs and explicit managed account selection.
 The account identity is checked again before consumption. Each logical reset
 attempt has a UUID reused for retries; automatic polling cannot consume a reset.

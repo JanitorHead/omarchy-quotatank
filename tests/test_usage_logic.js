@@ -839,6 +839,32 @@ assert.equal(context.withMember(["ghost", "codex"], "kimi", true, context.LOCAL_
 assert.equal(context.keySaved({ poeKeyFile: "/private/poe.key" }, "poe"), true);
 assert.equal(context.keySaved({ poeKeyFile: " " }, "poe"), false);
 assert.equal(context.keySaved(null, "poe"), false);
+
+// Several keys per provider: the setting round-trips, bad rows are dropped, and only monitored
+// providers reach the backend.
+let extra = context.addExtraKey("{}", "openrouter", { id: "k-0123abcd", label: "  Work  ", file: "/private/a.key" });
+extra = context.addExtraKey(extra, "openrouter", { id: "k-89abcdef", label: "", file: "/private/b.key" });
+extra = context.renamePrimaryKey(extra, "openrouter", "Personal");
+assert.deepEqual([...context.extraKeysFor(extra, "openrouter").keys.map((key) => key.label)], ["Work", ""]);
+assert.deepEqual([...context.extraKeyArguments(extra, ["openrouter"])],
+  ["--extra-key", "openrouter=k-0123abcd=/private/a.key", "--extra-key", "openrouter=k-89abcdef=/private/b.key"]);
+assert.deepEqual([...context.extraKeyArguments(extra, ["claude"])], [], "a provider that is not monitored passes no keys");
+assert.equal(Object.keys(context.parseExtraKeys('{"openrouter":{"keys":[{"id":"bad","file":"/x"},{"id":"k-00000000","file":""}]},"claude":{"keys":[]}}')).length, 0,
+  "rows without a valid id or file, and providers that take no key, are dropped");
+assert.equal(context.extraKeysFor(context.removeExtraKey(extra, "openrouter", "k-0123abcd"), "openrouter").keys.length, 1);
+assert.equal(context.extraKeysFor(context.removeExtraKey(context.renamePrimaryKey(context.removeExtraKey(extra, "openrouter", "k-0123abcd"),
+  "openrouter", ""), "openrouter", "k-89abcdef"), "openrouter").keys.length, 0);
+assert.match(context.newExtraKeyId(), /^k-[0-9a-f]{8}$/);
+// Account cards: chosen names first, emails only when shown, numbered otherwise.
+assert.equal(context.accountName({ id: "openrouter", accountId: "primary" }, extra, true, 1), "Personal");
+assert.equal(context.accountName({ id: "openrouter", accountId: "k-89abcdef" }, extra, true, 3), "Key 3");
+assert.equal(context.accountName({ id: "claude", label: "Work", active: true, account: "me@example.com" }, "{}", true, 2), "Work · in use");
+assert.equal(context.accountName({ id: "claude", label: "Work", active: false, account: "me@example.com" }, "{}", false, 2), "Work · me@example.com");
+assert.equal(context.accountName({ id: "codex", accountId: "0123456789abcdef", account: "proxy@example.com" }, "{}", true, 4), "Account 4");
+assert.equal(context.accountName({ id: "codex", accountId: "0123456789abcdef", account: "proxy@example.com" }, "{}", false, 4), "proxy@example.com");
+assert.deepEqual([...context.secretPaths({ poeKeyFile: "/k/poe.key", cliproxyKeyFile: "/k/proxy.key", costKeeperPasswordFile: "", extraKeys: extra,
+  costT3Servers: '[{"id":"a","tokenFile":"/k/t3.key"}]', refreshIntervalSec: 900 })].sort(),
+  ["/k/poe.key", "/k/proxy.key", "/k/t3.key", "/private/a.key", "/private/b.key"]);
 assert.equal(context.keyHint(context.localProvider("openrouter")), "OPENROUTER_API_KEY in the environment takes precedence.");
 assert.equal(context.keyHint(context.localProvider("amp")), "Optional: used instead of the sign-in. AMP_API_KEY in the environment takes precedence.");
 assert.equal(context.filterProviders(context.LOCAL_PROVIDERS, " DEEP ").map((entry) => entry.id).join(","), "deepseek,deepinfra");

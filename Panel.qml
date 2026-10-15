@@ -57,7 +57,7 @@ Ui.Panel {
   readonly property bool providerColors: setting("providerColors", false) === true
 
   function accountDisplayName(account, index) {
-    return hideAccountEmails ? "Account " + index : String(account.account || "Account " + index)
+    return UsageLogic.accountName(account, setting("extraKeys", "{}"), hideAccountEmails, index)
   }
 
   readonly property int criticalThreshold: UsageLogic.clamp(
@@ -123,7 +123,9 @@ Ui.Panel {
   readonly property var providerModels: UsageLogic.providerModels(
     costBackend.payload ? costBackend.payload.models : [], provider ? provider.id : "")
   readonly property var proxyAccounts: UsageLogic.listOrEmpty(providerSummary && providerSummary.accounts)
-  readonly property bool accountOverview: proxyMode && proxyAccounts.length > 0
+  // A proxy always shows its accounts; locally a provider lists them once it has more than one
+  // (Omarchy subscription accounts, or extra API keys).
+  readonly property bool accountOverview: proxyAccounts.length > (proxyMode ? 0 : 1)
   property alias accountCards: accountRepeater
   readonly property var providerOptions: {
     var result = []
@@ -1689,6 +1691,8 @@ Ui.Panel {
         visible: text !== ""
         text: accountCard.account.status === "error" ? root.errorBody(accountCard.account)
           : accountCard.account.stale || !accountCard.healthy ? String(accountCard.account.notice || "Quota unavailable")
+          : accountCard.windows.length === 0 && UsageLogic.spendable(accountCard.account) !== null
+            ? UsageLogic.formatMoney(UsageLogic.spendable(accountCard.account), UsageLogic.moneyCurrency(accountCard.account)) + " left"
           : accountCard.windows.length === 0 ? "No subscription limits reported." : ""
         textFormat: Text.PlainText
         color: accountCard.account.status === "error" ? root.urgent : root.dim

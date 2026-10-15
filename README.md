@@ -132,6 +132,11 @@ A chip switches to the Omarchy theme's alert color when either of its lines is a
 
 ![Three OpenAI Codex accounts from CLIProxyAPI, each on its own card with plan, weekly limit, reset time, and banked resets; an arrow leads from the first account's 2 banked resets badge to the confirmation it opens](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/accounts.png)
 
+Several subscriptions of one provider show the same way, each on its own card with the name you gave it:
+
+- **Claude Code, Codex, and Grok accounts added with Omarchy** (`omarchy agent account add claude work`) are picked up on their own. The card of the account new sessions start as is marked **in use**, and the chip in the bar follows it.
+- **Several API keys for one provider**: under **Settings → Providers**, a provider with a saved key offers **Add another key…**. Name it (Work, Personal, a client) and save it; each key is read on its own and gets its own card. The environment variable only ever replaces the first key.
+
 With Fusebox or CLIProxyAPI as the source, every managed account gets its own card with its own plan, percentage, and reset time. Each card shows the account's weekly limit when it reports one; **Additional limits** opens the others.
 
 In CLIProxyAPI mode, Codex cards show how many banked resets the account holds. A banked reset resets that account's current Codex usage limits and is spent once applied, so clicking a nonzero badge opens a confirmation first. It lists each reset with its expiry, selects the one expiring soonest, and applies nothing until you choose **Apply reset**.
@@ -163,7 +168,7 @@ The gear opens an index of six pages, and each row already says what the page is
 | **Alerts** | Desktop notifications, the percentage thresholds, and the low-balance amounts |
 | **Display** | Used or left, provider colors, square cards, hidden account emails |
 | **Costs** | Local history, T3 servers, custom prices, and the last scan |
-| **Advanced** | Refresh interval (1 to 60 minutes), diagnostics, and **Reset to defaults**, which keeps your source, keys, T3 servers, and custom prices |
+| **Advanced** | Refresh interval (1 to 60 minutes), diagnostics, **Back up and restore** (every setting and saved key in one passphrase-encrypted file), and **Reset to defaults**, which keeps your source, keys, T3 servers, and custom prices |
 
 Every key is listed in the [settings reference](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#settings).
 
@@ -175,7 +180,7 @@ Privacy:
 - Antigravity is read from its own running language server on `127.0.0.1`, using the session token that process was started with, or from `agy`'s usage report. GitHub Copilot can fall back to `gh auth token`. Both commands run without a shell, with a timeout and no browser.
 - Claude Code access tokens last about eight hours. When the saved one has expired, Quotatank runs `claude doctor`, which renews and saves Claude Code's own sign-in without a prompt or a model request, so a computer where you rarely open Claude Code stays signed in. Quotatank never uses Claude's refresh token itself.
 - Applying a banked Codex reset is a separate action in CLIProxyAPI mode, and it asks for confirmation first.
-- API keys, management keys, and T3 tokens are saved in private files (`0600`, in a `0700` directory), never in widget settings or command-line arguments. **Remove** deletes the file.
+- API keys, management keys, and T3 tokens are saved in private files (`0600`, in a `0700` directory), never in widget settings or command-line arguments. **Remove** deletes the file. A backup holds them encrypted with your passphrase (gpg, AES-256); without the passphrase they cannot be recovered.
 - Cost history stores token counts, timestamps, model names, and hashed transcript identifiers. It never stores prompts, responses, or tool output.
 - HTTPS certificates are verified, and redirects are rejected. The one exception is Antigravity's loopback language server, whose self-signed certificate is accepted on `127.0.0.1` only.
 

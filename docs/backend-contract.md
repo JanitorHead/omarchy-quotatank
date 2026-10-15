@@ -111,6 +111,24 @@ Successful action responses expose `outcome`: `reset`, `nothing_to_reset`, `no_c
 
 Unsupported or unavailable fields are `null`; they are not overloaded with sentinel strings. History arrays are pre-bucketed percentages so QML never has to parse or aggregate the bounded on-disk sample set.
 
+## Accounts in local mode
+
+A local provider can have several Omarchy logins (`claude`, `codex`, `grok`) or several API keys (`--extra-key`). Each reading then carries its own identity, and the provider-level fields describe the active one. `accountId` is the Omarchy id (`main` for the default login) or the extra key's `KEYID` (`primary` for the primary key). `active` marks the reading the provider-level fields describe, `primary` marks the default login or primary key, and `accountCount` is the number of entries in `accounts`. Omarchy logins also carry `label`, cleaned and capped at 40 characters. With one login and no extra keys, the output has none of these fields and is unchanged.
+
+Omarchy logins come from `${XDG_STATE_HOME:-~/.local/state}/omarchy/agents/accounts/<provider>.json`, read with the 2 MiB local JSON ceiling. A missing or unreadable file means the default login only, silently. Each `home` must be an absolute path that resolves strictly inside `accounts/<provider>/`; other entries are skipped, as are reserved ids `main` and `primary` on non-primary entries, duplicate ids, and a second primary-flagged entry. The primary login is the entry flagged `primary` (an empty `home` means the default folder). When no primary entry survives, a built-in `main` at `~/.claude`, `~/.codex`, or `~/.grok` is placed first. Logins otherwise keep registry order. `active` names the login shown in the provider-level fields: a login id, or `primary` for the default login. A missing or unknown value falls back to the first login. With two or more logins, the primary reads its default folder even when `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GROK_HOME` points elsewhere. With one login, those variables apply as before.
+
+`--extra-key PROVIDER=KEYID=PATH`, repeatable, adds an API key for an API-key provider. `KEYID` is `k-` followed by eight lowercase hex digits. `PATH` follows the `--key-file` rules: a regular file with mode 0600 owned by the user. Each extra key is read only from its own file, and the provider's environment variable never overrides it. Entries with an unknown or non-API-key provider, a malformed `KEYID`, or an empty path are ignored. When a `KEYID` repeats for a provider, the first path wins. The primary key (environment variable, then `--key-file`) is listed first with `accountId` `primary`. When the primary has no key at all (`errorKind` `no_credentials`), it is left out of `accounts`, and the provider-level fields describe the first extra key whose `status` is `ok`, or else the first extra key.
+
+Logins and keys are read with at most four concurrent reads under one shared deadline. A failing login or key keeps its own `status` and error fields and does not affect the others. Tokens and keys are never written to the output.
+
+## Backup helper
+
+`scripts/backup.py` reads one JSON request line on stdin and writes one JSON line: `{"ok": true, …}` or `{"ok": false, "error": "<fixed message>"}` (exit 1). Actions:
+
+- `{"action": "export", "path", "passphrase", "settings"}` collects every secret the settings reference (`*KeyFile`, `costKeeperPasswordFile`, `extraKeys` files, `costT3Servers` token files), replaces each reference with `secret:<n>`, and writes `{"format": "quotatank-backup", "version": 1, "createdAt", "pluginVersion", "settings", "secrets"}` encrypted with gpg. Reply: `path`, `settings`, `secrets` counts.
+- `{"action": "inspect", "path", "passphrase"}` decrypts and validates without writing anything. Reply: `createdAt`, `pluginVersion`, `settings`, `preferences`, `secrets`, `providers` (ids with a key), `skipped` (settings this version does not know).
+- `{"action": "restore", "path", "passphrase", "include": {"preferences": bool, "keys": bool}}` writes the selected secrets to new private key files and replies with `settings` pointing at them; unknown settings are dropped and counted in `skipped`. Secret values never appear in a reply.
+
 ## Resource ceilings
 
 Provider HTTP bodies and local JSON inputs are read with a 2 MiB ceiling before parsing. An oversized HTTP response becomes a provider-local `malformed` error and cannot suppress healthy providers. Codex app-server output is read incrementally in bounded chunks with a 2 MiB ceiling per JSON-RPC line; the same request deadline remains active even when a line is incomplete.

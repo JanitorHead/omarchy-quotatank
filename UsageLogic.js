@@ -1300,6 +1300,114 @@ function keySaved(settings, providerId) {
   return path !== undefined && path !== null && String(path).trim() !== ""
 }
 
+// Every private file the settings point at: `<id>KeyFile`, the proxy and Keeper secrets, extra keys,
+// and T3 tokens. A restore deletes the ones the new settings no longer use.
+function secretPaths(settings) {
+  var paths = []
+  function add(path) { if (typeof path === "string" && path.trim() !== "" && paths.indexOf(path) < 0) paths.push(path) }
+  if (!settings) return paths
+  for (var key in settings) if (/KeyFile$/.test(key) || key === "costKeeperPasswordFile") add(settings[key])
+  var extra = parseExtraKeys(settings.extraKeys)
+  for (var id in extra) for (var i = 0; i < extra[id].keys.length; i++) add(extra[id].keys[i].file)
+  var servers = []
+  try { servers = JSON.parse(String(settings.costT3Servers || "[]")) } catch (e) { servers = [] }
+  if (Array.isArray(servers)) for (var j = 0; j < servers.length; j++) if (servers[j]) add(servers[j].tokenFile)
+  return paths
+}
+
+// ---- Several keys for one provider. The `extraKeys` setting is a JSON string:
+// {"<provider>": {"primary": "<name of the <id>KeyFile key>", "keys": [{"id": "k-1a2b3c4d", "label": "Work",
+// "file": "/private/key-….key"}]}}. The usual key stays where it was, so nothing needs migrating; the
+// backend reads each extra key with `--extra-key PROVIDER=ID=PATH`, and names never leave the widget.
+var EXTRA_KEY_LIMIT = 8
+var EXTRA_KEY_LABEL_LIMIT = 40
+
+function parseExtraKeys(raw) {
+  var parsed = null
+  try { parsed = JSON.parse(String(raw || "{}")) } catch (e) { parsed = null }
+  var result = {}
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return result
+  for (var i = 0; i < KEY_PROVIDER_IDS.length; i++) {
+    var id = KEY_PROVIDER_IDS[i]
+    var entry = parsed[id]
+    if (!entry || typeof entry !== "object") continue
+    var keys = []
+    var rows = Array.isArray(entry.keys) ? entry.keys : []
+    for (var j = 0; j < rows.length && keys.length < EXTRA_KEY_LIMIT; j++) {
+      var row = rows[j]
+      if (!row || !/^k-[0-9a-f]{8}$/.test(String(row.id)) || typeof row.file !== "string" || row.file.trim() === "") continue
+      keys.push({ id: String(row.id), label: String(row.label || "").slice(0, EXTRA_KEY_LABEL_LIMIT), file: row.file })
+    }
+    var primary = String(entry.primary || "").slice(0, EXTRA_KEY_LABEL_LIMIT)
+    if (keys.length || primary) result[id] = { primary: primary, keys: keys }
+  }
+  return result
+}
+
+function extraKeysFor(raw, providerId) {
+  return parseExtraKeys(raw)[String(providerId)] || { primary: "", keys: [] }
+}
+
+function withExtraKeys(raw, providerId, entry) {
+  var all = parseExtraKeys(raw)
+  if (entry.keys.length || entry.primary) all[String(providerId)] = entry
+  else delete all[String(providerId)]
+  return JSON.stringify(all)
+}
+
+function addExtraKey(raw, providerId, key) {
+  var entry = extraKeysFor(raw, providerId)
+  if (entry.keys.length >= EXTRA_KEY_LIMIT) return String(raw || "{}")
+  entry.keys.push({ id: key.id, label: String(key.label || "").trim().slice(0, EXTRA_KEY_LABEL_LIMIT), file: key.file })
+  return withExtraKeys(raw, providerId, entry)
+}
+
+function removeExtraKey(raw, providerId, keyId) {
+  var entry = extraKeysFor(raw, providerId)
+  entry.keys = entry.keys.filter(function (key) { return key.id !== keyId })
+  return withExtraKeys(raw, providerId, entry)
+}
+
+function renamePrimaryKey(raw, providerId, label) {
+  var entry = extraKeysFor(raw, providerId)
+  entry.primary = String(label || "").trim().slice(0, EXTRA_KEY_LABEL_LIMIT)
+  return withExtraKeys(raw, providerId, entry)
+}
+
+function newExtraKeyId() {
+  var hex = ""
+  for (var i = 0; i < 8; i++) hex += Math.floor(Math.random() * 16).toString(16)
+  return "k-" + hex
+}
+
+// `--extra-key PROVIDER=ID=PATH` for every extra key of a monitored provider.
+function extraKeyArguments(raw, providerIds) {
+  var all = parseExtraKeys(raw)
+  var args = []
+  for (var id in all) {
+    if (!contains(providerIds, id)) continue
+    for (var i = 0; i < all[id].keys.length; i++) args.push("--extra-key", id + "=" + all[id].keys[i].id + "=" + all[id].keys[i].file)
+  }
+  return args
+}
+
+// The name on an account card. Omarchy subscription accounts carry the name chosen when they were
+// added (`label`); a provider's extra keys use the names saved in Settings; proxy and unnamed accounts
+// fall back to the email, or "Account N" while account emails are hidden.
+function accountName(account, extraRaw, hideEmails, index) {
+  if (!account) return ""
+  var named = String(account.label || "")
+  if (!named && (account.accountId === "primary" || /^k-[0-9a-f]{8}$/.test(String(account.accountId)))) {
+    var entry = extraKeysFor(extraRaw, account.id)
+    if (account.accountId === "primary") named = entry.primary || "Main key"
+    for (var i = 0; i < entry.keys.length && !named; i++)
+      if (entry.keys[i].id === account.accountId) named = entry.keys[i].label || "Key " + (i + 2)
+  }
+  var email = String(account.account || "")
+  if (named) return named + (account.label && account.active ? " · in use" : "") + (!hideEmails && email ? " · " + email : "")
+  return hideEmails || !email ? "Account " + index : email
+}
+
 // `list` with `id` present or absent, in `order`; ids that `order` does not know are dropped.
 function withMember(list, id, present, order) {
   var result = []

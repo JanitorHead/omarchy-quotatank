@@ -303,6 +303,15 @@ Column {
     }
   }
 
+  // Forgets one of a provider's extra keys and deletes its private file.
+  function removeExtraKey(providerId, key) {
+    set("extraKeys", UsageLogic.removeExtraKey(value("extraKeys", "{}"), providerId, key.id))
+    var request = {}
+    request["extraKey_" + providerId + "_" + key.id] = key.file
+    keyRemover.request = request
+    keyRemover.running = true
+  }
+
   function validSecret(text) {
     var secret = String(text).trim()
     return secret !== "" && secret.length <= 8191 && !/[^\x20-\x7e]/.test(secret)
@@ -764,6 +773,11 @@ Column {
               visible: !!providerRow.entry && providerRow.entry.keysUrl === ""
               width: parent.width - parent.leftPadding
               text: providerRow.entry ? providerRow.entry.signIn : ""
+            }
+            ExtraKeys {
+              width: parent.width - parent.leftPadding
+              providerId: providerRow.providerId
+              keyLabel: providerRow.entry ? providerRow.entry.keyLabel : "API key"
             }
           }
 
@@ -1336,6 +1350,8 @@ Column {
       }
     }
 
+    BackupSection { width: parent.width }
+
     Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
 
     // Reset asks once, in place: the button turns into a confirmation that names what is kept.
@@ -1415,6 +1431,72 @@ Column {
 
   function resetToDefaults() {
     setMany(JSON.parse(JSON.stringify(UsageLogic.DEFAULT_SETTINGS)))
+  }
+
+  // ---- backup: scripts/backup.py encrypts settings and saved keys with gpg; secrets cross only its stdin
+  property var backupRequest: null
+  property var backupDone: null
+  property var staleKeyFiles: []
+
+  function runBackup(request, done) {
+    if (backupRunner.running) return
+    backupRequest = request
+    backupDone = done
+    backupRunner.reply = ""
+    backupRunner.running = true
+  }
+
+  Process {
+    id: backupRunner
+    property string reply: ""
+    command: ["python3", "-u", decodeURIComponent(String(Qt.resolvedUrl("scripts/backup.py")).replace(/^file:\/\//, ""))]
+    stdinEnabled: true
+    onStarted: {
+      write(JSON.stringify(root.backupRequest) + "\n")
+      root.backupRequest = null
+    }
+    stdout: SplitParser { onRead: function(data) { if (backupRunner.reply === "") backupRunner.reply = data } }
+    stderr: SplitParser { splitMarker: "" }
+    onRunningChanged: if (!running && root.backupDone) {
+      var done = root.backupDone
+      root.backupDone = null
+      var response = null
+      try { response = JSON.parse(reply) } catch (error) { response = null }
+      reply = ""
+      done(response || { ok: false, error: "The backup helper did not answer. Check that gpg and Python 3 are installed." })
+    }
+  }
+
+  Timer {
+    interval: 60000
+    running: backupRunner.running
+    onTriggered: backupRunner.running = false
+  }
+
+  // A restore points every key setting at new private files; the files the old settings used are
+  // deleted afterwards, four at a time (the helper's limit per request).
+  function removeStaleKeyFiles() {
+    if (keyRemover.running || staleKeyFiles.length === 0) return
+    var batch = staleKeyFiles.slice(0, 4)
+    staleKeyFiles = staleKeyFiles.slice(4)
+    var request = {}
+    for (var i = 0; i < batch.length; i++) request["stale" + i] = batch[i]
+    keyRemover.request = request
+    keyRemover.running = true
+  }
+  Connections {
+    target: keyRemover
+    function onRunningChanged() { if (!keyRemover.running) Qt.callLater(root.removeStaleKeyFiles) }
+  }
+
+  // A partial restore (keys or preferences only) leaves the rest as it is, so only files that the merged
+  // settings stop using are deleted; the safety backup taken before the restore still holds them.
+  function applyRestoredSettings(restored) {
+    var before = UsageLogic.secretPaths(settings)
+    var after = UsageLogic.secretPaths(Object.assign({}, settings, restored))
+    setMany(restored)
+    staleKeyFiles = before.filter(function (path) { return after.indexOf(path) < 0 })
+    removeStaleKeyFiles()
   }
 
   // ---- prices
@@ -1806,6 +1888,378 @@ Column {
     Hint { visible: keyRow.error !== ""; text: keyRow.error; color: root.urgent }
     Hint { visible: keyRow.blockedReason !== "" && !keyRow.saved; text: keyRow.blockedReason }
     Hint { visible: keyRow.hint !== ""; text: keyRow.hint }
+  }
+
+  // A provider's further keys, each read as its own account card in Limits: the saved ones by name,
+  // each with Remove, and an editor that names and saves one more. The key above stays the first;
+  // once there is more than one, it can be named too.
+  component ExtraKeys: Column {
+    id: extra
+    property string providerId: ""
+    property string keyLabel: "API key"
+    // "key" in running text; other secrets (TypeSafe's Cookie header) keep their own name.
+    readonly property string keyNoun: keyLabel === "API key" ? "key" : keyLabel.charAt(0).toLowerCase() + keyLabel.slice(1)
+    readonly property var entry: UsageLogic.extraKeysFor(root.value("extraKeys", "{}"), providerId)
+    readonly property bool primarySaved: UsageLogic.keySaved(root.settings, providerId)
+    property bool adding: false
+    property string error: ""
+    objectName: providerId + "ExtraKeys"
+    visible: primarySaved || entry.keys.length > 0
+    spacing: Style.spacing.sm
+
+    function save() {
+      if (!root.validSecret(extraSecret.text)) { error = "Enter the key using ASCII characters."; return }
+      error = ""
+      var id = UsageLogic.newExtraKeyId()
+      var name = "extraKey_" + providerId + "_" + id
+      var provider = providerId
+      var label = extraName.text.trim()
+      var keys = {}
+      keys[name] = extraSecret.text.trim()
+      root.stageKeys(keys, {}, function(paths) {
+        if (paths[name]) root.set("extraKeys", UsageLogic.addExtraKey(root.value("extraKeys", "{}"), provider, { id: id, label: label, file: paths[name] }))
+      })
+      extraSecret.text = ""
+      extraName.text = ""
+      adding = false
+    }
+
+    TextRow {
+      objectName: extra.providerId + "PrimaryKeyName"
+      visible: extra.entry.keys.length > 0 && extra.primarySaved
+      label: "Name of the " + extra.keyNoun + " above"
+      placeholder: "Main key"
+      maximumLength: UsageLogic.EXTRA_KEY_LABEL_LIMIT
+      source: extra.entry.primary
+      onApplied: function(text) { root.set("extraKeys", UsageLogic.renamePrimaryKey(root.value("extraKeys", "{}"), extra.providerId, text)) }
+    }
+    Repeater {
+      model: extra.entry.keys
+      delegate: Row {
+        id: extraRow
+        required property var modelData
+        required property int index
+        width: extra.width
+        spacing: Style.spacing.md
+        Label {
+          width: parent.width - extraRemove.width - parent.spacing
+          anchors.verticalCenter: parent.verticalCenter
+          text: (extraRow.modelData.label || "Key " + (extraRow.index + 2)) + " · saved on this device"
+          elide: Text.ElideRight
+          wrapMode: Text.NoWrap
+        }
+        Ui.Button {
+          id: extraRemove
+          objectName: extra.providerId + "ExtraRemove-" + extraRow.index
+          text: "Remove"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          fontSize: Style.font.bodySmall
+          focusable: true
+          Accessible.name: "Remove " + (extraRow.modelData.label || "key " + (extraRow.index + 2))
+          onClicked: root.removeExtraKey(extra.providerId, extraRow.modelData)
+          onActiveFocusChanged: if (activeFocus) root.revealRequested(extraRemove)
+        }
+      }
+    }
+    Ui.Button {
+      id: addExtra
+      objectName: extra.providerId + "AddExtraKey"
+      visible: extra.primarySaved && !extra.adding && extra.entry.keys.length < UsageLogic.EXTRA_KEY_LIMIT
+      text: "Add another " + extra.keyNoun + "…"
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      fontSize: Style.font.caption
+      horizontalPadding: Style.spacing.sm
+      verticalPadding: Style.spacing.xs
+      focusable: true
+      onClicked: { extra.adding = true; Qt.callLater(function() { extraName.forceActiveFocus() }) }
+      onActiveFocusChanged: if (activeFocus) root.revealRequested(addExtra)
+    }
+    Column {
+      visible: extra.adding
+      width: extra.width
+      spacing: Style.spacing.sm
+      Label { text: "Name" }
+      SettingsField {
+        id: extraName
+        objectName: extra.providerId + "ExtraName"
+        width: parent.width
+        placeholderText: "Work, personal, team…"
+        maximumLength: UsageLogic.EXTRA_KEY_LABEL_LIMIT
+        foreground: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        Accessible.name: "Name of the new key"
+        onAccepted: extraSecret.forceActiveFocus()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+      Label { text: extra.keyLabel }
+      Row {
+        width: parent.width
+        spacing: Style.spacing.md
+        SettingsField {
+          id: extraSecret
+          objectName: extra.providerId + "ExtraSecret"
+          width: parent.width - extraSave.width - extraCancel.width - parent.spacing * 2
+          password: true
+          maximumLength: 8191
+          placeholderText: extra.keyLabel
+          foreground: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          Accessible.name: "New " + extra.keyLabel
+          onTextEdited: extra.error = ""
+          onAccepted: extra.save()
+          onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+        }
+        Ui.Button {
+          id: extraSave
+          objectName: extra.providerId + "ExtraSave"
+          anchors.verticalCenter: parent.verticalCenter
+          text: root.saving ? "Saving…" : "Save"
+          enabled: !root.saving && extraSecret.text.trim() !== ""
+          bordered: true
+          selected: enabled
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          fontSize: Style.font.bodySmall
+          focusable: true
+          onClicked: extra.save()
+        }
+        Ui.Button {
+          id: extraCancel
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Cancel"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          fontSize: Style.font.bodySmall
+          focusable: true
+          onClicked: { extraSecret.text = ""; extraName.text = ""; extra.adding = false; extra.error = "" }
+        }
+      }
+      Hint { visible: extra.error !== ""; text: extra.error; color: root.urgent }
+      Hint { text: "Each key shows as its own account in Limits. The name stays on this device." }
+    }
+  }
+
+  // Back up and restore: one file holding every setting and saved key, encrypted with a passphrase
+  // (gpg, AES-256). Restoring checks the file first and says what it holds, then asks to apply it.
+  // Sign-ins that belong to each tool (Claude Code, Codex…) are not included: sign in again there.
+  component BackupSection: SettingsSection {
+    id: backup
+    objectName: "backupSection"
+    property string status: ""
+    property bool failed: false
+    property var found: null
+    readonly property string defaultPath: "~/quotatank-backup-" + Qt.formatDate(new Date(), "yyyy-MM-dd") + ".qtbackup"
+    title: "Back up and restore"
+    foreground: root.foreground
+    fontFamily: root.fontFamily
+    onRevealRequested: function(item) { root.revealRequested(item) }
+
+    function report(text, isError) { status = text; failed = isError }
+    function clearSecrets() { exportPass.text = ""; exportRepeat.text = ""; restorePass.text = "" }
+    function describe(info) {
+      var keys = info.secrets === 1 ? "1 key" : info.secrets + " keys"
+      return "Saved " + Qt.formatDateTime(new Date(String(info.createdAt)), "MMM d, yyyy HH:mm")
+        + (info.pluginVersion ? " by Quotatank " + info.pluginVersion : "") + ": " + info.settings + " settings and " + keys + "."
+        + (info.skipped ? " " + info.skipped + " older settings will be skipped." : "")
+    }
+
+    Hint { text: "Saves every setting and every key you saved here in one file, encrypted with a passphrase, to move to another computer or keep after uninstalling. Sign-ins that belong to each tool, such as Claude Code or Codex, are not included." }
+
+    Label { text: "Back up"; font.bold: true }
+    SettingsField {
+      id: exportPath
+      objectName: "backupExportPath"
+      width: parent.width
+      text: backup.defaultPath
+      foreground: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      Accessible.name: "Backup file"
+      onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+    }
+    SettingsField {
+      id: exportPass
+      objectName: "backupExportPassphrase"
+      width: parent.width
+      password: true
+      maximumLength: 1024
+      placeholderText: "Passphrase (12 characters or more)"
+      foreground: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      Accessible.name: "Backup passphrase"
+      onTextEdited: backup.status = ""
+      onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+    }
+    Row {
+      width: parent.width
+      spacing: Style.spacing.md
+      SettingsField {
+        id: exportRepeat
+        objectName: "backupExportRepeat"
+        width: parent.width - exportButton.width - parent.spacing
+        password: true
+        maximumLength: 1024
+        placeholderText: "Repeat the passphrase"
+        foreground: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        Accessible.name: "Repeat the backup passphrase"
+        onTextEdited: backup.status = ""
+        onAccepted: exportButton.clicked()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+      Ui.Button {
+        id: exportButton
+        objectName: "backupExportButton"
+        anchors.verticalCenter: parent.verticalCenter
+        text: backupRunner.running ? "Working…" : "Save backup"
+        enabled: !backupRunner.running && exportPath.text.trim() !== "" && exportPass.text !== ""
+        bordered: true
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        fontSize: Style.font.bodySmall
+        focusable: true
+        onClicked: {
+          if (exportPass.text.length < 12) { backup.report("Use a passphrase of 12 characters or more.", true); return }
+          if (exportPass.text !== exportRepeat.text) { backup.report("The two passphrases differ.", true); return }
+          backup.report("", false)
+          root.runBackup({ action: "export", path: exportPath.text.trim(), passphrase: exportPass.text, settings: root.settings },
+            function(response) {
+              if (response.ok) backup.report("Saved to " + response.path + ": " + response.settings + " settings and "
+                + (response.secrets === 1 ? "1 key" : response.secrets + " keys") + ". Keep the passphrase: without it the keys cannot be restored.", false)
+              else backup.report(String(response.error || "The backup could not be saved."), true)
+            })
+          exportPass.text = ""
+          exportRepeat.text = ""
+        }
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(exportButton)
+      }
+    }
+
+    Label { text: "Restore"; font.bold: true; topPadding: Style.spacing.md }
+    SettingsField {
+      id: restorePath
+      objectName: "backupRestorePath"
+      width: parent.width
+      text: backup.defaultPath
+      foreground: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      Accessible.name: "Backup file to restore"
+      onTextEdited: backup.found = null
+      onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+    }
+    Row {
+      width: parent.width
+      spacing: Style.spacing.md
+      SettingsField {
+        id: restorePass
+        objectName: "backupRestorePassphrase"
+        width: parent.width - checkButton.width - parent.spacing
+        password: true
+        maximumLength: 1024
+        placeholderText: "Passphrase"
+        foreground: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        Accessible.name: "Passphrase of the backup"
+        onTextEdited: { backup.found = null; backup.status = "" }
+        onAccepted: checkButton.clicked()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+      Ui.Button {
+        id: checkButton
+        objectName: "backupCheckButton"
+        anchors.verticalCenter: parent.verticalCenter
+        text: backupRunner.running ? "Working…" : "Open"
+        enabled: !backupRunner.running && restorePath.text.trim() !== "" && restorePass.text !== ""
+        bordered: true
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        fontSize: Style.font.bodySmall
+        focusable: true
+        onClicked: {
+          backup.report("", false)
+          root.runBackup({ action: "inspect", path: restorePath.text.trim(), passphrase: restorePass.text }, function(response) {
+            if (response.ok) { backup.found = response; backup.report(backup.describe(response), false) }
+            else { backup.found = null; backup.report(String(response.error || "The backup could not be read."), true) }
+          })
+        }
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(checkButton)
+      }
+    }
+    Hint { visible: backup.status !== ""; text: backup.status; color: backup.failed ? root.urgent : Qt.darker(root.foreground, 1.5) }
+    // What to bring back, like Raycast's import checklist: preferences, keys and tokens, or both.
+    SwitchRow {
+      id: restorePreferences
+      objectName: "backupRestorePreferences"
+      visible: backup.found !== null
+      label: "Preferences" + (backup.found ? " (" + backup.found.preferences + ")" : "")
+      checked: true
+      onToggled: checked = !checked
+    }
+    SwitchRow {
+      id: restoreKeys
+      objectName: "backupRestoreKeys"
+      visible: backup.found !== null
+      label: "Keys and tokens" + (backup.found ? " (" + backup.found.secrets + ")" : "")
+      checked: true
+      onToggled: checked = !checked
+    }
+    Row {
+      visible: backup.found !== null
+      spacing: Style.spacing.md
+      Ui.Button {
+        id: restoreButton
+        objectName: "backupRestoreButton"
+        text: "Restore"
+        enabled: !backupRunner.running && (restorePreferences.checked || restoreKeys.checked)
+        bordered: true
+        selected: true
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        fontSize: Style.font.bodySmall
+        focusable: true
+        onClicked: {
+          var path = restorePath.text.trim()
+          var passphrase = restorePass.text
+          var include = { preferences: restorePreferences.checked, keys: restoreKeys.checked }
+          // The current settings and keys are saved first, with the same passphrase, so a restore can be undone.
+          var safety = "~/quotatank-before-restore-" + Qt.formatDateTime(new Date(), "yyyy-MM-dd-HHmmss") + ".qtbackup"
+          root.runBackup({ action: "export", path: safety, passphrase: passphrase, settings: root.settings }, function(saved) {
+            if (!saved.ok) {
+              backup.report("Nothing was restored: the current settings could not be saved first (" + String(saved.error || "unknown error") + ").", true)
+              return
+            }
+            // Started on the next turn of the event loop: the export's process is still finishing here.
+            Qt.callLater(function() {
+              root.runBackup({ action: "restore", path: path, passphrase: passphrase, include: include }, function(response) {
+                backup.found = null
+                backup.clearSecrets()
+                if (!response.ok || !response.settings) { backup.report(String(response.error || "The backup could not be restored."), true); return }
+                root.applyRestoredSettings(response.settings)
+                backup.report("Restored. The previous settings and keys are in " + saved.path + ", with the same passphrase. Sign in again to tools such as Claude Code where needed.", false)
+              })
+            })
+          })
+        }
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(restoreButton)
+      }
+      Ui.Button {
+        text: "Cancel"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        fontSize: Style.font.bodySmall
+        focusable: true
+        onClicked: { backup.found = null; backup.status = ""; restorePass.text = "" }
+      }
+    }
+    Hint { visible: backup.found !== null; text: "What you pick replaces the current one. The current settings and keys are saved to a backup first, with the same passphrase." }
   }
 
   component LinkButton: Ui.Button {
