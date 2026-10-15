@@ -36,7 +36,8 @@ KEY_PROVIDERS = (
     "openrouter", "deepseek", "moonshot", "venice", "deepinfra", "vercel", "poe", "atlascloud",
     "hyper", "sailresearch", "sofya", "v0", "manus", "typesafe",
 )
-SETTING_NAMES = frozenset({"cliproxyKeyFile", "costKeeperPasswordFile"} | {provider + "KeyFile" for provider in KEY_PROVIDERS})
+SETTING_NAMES = frozenset({"cliproxyKeyFile", "costKeeperPasswordFile", "ompGatewayKeyFile"}
+                          | {provider + "KeyFile" for provider in KEY_PROVIDERS})
 
 
 def unlink_previous(directory: Path, directory_fd: int, previous: Path) -> bool:

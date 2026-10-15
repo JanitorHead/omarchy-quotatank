@@ -1,0 +1,267 @@
+{
+  "generatedAt": 1893456000000,
+  "reports": [
+    {
+      "provider": "anthropic",
+      "fetchedAt": 1893456000000,
+      "limits": [
+        {
+          "id": "anthropic:5h",
+          "label": "Claude 5 Hour",
+          "scope": {"provider": "anthropic", "windowId": "5h", "shared": true},
+          "window": {"id": "5h", "label": "5 Hour", "durationMs": 18000000, "resetsAt": 1893474000000},
+          "amount": {"used": 4, "limit": 100, "remaining": 96, "usedFraction": 0.04, "remainingFraction": 0.96, "unit": "percent"},
+          "status": "ok"
+        },
+        {
+          "id": "anthropic:7d",
+          "label": "Claude 7 Day",
+          "scope": {"provider": "anthropic", "windowId": "7d", "shared": true},
+          "window": {"id": "7d", "label": "7 Day", "durationMs": 604800000, "resetsAt": 1893974400000},
+          "amount": {"used": 37, "limit": 100, "remaining": 63, "usedFraction": 0.37, "remainingFraction": 0.63, "unit": "percent"},
+          "status": "ok"
+        },
+        {
+          "id": "anthropic:7d:fable",
+          "label": "Claude 7 Day (Fable)",
+          "scope": {"provider": "anthropic", "windowId": "7d", "tier": "fable"},
+          "window": {"id": "7d", "label": "7 Day", "durationMs": 604800000, "resetsAt": 1893974400000},
+          "amount": {"used": 12, "limit": 100, "remaining": 88, "usedFraction": 0.12, "remainingFraction": 0.88, "unit": "percent"},
+          "status": "ok"
+        },
+        {
+          "id": "anthropic:extra",
+          "label": "Claude Extra Usage",
+          "scope": {"provider": "anthropic", "windowId": "extra"},
+          "amount": {"used": 45, "unit": "usd", "limit": 50, "remaining": 5, "usedFraction": 0.9, "remainingFraction": 0.1}
+        }
+      ],
+      "resetCredits": {"availableCount": 1},
+      "metadata": {
+        "email": "Dev@Example.com",
+        "accountId": "acc-synthetic-claude",
+        "orgId": "org-synthetic-a",
+        "orgName": "dev@example.com's Organization",
+        "endpoint": "https://api.example.com/usage"
+      }
+    },
+    {
+      "provider": "anthropic",
+      "fetchedAt": 1893456060000,
+      "limits": [
+        {
+          "id": "anthropic:5h",
+          "label": "Claude 5 Hour",
+          "scope": {"provider": "anthropic", "windowId": "5h", "shared": true},
+          "window": {"id": "5h", "label": "5 Hour", "durationMs": 18000000, "resetsAt": 1893474000000},
+          "amount": {"used": 50, "limit": 100, "remaining": 50, "usedFraction": 0.5, "remainingFraction": 0.5, "unit": "percent"},
+          "status": "ok"
+        }
+      ],
+      "metadata": {"email": "dev@example.com", "orgId": "org-synthetic-b", "orgName": "Synthetic Team"}
+    },
+    {
+      "provider": "openai-codex",
+      "fetchedAt": 1893456000000,
+      "limits": [
+        {
+          "id": "openai-codex:primary",
+          "label": "5 hours",
+          "scope": {"provider": "openai-codex", "windowId": "5h", "shared": true},
+          "window": {"id": "5h", "label": "5 hours", "durationMs": 18000000, "resetsAt": 1893474000000},
+          "amount": {"used": 25, "limit": 100, "remaining": 75, "usedFraction": 0.25, "remainingFraction": 0.75, "unit": "percent"},
+          "status": "ok"
+        },
+        {
+          "id": "openai-codex:secondary",
+          "label": "7 days",
+          "scope": {"provider": "openai-codex", "windowId": "7d", "shared": true},
+          "window": {"id": "7d", "label": "7 days", "durationMs": 604800000, "resetsAt": 1893974400000},
+          "amount": {"used": 50, "limit": 100, "remaining": 50, "usedFraction": 0.5, "remainingFraction": 0.5, "unit": "percent"},
+          "status": "ok"
+        },
+        {
+          "id": "openai-codex:spark:primary",
+          "label": "5 hours (Spark)",
+          "scope": {"provider": "openai-codex", "tier": "spark", "modelId": "GPT-5.3-Codex-Spark", "windowId": "5h", "shared": true},
+          "window": {"id": "5h", "label": "5 hours", "durationMs": 18000000, "resetsAt": 1893474000000},
+          "amount": {"used": 75, "limit": 100, "remaining": 25, "usedFraction": 0.75, "remainingFraction": 0.25, "unit": "percent"},
+          "status": "ok"
+        }
+      ],
+      "resetCredits": {"availableCount": 2},
+      "metadata": {"email": "work@example.com", "accountId": "acc-synthetic-codex", "planType": "prolite", "allowed": true, "limitReached": false}
+    },
+    {
+      "provider": "opencode-go",
+      "fetchedAt": 1893456000000,
+      "limits": [
+        {
+          "id": "rolling-5h",
+          "label": "5 Hour limit",
+          "scope": {"provider": "opencode-go", "windowId": "5h", "shared": true},
+          "window": {"id": "5h", "label": "5 Hour", "durationMs": 18000000, "resetsAt": 1893474000000},
+          "amount": {"used": 10, "usedFraction": 0.1, "remainingFraction": 0.9, "unit": "percent"},
+          "status": "ok"
+        },
+        {
+          "id": "monthly",
+          "label": "Monthly limit",
+          "scope": {"provider": "opencode-go", "windowId": "monthly", "shared": true},
+          "window": {"id": "monthly", "label": "Monthly", "resetsAt": 1895000000000},
+          "amount": {"used": 100, "usedFraction": 1, "remainingFraction": 0, "unit": "percent"},
+          "status": "exhausted"
+        }
+      ],
+      "metadata": {"planType": "OpenCode Go", "endpoint": "https://opencode.example.com/usage"}
+    },
+    {
+      "provider": "kimi-code",
+      "fetchedAt": 1893456000000,
+      "limits": [
+        {
+          "id": "kimi-code:usage",
+          "label": "Weekly limit",
+          "scope": {"provider": "kimi-code", "windowId": "7d", "shared": true},
+          "window": {"id": "7d", "label": "7 Day", "resetsAt": 1893974400000},
+          "amount": {"used": 30, "limit": 100, "usedFraction": 0.3, "remainingFraction": 0.7, "unit": "unknown"}
+        }
+      ],
+      "metadata": {"email": "kimi@example.com"}
+    },
+    {
+      "provider": "zai",
+      "fetchedAt": 1893456000000,
+      "limits": [
+        {
+          "id": "zai:tokens:5h",
+          "label": "ZAI 5 Hours Token Quota",
+          "scope": {"provider": "zai", "windowId": "5h", "shared": true},
+          "window": {"id": "5h", "label": "5 Hours", "durationMs": 18000000, "resetsAt": 1893474000000},
+          "amount": {"usedFraction": 0.2, "remainingFraction": 0.8, "unit": "tokens"}
+        },
+        {
+          "id": "zai:requests:1mo",
+          "label": "ZAI Request Quota",
+          "scope": {"provider": "zai", "windowId": "1mo", "shared": true},
+          "window": {"id": "1mo", "label": "Monthly", "durationMs": 2592000000},
+          "amount": {"used": 5, "limit": 100, "usedFraction": 0.05, "remainingFraction": 0.95, "unit": "requests"}
+        }
+      ],
+      "metadata": {"email": "zai@example.com"}
+    },
+    {
+      "provider": "google-antigravity",
+      "fetchedAt": 1893456000000,
+      "limits": [
+        {
+          "id": "google-antigravity:anthropic:default:third-party-5h",
+          "label": "Claude & GPT (shared)",
+          "scope": {"provider": "google-antigravity", "windowId": "5h", "shared": true, "sharedGroup": "third-party:5h"},
+          "window": {"id": "5h", "label": "5 Hour", "durationMs": 18000000},
+          "amount": {"usedFraction": 0.6, "remainingFraction": 0.4, "unit": "percent"}
+        },
+        {
+          "id": "google-antigravity:openai:default:third-party-5h",
+          "label": "Claude & GPT (shared)",
+          "scope": {"provider": "google-antigravity", "windowId": "5h", "shared": true, "sharedGroup": "third-party:5h"},
+          "window": {"id": "5h", "label": "5 Hour", "durationMs": 18000000},
+          "amount": {"usedFraction": 0.6, "remainingFraction": 0.4, "unit": "percent"}
+        },
+        {
+          "id": "google-antigravity:google:default:gemini-weekly",
+          "label": "Gemini",
+          "scope": {"provider": "google-antigravity", "windowId": "7d"},
+          "window": {"id": "7d", "label": "Weekly", "durationMs": 604800000},
+          "amount": {"usedFraction": 0.1, "remainingFraction": 0.9, "unit": "percent"}
+        }
+      ],
+      "metadata": {"email": "antigravity@example.com", "projectId": "project-synthetic"}
+    },
+    {
+      "provider": "cursor",
+      "fetchedAt": 1893456000000,
+      "limits": [
+        {
+          "id": "cursor:usd:individual-overall",
+          "label": "Personal Usage",
+          "scope": {"provider": "cursor", "windowId": "monthly"},
+          "window": {"id": "monthly", "label": "Monthly", "resetsAt": 1895000000000},
+          "amount": {"used": 12, "limit": 20, "remaining": 8, "usedFraction": 0.6, "remainingFraction": 0.4, "unit": "usd"}
+        }
+      ],
+      "metadata": {"email": "cursor@example.com"}
+    },
+    {
+      "provider": "github-copilot",
+      "fetchedAt": 1893456000000,
+      "limits": [
+        {
+          "id": "copilot:premium",
+          "label": "Premium Requests",
+          "scope": {"provider": "github-copilot", "accountId": "copilot-synthetic", "tier": "individual", "windowId": "monthly"},
+          "window": {"id": "monthly", "label": "Monthly", "resetsAt": 1895000000000},
+          "amount": {"used": 150, "limit": 300, "remaining": 150, "usedFraction": 0.5, "remainingFraction": 0.5, "unit": "requests"}
+        },
+        {
+          "id": "copilot:chat",
+          "label": "Chat Requests",
+          "scope": {"provider": "github-copilot", "tier": "individual"},
+          "window": {"id": "monthly", "label": "Monthly", "resetsAt": 1895000000000},
+          "amount": {"unit": "requests"}
+        }
+      ],
+      "metadata": {"email": "copilot@example.com"}
+    },
+    {
+      "provider": "minimax-code",
+      "fetchedAt": 1893456000000,
+      "limits": [
+        {
+          "id": "general:5h",
+          "label": "General 5 Hour",
+          "scope": {"provider": "minimax-code", "shared": true, "windowId": "5h"},
+          "window": {"id": "5h", "label": "5 Hour", "durationMs": 18000000, "resetsAt": 1893474000000},
+          "amount": {"used": 40, "usedFraction": 0.4, "remaining": 60, "remainingFraction": 0.6, "unit": "percent"}
+        }
+      ],
+      "metadata": {"source": "minimax-token-plan", "accountId": "acc-synthetic-minimax"}
+    },
+    {
+      "provider": "xai-oauth",
+      "fetchedAt": 1893456000000,
+      "limits": [
+        {
+          "id": "xai:weekly",
+          "label": "Weekly",
+          "window": {"id": "7d", "label": "Weekly", "durationMs": 604800000},
+          "amount": {"usedFraction": 0.9, "unit": "percent"}
+        }
+      ],
+      "metadata": {"email": "other@example.com"}
+    }
+  ],
+  "accountsWithoutUsage": [],
+  "disabledCredentials": [
+    {
+      "id": "7", "provider": "anthropic", "type": "oauth",
+      "cause": "oauth refresh failed: synthetic-refresh-detail",
+      "email": "old@example.com", "accountId": "acc-synthetic-old", "orgId": "org-synthetic-c", "orgName": "Old Org",
+      "disabledAtMs": 1893000000000
+    },
+    {
+      "id": "8", "provider": "openai-codex", "type": "oauth",
+      "cause": "oauth refresh failed: synthetic-refresh-detail",
+      "email": "work@example.com", "disabledAtMs": 1893000000000
+    }
+  ],
+  "capacity": {
+    "anthropic": [
+      {"window": "5h", "durationMs": 18000000, "accounts": 2, "usedAccounts": 0.54, "remainingAccounts": 1.46},
+      {"window": "7d", "durationMs": 604800000, "meter": "fable", "accounts": 2, "usedAccounts": 0.12, "remainingAccounts": 1.88}
+    ],
+    "openai-codex": [
+      {"window": "5h", "durationMs": 18000000, "accounts": 1, "usedAccounts": 0.25, "remainingAccounts": 0.75}
+    ]
+  }
+}

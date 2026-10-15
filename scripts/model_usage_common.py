@@ -1,15 +1,75 @@
-"""Shared state-file and error-sanitizing helpers for Model Usage backends."""
+"""Shared state-file, error-sanitizing, server-URL and omp identity helpers for Model Usage backends."""
 
 from __future__ import annotations
 
 import errno
+import hashlib
+import ipaddress
 import json
 import os
 import re
 import secrets
 import stat
+import urllib.parse
 from pathlib import Path
 from typing import Any
+
+# omp (Oh My Pi) provider ids of the subscriptions Quotatank also reads, and the Quotatank id of each.
+# omp 18.11 reports MiniMax usage as "minimax-code"; "minimax-coding-plan" is its model-catalog name.
+OMP_PROVIDERS = {
+    "anthropic": "claude", "openai-codex": "codex", "opencode-go": "opencode", "kimi-code": "kimi",
+    "zai-coding-plan": "zai", "zai": "zai", "google-antigravity": "antigravity", "cursor": "cursor",
+    "github-copilot": "copilot", "minimax-code": "minimax", "minimax-coding-plan": "minimax", "minimax": "minimax",
+}
+# Plain HTTP stays on networks the user controls: loopback, private LANs (RFC 1918, IPv6 unique local)
+# and Tailscale (100.64.0.0/10 addresses, MagicDNS `*.ts.net` and single-label names).
+PLAIN_HTTP_NETWORKS = tuple(ipaddress.ip_network(network) for network in (
+    "127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7",
+))
+# A single-label name starts with a letter, so numeric IPv4 forms such as 2130706433 never pass as one.
+SINGLE_LABEL_HOST = re.compile(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
+TAILSCALE_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+ts\.net")
+
+
+def plain_http_allowed(hostname: str) -> bool:
+    """Whether plain HTTP may reach `hostname`, given in lower case as urlsplit returns it."""
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return bool(SINGLE_LABEL_HOST.fullmatch(hostname) or TAILSCALE_HOST.fullmatch(hostname))
+    return any(address in network for network in PLAIN_HTTP_NETWORKS)
+
+
+def normalize_server_url(address: str) -> str:
+    """`address` as `scheme://host[:port][/path]` without a trailing slash, or ValueError.
+
+    HTTPS may reach any host, plain HTTP only hosts that plain_http_allowed accepts. Credentials, a
+    query, a fragment, dot segments and control characters are refused. The error carries no text
+    because the address may hold a secret.
+    """
+    try:
+        if any(ord(char) < 32 or ord(char) == 127 for char in address):
+            raise ValueError
+        parts = urllib.parse.urlsplit(address.strip())
+        parts.port  # Raises ValueError for a malformed or out-of-range port.
+        path = parts.path.rstrip("/")
+        if (parts.scheme not in ("http", "https") or not parts.hostname
+                or parts.username is not None or parts.password is not None or parts.query or parts.fragment
+                or any(segment in (".", "..") for segment in urllib.parse.unquote(path).split("/"))
+                or (parts.scheme == "http" and not plain_http_allowed(parts.hostname))):
+            raise ValueError
+        return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+    except (TypeError, AttributeError, ValueError):
+        raise ValueError from None
+
+
+def omp_account_id(provider: str, identity: str) -> str:
+    """Quotatank's id for an omp account: `omp-` and 12 hex digits of sha256("<provider>|<identity>").
+
+    `provider` is the omp provider id as omp writes it (e.g. "anthropic"); `identity` is the account's
+    email, compared case-insensitively. Every backend derives the same id for the same account.
+    """
+    return "omp-" + hashlib.sha256(f"{provider}|{identity.strip().lower()}".encode()).hexdigest()[:12]
 
 
 def clean_message(value: Any) -> str:

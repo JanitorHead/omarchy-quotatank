@@ -254,3 +254,89 @@ and cleanup. Directory symlinks and parent traversal are rejected; no pathname
 is chmodded. See [the private-state boundary](../SECURITY.md#data-and-trust-boundary)
 for the permitted ancestor modes and descriptor-based tightening of owned state
 directories.
+
+## Live omp activity
+
+`scripts/omp-live.py` is a long-running helper that reports Oh My Pi (omp) activity
+as it happens. `--local` follows the local session transcripts, `--stats-url URL`
+follows the live events of an `omp stats` server, and `--accounts` (only with
+`--local`) maps omp credential ids to account ids; `--local` and `--stats-url` may be
+combined. It writes one compact JSON object per line on stdout and flushes each
+line. Every line has `"schemaVersion": 1`; consumers ignore line types they do not
+know.
+
+```json
+{"schemaVersion":1,"heartbeat":true}
+{"schemaVersion":1,"type":"request","source":"local","provider":"claude","model":"claude-opus-5-5","credentialId":7,"costUsd":0.0412,"tokens":18234,"subagent":false,"at":2000000000.123}
+{"schemaVersion":1,"type":"state","source":"remote","state":"live","message":"Live omp activity"}
+{"schemaVersion":1,"type":"activity","source":"remote","version":42,"at":2000000000.5}
+{"schemaVersion":1,"type":"accounts","map":{"7":{"provider":"claude","accountId":"omp-0123456789ab"}}}
+```
+
+- **Heartbeat** lines arrive at least 5 seconds apart (about every 6 seconds) in every
+  mode, so a reader can treat 20 silent seconds as a stalled helper.
+- **`request`** is one model request recorded locally: an assistant `message` with
+  `usage`, or a background `model_usage` line. `provider` is the Quotatank id for the
+  omp providers `usage-fetch.py` maps (`anthropic` → `claude`, `openai-codex` → `codex`,
+  …), otherwise omp's own provider id. `model` is at most 256 characters.
+  `credentialId` is omp's credential id, or `null` for `model_usage` lines and messages
+  without one. `costUsd` is the price omp recorded, `null` when absent or zero (a zero
+  means omp knew no rate). `tokens` is input + output + cache read + cache write.
+  `subagent` is true for transcripts inside a session folder. `at` is the line's own
+  timestamp in epoch seconds (millisecond precision), or the time it was read when
+  the line has none.
+- **`state`** describes the stats-server connection and is written only when it
+  changes: `reconnecting` (first with “Connecting to omp stats…”), `live` once an
+  event with a `version` arrived, or `unavailable` when the server has no live
+  events or the URL is not allowed. `message` is fixed, display-safe text.
+- **`activity`** means the server indexed new requests: its event `version` grew.
+- **`accounts`** maps credential ids to Quotatank providers and account ids. Each
+  line replaces the previous map; a reader keeps the last map when none arrives.
+
+Local tailing reads `${OMP_SESSIONS_DIR:-~/.omp/agent/sessions}` every 2 seconds and
+follows `.jsonl` transcripts modified in the last 15 minutes. A transcript is read
+from its end when first seen, so history is never replayed; lines written to it
+before that are not reported, which can include the first request of a session
+that starts while the sweep below has not reached it yet. Afterwards each pass
+reads the complete lines appended since the previous one; a line without its
+newline waits for the next pass. A truncated or replaced file is read again from
+its start, skipping lines stamped no later than its previous modification time.
+Only spend-bearing lines are parsed; prompts, responses, tool calls, paths, folder
+names, session and message ids never leave the helper.
+
+Each pass checks at most 2,000 transcripts and lists at most 2,000 directories,
+three levels deep (project folder, session folder, nested agent folder), 10,000
+entries per directory, without following symlinks. Files active in the last 15
+minutes are re-checked every pass with at most half of those checks; the rest
+continue a sweep in name order where the previous pass stopped, so a larger tree is
+covered over several passes. A pass reads at most 1 MiB; lines longer than 64 KiB
+are skipped whole. At most 4,096 transcripts keep a read position; the least
+recently modified are forgotten first.
+
+The stats URL follows the omp gateway rule: HTTPS with certificate verification, or
+plain HTTP only to loopback, private (RFC 1918, IPv6 unique local), Tailscale
+(`100.64.0.0/10`, `*.ts.net`) or single-label hosts. The helper only ever requests
+`GET <url>/api/events` (server-sent events), never the `/api/sessions` or
+`/api/session/trace` endpoints that serve conversation contents. It sends no
+credentials, uses no proxy and follows no redirects. The first event sets the
+`version` baseline; each later increase is one `activity` line. The baseline
+survives reconnects, so activity during an outage is still reported once, while a
+restarted server (counting from 1 again) only resets the baseline. Connecting is
+limited to 10 seconds; a stream silent for 45 seconds (the server sends a
+keep-alive every 15) is reconnected. Lines and events are limited to 64 KiB.
+Reconnects back off from 2 to 60 seconds and reset after a connection that lasted
+30 seconds. A 404/405 or a response that is not an event stream is `unavailable`
+and retried every 60 seconds; a disallowed URL is `unavailable` and not retried.
+Error details are never forwarded.
+
+`--accounts` runs `omp usage reset --no-extensions` at start and every 10 minutes
+(30-second timeout, 64 KiB of output). Without a target that command only lists
+saved resets; the helper never adds one, because `omp usage reset
+<provider>/<credential id>` spends a saved reset. Lines of the form
+`- <email> · <plan> [<name> · <omp provider>/<credential id>]: …` map the credential
+id to `{"provider": <Quotatank id>, "accountId": "omp-" + the first 12 hex digits of
+sha256("<omp provider>|<lowercase email>")}`, the id `usage-fetch.py` gives the same
+omp account. An email listed twice for one provider (one person in two
+organizations), a credential id listed for two accounts, and providers Quotatank
+does not read are left out. A missing `omp`, a failed or oversized run, or output
+without any account line produce no `accounts` line.

@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 from xml.etree import ElementTree
 
-from model_usage_common import atomic_write_json, clean_message
+from model_usage_common import OMP_PROVIDERS, atomic_write_json, clean_message, normalize_server_url, omp_account_id
 
 SCHEMA_VERSION = 1
 # Every provider the collector can read, in the order the widget lists them by default. Plan
@@ -397,10 +397,13 @@ def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = Non
     except urllib.error.HTTPError as exc:
         exc.close()
         if exc.code in (401, 403):
-            raise ProviderFailure("expired", "The saved sign-in is no longer accepted.") from None
-        if exc.code == 429:
-            raise ProviderFailure("rate_limited", "The provider is rate limiting usage checks.") from None
-        raise ProviderFailure("http", f"The usage endpoint returned HTTP {exc.code}.") from None
+            failure = ProviderFailure("expired", "The saved sign-in is no longer accepted.")
+        elif exc.code == 429:
+            failure = ProviderFailure("rate_limited", "The provider is rate limiting usage checks.")
+        else:
+            failure = ProviderFailure("http", f"The usage endpoint returned HTTP {exc.code}.")
+        failure.http_status = exc.code
+        raise failure from None
     except (TimeoutError, urllib.error.URLError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
@@ -8044,6 +8047,356 @@ def parse_extra_keys(values: list[str]) -> dict[str, list[tuple[str, Path]]]:
     return extra_keys
 
 
+# --------------------------------------------------------------- omp
+# omp (Oh My Pi) keeps its own subscription sign-ins and reports their limits: on this computer with
+# `omp usage --json`, and remotely through its auth gateway's `GET /v1/usage`. Each omp account joins the provider
+# it belongs to as an `accounts` entry; omp is a source, never a provider of its own. The gateway token can also
+# spend model quota, so `/v1/usage` is the only path ever requested with it.
+OMP_USAGE_ARGUMENTS = ("usage", "--json", "--no-extensions")
+OMP_USAGE_TIMEOUT = 45.0
+OMP_VERSION_TIMEOUT = 5.0
+MAX_OMP_OUTPUT_BYTES = 2 * 1024 * 1024
+MAX_OMP_REPORTS = 64
+MAX_OMP_LIMITS = 32
+MAX_OMP_POOL_WINDOWS = 16
+# The Claude reader's ids, labels and lengths for the windows omp calls anthropic:5h and anthropic:7d.
+OMP_CLAUDE_WINDOWS = {"5h": ("session", "5-hour limit", FIVE_HOURS), "7d": ("weekly", "Weekly limit", SEVEN_DAYS)}
+# Lengths of omp's window ids, for windows it gives no length (Kimi's weekly, the monthly allowances).
+OMP_WINDOW_SECONDS = {"5h": FIVE_HOURS, "1d": ONE_DAY, "7d": SEVEN_DAYS, "1w": SEVEN_DAYS,
+                      "1mo": THIRTY_DAYS, "monthly": THIRTY_DAYS}
+# A native reading that failed this way has no account to show beside omp's.
+OMP_UNREAD_KINDS = frozenset({"no_credentials", "cli_unavailable"})
+OMP_SIGN_IN_AGAIN = "omp can't renew this sign-in. Sign in again in omp."
+OMP_GATEWAY_URL_RULE = ("The omp gateway URL must use HTTPS, or HTTP to this computer, a private network or Tailscale, "
+                        "with no user name, query or fragment.")
+OMP_GATEWAY_FAILURES = {
+    "expired": "The omp gateway refused the token.",
+    "rate_limited": "The omp gateway is rate limiting usage checks.",
+    "timeout": "The omp gateway did not answer in time.",
+    "network": "Could not reach the omp gateway. Check its URL, the network and its TLS certificate.",
+    "malformed": "The omp gateway returned unreadable usage data.",
+}
+# (email in lower case, omp's account id, omp's org id), each "" when omp gives none.
+OmpIdentity = tuple[str, str, str]
+
+
+def omp_executable() -> str | None:
+    return shutil.which("omp", path=runtime_environment().get("PATH"))
+
+
+def run_omp(omp: str, arguments: tuple[str, ...], timeout: float, max_bytes: int) -> tuple[int, bytes]:
+    """omp's exit code and standard output, run from an empty folder so that no project's omp settings apply.
+
+    Raises like run_cli. omp's error output is dropped: it can name accounts."""
+    with tempfile.TemporaryDirectory(prefix="quotatank-omp-") as cwd:
+        code, output, _ = run_cli([omp, *arguments], timeout, env=runtime_environment(), cwd=cwd, max_bytes=max_bytes)
+    return code, output
+
+
+def omp_version(omp: str) -> str:
+    """omp's version, such as "18.11.0", or "" when omp does not tell it."""
+    try:
+        code, output = run_omp(omp, ("--version",), OMP_VERSION_TIMEOUT, 4096)
+    except (OSError, TimeoutError, ValueError):
+        return ""
+    match = re.search(rb"\d+(?:\.\d+){1,3}", output) if code == 0 else None
+    return match.group().decode("ascii") if match else ""
+
+
+def omp_document(payload: Any, message: str) -> dict[str, Any]:
+    """An omp usage document, from the CLI's output or a decoded gateway body: an object listing `reports`."""
+    if isinstance(payload, bytes):
+        try:
+            payload = json.loads(payload)
+        except (ValueError, RecursionError):
+            raise ProviderFailure("malformed", message) from None
+    if not isinstance(payload, dict) or not isinstance(payload.get("reports"), list):
+        raise ProviderFailure("malformed", message)
+    return payload
+
+
+def read_omp_local(omp: str) -> tuple[str, str, dict[str, Any] | None]:
+    """("ok", "", document) from `omp usage --json` on this computer, else ("error", message, None)."""
+    try:
+        code, output = run_omp(omp, OMP_USAGE_ARGUMENTS, OMP_USAGE_TIMEOUT, MAX_OMP_OUTPUT_BYTES)
+        if code != 0:
+            return "error", f"omp usage exited with status {code}.", None
+        return "ok", "", omp_document(output, "omp usage returned unreadable data.")
+    except TimeoutError:
+        return "error", "omp usage did not finish in time.", None
+    except ValueError:
+        return "error", "omp usage returned too much data.", None
+    except OSError:
+        return "error", "omp could not be started.", None
+    except ProviderFailure as exc:
+        return "error", exc.message, None
+    except Exception:
+        return "error", "omp usage could not be read.", None
+
+
+def read_omp_gateway(address: str, key_file: Path | None, timeout: float) -> tuple[str, str, dict[str, Any] | None]:
+    """("ok", "", document) from an omp gateway's `GET /v1/usage`, else ("error", message, None)."""
+    try:
+        url = normalize_server_url(address) + "/v1/usage"
+    except ValueError:
+        return "error", OMP_GATEWAY_URL_RULE, None
+    try:
+        headers = {"Accept": "application/json"}
+        if key_file is not None:
+            headers["Authorization"] = "Bearer " + read_private_key(key_file, "omp gateway token")
+        return "ok", "", omp_document(http_json(url, headers, timeout), OMP_GATEWAY_FAILURES["malformed"])
+    except ProviderFailure as exc:
+        if exc.kind == "expired" and key_file is None:
+            return "error", "The omp gateway asks for a token.", None
+        if exc.kind == "http":
+            return "error", f"The omp gateway answered HTTP {exc.http_status}.", None
+        return "error", OMP_GATEWAY_FAILURES.get(exc.kind, exc.message), None
+    except Exception:
+        return "error", "The omp gateway could not be read.", None
+
+
+def omp_text(value: Any, limit: int = 120) -> str:
+    """A display-safe string omp gave, or "" for anything else."""
+    return clean_message(value)[:limit].strip() if isinstance(value, str) else ""
+
+
+def omp_slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:64] or "limit"
+
+
+def omp_seconds(duration_ms: Any, window_id: Any) -> int | None:
+    """A window's length in seconds: omp's milliseconds, else what its window id says."""
+    duration = number(duration_ms)
+    if duration is not None and duration >= 1000:
+        return int(duration // 1000)
+    return OMP_WINDOW_SECONDS.get(str(window_id))
+
+
+def omp_scope_name(title: str, scope: dict[str, Any], fallback: str) -> str:
+    """The model or meter a limit counts: omp's model id, else the name in its label's parentheses
+    ("Claude 7 Day (Fable)"), else `fallback` from its id."""
+    named = re.search(r"\(([^()]+)\)$", title)
+    return (omp_text(scope.get("modelId"), 64) or (named.group(1).strip() if named else "")
+            or omp_text(fallback.replace("-", " ").title(), 64))
+
+
+def omp_period_label(title: str, window: dict[str, Any], seconds: int | None) -> str:
+    """omp's label for a limit, followed by its period when the label does not name it already."""
+    window_label = omp_text(window.get("label"), 40)
+    period = period_identity(seconds // 60)[1] if seconds else window_label
+    if not title:
+        return period or "Usage limit"
+    if period and not any(text.casefold() in title.casefold() for text in (window_label, period) if text):
+        return f"{title} · {period}"
+    return title
+
+
+def omp_window(provider_id: str, limit: dict[str, Any]) -> dict[str, Any] | None:
+    """One omp limit as a window with the id, label and length that Quotatank's own reader of the provider uses.
+
+    None when omp gives no used share or no window; Claude's extra usage, for one, is spend rather than a limit."""
+    amount, window, scope = (limit.get(key) if isinstance(limit.get(key), dict) else {}
+                             for key in ("amount", "window", "scope"))
+    fraction = number(amount.get("usedFraction"))
+    limit_id = limit.get("id")
+    if fraction is None or not window or not isinstance(limit_id, str) or not limit_id:
+        return None
+    seconds = omp_seconds(window.get("durationMs"), window.get("id"))
+    title = omp_text(limit.get("label"))
+    parts = limit_id.split(":")
+    if provider_id == "claude" and parts[0] == "anthropic" and len(parts) in (2, 3) and parts[1] in OMP_CLAUDE_WINDOWS:
+        window_id, label, seconds = OMP_CLAUDE_WINDOWS[parts[1]]
+        if len(parts) == 3 and parts[2]:
+            window_id, label = f"{omp_slug(parts[2])}-{window_id}", f"{omp_scope_name(title, scope, parts[2])} {window_id}"
+    elif provider_id == "codex" and parts[0] == "openai-codex" and len(parts) in (2, 3) and parts[-1] in ("primary", "secondary"):
+        label, seconds = duration_label(seconds // 60 if seconds else None)
+        window_id = "codex-" + parts[-1]
+        if len(parts) == 3 and parts[1]:
+            window_id, label = f"{omp_slug(parts[1])}-{parts[-1]}", f"{omp_scope_name(title, scope, parts[1])} · {label}"
+    else:
+        # omp lists a quota that several model families share once per family; its group names it once.
+        window_id = omp_slug(str(scope.get("sharedGroup") or limit_id))
+        label = omp_period_label(title, window, seconds)
+    return make_window(window_id, label, fraction * 100, window.get("resetsAt"), seconds)
+
+
+def omp_plan(provider_id: str, plan_type: Any) -> str:
+    """The plan as the provider's own reader names it: ChatGPT tiers for Codex, omp's name otherwise."""
+    raw = omp_text(plan_type, 64)
+    return CODEX_PLAN_LABELS.get(raw, raw.replace("_", " ").title()) if provider_id == "codex" and raw else raw
+
+
+def omp_time(value: Any) -> str:
+    """ISO time from omp's epoch milliseconds, or "" when it is missing or out of range."""
+    stamp = epoch_seconds(value)
+    try:
+        return datetime.fromtimestamp(stamp, timezone.utc).isoformat() if stamp else ""
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def omp_entry(provider_id: str, account_id: str, email: Any) -> dict[str, Any]:
+    entry = base_provider(provider_id)
+    entry.update(source="omp usage report", origin="omp", authCommand="", accountId=account_id, label="",
+                 account=omp_text(email, 254), active=False, primary=False)
+    return entry
+
+
+def omp_report_entry(provider_id: str, account_id: str, report: dict[str, Any]) -> dict[str, Any]:
+    """One omp usage report as an account entry."""
+    metadata = report.get("metadata") if isinstance(report.get("metadata"), dict) else {}
+    entry = omp_entry(provider_id, account_id, metadata.get("email"))
+    for limit in dict_list(report.get("limits"))[:MAX_OMP_LIMITS]:
+        window = omp_window(provider_id, limit)
+        if window is not None and all(known["id"] != window["id"] for known in entry["windows"]):
+            entry["windows"].append(window)
+    # Only the banked-reset balance, shaped as the Codex reader shapes it.
+    credits = parse_codex_rate_limits({"rateLimitResetCredits": report.get("resetCredits")})[1]
+    entry.update(plan=omp_plan(provider_id, metadata.get("planType")), credits=credits,
+                 fetchedAt=omp_time(report.get("fetchedAt")) or entry["fetchedAt"])
+    if not entry["windows"]:
+        entry["notice"] = "omp reported no usage limits for this account."
+    return entry
+
+
+def omp_disabled_entry(provider_id: str, account_id: str, credential: dict[str, Any]) -> dict[str, Any]:
+    """A sign-in omp has disabled. Its cause is left out: the text can carry account details."""
+    entry = omp_entry(provider_id, account_id, credential.get("email"))
+    entry.update(status="error", errorKind="expired", message=OMP_SIGN_IN_AGAIN)
+    return entry
+
+
+def omp_identity(details: dict[str, Any]) -> OmpIdentity:
+    email, account, org = (details.get(key).strip() if isinstance(details.get(key), str) else ""
+                           for key in ("email", "accountId", "orgId"))
+    return email.lower(), account, org
+
+
+def same_omp_account(first: OmpIdentity, second: OmpIdentity) -> bool:
+    """Whether two identities name one account: the same email or omp account id, in the same org when both
+    name an org (one person can belong to two)."""
+    (email, account, org), (other_email, other_account, other_org) = first, second
+    same_person = bool(email and email == other_email) or bool(account and account == other_account)
+    return same_person and (not org or not other_org or org == other_org)
+
+
+def omp_rows(document: dict[str, Any], key: str, provider_ids: list[str]) -> Iterator[tuple[int, str, str, dict[str, Any]]]:
+    """(position, omp provider id, Quotatank provider id, row) for the rows under `key` of requested providers."""
+    for index, row in enumerate(dict_list(document.get(key))[:MAX_OMP_REPORTS]):
+        omp_provider = row.get("provider")
+        provider_id = OMP_PROVIDERS.get(omp_provider) if isinstance(omp_provider, str) else None
+        if provider_id in provider_ids:
+            yield index, omp_provider, provider_id, row
+
+
+def omp_accounts(documents: list[dict[str, Any]],
+                 provider_ids: list[str]) -> list[tuple[str, OmpIdentity, dict[str, Any]]]:
+    """(provider id, identity, entry) for each omp account of a requested provider: the reports of every document,
+    then their disabled sign-ins. An account seen twice, say by this computer's omp and by a gateway, is kept once.
+
+    `accountId` is omp_account_id of the omp provider and the email, else omp's account id, else the row's
+    position. A later account with the same id (one email in two orgs) gets `-2`, `-3`, … in that order."""
+    accounts: list[tuple[str, OmpIdentity, dict[str, Any]]] = []
+    repeats: dict[str, int] = {}
+    for key in ("reports", "disabledCredentials"):
+        for document in documents:
+            for index, omp_provider, provider_id, row in omp_rows(document, key, provider_ids):
+                details = row if key == "disabledCredentials" else row.get("metadata")
+                identity = omp_identity(details if isinstance(details, dict) else {})
+                if any(known == provider_id and same_omp_account(identity, other) for known, other, _ in accounts):
+                    continue
+                base = omp_account_id(omp_provider, identity[0] or identity[1] or str(index))
+                repeats[base] = repeats.get(base, 0) + 1
+                account_id = base if repeats[base] == 1 else f"{base}-{repeats[base]}"
+                entry = (omp_disabled_entry if key == "disabledCredentials" else omp_report_entry)(provider_id, account_id, row)
+                accounts.append((provider_id, identity, entry))
+    return accounts
+
+
+def omp_account_count(document: dict[str, Any] | None, provider_ids: list[str]) -> int:
+    """How many accounts of requested providers one omp source reported, disabled sign-ins included."""
+    if document is None:
+        return 0
+    return sum(1 for key in ("reports", "disabledCredentials") for _ in omp_rows(document, key, provider_ids))
+
+
+def omp_pool(capacity: Any, provider_id: str) -> dict[str, Any] | None:
+    """omp's pooled capacity of the provider's accounts per window, in account-equivalents; None without any."""
+    rows = [row for omp_provider, windows in (capacity.items() if isinstance(capacity, dict) else ())
+            if OMP_PROVIDERS.get(omp_provider) == provider_id for row in dict_list(windows)]
+    windows = []
+    for row in rows[:MAX_OMP_POOL_WINDOWS]:
+        total, used, left = (number(row.get(key)) for key in ("accounts", "usedAccounts", "remainingAccounts"))
+        if total is None or used is None or left is None or min(total, used, left) < 0:
+            continue
+        windows.append({"windowSeconds": omp_seconds(row.get("durationMs"), row.get("window")),
+                        "meter": omp_text(row.get("meter"), 64) or None, "accounts": int(total),
+                        "usedAccounts": round(used, 2), "remainingAccounts": round(left, 2)})
+    return {"source": "omp", "windows": windows} if windows else None
+
+
+def native_origin(provider: dict[str, Any], reading: dict[str, Any], cliproxy: bool) -> str:
+    """The `origin` of a native reading: its own, else the kind of reading the provider made."""
+    if reading.get("origin"):
+        return reading["origin"]
+    if cliproxy:
+        return "proxy"
+    if provider["id"] in KEYED_FETCHERS:
+        return "key"
+    return "omarchy" if "accounts" in provider else "signin"
+
+
+def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
+                       accounts: list[tuple[OmpIdentity, dict[str, Any]]], cliproxy: bool) -> dict[str, Any] | None:
+    """The provider's result with its omp accounts merged in (backend contract, "omp accounts")."""
+    entries = [entry for _identity, entry in accounts]
+    if provider is None or (provider.get("errorKind") in OMP_UNREAD_KINDS and "accounts" not in provider):
+        if not entries:
+            return provider
+        index = next((position for position, entry in enumerate(entries) if entry["status"] == "ok"), 0)
+        entries[index]["active"] = True
+        return summarize_accounts(entries, index)
+    natives = [provider, *dict_list(provider.get("accounts"))]
+    added = []
+    for (email, _account, _org), entry in accounts:
+        # A native reading of the same account is the more reliable one and stays, listing both origins.
+        matches = [native for native in natives if email and str(native.get("account") or "").strip().lower() == email]
+        for native in matches:
+            native["origins"] = [native_origin(provider, native, cliproxy), "omp"]
+        if not matches:
+            added.append(entry)
+    if added:
+        if "accounts" not in provider:
+            provider.update(accountId="primary" if provider_id in KEYED_FETCHERS else PRIMARY_ACCOUNT_ID,
+                            active=True, primary=True, origin=native_origin(provider, provider, cliproxy))
+            provider["accounts"] = [copy.deepcopy(provider)]
+        provider["accounts"].extend(added)
+        for entry in (provider, *provider["accounts"]):
+            entry["accountCount"] = len(provider["accounts"])
+    return provider
+
+
+def merge_omp(providers: list[dict[str, Any]], provider_ids: list[str], documents: list[dict[str, Any]],
+              capacity: Any, cliproxy: bool) -> int:
+    """Merge omp's accounts and pools into the requested providers, in place; returns how many accounts merged.
+    A requested provider without a result of its own (proxy mode, --omp-only) is made of its omp accounts."""
+    accounts = omp_accounts(documents, provider_ids)
+    for provider_id in provider_ids:
+        position = next((index for index, provider in enumerate(providers) if provider.get("id") == provider_id), None)
+        mine = [(identity, entry) for owner, identity, entry in accounts if owner == provider_id]
+        merged = merge_omp_provider(providers[position] if position is not None else None, provider_id, mine, cliproxy)
+        if merged is None:
+            continue
+        pool = omp_pool(capacity, provider_id)
+        if pool:
+            merged["pool"] = pool
+        if position is None:
+            providers.append(merged)
+        else:
+            providers[position] = merged
+    return len(accounts)
+
+
 # --------------------------------------------------------------- Orchestration
 
 
@@ -8105,19 +8458,48 @@ def build_payload(
     source: str = "direct", cliproxy_url: str = "http://127.0.0.1:8317",
     key_file: Path | None = None, key_files: dict[str, Path] | None = None,
     extra_keys: dict[str, list[tuple[str, Path]]] | None = None,
+    omp_local: bool = False, omp_gateway_url: str = "", omp_gateway_key_file: Path | None = None,
+    omp_only: bool = False,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
-    if source == "cliproxy":
-        providers = collect_cliproxy(provider_ids, timeout, cliproxy_url, key_file or cliproxy_key_path(), discover=True, metadata=metadata)
-        try:
-            server = normalize_cliproxy_url(cliproxy_url)
-        except ProviderFailure:
-            server = "invalid"
-        server_id = hashlib.sha256(server.encode("utf-8")).hexdigest()[:16]
-        state_dir = history_path(state_dir).parent / ("cliproxy-" + server_id)
-    else:
-        providers = collect_providers(provider_ids, timeout, key_files, extra_keys)
-    update_and_attach_history(providers, state_dir)
+    omp = omp_executable()
+    reads_local = omp_local and omp is not None
+    # omp takes longer than most providers, so it is read while they are.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        local = pool.submit(read_omp_local, omp) if reads_local else None
+        version = pool.submit(omp_version, omp) if reads_local else None
+        gateway = pool.submit(read_omp_gateway, omp_gateway_url, omp_gateway_key_file, timeout) if omp_gateway_url else None
+        if omp_only:
+            providers: list[dict[str, Any]] = []
+        elif source == "cliproxy":
+            providers = collect_cliproxy(provider_ids, timeout, cliproxy_url, key_file or cliproxy_key_path(), discover=True, metadata=metadata)
+            try:
+                server = normalize_cliproxy_url(cliproxy_url)
+            except ProviderFailure:
+                server = "invalid"
+            server_id = hashlib.sha256(server.encode("utf-8")).hexdigest()[:16]
+            state_dir = history_path(state_dir).parent / ("cliproxy-" + server_id)
+        else:
+            providers = collect_providers(provider_ids, timeout, key_files, extra_keys)
+        if local:
+            local_read = local.result()
+        else:
+            local_read = ("missing", "omp was not found on this computer.", None) if omp_local else ("off", "", None)
+        gateway_read = gateway.result() if gateway else ("off", "", None)
+        omp_release = version.result() if version else ""
+    reads = (local_read, gateway_read)
+    merged = merge_omp(providers, provider_ids, [document for _, _, document in reads if document is not None],
+                       local_read[2].get("capacity") if local_read[2] else None, source == "cliproxy")
+    if not omp_only:
+        update_and_attach_history(providers, state_dir)
+    omp_summary = {
+        "local": local_read[0], "gateway": gateway_read[0],
+        "message": clean_message(" ".join(message for _, message, _ in reads if message)),
+        "accounts": merged, "localAccounts": omp_account_count(local_read[2], provider_ids),
+        "gatewayAccounts": omp_account_count(gateway_read[2], provider_ids), "installed": omp is not None,
+    }
+    if omp_release:
+        omp_summary["version"] = omp_release
     return {
         "schemaVersion": SCHEMA_VERSION,
         "generatedAt": now_iso(),
@@ -8125,6 +8507,7 @@ def build_payload(
         "source": source,
         "detected": detected_providers(),
         "installed": installed_providers(),
+        "omp": omp_summary,
         **metadata,
     }
 
@@ -8142,6 +8525,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--extra-key", action="append", default=[], metavar="PROVIDER=KEYID=PATH",
                         help="Another private key for an API-key provider, read as its own account. "
                              "KEYID is the id of a key saved in widget settings (k- and eight hex digits).")
+    parser.add_argument("--omp", choices=("off", "local"), default="off",
+                        help="local: add the accounts omp (Oh My Pi) signs in to, from `omp usage --json`.")
+    parser.add_argument("--omp-gateway-url", default="",
+                        help="An omp auth gateway whose GET /v1/usage lists more omp accounts.")
+    parser.add_argument("--omp-gateway-key-file", type=lambda value: Path(value).expanduser(),
+                        help="Private file with the omp gateway's token.")
+    parser.add_argument("--omp-only", action="store_true",
+                        help="Read only omp's accounts: no provider is queried and no history is written.")
     args = parser.parse_args(argv)
 
     provider_ids = parse_provider_ids(args.providers)
@@ -8150,7 +8541,9 @@ def main(argv: list[str] | None = None) -> int:
         key_files = parse_key_files(args.key_file)
         extra_keys = parse_extra_keys(args.extra_key)
         payload = build_payload(provider_ids, timeout, args.state_dir, args.source, args.cliproxy_url,
-                                args.cliproxy_key_file, key_files, extra_keys)
+                                args.cliproxy_key_file, key_files, extra_keys, omp_local=args.omp == "local",
+                                omp_gateway_url=args.omp_gateway_url.strip(),
+                                omp_gateway_key_file=args.omp_gateway_key_file, omp_only=args.omp_only)
     except Exception as exc:
         payload = {
             "schemaVersion": SCHEMA_VERSION,

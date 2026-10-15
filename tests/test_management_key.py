@@ -204,9 +204,10 @@ class ManagementKeyTests(unittest.TestCase):
             self.assertFalse(path.exists())
             self.assertTrue(custom.exists(), "files the widget did not create are left alone")
 
-    def test_every_api_key_provider_setting_is_accepted_and_nothing_else(self):
+    def test_every_key_setting_is_accepted_and_nothing_else(self):
         for name, accepted in (("huggingfaceKeyFile", True), ("poeKeyFile", True), ("factoryKeyFile", True),
                                ("claudeKeyFile", False), ("KeyFile", False), ("poeKeyFile ", False),
+                               ("ompGatewayKeyFile", True), ("ompgatewayKeyFile", False), ("ompKeyFile", False),
                                ("extraKey_openrouter_k-0123abcd", True), ("extraKey_claude_k-0123abcd", False),
                                ("extraKey_openrouter_k-0123ABCD", False), ("extraKey_openrouter_k-0123abcd0", False)):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as config:

@@ -132,6 +132,44 @@ Logins and keys are read with at most four concurrent reads under one shared dea
 
 Each entry in `accounts` carries `origin`, the kind of reading: `omarchy` (an Omarchy login), `key` (an API key, primary or extra), `signin` (the provider's single native reading), `omp` (an account read from omp), or `proxy` (a Fusebox or CLIProxyAPI account). `source` keeps its meaning: a human description of the API that answered. A provider with two or more Omarchy logins also carries `accountSwitch` from the registry: `{"mode": "manual" | "auto", "threshold": 50..100}`. `auto` means Omarchy moves new sessions to the account with the most headroom at the threshold, `manual` that it only notifies. A missing or invalid value reads as Omarchy's default, `manual` at 95.
 
+## omp accounts
+
+omp (Oh My Pi) keeps its own subscription sign-ins. Three optional flags add them as accounts of the providers Quotatank already reads. omp is a source, never a provider, so it adds nothing to `detected` or `installed`.
+
+- `--omp local` runs `omp usage --json --no-extensions`: omp is found on `PATH` (plus the usual user bin folders) and runs without stdin, in an empty temporary folder so no project's omp settings apply, with a 45-second deadline and a 2 MiB output ceiling. Its error output is discarded and no secret is passed to it. `omp --version` (5 seconds) supplies `omp.version`. `--omp off`, the default, runs nothing.
+- `--omp-gateway-url URL` requests `GET <URL>/v1/usage` from an omp auth gateway. No other path is ever requested, because the gateway token can also spend model quota. The request uses the providers' HTTP client: TLS verified, redirects refused, a 2 MiB body ceiling and the `--timeout` deadline. `--omp-gateway-key-file PATH` sends the gateway token as `Authorization: Bearer`; the file follows the `--key-file` rules (a regular file owned by the user with mode 0600, one ASCII line of at most 8 KiB). Settings saves it as `ompGatewayKeyFile` through `scripts/management-key.py`.
+- The gateway URL must use HTTPS, or plain HTTP to a loopback, private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) or Tailscale (`100.64.0.0/10`) address, a `*.ts.net` name, or a single-label name. It may not carry a user name, query, fragment or dot segment. The rule is `normalize_server_url` in `scripts/model_usage_common.py`; the omp stats and live helpers apply it too.
+- `--omp-only` reads omp alone: no provider is queried and no history is written. Settings uses it to test an omp source.
+
+Both sources may be given. Only providers named by `--providers` are touched. omp provider ids map to `anthropic` → `claude`, `openai-codex` → `codex`, `opencode-go` → `opencode`, `kimi-code` → `kimi`, `zai` and `zai-coding-plan` → `zai`, `google-antigravity` → `antigravity`, `cursor` → `cursor`, `github-copilot` → `copilot`, and `minimax-code` (omp 18.11's id), `minimax-coding-plan` and `minimax` → `minimax`; other omp providers are ignored. Each source is read for at most 64 reports, 64 disabled sign-ins and 32 limits per report.
+
+Each omp report becomes an account entry shaped like any provider reading:
+
+- `accountId` is `omp-` followed by the first 12 hex digits of the SHA-256 of `<omp provider id>|<email in lower case>`. Without an email, omp's account id takes the email's place, and without either, the report's position. A later report with the same id (one email in two organizations) gets `-2`, `-3`, … in report order. `scripts/omp-live.py` derives the same ids.
+- `source` is `"omp usage report"` and `origin` is `"omp"`. `label` is empty, `account` is the email (or empty), `active` and `primary` are false, `authCommand` is empty, and `fetchedAt` is the report's time.
+- `plan` names Codex tiers as the Codex reader does (`plus` → ChatGPT Plus) and other plans as omp gives them. Organization names are never shown: Claude names a personal organization after its email, which would bypass `hideAccountEmails`.
+- In `windows`, `used` is omp's `usedFraction` × 100 and `resetsAt` is in seconds. Claude's `anthropic:5h` and `anthropic:7d` become `session` (5-hour limit) and `weekly` (Weekly limit), as the Claude reader names them, and `anthropic:7d:<meter>` a model-scoped weekly window (`fable-weekly`, "Fable weekly"). Codex's primary and secondary windows become `codex-primary` and `codex-secondary`, labelled by their length as the Codex reader labels them; a model-scoped one becomes, for example, `spark-primary` "GPT-5.3-Codex-Spark · 5-hour limit". Other limits keep omp's label, followed by their period unless the label names it ("Premium Requests · Monthly limit"), and an id made from omp's limit id. `windowSeconds` comes from omp's `durationMs`, else from its window id (`5h`, `7d`, `monthly`, …). A limit without a used share or without a window, such as Claude's extra usage, is left out, and a quota omp lists once per model family that shares it is listed once.
+- `credits.resetCreditsAvailable` is omp's `resetCredits.availableCount`, in the shape the Codex reader uses.
+- Each `disabledCredentials` entry becomes an account with `status: "error"`, `errorKind: "expired"` and the message "omp can't renew this sign-in. Sign in again in omp." omp's `cause` text is never passed on.
+
+An account both sources report (the same provider and email or omp account id, in the same organization when both name one) is kept once, the local reading first. A disabled sign-in of an account that also has a report is not listed.
+
+omp accounts are merged into each requested provider's result before history is recorded:
+
+1. An omp account whose email matches, case-insensitively, the `account` of the provider-level reading or of an `accounts` entry is not added. The native reading stays, being the more reliable one, and gains `origins: [<origin>, "omp"]`. The native origin is the reading's own `origin`, else `proxy` (`--source cliproxy`), `key` (API-key providers), `omarchy` (Omarchy logins) or `signin` (a single reading). Native readings carry no organization, so both organizations of one email match the native reading.
+2. Other omp accounts are appended to `accounts`, and `accountCount` counts every entry. A provider that had no `accounts` first lists its own reading as `accounts[0]` with `accountId` `main` (`primary` for an API-key provider), `active` and `primary` true, and `origin` `signin` (`key`); its provider-level fields stay that reading.
+3. When the provider's own reading failed with `no_credentials` or `cli_unavailable` and has no `accounts`, or when the provider has no result at all (`--source cliproxy` without that provider, `--omp-only`), the provider becomes its omp accounts: the summary is the first one with `status: "ok"` (else the first), marked `active`.
+4. With `--omp local`, omp's pooled capacity adds `pool: {"source": "omp", "windows": [{"windowSeconds", "meter", "accounts", "usedAccounts", "remainingAccounts"}]}` in account-equivalents, at most 16 windows; `meter` is a string or `null`. The gateway reports no capacity, so it adds no pool.
+
+The payload always has a top-level `omp` object:
+
+```json
+"omp": {"local": "ok", "gateway": "error", "message": "The omp gateway refused the token.",
+        "accounts": 3, "localAccounts": 3, "gatewayAccounts": 0, "installed": true, "version": "18.11.0"}
+```
+
+`local` is `off`, `ok`, `missing` (omp is not on `PATH`) or `error`; `gateway` is `off`, `ok` or `error`. `message` joins the local and the gateway failure, each a fixed sentence that never quotes omp's output, the URL or the token. `accounts` counts the omp accounts merged after duplicates are removed; `localAccounts` and `gatewayAccounts` count what each source reported for the requested providers, disabled sign-ins included. `installed` tells whether omp is on `PATH`, whatever the flags. `version` is present when `--omp local` ran and omp told its version.
+
 ## Backup helper
 
 `scripts/backup.py` reads one JSON request line on stdin and writes one JSON line: `{"ok": true, …}` or `{"ok": false, "error": "<fixed message>"}` (exit 1). Actions:
