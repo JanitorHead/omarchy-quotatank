@@ -219,7 +219,8 @@ Item {
 
   Timer {
     id: processTimeout
-    interval: 35000
+    // `omp usage` may take up to 45 s, so the collector gets longer when it runs omp.
+    interval: root.ompArguments.indexOf("local") >= 0 ? 60000 : 35000
     repeat: false
     onTriggered: {
       fetchProcess.timedOut = true
