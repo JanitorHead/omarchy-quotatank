@@ -4,6 +4,28 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.0
+
+### Added
+
+- **Several accounts, at a glance.** A provider with two or more accounts (Omarchy logins, extra API keys, omp accounts, Fusebox or CLIProxyAPI accounts) gets one dot per account beside its chip: filled for the account being counted, a ring coloured by each other account's state. When the account in use nears its limit and another has room, the chip says where to go ("→ Personal"); when every account is used up, the dot becomes a clock with the time to the first reset. Hovering the chip opens a card with every account's 5-hour and weekly use and its trend. Menu bar settings can instead give each account its own chip.
+- **Accounts in Limits.** One row per account with its state ("spending now", "used up · back 18:02", "switched 16:27"), a 24-hour trend you can read with the pointer, and its 5-hour and weekly meters. Pick a row to see its full detail. **Use** switches the account new sessions start with (`omarchy agent account use`). Accounts used together, by omp or a proxy, sort by headroom and slide into place as that changes. A notice says when Omarchy switched accounts or a limit reset.
+- **Runway.** A card shows how long each account lasts until the 5-hour reset: one taking over from another, or all running down together, and the gap with nothing left when they run out first.
+- **Forecasts on every limit.** The meter shows where the current pace takes it before the reset, faint marks at your warning and critical levels, and, under the pointer, when it will reach that level or when it passed it.
+- **omp as a source.** Quotatank reads the accounts omp (Oh My Pi) is signed in to and follows its sessions live: each request marks its account as spending, and Costs grows as you work. From another computer, it reads an `omp stats` dashboard for costs and live activity, and optionally an omp auth gateway for limits. Settings explains each step, with commands to copy for Tailscale or an SSH tunnel, and a Test that says what it found.
+- **Costs.** The total compares with the previous period; the chart keeps each day in place when you change the period; the pointer reads any bar; hovering a provider highlights it and clicking isolates it. Breakdown by model, project, or main sessions and subagents; a 7 × 24 map of when you spend; cache savings.
+- **Motion that explains.** Changed digits roll in the direction of the change, a live request sends one ring from its account's dot, and a crossed threshold or a reset flashes once. Routine refreshes only change numbers. Motion follows Hyprland's animation setting, and Display settings can turn it off.
+
+### Changed
+
+- Proxy accounts appear as account rows; their banked resets and session counts stay.
+- Each account keeps its own history, so trends and pace work per account.
+- When a single sign-in has expired but omp has a working account for the provider, that account leads instead of the error.
+
+### Security
+
+- omp runs only where omp is already set up, never outlives Quotatank's helper, and the omp gateway token travels over plain HTTP only to this computer or over Tailscale. See SECURITY.md.
+
 ## 1.8.1
 
 ### Changed

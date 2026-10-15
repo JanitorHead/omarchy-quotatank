@@ -225,6 +225,13 @@ In **Settings → Costs → Custom prices**, add the exact model ID and its inpu
 | `costKeeperUrl` | empty | Optional Keeper URL for last-used quota account activity |
 | `costT3Servers` | `"[]"` | T3 server configurations managed in Costs settings; credentials are private file references |
 | `extraKeys` | `"{}"` | A provider's further API keys, managed by **Settings → Providers → Add another key**: per provider, the first key's name and each further key's id, name, and private key file. Each key is read on its own and shown as its own account |
+| `ompLocal` | `true` | Read the accounts omp (Oh My Pi) is signed in to on this computer and follow its sessions for live activity. Runs only where omp is already set up |
+| `ompGatewayUrl` | empty | An omp auth gateway on another computer; only `/v1/usage` is read. Plain HTTP only to this computer or over Tailscale |
+| `ompGatewayKeyFile` | empty | Private file with the gateway token, managed by Settings |
+| `ompStatsUrl` | empty | An `omp stats` dashboard on another computer, read for costs and live activity |
+| `barAccountMode` | `"dots"` | `dots`: one chip per provider with a dot per account; `chips`: one chip per account, counted against `barMaxChips` |
+| `motion` | `"system"` | `system` follows Hyprland's animation setting; `reduced` turns animation off |
+| `accountModes` | `"{}"` | Per provider, `single` (one account at a time) or `together` (accounts spent at once); absent means automatic |
 | `costKeeperPasswordFile` | empty | Private Keeper password for quota account activity (legacy setting name) |
 
 Examples:
@@ -256,9 +263,19 @@ Refresh intervals above one hour mark short limits `No recent data`, because the
 
 ## Several accounts
 
-**Omarchy subscription accounts.** Claude Code, Codex, and Grok logins added with `omarchy agent account add <provider> <name>` are read from Omarchy's registry (`~/.local/state/omarchy/agents/accounts/<provider>.json`), each from its own folder. With two or more, Limits shows one card per account with its name, marks the one new sessions start as **in use**, and the provider's chip follows that account. Once a second account exists, the first is always read from `~/.claude`, `~/.codex`, or `~/.grok`, as Omarchy does, even if `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GROK_HOME` point elsewhere.
+**Omarchy subscription accounts.** Claude Code, Codex, and Grok logins added with `omarchy agent account add <provider> <name>` are read from Omarchy's registry (`~/.local/state/omarchy/agents/accounts/<provider>.json`), each from its own folder. With two or more, the chip gets a dot per account and Limits lists them, marks the one new sessions start as **in use**, and offers **Use** on the others. The header shows Omarchy's switching rule ("switches at 95%" or "notifies at 95%"). Once a second account exists, the first is always read from `~/.claude`, `~/.codex`, or `~/.grok`, as Omarchy does, even if `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GROK_HOME` point elsewhere.
 
-**Several API keys.** A provider with a saved key offers **Add another key…** under its card in **Settings → Providers**: name it and save it, and it is stored in its own private file like the first. Each key gets its own card in Limits; the chip and alerts follow the first key. The provider's environment variable only ever replaces the first key. **Remove** forgets a further key and deletes its file.
+**Several API keys.** A provider with a saved key offers **Add another key…** under its card in **Settings → Providers**: name it and save it, and it is stored in its own private file like the first. Each key is its own account; the chip and alerts follow the first key. The provider's environment variable only ever replaces the first key. **Remove** forgets a further key and deletes its file.
+
+**One at a time or together.** Accounts are counted one at a time when new sessions use one account (Omarchy logins): the chip shows the account in use. They are counted together when several are spent at once, by a proxy, by omp's pool, or when two accounts rose within the last hour: the chip shows the account closest to its limit among those spending, and Limits sorts by headroom. **Settings → Providers → Customize → Accounts are used** can fix either mode per provider.
+
+**Spending now.** An account is marked spending when its reading rose in the last 15 minutes, or when omp or the proxy reports a request for it in the last two. Readings arrive every refresh interval, so a light request may only show once it moves a percentage; omp's live feed shows it at once.
+
+## omp (Oh My Pi)
+
+**On this computer.** With `ompLocal` on and omp set up (its `~/.omp/agent/agent.db` exists), Quotatank runs `omp usage --json` with each refresh and merges omp's accounts into the providers it already reads: an account you also use directly appears once. omp's session files feed the live activity and Costs (projects, main sessions and subagents).
+
+**On another computer.** In **Settings → Costs → omp on another computer**, enter the address of an `omp stats` dashboard started there (`omp stats --host <Tailscale address> --port 3847`, or reached through `ssh -N -L 3847:127.0.0.1:3847 <host>`). Quotatank reads its totals, providers, models and folders, and its event feed for live activity. The dashboard has no password and also serves conversations: keep it on Tailscale or behind SSH. For limits, **Settings → Providers → omp → On another computer** takes an omp auth gateway address and its token; Quotatank asks it only for `/v1/usage`.
 
 ## Back up and restore
 
