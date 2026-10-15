@@ -1,4 +1,4 @@
-"""Shared state-file, error-sanitizing, server-URL and omp identity helpers for Model Usage backends."""
+"""Shared state-file, error-sanitizing, server-URL, address and omp identity helpers for Model Usage backends."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ import json
 import os
 import re
 import secrets
+import socket
 import stat
+import threading
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,9 @@ OMP_PROVIDERS = {
 PLAIN_HTTP_NETWORKS = tuple(ipaddress.ip_network(network) for network in (
     "127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7",
 ))
+# Tailscale's own ranges. Plain HTTP may carry a secret only to loopback or to these (plain_http_token_addresses):
+# a single-label name or a LAN address that is a trusted computer on one network is anyone's on the next.
+TAILSCALE_NETWORKS = tuple(ipaddress.ip_network(network) for network in ("100.64.0.0/10", "fd7a:115c:a1e0::/48"))
 # A single-label name starts with a letter, so numeric IPv4 forms such as 2130706433 never pass as one.
 SINGLE_LABEL_HOST = re.compile(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
 TAILSCALE_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+ts\.net")
@@ -40,27 +45,86 @@ def plain_http_allowed(hostname: str) -> bool:
     return any(address in network for network in PLAIN_HTTP_NETWORKS)
 
 
-def normalize_server_url(address: str) -> str:
-    """`address` as `scheme://host[:port][/path]` without a trailing slash, or ValueError.
+def split_server_url(address: str) -> urllib.parse.SplitResult:
+    """`address` as the parts of `scheme://host[:port]`, http or https, or ValueError.
 
-    HTTPS may reach any host, plain HTTP only hosts that plain_http_allowed accepts. Credentials, a
-    query, a fragment, dot segments and control characters are refused. The error carries no text
-    because the address may hold a secret.
+    A server address names the server alone: a trailing slash is dropped, while a path, a query, a
+    fragment, a user name, a backslash, whitespace and control characters are refused. The error
+    carries no text because the address may hold a secret.
     """
     try:
         if any(ord(char) < 32 or ord(char) == 127 for char in address):
             raise ValueError
-        parts = urllib.parse.urlsplit(address.strip())
-        parts.port  # Raises ValueError for a malformed or out-of-range port.
-        path = parts.path.rstrip("/")
-        if (parts.scheme not in ("http", "https") or not parts.hostname
-                or parts.username is not None or parts.password is not None or parts.query or parts.fragment
-                or any(segment in (".", "..") for segment in urllib.parse.unquote(path).split("/"))
-                or (parts.scheme == "http" and not plain_http_allowed(parts.hostname))):
+        address = address.strip()
+        if any(char.isspace() or char in "\\?#@" for char in address):
             raise ValueError
-        return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+        parts = urllib.parse.urlsplit(address)
+        parts.port  # Raises ValueError for a malformed or out-of-range port.
+        if parts.scheme not in ("http", "https") or not parts.hostname or parts.path not in ("", "/"):
+            raise ValueError
+        return parts._replace(path="")
     except (TypeError, AttributeError, ValueError):
         raise ValueError from None
+
+
+def normalize_server_url(address: str) -> str:
+    """`address` as `scheme://host[:port]` (split_server_url), or ValueError. HTTPS may reach any host,
+    plain HTTP only hosts that plain_http_allowed accepts."""
+    parts = split_server_url(address)
+    if parts.scheme == "http" and not plain_http_allowed(parts.hostname):
+        raise ValueError
+    return urllib.parse.urlunsplit(parts)
+
+
+def resolve_host(hostname: str, timeout: float) -> list[Any]:
+    """The addresses of `hostname`: the address itself when it is one, else the system resolver's answer;
+    none when the lookup fails or outlasts `timeout` seconds."""
+    try:
+        return [ipaddress.ip_address(hostname)]
+    except ValueError:
+        pass
+    found: list[Any] = []
+
+    def lookup() -> None:
+        try:
+            for *_, address in socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM):
+                found.append(ipaddress.ip_address(address[0].split("%", 1)[0]))
+        except (OSError, ValueError, UnicodeError):
+            pass
+
+    # A daemon thread cannot hold the process open after its work, as a stuck resolver would.
+    worker = threading.Thread(target=lookup, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    return [] if worker.is_alive() else found
+
+
+def tailscale_address(address: Any) -> bool:
+    return any(address in network for network in TAILSCALE_NETWORKS)
+
+
+def reached_through_tailscale(address: Any) -> bool:
+    """Whether this computer sends to `address` from an address of its own in Tailscale's ranges, that is
+    through Tailscale, which is then connected. Connecting a UDP socket picks the route and sends nothing."""
+    family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+    try:
+        with socket.socket(family, socket.SOCK_DGRAM) as probe:
+            probe.connect((str(address), 9))
+            source = ipaddress.ip_address(probe.getsockname()[0].split("%", 1)[0])
+    except (OSError, ValueError):
+        return False
+    return tailscale_address(source)
+
+
+def plain_http_token_addresses(addresses: list[Any]) -> list[Any] | None:
+    """The addresses plain HTTP may carry a token to, of a host with `addresses`, or None when the token
+    needs HTTPS: all of them, when every one is loopback or Tailscale's and each Tailscale one is reached
+    through Tailscale. The caller connects only to these, so a second lookup cannot send the token
+    elsewhere."""
+    unmapped = [(address.ipv4_mapped or address) if address.version == 6 else address for address in addresses]
+    carried = all(address.is_loopback or (tailscale_address(address) and reached_through_tailscale(address))
+                  for address in unmapped)
+    return unmapped if unmapped and carried else None
 
 
 def omp_account_id(provider: str, identity: str) -> str:

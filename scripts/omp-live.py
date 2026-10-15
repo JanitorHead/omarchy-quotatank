@@ -4,7 +4,8 @@
 --local follows the session files omp writes and reports each model request they record.
 --stats-url follows the live events of an `omp stats` server and reports when its statistics grow.
 --accounts (with --local) maps omp credential ids to the account ids Quotatank uses.
-Prompts, responses, paths, session ids and emails never leave this process.
+Prompts, responses, paths, session ids and emails never leave this process. Nothing of omp's runs, and
+no session file is read, until omp has set itself up on this computer.
 """
 from __future__ import annotations
 
@@ -15,7 +16,6 @@ import json
 import math
 import os
 import re
-import shutil
 import ssl
 import stat
 import sys
@@ -69,18 +69,20 @@ CONNECTING = "Connecting to omp stats…"
 LIVE = "Live omp activity"
 RECONNECTING = "Reconnecting to omp stats…"
 UNSUPPORTED = "This server does not offer omp live events."
-INVALID_URL = "The omp stats URL must use HTTPS, or HTTP to this computer, a private network or Tailscale."
+INVALID_URL = ("The omp stats URL must be the server's address alone, https://host:port or plain HTTP to this "
+               "computer, a private network or Tailscale.")
 
-# Credential map
+# Credential map. Each listing makes omp ask Anthropic and OpenAI about every account's saved resets, so it
+# runs once at start and again only for a request whose credential the last listing did not name.
 ACCOUNTS_INTERVAL = 10 * 60
 ACCOUNTS_TIMEOUT = 30
-MAX_LISTING_BYTES = 64 * 1024
-MAX_LISTING_LINE = 1024
-# `- <email> · <plan> [<name> · <omp provider>/<credential id>]: <saved resets>`
-RESET_LISTING_LINE = re.compile(
-    r"\s*- (?P<email>[^\s@\[\]]+@[^\s@\[\]]+)(?: · [^\[]*)? \[(?:[^\]]* · )?"
-    r"(?P<provider>[a-z0-9][a-z0-9._-]{0,63})/(?P<credential>[0-9]{1,15})\]:")
-ANSI_STYLE = re.compile(r"\x1b\[[0-9;]*m")
+MAX_LISTING_BYTES = 256 * 1024
+# Without a target `omp usage reset` only lists saved resets: `omp usage reset <provider>/<credential id>`
+# spends one, so no target is ever added.
+RESET_LISTING_ARGUMENTS = ("usage", "reset", "--json", "--no-extensions")
+RESET_LISTING_VERSION = (18, 9)  # the first omp with `omp usage reset`
+# Quotatank ids of the providers whose accounts omp lists there.
+LISTED_PROVIDERS = frozenset({"claude", "codex"})
 
 
 def omp_sessions_root() -> Path:
@@ -308,7 +310,8 @@ class EventsUnsupported(Exception):
 
 
 def open_event_stream(base_url: str) -> Iterator[bytes]:
-    """The lines of `<base_url>/api/events`, the only path this helper requests from a stats server."""
+    """The lines of `<base_url>/api/events`, the only path this helper requests from a stats server. `base_url`
+    is a server address alone (normalize_server_url), so the request path is exactly /api/events."""
     parts = urllib.parse.urlsplit(base_url)
     if parts.scheme == "https":
         connection = http.client.HTTPSConnection(parts.netloc, timeout=CONNECT_TIMEOUT,
@@ -318,8 +321,7 @@ def open_event_stream(base_url: str) -> Iterator[bytes]:
     try:
         connection.connect()
         connection.sock.settimeout(STALE_SECONDS)
-        connection.request("GET", parts.path + EVENTS_PATH,
-                           headers={"Accept": "text/event-stream", "Cache-Control": "no-cache"})
+        connection.request("GET", EVENTS_PATH, headers={"Accept": "text/event-stream", "Cache-Control": "no-cache"})
         response = connection.getresponse()
         event_stream = (response.getheader("Content-Type") or "").lower().startswith("text/event-stream")
         if response.status in (404, 405) or (response.status == 200 and not event_stream):
@@ -424,57 +426,115 @@ class RemoteFollower:
             delay = min(BACKOFF_MAX, delay * 2)
 
 
-def parse_reset_listing(text: str) -> dict[str, dict[str, str]] | None:
-    """Credential id → Quotatank provider and account id, from `omp usage reset` output.
+def parse_reset_listing(text: str) -> tuple[dict[str, dict[str, str]], set[int]] | None:
+    """From `omp usage reset --json`: credential id → Quotatank provider and account id, and every credential
+    id the listing names. None when the text is not such a listing or it names no account.
 
-    None when no account line parses. An email listed twice for one provider (one person in two
-    organizations) cannot be told apart, so neither entry is mapped; nor is a credential id listed
-    for two accounts. Providers Quotatank does not read are left out.
+    The account id is usage-fetch.py's for the same omp account: omp_account_id of omp's provider id and the
+    email, else omp's account id. One email listed twice for a provider (one person in two organizations)
+    cannot be told apart, so neither is mapped; nor is a credential id listed for two accounts. Providers
+    Quotatank does not read are left out.
     """
-    owners: dict[str, tuple[str, str]] = {}
-    conflicting: set[str] = set()
-    for line in ANSI_STYLE.sub("", text).splitlines():
-        match = RESET_LISTING_LINE.match(line) if len(line) <= MAX_LISTING_LINE else None
-        if match is None:
+    try:
+        document = json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    rows = document.get("accounts") if isinstance(document, dict) else None
+    owners: dict[int, tuple[str, str]] = {}
+    conflicting: set[int] = set()
+    for row in rows if isinstance(rows, list) else ():
+        if not isinstance(row, dict):
             continue
-        credential = str(int(match["credential"]))
-        owner = (match["provider"], match["email"].lower())
+        credential, provider = row.get("credentialId"), row.get("provider")
+        identity = next((value.strip().lower() for value in (row.get("email"), row.get("accountId"))
+                         if isinstance(value, str) and value.strip()), "")
+        if type(credential) is not int or not 0 <= credential <= MAX_SAFE_INTEGER or not isinstance(provider, str):
+            continue
+        owner = (provider, identity)
         if owners.setdefault(credential, owner) != owner:
             conflicting.add(credential)
     if not owners:
         return None
     credentials_per_owner = Counter(owners.values())
-    return {credential: {"provider": OMP_PROVIDERS[provider], "accountId": omp_account_id(provider, email)}
-            for credential, (provider, email) in owners.items()
-            if provider in OMP_PROVIDERS and credential not in conflicting
-            and credentials_per_owner[(provider, email)] == 1}
+    mapping = {str(credential): {"provider": OMP_PROVIDERS[provider], "accountId": omp_account_id(provider, identity)}
+               for credential, (provider, identity) in owners.items()
+               if provider in OMP_PROVIDERS and identity and credential not in conflicting
+               and credentials_per_owner[(provider, identity)] == 1}
+    return mapping, set(owners)
+
+
+def lists_resets(version: str) -> bool:
+    """Whether an omp of `version` ("18.11.0", or "" when the program is not omp) has `omp usage reset`."""
+    parts = version.split(".")
+    return len(parts) >= 2 and (int(parts[0]), int(parts[1])) >= RESET_LISTING_VERSION
 
 
 def read_reset_listing() -> str | None:
-    """Output of `omp usage reset`, which lists each account's credential id; None when it fails."""
-    environment = usage.runtime_environment()
-    executable = shutil.which("omp", path=environment.get("PATH"))
-    if not executable:
+    """Output of `omp usage reset --json`, which lists each account's credential id. None when omp is missing,
+    not set up here, older than 18.9 or not omp at all, or when the listing fails."""
+    omp = usage.omp_executable()
+    if not omp or not usage.omp_set_up() or not lists_resets(usage.omp_version(omp)):
         return None
-    # Never add a target: `omp usage reset <provider>/<credential id>` spends a saved reset.
-    command = [executable, "usage", "reset", "--no-extensions"]
     try:
-        code, output, _ = usage.run_cli(command, ACCOUNTS_TIMEOUT, env=environment, max_bytes=MAX_LISTING_BYTES)
+        code, output = usage.run_omp(omp, RESET_LISTING_ARGUMENTS, ACCOUNTS_TIMEOUT, MAX_LISTING_BYTES)
     except (OSError, TimeoutError, ValueError):
         return None
     return output.decode("utf-8", "replace") if code == 0 else None
 
 
-def follow_accounts(emit: Callable[[dict[str, Any]], None],
-                    read_listing: Callable[[], str | None] = read_reset_listing,
-                    sleep: Callable[[float], None] = time.sleep) -> None:
-    """Emit the credential map now and every ACCOUNTS_INTERVAL; a failed listing emits nothing."""
-    while True:
-        listing = read_listing()
-        mapping = parse_reset_listing(listing) if listing is not None else None
-        if mapping is not None:
-            emit({"schemaVersion": SCHEMA_VERSION, "type": "accounts", "map": mapping})
-        sleep(ACCOUNTS_INTERVAL)
+def in_background(work: Callable[[], None]) -> None:
+    threading.Thread(target=work, daemon=True).start()
+
+
+class AccountMap:
+    """omp's credential map, listed when the helper starts and again only when a request names a Claude or
+    Codex credential the last listing did not, at most once every ACCOUNTS_INTERVAL. A listing that reads
+    emits one `accounts` line; a failed one emits nothing."""
+
+    def __init__(self, emit: Callable[[dict[str, Any]], None],
+                 read_listing: Callable[[], str | None] | None = None,
+                 clock: Callable[[], float] | None = None,
+                 start: Callable[[Callable[[], None]], None] | None = None):
+        self.emit = emit
+        self.read_listing = read_listing or read_reset_listing
+        self.clock = clock or time.monotonic
+        self.start = start or in_background
+        self.lock = threading.Lock()
+        self.known: set[int] = set()
+        self.listed_at: float | None = None
+        self.listing = False
+
+    def refresh(self) -> None:
+        """List the accounts in the background, unless a listing runs or started within ACCOUNTS_INTERVAL."""
+        with self.lock:
+            now = self.clock()
+            if self.listing or (self.listed_at is not None and now - self.listed_at < ACCOUNTS_INTERVAL):
+                return
+            self.listing, self.listed_at = True, now
+        self.start(self.list_accounts)
+
+    def list_accounts(self) -> None:
+        try:
+            listing = self.read_listing()
+            parsed = parse_reset_listing(listing) if listing is not None else None
+            if parsed is not None:
+                mapping, known = parsed
+                with self.lock:
+                    self.known = known
+                self.emit({"schemaVersion": SCHEMA_VERSION, "type": "accounts", "map": mapping})
+        finally:
+            with self.lock:
+                self.listing = False
+
+    def saw(self, event: dict[str, Any]) -> None:
+        """Note a request event; a Claude or Codex credential the last listing did not name asks for a new one."""
+        credential = event.get("credentialId")
+        if credential is None or event.get("provider") not in LISTED_PROVIDERS:
+            return
+        with self.lock:
+            unknown = credential not in self.known
+        if unknown:
+            self.refresh()
 
 
 class LineWriter:
@@ -492,26 +552,34 @@ class LineWriter:
 
 
 def run(args: argparse.Namespace, emit: Callable[[dict[str, Any]], None]) -> None:
-    """Start the requested followers, then tail session files and send heartbeats until stopped."""
-    if args.stats_url is not None:
-        try:
-            base_url = normalize_server_url(args.stats_url)
-        except ValueError:
-            emit(state_line("unavailable", INVALID_URL))
-        else:
-            threading.Thread(target=RemoteFollower(base_url, emit).run, daemon=True).start()
-    if args.accounts:
-        threading.Thread(target=follow_accounts, args=(emit,), daemon=True).start()
-    tailer = Tailer(omp_sessions_root()) if args.local else None
-    heartbeat_at = -math.inf
-    while True:
-        if tailer is not None:
-            for event in tailer.poll():
-                emit(event)
-        if time.monotonic() - heartbeat_at >= HEARTBEAT_SECONDS:
-            emit(HEARTBEAT)
-            heartbeat_at = time.monotonic()
-        time.sleep(POLL_SECONDS)
+    """Start the requested followers, then tail session files and send heartbeats until stopped. Session files
+    are read only while omp is set up here. However the loop ends (a closed stdout raises), an omp listing
+    still running ends with it."""
+    try:
+        if args.stats_url is not None:
+            try:
+                base_url = normalize_server_url(args.stats_url)
+            except ValueError:
+                emit(state_line("unavailable", INVALID_URL))
+            else:
+                threading.Thread(target=RemoteFollower(base_url, emit).run, daemon=True).start()
+        accounts = AccountMap(emit) if args.accounts else None
+        if accounts is not None:
+            accounts.refresh()
+        tailer = Tailer(omp_sessions_root()) if args.local else None
+        heartbeat_at = -math.inf
+        while True:
+            if tailer is not None and usage.omp_set_up():
+                for event in tailer.poll():
+                    emit(event)
+                    if accounts is not None:
+                        accounts.saw(event)
+            if time.monotonic() - heartbeat_at >= HEARTBEAT_SECONDS:
+                emit(HEARTBEAT)
+                heartbeat_at = time.monotonic()
+            time.sleep(POLL_SECONDS)
+    finally:
+        usage.end_running_clis()
 
 
 def main() -> None:
@@ -528,4 +596,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    usage.stop_on_signals()
     main()

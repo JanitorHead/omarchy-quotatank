@@ -8,10 +8,8 @@ counters, costs, provider and model ids and folder names are retained.
 from __future__ import annotations
 
 import http.client
-import ipaddress
 import json
 import socket
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -19,7 +17,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from model_usage_common import OMP_PROVIDERS, normalize_server_url
+from model_usage_common import OMP_PROVIDERS, normalize_server_url, resolve_host
 
 MAX_BYTES = 2 * 1024 * 1024
 MAX_ROWS = 4096
@@ -39,8 +37,8 @@ FIGURE_FIELDS = {
     "output": "totalOutputTokens", "cacheRead": "totalCacheReadTokens", "cacheWrite": "totalCacheWriteTokens",
 }
 
-INVALID_URL = ("The omp stats URL must use HTTPS, or HTTP to this computer, a private network or Tailscale, "
-               "without a user name, query or fragment.")
+INVALID_URL = ("The omp stats URL must be the server's address alone, https://host:port or plain HTTP to this "
+               "computer, a private network or Tailscale, without a path, user name, query or fragment.")
 NETWORK = ("Could not reach omp stats at this address. Check that it is running there, reachable from this "
            "computer, and that its HTTPS certificate is valid.")
 TIMEOUT = (f"omp stats did not answer within {TIMEOUT_SECONDS} seconds. It may still be indexing sessions; "
@@ -97,8 +95,10 @@ def get_json(url: str, timeout: float) -> Any:
     deadline = time.monotonic() + timeout
     request = urllib.request.Request(url, headers={"Accept": "application/json",
                                                    "User-Agent": "omarchy-model-usage/1"})
+    # Environment proxies are ignored: the server is this computer, a private network or the user's own HTTPS host.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirects())
     try:
-        with urllib.request.build_opener(NoRedirects()).open(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             body = read_body(response, deadline)
         return json.loads(body)
     except OmpStatsError:
@@ -260,24 +260,6 @@ def normalize(documents: dict[str, Any], days: int) -> dict[str, Any]:
         raise OmpStatsError("malformed", MALFORMED) from None
 
 
-def resolve(hostname: str) -> list[Any]:
-    """Addresses of `hostname`, or none when the lookup fails or outlasts its short timeout."""
-    found: list[Any] = []
-
-    def lookup() -> None:
-        try:
-            for *_, address in socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM):
-                found.append(ipaddress.ip_address(address[0].split("%", 1)[0]))
-        except (OSError, ValueError, UnicodeError):
-            pass
-
-    # A daemon thread cannot hold the backend open after the scan, as a stuck resolver would.
-    worker = threading.Thread(target=lookup, daemon=True)
-    worker.start()
-    worker.join(LOOKUP_TIMEOUT_SECONDS)
-    return [] if worker.is_alive() else found
-
-
 def holds_address(address: Any) -> bool:
     if address.version == 6 and address.ipv4_mapped:
         address = address.ipv4_mapped
@@ -297,11 +279,7 @@ def is_local_host(hostname: str) -> bool:
     """Whether `hostname` names this computer: loopback, or an address of a local interface."""
     if hostname == "localhost" or hostname.endswith(".localhost"):
         return True
-    try:
-        addresses = [ipaddress.ip_address(hostname)]
-    except ValueError:
-        addresses = resolve(hostname)
-    return any(holds_address(address) for address in addresses)
+    return any(holds_address(address) for address in resolve_host(hostname, LOOKUP_TIMEOUT_SECONDS))
 
 
 def collect(url: str, days: int, timeout: float = TIMEOUT_SECONDS) -> dict[str, Any]:

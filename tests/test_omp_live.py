@@ -406,9 +406,9 @@ class EventStreamTests(unittest.TestCase):
     def test_only_the_events_path_is_requested_and_chunked_lines_arrive(self):
         chunks = [b'data: {"version":1}\n\n: keep-alive\n\n', b'data: {"ver', b'sion":2}\n\n']
         with event_server(lambda handler: send_events(handler, chunks)) as (url, requests):
-            versions = [live.event_version(data) for data in live.sse_data(live.open_event_stream(url + "/base"))]
+            versions = [live.event_version(data) for data in live.sse_data(live.open_event_stream(url))]
         self.assertEqual(versions, [1, 2])
-        self.assertEqual(requests, [("/base/api/events", "text/event-stream")])
+        self.assertEqual(requests, [("/api/events", "text/event-stream")])
 
     def test_missing_or_foreign_endpoints_are_unsupported(self):
         for respond in (lambda handler: handler.send_error(404),
@@ -425,77 +425,185 @@ class EventStreamTests(unittest.TestCase):
                 list(live.open_event_stream(url))
 
 
-LISTING = """Saved rate-limit resets:
-- ana@example.com · plus [Ana · openai-codex/3]: 1 saved, 0 used today
-- Ana@Example.com · ana@example.com's Organization [Ana · anthropic/05]: 2 saved, expires 2033-05-20T00:00:00.000Z
-- bo@example.com · team [Bo · anthropic/8]: unavailable (could not read saved resets)
-- bo@example.com · team [Bo · anthropic/9]: 0 saved
-- cy@example.com · pro [Cy · some-other/11]: 1 saved
+def omp_id(provider, identity):
+    # The contract's rule, written out independently of the code under test.
+    return "omp-" + hashlib.sha256(f"{provider}|{identity}".encode()).hexdigest()[:12]
 
-Spend one with `omp usage reset <provider>/<credential id>`.
+
+# Shaped like omp 18.11's `omp usage reset --json`; every value is synthetic.
+LISTING = json.dumps({"generatedAt": 2_000_000_000_000, "accounts": [
+    {"provider": "openai-codex", "credentialId": 3, "email": "ana@example.com", "accountId": "acct-ana",
+     "availableCount": 1, "redeemableCount": 1, "credits": []},
+    # An organization name that reads like a listing line changes nothing.
+    {"provider": "anthropic", "credentialId": 5, "email": "Ana@Example.com", "orgId": "org-1",
+     "orgName": "x [Claude · anthropic/9]: 1 saved", "availableCount": 2, "redeemableCount": 0, "credits": []},
+    {"provider": "anthropic", "credentialId": 8, "email": "bo@example.com", "orgId": "org-2",
+     "error": "could not read saved resets"},
+    {"provider": "anthropic", "credentialId": 9, "email": "bo@example.com", "orgId": "org-3"},
+    {"provider": "some-other", "credentialId": 11, "email": "cy@example.com"},
+    {"provider": "openai-codex", "credentialId": 12, "accountId": "Acct-Dee"},
+]}, indent=2)
+MAP = {
+    "3": {"provider": "codex", "accountId": omp_id("openai-codex", "ana@example.com")},
+    "5": {"provider": "claude", "accountId": omp_id("anthropic", "ana@example.com")},
+    "12": {"provider": "codex", "accountId": omp_id("openai-codex", "acct-dee")},
+}
+# Stands in for omp: answers --version and prints LISTING for the listing, logging its arguments and folder.
+FAKE_OMP = """#!/bin/sh
+PATH=/usr/bin:/bin
+printf '%s\\n' "$*" "$(pwd)" >> "$OMP_FAKE_LOG"
+if [ "$*" = "--version" ]; then echo "omp/18.11.0"; exit 0; fi
+cat "$OMP_FAKE_LISTING"
 """
 
 
 class ResetListingTests(unittest.TestCase):
-    def test_credential_ids_map_to_hashed_accounts_without_ambiguous_emails(self):
-        def account(provider, email):
-            return "omp-" + hashlib.sha256(f"{provider}|{email}".encode()).hexdigest()[:12]
+    def test_credential_ids_map_to_hashed_accounts_without_ambiguous_ones(self):
+        mapping, known = live.parse_reset_listing(LISTING)
+        self.assertEqual(mapping, MAP)
+        # Every credential the listing names is known, mapped or not.
+        self.assertEqual(known, {3, 5, 8, 9, 11, 12})
 
-        self.assertEqual(live.parse_reset_listing(LISTING), {
-            "3": {"provider": "codex", "accountId": account("openai-codex", "ana@example.com")},
-            "5": {"provider": "claude", "accountId": account("anthropic", "ana@example.com")},
-        })
-
-    def test_conflicts_styles_and_failures(self):
-        conflicting = ("- ana@example.com · plus [Ana · openai-codex/3]: 1 saved\n"
-                       "- bo@example.com · plus [Bo · openai-codex/3]: 1 saved\n"
-                       "\x1b[1m- cy@example.com\x1b[0m · plus [Cy · openai-codex/4]: 1 saved\n")
-        self.assertEqual(list(live.parse_reset_listing(conflicting)), ["4"])
-        for text in ("", "No saved resets.\n", "- ana@example.com · plus [openai-codex]: 1 saved\n",
-                     "- " + "a" * 2000 + "@example.com · plus [Ana · openai-codex/3]: 1 saved\n"):
+    def test_conflicts_and_failures(self):
+        conflicting = json.dumps({"accounts": [
+            {"provider": "openai-codex", "credentialId": 3, "email": "ana@example.com"},
+            {"provider": "openai-codex", "credentialId": 3, "email": "bo@example.com"},
+            {"provider": "openai-codex", "credentialId": 4, "email": "cy@example.com"},
+            {"provider": "openai-codex", "credentialId": True, "email": "dee@example.com"},
+            {"provider": "openai-codex", "credentialId": "6", "email": "eve@example.com"},
+            {"provider": "openai-codex", "credentialId": -1, "email": "fay@example.com"},
+            {"provider": "openai-codex", "credentialId": 2 ** 60, "email": "gus@example.com"},
+            {"provider": 7, "credentialId": 8, "email": "hal@example.com"},
+            "not an account",
+        ]})
+        mapping, known = live.parse_reset_listing(conflicting)
+        self.assertEqual((list(mapping), known), (["4"], {3, 4}))
+        for text in ("", "not json", "[]", '{"accounts": []}', '{"accounts": {}}', '{"generatedAt": 1}',
+                     "- ana@example.com · plus [Ana · openai-codex/3]: 1 saved\n", "[" * 100000):
             self.assertIsNone(live.parse_reset_listing(text))
 
-    def test_listing_command_never_names_a_target(self):
-        calls = []
+    def test_a_listed_credential_names_the_native_account_omp_was_merged_into(self):
+        native = dict(live.usage.base_provider("claude"), account="ana@example.com")
+        report = {"provider": "anthropic", "fetchedAt": 1, "limits": [], "metadata": {"email": "ANA@example.com"}}
+        providers = [native]
+        live.usage.merge_omp(providers, ["claude"], [{"reports": [report]}], None, False)
+        self.assertEqual(providers[0]["ompAccountId"], live.parse_reset_listing(LISTING)[0]["5"]["accountId"])
 
-        def run_cli(argv, timeout, **kwargs):
-            calls.append((argv, timeout, kwargs["max_bytes"]))
-            return 0, LISTING.encode(), b""
+    def listing(self, executable="/opt/omp", set_up=True, version="18.11.0", outcome=(0, LISTING.encode())):
+        run_omp = mock.Mock(side_effect=[outcome])
+        omp_version = mock.Mock(return_value=version)
+        with mock.patch.multiple(live.usage, omp_executable=mock.Mock(return_value=executable),
+                                 omp_set_up=mock.Mock(return_value=set_up), omp_version=omp_version, run_omp=run_omp):
+            listing = live.read_reset_listing()
+        return listing, [call.args for call in omp_version.call_args_list + run_omp.call_args_list]
 
-        with mock.patch.object(live.shutil, "which", return_value="/opt/omp"), \
-                mock.patch.object(live.usage, "run_cli", side_effect=run_cli):
-            self.assertEqual(live.read_reset_listing(), LISTING)
-        self.assertEqual(calls, [(["/opt/omp", "usage", "reset", "--no-extensions"], 30, 64 * 1024)])
-        for outcome in ((1, b"- ana@example.com", b""), TimeoutError(), ValueError(), OSError()):
-            with mock.patch.object(live.shutil, "which", return_value="/opt/omp"), \
-                    mock.patch.object(live.usage, "run_cli", side_effect=[outcome]):
-                self.assertIsNone(live.read_reset_listing())
-        with mock.patch.object(live.shutil, "which", return_value=None), \
-                mock.patch.object(live.usage, "run_cli") as run:
-            self.assertIsNone(live.read_reset_listing())
-        run.assert_not_called()
+    def test_only_a_set_up_omp_18_9_or_later_lists_and_it_never_names_a_target(self):
+        listing = ("/opt/omp", ("usage", "reset", "--json", "--no-extensions"), 30, 256 * 1024)
+        for version in ("18.11.0", "18.9.0", "19.0.0"):
+            with self.subTest(version=version):
+                self.assertEqual(self.listing(version=version), (LISTING, [("/opt/omp",), listing]))
+        # Older than `omp usage reset`, or a program that does not answer as omp: nothing is listed.
+        for version in ("18.8.12", "17.30.0", ""):
+            with self.subTest(version=version):
+                self.assertEqual(self.listing(version=version), (None, [("/opt/omp",)]))
+        self.assertEqual(self.listing(set_up=False), (None, []))
+        self.assertEqual(self.listing(executable=None), (None, []))
+        for outcome in ((1, b"{}"), TimeoutError(), ValueError(), OSError()):
+            with self.subTest(outcome=outcome):
+                self.assertEqual(self.listing(outcome=outcome)[0], None)
 
-    def test_map_is_emitted_at_start_and_every_ten_minutes_unless_unreadable(self):
-        lines, pauses = [], []
-        listings = iter([LISTING, None, "garbage"])
+    def test_the_listing_runs_in_quotatanks_private_omp_folder(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "bin").mkdir()
+            (root / "bin" / "omp").write_text(FAKE_OMP)
+            (root / "bin" / "omp").chmod(0o755)
+            (root / "listing.json").write_text(LISTING)
+            (root / "agent").mkdir()
+            (root / "agent" / "agent.db").write_bytes(b"")
+            environment = {"PATH": str(root / "bin"), "HOME": str(root), "XDG_STATE_HOME": str(root / "state"),
+                           "PI_CODING_AGENT_DIR": str(root / "agent"), "OMP_FAKE_LOG": str(root / "omp.log"),
+                           "OMP_FAKE_LISTING": str(root / "listing.json")}
+            with mock.patch.dict(os.environ, environment):
+                self.assertEqual(live.read_reset_listing(), LISTING)
+            workdir = str(root / "state" / "omarchy" / "model-usage" / "omp-workdir")
+            self.assertEqual((root / "omp.log").read_text().splitlines(),
+                             ["--version", workdir, "usage reset --json --no-extensions", workdir])
 
-        def sleep(seconds):
-            pauses.append(seconds)
-            if len(pauses) == 3:
-                raise Done
 
-        with self.assertRaises(Done):
-            live.follow_accounts(lines.append, lambda: next(listings), sleep)
-        self.assertEqual(pauses, [600, 600, 600])
-        self.assertEqual(lines, [{"schemaVersion": 1, "type": "accounts", "map": live.parse_reset_listing(LISTING)}])
+class AccountMapTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 1000.0
+        self.lines, self.listings, self.pending = [], [], []
+        self.answers = [LISTING]
+
+        def read_listing():
+            self.listings.append(self.now)
+            return self.answers.pop(0) if self.answers else None
+
+        self.accounts = live.AccountMap(self.lines.append, read_listing, clock=lambda: self.now,
+                                        start=lambda work: work())
+
+    def request(self, credential, provider="claude"):
+        self.accounts.saw({"schemaVersion": 1, "type": "request", "provider": provider, "credentialId": credential})
+
+    def test_listed_at_start_then_only_for_a_credential_it_did_not_name_at_most_every_ten_minutes(self):
+        self.accounts.refresh()
+        self.assertEqual(self.lines, [{"schemaVersion": 1, "type": "accounts", "map": MAP}])
+        # Known credentials (mapped or ambiguous), requests without one, and providers whose accounts omp does
+        # not list with saved resets never ask omp again.
+        for credential, provider in ((3, "codex"), (5, "claude"), (8, "claude"), (None, "claude"), (70, "kimi"),
+                                     (70, "some-other")):
+            self.request(credential, provider)
+        self.now = 1060.0
+        self.request(70)  # unknown, but the last listing started a minute ago
+        self.assertEqual(self.listings, [1000.0])
+        self.answers = [json.dumps({"accounts": [{"provider": "anthropic", "credentialId": 70,
+                                                  "email": "new@example.com"}]})]
+        self.now = 1600.0
+        self.request(70)
+        self.assertEqual(self.listings, [1000.0, 1600.0])
+        self.assertEqual(self.lines[-1]["map"],
+                         {"70": {"provider": "claude", "accountId": omp_id("anthropic", "new@example.com")}})
+        self.now = 9000.0
+        self.request(70)
+        self.assertEqual(self.listings, [1000.0, 1600.0])
+
+    def test_a_failed_listing_emits_nothing_and_still_counts(self):
+        self.answers = [None]
+        self.accounts.refresh()
+        self.request(3)
+        self.now = 1599.0
+        self.request(3)
+        self.assertEqual((self.lines, self.listings), ([], [1000.0]))
+        self.now = 1600.0
+        self.request(3)
+        self.assertEqual(self.listings, [1000.0, 1600.0])
+
+    def test_one_listing_at_a_time(self):
+        self.accounts.start = self.pending.append
+        self.accounts.refresh()
+        self.now = 5000.0
+        self.request(3)
+        self.assertEqual(len(self.pending), 1)
+        self.pending.pop()()
+        self.assertEqual(self.listings, [5000.0])
+        self.now = 5600.0
+        self.request(70)
+        self.assertEqual(len(self.pending), 1)
 
 
 class LoopTests(unittest.TestCase):
-    def test_heartbeats_and_local_requests(self):
+    def loop(self, *, set_up, accounts=False):
+        """Run the helper with --local for eight seconds of a fake clock; a request is appended after two."""
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "project" / "main.jsonl"
-            path.parent.mkdir()
+            path = Path(temporary) / "sessions" / "project" / "main.jsonl"
+            path.parent.mkdir(parents=True)
             path.write_bytes(b"")
+            agent = Path(temporary) / "agent"
+            agent.mkdir()
+            if set_up:
+                (agent / "agent.db").write_bytes(b"")
             clock, lines = [0.0], []
 
             def sleep(seconds):
@@ -506,11 +614,23 @@ class LoopTests(unittest.TestCase):
                 if clock[0] >= 8:
                     raise Done
 
-            with mock.patch.dict(os.environ, {"OMP_SESSIONS_DIR": temporary}), \
+            omp = {"omp_executable": mock.Mock(return_value="/opt/omp"),
+                   "omp_version": mock.Mock(side_effect=AssertionError("omp ran")),
+                   "run_omp": mock.Mock(side_effect=AssertionError("omp ran"))}
+            environment = {"OMP_SESSIONS_DIR": str(path.parent.parent), "PI_CODING_AGENT_DIR": str(agent)}
+            with mock.patch.dict(os.environ, environment), mock.patch.multiple(live.usage, **omp), \
+                    mock.patch.object(live, "in_background", side_effect=lambda work: work()), \
                     mock.patch.object(live.time, "monotonic", side_effect=lambda: clock[0]), \
                     mock.patch.object(live.time, "sleep", side_effect=sleep), self.assertRaises(Done):
-                live.run(argparse.Namespace(local=True, stats_url=None, accounts=False), lines.append)
-        self.assertEqual([line.get("type", "heartbeat") for line in lines], ["heartbeat", "request", "heartbeat"])
+                live.run(argparse.Namespace(local=True, stats_url=None, accounts=accounts), lines.append)
+        return [line.get("type", "heartbeat") for line in lines]
+
+    def test_heartbeats_and_local_requests(self):
+        self.assertEqual(self.loop(set_up=True), ["heartbeat", "request", "heartbeat"])
+
+    def test_nothing_is_read_or_run_before_omp_has_set_itself_up(self):
+        # Neither a session file nor omp's credential listing: only heartbeats.
+        self.assertEqual(self.loop(set_up=False, accounts=True), ["heartbeat", "heartbeat"])
 
     def test_invalid_stats_url_is_reported_without_connecting(self):
         lines = []
@@ -532,15 +652,17 @@ class ProcessTests(unittest.TestCase):
     def test_process_streams_local_requests_and_remote_activity(self):
         release = threading.Event()
         chunks = [b'data: {"version":3}\n\n', 0.3, b'data: {"version":4}\n\n']
-        with tempfile.TemporaryDirectory() as temporary, \
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as agent, \
                 event_server(lambda handler: send_events(handler, chunks, hold=release)) as (url, requests):
+            (Path(agent) / "agent.db").write_bytes(b"")
             path = Path(temporary) / "-private-folder" / "2033_private-session.jsonl"
             path.parent.mkdir()
             path.write_bytes(assistant(time.time() - 60, text="private history"))
             process = subprocess.Popen(
                 [sys.executable, "-u", str(ROOT / "scripts/omp-live.py"), "--local", "--stats-url", url],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                env={**os.environ, "OMP_SESSIONS_DIR": temporary, "PYTHONDONTWRITEBYTECODE": "1"})
+                env={**os.environ, "OMP_SESSIONS_DIR": temporary, "PI_CODING_AGENT_DIR": agent,
+                     "PYTHONDONTWRITEBYTECODE": "1"})
             documents, body, appended = [], b"", False
             try:
                 deadline = time.monotonic() + 10

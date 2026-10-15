@@ -87,7 +87,7 @@ class ServerTests(unittest.TestCase):
         self.port = self.server.server_port
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self.thread.start()
-        self.url = f"http://127.0.0.1:{self.port}/base/"
+        self.url = f"http://127.0.0.1:{self.port}/"
 
     def tearDown(self):
         self.server.shutdown()
@@ -107,7 +107,7 @@ class ServerTests(unittest.TestCase):
             with self.subTest(days=days):
                 result = omp_stats.collect(self.url, days)
                 self.assertEqual(sorted(self.requests), [
-                    (f"/base/api/stats/{name}?range={period}", "application/json")
+                    (f"/api/stats/{name}?range={period}", "application/json")
                     for name in ("folders", "models", "overview", "providers")])
                 self.assertEqual(result["bucketMs"], omp_stats.BUCKET_MS[days])
                 self.assertTrue(result["local"])
@@ -171,10 +171,38 @@ class ServerTests(unittest.TestCase):
 
     def test_url_rule_is_checked_before_any_request(self):
         for url in (f"http://203.0.113.5:{self.port}", f"http://stats.example.com:{self.port}",
-                    f"https://user:secret@127.0.0.1:{self.port}", f"{self.url}?range=30d", ""):
+                    f"https://user:secret@127.0.0.1:{self.port}", f"{self.url}?range=30d",
+                    f"{self.url}api/session/trace", f"http://127.0.0.1:{self.port}/base/", ""):
             with self.subTest(url=url):
                 self.assert_fails("invalid_url", url=url)
         self.assertEqual(self.requests, [])
+
+    def test_proxy_settings_are_ignored(self):
+        proxied = []
+
+        class Proxy(BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                proxied.append(self.path)
+                self.send_response(502)
+                self.end_headers()
+
+        proxy = ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
+        thread = threading.Thread(target=proxy.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        thread.start()
+        address = f"http://127.0.0.1:{proxy.server_port}"
+        try:
+            with mock.patch.dict("os.environ", {"http_proxy": address, "https_proxy": address, "all_proxy": address,
+                                                "no_proxy": "", "NO_PROXY": ""}):
+                omp_stats.collect(self.url, 7)
+        finally:
+            proxy.shutdown()
+            proxy.server_close()
+            thread.join()
+        self.assertEqual(proxied, [])
+        self.assertEqual(len(self.requests), 4)
 
 
 class UrlRuleTests(unittest.TestCase):
@@ -187,14 +215,15 @@ class UrlRuleTests(unittest.TestCase):
             ("http://192.168.1.20:3000", "http://192.168.1.20:3000"),
             ("http://100.101.102.103:3000", "http://100.101.102.103:3000"),
             ("http://devbox:3000", "http://devbox:3000"),
-            ("http://devbox.example-tailnet.ts.net:3000/omp", "http://devbox.example-tailnet.ts.net:3000/omp"),
+            ("http://devbox.example-tailnet.ts.net:3000/", "http://devbox.example-tailnet.ts.net:3000"),
         ):
             with self.subTest(url=url):
                 self.assertEqual(omp_stats.normalize_url(url), expected)
         for url in ("http://stats.example.com:3000", "http://203.0.113.5:3000", "ftp://stats.example.com",
                     "https://user:secret@stats.example.com", "https://stats.example.com/?token=x",
                     "https://stats.example.com/#x", "https://stats.example.com/a/../b", "http://127.0.0.1:99999",
-                    "http://127.0.0.1\n:3000", ""):
+                    "http://127.0.0.1\n:3000", "http://devbox.example-tailnet.ts.net:3000/omp",
+                    "http://devbox:3847/api/session/trace", "http://devbox:1/\\..\\x", ""):
             with self.subTest(url=url), self.assertRaises(omp_stats.OmpStatsError) as caught:
                 omp_stats.normalize_url(url)
             self.assertEqual(caught.exception.kind, "invalid_url")
