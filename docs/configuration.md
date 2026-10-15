@@ -21,6 +21,8 @@ Quotatank is a monitor, not an authentication manager. Its backend reads credent
 | Grok CLI | `https://cli-chat-proxy.grok.com/v1/billing` | `${GROK_HOME:-~/.grok}/auth.json` (`grok login`) |
 | Kiro | AWS `GetUsageLimits` | `kiro-cli`'s `data.sqlite3`, opened read-only (`KIRO_DATA_DIR`) |
 | JetBrains AI | No network: the IDE's `AIAssistantQuotaManager2.xml` and its newest `idea.log` quota line | Nothing; the IDE's own files under `~/.config/JetBrains` and `~/.cache/JetBrains` |
+| Nous Portal | `GET https://portal.nousresearch.com/api/oauth/account` | Hermes Agent's login in `$HERMES_HOME/auth.json`, then `shared/nous_auth.json` (default `~/.hermes`; `hermes portal`), or `NOUS_PORTAL_ACCESS_TOKEN`. An expired token is reported, never refreshed |
+| Muse Code | `POST https://api.meta.ai/muse-code/key`, the call the `muse` CLI makes for its own key; only the usage fields are read and the returned key is discarded | The device token in `~/.config/muse/auth.json` (`muse login`), or `MUSE_AUTH_PATH` |
 | Droid (Factory) | Factory's billing limits API | A saved key or `FACTORY_API_KEY`, then `FACTORY_API_KEY` in `~/.factory/.env` |
 | Amp | Amp's balance API | A saved key or `AMP_API_KEY`, then Amp's `secrets.json` |
 | Kilo Code | Kilo's credit and Kilo Pass API | A saved key or `KILO_API_KEY`, then Kilo's `auth.json` |
@@ -41,6 +43,15 @@ Each of these is off until turned on under **Settings → Providers**. Save a ke
 | Warp | Warp's `GetRequestLimitInfo` GraphQL query | `WARP_API_KEY`, `WARP_TOKEN` |
 | ZenMux | Management API subscription detail and pay-as-you-go balance | `ZENMUX_MANAGEMENT_API_KEY` |
 | Cline | `GET https://api.cline.bot/api/v1/users/me/plan/usage-limits` | `CLINE_API_KEY`, `CLINEPASS_API_KEY` |
+| Alibaba Coding Plan | The Model Studio console's `queryCodingPlanInstanceInfoV2` on `modelstudio.console.alibabacloud.com`, then `bailian.console.aliyun.com` when the key belongs there | `ALIBABA_CODING_PLAN_API_KEY`, `ALIBABA_QWEN_API_KEY`, `DASHSCOPE_API_KEY` |
+| Command Code | `GET /alpha/whoami`, then `/alpha/billing/credits` (for the key's organisation) and `/alpha/billing/subscriptions` on `api.commandcode.ai` | `COMMAND_CODE_API_KEY` |
+| DevPass | `GET https://api.llmgateway.io/v1/key` | `DEVPASS_API_KEY` |
+| xKiro | `GET https://api.xkiro.com/v1/usage` | `XKIRO_API_KEY` |
+| IBM Bob | `GET https://api.us-east.bob.ibm.com/admin/v1/profile`, then each team's budget on its `bob.ibm.com` region | `BOBSHELL_API_KEY` |
+| Umans | `GET https://api.code.umans.ai/v1/usage` | `UMANS_AI_CODING_PLAN_API_KEY` |
+| Neuralwatt | `GET https://api.neuralwatt.com/v1/quota` | `NEURALWATT_API_KEY` |
+| Aixy | `GET https://api.aixy-gateway.com/v1/usage` | `AIXY_API_KEY` |
+| ClawRouter | `GET https://clawrouter.openclaw.ai/v1/usage` | `CLAWROUTER_API_KEY` |
 | OpenRouter | `GET /api/v1/key` and `GET /api/v1/credits` | `OPENROUTER_API_KEY` |
 | DeepSeek | `GET /user/balance` | `DEEPSEEK_API_KEY` |
 | Moonshot | `GET /v1/users/me/balance` on `api.moonshot.ai`, then `api.moonshot.cn` | `MOONSHOT_API_KEY` |
@@ -48,6 +59,13 @@ Each of these is off until turned on under **Settings → Providers**. Save a ke
 | DeepInfra | Payment checklist and this month's usage | `DEEPINFRA_API_KEY`, `DEEPINFRA_TOKEN` |
 | Vercel AI Gateway | `GET https://ai-gateway.vercel.sh/v1/credits` | `AI_GATEWAY_API_KEY` |
 | Poe | `GET https://api.poe.com/usage/current_balance` | `POE_API_KEY` |
+| Atlas Cloud | `GET https://api.atlascloud.ai/public/v1/balance` (needs a key with balance access) | `ATLASCLOUD_API_KEY` |
+| Charm Hyper | `GET https://hyper.charm.land/v1/credits` | `HYPER_API_KEY` |
+| Sail Research | `GET https://api.sailresearch.com/v2/usage/summary?range=30d` | `SAIL_API_KEY` |
+| Sofya | `GET https://sofya.co/v1/auth/me` | `SOFYA_API_KEY` |
+| v0 | `GET https://api.v0.dev/v1/user/billing` | `V0_API_KEY` |
+| Manus | `GET https://api.manus.ai/v2/usage.availableCredits` | `MANUS_API_KEY` |
+| TypeSafe | The console's billing page: its Next.js billing action, found in the page's scripts and cached for 12 hours. TypeSafe has no balance API for keys, so the credential is the console's `Cookie` header | `TYPESAFE_COOKIE` |
 
 A key is only ever sent to its own provider. Where a company runs an international and a China platform (Z.ai/BigModel, MiniMax, Moonshot), the international host is asked first and the other one only when the key is rejected.
 
@@ -200,7 +218,7 @@ In **Settings → Costs → Custom prices**, add the exact model ID and its inpu
 | `barProviders` | every provider | Enabled providers allowed to show percentage chips; independent of popup visibility |
 | `warningThreshold` | `25` | Warn when a limit has this much or less left. Stored as % left; Settings show it as % used under `Used` (25 left is 75 used) |
 | `criticalThreshold` | `10` | Critical when this much or less is left. Stored as % left; must not be looser than `warningThreshold` |
-| `creditWarningUsd` | `5` | Low-balance warning for prepaid providers (OpenRouter, DeepSeek, Moonshot, Venice, DeepInfra, Vercel AI Gateway, Poe): what can still be spent, in the balance's currency or unit, at or below this amount |
+| `creditWarningUsd` | `5` | Low-balance warning for prepaid providers (OpenRouter, DeepSeek, Moonshot, Venice, DeepInfra, Vercel AI Gateway, Poe, Atlas Cloud, Charm Hyper, Sail Research, Sofya, v0, Manus, TypeSafe): what can still be spent, in the balance's currency or unit, at or below this amount |
 | `creditCriticalUsd` | `1` | Low-balance critical amount; must not be above `creditWarningUsd` |
 | `costPriceOverrides` | `"{}"` | JSON string managed by Custom model prices; exact IDs mapped to USD-per-million rates |
 | `costLocalProviders` | `["claude", "codex", "opencode"]` | Local cost sources (`claude`, `codex`, `opencode`), independent of quota providers |

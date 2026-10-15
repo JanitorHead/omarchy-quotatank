@@ -31,8 +31,10 @@ KEY_NAME = re.compile(r"key-[0-9a-f]{32}\.key")
 # tests/test_project.py keeps the three in step.
 KEY_PROVIDERS = (
     "factory", "amp", "kilo", "codebuff", "huggingface",
-    "zai", "minimax", "synthetic", "chutes", "ollama", "warp", "zenmux", "clinepass",
-    "openrouter", "deepseek", "moonshot", "venice", "deepinfra", "vercel", "poe",
+    "zai", "minimax", "synthetic", "chutes", "ollama", "warp", "zenmux", "clinepass", "alibaba",
+    "commandcode", "devpass", "xkiro", "ibmbob", "umans", "neuralwatt", "aixy", "clawrouter",
+    "openrouter", "deepseek", "moonshot", "venice", "deepinfra", "vercel", "poe", "atlascloud",
+    "hyper", "sailresearch", "sofya", "v0", "manus", "typesafe",
 )
 SETTING_NAMES = frozenset({"cliproxyKeyFile", "costKeeperPasswordFile"} | {provider + "KeyFile" for provider in KEY_PROVIDERS})
 

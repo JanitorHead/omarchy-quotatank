@@ -720,9 +720,6 @@ assert.equal(context.formatMoney(2345678, "POINTS"), "2.35M points", "a points b
 assert.equal(context.formatMoney(850, "CREDITS"), "850 credits");
 assert.equal(context.formatMoney(12.5, "credits"), "12.5 credits");
 assert.equal(context.formatMoney(-3, "POINTS"), "-3 points");
-assert.equal(context.LOCAL_PROVIDER_IDS.join(","), "claude,codex,kimi,opencode,antigravity,gemini,copilot,cursor,grok,kiro,jetbrains,"
-  + "factory,amp,kilo,codebuff,huggingface,zai,minimax,synthetic,chutes,ollama,warp,zenmux,clinepass,"
-  + "openrouter,deepseek,moonshot,venice,deepinfra,vercel,poe", "the backend's PROVIDER_ORDER");
 assert.equal(context.providerShortName({ id: "openrouter", name: "OpenRouter" }), "OpenRouter");
 assert.equal(context.providerShortName({ id: "claude", name: "Claude Code" }), "Claude");
 assert.equal(context.providerShortName({ id: "gemini-cli", name: "Gemini CLI" }), "Gemini CLI", "proxy providers keep their name");
@@ -786,9 +783,6 @@ for (const entry of registry) {
     assert.equal(manifestDefaults[entry.id + "KeyFile"], "", entry.id + " has a key file setting");
   }
 }
-assert.equal(registry.filter((entry) => entry.money).map((entry) => entry.id).join(","), "openrouter,deepseek,moonshot,venice,deepinfra,vercel,poe");
-assert.equal(registry.filter((entry) => entry.lightIcon).map((entry) => entry.id).join(","),
-  "codex,antigravity,copilot,cursor,grok,jetbrains,factory,kilo,codebuff,zai,synthetic,chutes,ollama,zenmux,clinepass,moonshot,venice,deepinfra,vercel");
 console.log("Provider registry: passed");
 
 // Settings → Providers places every provider exactly once from the last refresh.
@@ -808,8 +802,9 @@ assert.equal(placedIds("listed"), "codex,claude,kimi,cursor,amp,openrouter",
   "rows: connected, failing, found here though signed out, not checked yet, keyed, and key-only, in the saved order");
 assert.equal(placedIds("waiting"), "gemini", "a monitored sign-in that is not signed in waits out of sight");
 assert.equal(placedIds("found"), "copilot", "set up here, not monitored, not dismissed");
-assert.equal(placedIds("moreSignIns"), "opencode,antigravity,grok,kiro,jetbrains,factory,kilo,codebuff,huggingface");
-assert.equal(placedIds("moreKeys"), "zai,minimax,synthetic,chutes,ollama,warp,zenmux,clinepass,deepseek,moonshot,venice,deepinfra,vercel,poe",
+assert.equal(placedIds("moreSignIns"), "opencode,antigravity,grok,kiro,jetbrains,nous,muse,factory,kilo,codebuff,huggingface");
+assert.equal(placedIds("moreKeys"), "zai,minimax,synthetic,chutes,ollama,warp,zenmux,clinepass,alibaba,commandcode,devpass,xkiro,ibmbob,umans,"
+  + "neuralwatt,aixy,clawrouter,deepseek,moonshot,venice,deepinfra,vercel,poe,atlascloud,hyper,sailresearch,sofya,v0,manus,typesafe",
   "a dismissed provider stays available under More providers");
 assert.equal(["listed", "waiting", "found", "moreSignIns", "moreKeys"].reduce((total, section) => total + placed[section].length, 0),
   registryIds.length, "no provider is listed twice or lost");

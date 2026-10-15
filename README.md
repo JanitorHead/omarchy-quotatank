@@ -6,15 +6,39 @@
 
 [![Release](https://img.shields.io/github/v/release/JanitorHead/omarchy-quotatank?label=release)](https://github.com/JanitorHead/omarchy-quotatank/releases) [![License: MIT](https://img.shields.io/github/license/JanitorHead/omarchy-quotatank)](LICENSE)
 
-[Install](#install) · [Limits and pace](#limits-and-pace) · [Balances](#balances-not-just-percentages) · [Menu bar](#menu-bar) · [Accounts](#one-card-per-account) · [Costs](#costs) · [Settings](#settings-that-apply-as-you-go)
+[Install](#install) · [Providers](#providers) · [Limits and pace](#limits-and-pace) · [Balances](#balances-not-just-percentages) · [Menu bar](#menu-bar) · [Accounts](#one-card-per-account) · [Costs](#costs) · [Settings](#settings-that-apply-as-you-go)
 
 </div>
 
 ![Menu bar chips for the four providers closest to a limit and a +4 chip, with the Limits panel open below: tiles for Claude, Codex, Gemini, Antigravity, Copilot, Cursor, Z.ai, and OpenRouter, a headline that reads 5-hour limit runs out in 1h 11m, and three limit cards; beside it the Costs tab with a 30-day chart and the model breakdown](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/hero.png)
 
-Quotatank reads the plan limits of the coding agents you already signed in to — **Claude Code, OpenAI Codex, Gemini CLI, Antigravity, GitHub Copilot, Cursor, Kimi Code, OpenCode Go, Grok, Kiro, JetBrains AI, Droid, Amp, Kilo Code, Codebuff, and Hugging Face** — the coding plans and prepaid balances behind an API key — **Z.ai, MiniMax, Synthetic, Chutes, Ollama Cloud, Warp, Cline, ZenMux, OpenRouter, DeepSeek, Moonshot, Venice, DeepInfra, Vercel AI Gateway, and Poe** — or every account behind a **Fusebox or CLIProxyAPI** server. A second tab estimates what your recorded tokens would cost at API rates.
+Quotatank reads the plan limits and prepaid balances of **49 AI coding providers**, with the sign-ins and keys you already have, or every account behind a **Fusebox or CLIProxyAPI** server. A second tab estimates what your recorded tokens would cost at API rates.
 
 <sub>Screenshots use fixture data in the Tokyo Night theme.</sub>
+
+## Providers
+
+**49 providers**, plus every account on a proxy. Each one is read with what it already uses on this computer; nothing to configure for a sign-in, one paste for a key. [Connect a source](#connect-a-source) says what each one shows and where its credentials come from.
+
+![Every supported provider with its mark, in three groups: 18 sign-ins on this computer, 17 coding plans with an API key, and 14 prepaid balances, plus every account on a Fusebox or CLIProxyAPI server](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/providers.png)
+
+`key` marks a sign-in that can also use an API key instead.
+
+**Sign-ins on this computer.** Plan limits and allowances (5-hour, daily, weekly, monthly), read from the CLI, app, or IDE you are signed in to.
+
+Claude Code · OpenAI Codex · Gemini CLI · Antigravity · GitHub Copilot · Cursor · Kimi Code · OpenCode Go `key` · Grok CLI · Kiro · JetBrains AI · Nous Portal (Hermes Agent) · Muse Code (Meta) · Droid (Factory) `key` · Amp `key` · Kilo Code `key` · Codebuff `key` · Hugging Face `key`
+
+**Coding plans with an API key.** Subscription limits and credit packs.
+
+Z.ai Coding Plan (and BigModel) · MiniMax Coding Plan · Synthetic · Chutes · Ollama Cloud · Warp · Cline (ClinePass) · ZenMux · Alibaba Coding Plan (Qwen) · Command Code · DevPass (LLM Gateway) · xKiro · IBM Bob · Umans · Neuralwatt · Aixy · ClawRouter
+
+**Prepaid balances.** What you can still spend, in the provider's own currency, with low-balance alerts.
+
+OpenRouter · DeepSeek · Moonshot · Venice · DeepInfra · Vercel AI Gateway · Poe · Atlas Cloud · Charm Hyper · Sail Research · Sofya · v0 · Manus · TypeSafe (Jev)
+
+**Proxies.** Every Claude, Codex, Kimi, and Antigravity account on the server gets its own card, with live activity on Fusebox.
+
+Fusebox · CLIProxyAPI
 
 ## Why it is different
 
@@ -134,7 +158,7 @@ The gear opens an index of six pages, and each row already says what the page is
 
 | Page | What lives there |
 |---|---|
-| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server). **Found on this computer** offers sign-ins Quotatank detected but is not monitoring, with **Monitor** and **Ignore**. **Monitored** lists the providers in use, each with what the last check found (`Connected · Claude Max 20x`, `Sign-in expired`, `No key saved`) and, when signed out, a **Sign in** or **Install and sign in** button; a grip to drag it into the order tiles and chips follow; **Monitor** and **Menu bar** switches; its key editor when it takes an API key; and **Customize** to read it as used or left and pin the limits its chip shows. **More providers** folds away everything else, filterable by name, with the same buttons, a link to get each tool, and a link to each provider's key page |
+| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server). **Found on this computer** offers sign-ins Quotatank detected but is not monitoring, with **Monitor** and **Ignore**. **Monitored** gives each provider in use its own card with its mark: what the last check found (`Connected · Claude Max 20x`, `Sign-in expired`, `No key saved`) and, when signed out, a **Sign in** or **Install and sign in** button; a grip to drag it into the order tiles and chips follow; **Monitor** and **Menu bar** switches; its key editor when it takes an API key; and **Customize** to read it as used or left and pin the limits its chip shows. **More providers** folds away everything else, filterable by name, with the same buttons, a link to get each tool, and a link to each provider's key page |
 | **Menu bar** | Chips or the widget icon, the limit each chip shows, a second limit, reset times and formats, how many chips the bar holds, hiding used-up providers |
 | **Alerts** | Desktop notifications, the percentage thresholds, and the low-balance amounts |
 | **Display** | Used or left, provider colors, square cards, hidden account emails |
@@ -192,6 +216,8 @@ Sign in to each tool the way you already do, or from Quotatank: **Sign in** open
 | Grok CLI | `grok login` | The billing-period allowance |
 | Kiro | `kiro-cli login` | Monthly credits and overage |
 | JetBrains AI | AI Assistant in any JetBrains IDE | The monthly quota and top-up credits, read from the IDE's own files |
+| Nous Portal | `hermes portal` (Hermes Agent) | Monthly credits and the top-up balance |
+| Muse Code | `muse login` | 5-hour and weekly subscription limits |
 | Droid (Factory) | `droid`, or a saved `FACTORY_API_KEY` | Weekly and monthly token allowances |
 | Amp | `amp login`, or a saved key | Free daily credits and monthly plan usage |
 | Kilo Code | `kilo auth login`, or a saved key | The Kilo Pass allowance and credit balance |
@@ -212,6 +238,15 @@ Turn the provider on under **Settings → Providers → More providers**, then s
 | Warp | Personal API key, or `WARP_API_KEY` | Monthly AI credits and add-on credits |
 | Cline | API key, or `CLINE_API_KEY` | ClinePass 5-hour, weekly, and monthly limits |
 | ZenMux | Management key, or `ZENMUX_MANAGEMENT_API_KEY` | 5-hour and 7-day flow limits, pay-as-you-go credits |
+| Alibaba Coding Plan | API key, or `ALIBABA_CODING_PLAN_API_KEY` | 5-hour, weekly, and monthly Coding Plan quotas |
+| Command Code | API key, or `COMMAND_CODE_API_KEY` | Monthly plan credits, the 5-hour and weekly limits, and purchased credits; a team key shows its organisation's pool |
+| DevPass | API key, or `DEVPASS_API_KEY` | Plan credits for the cycle and the premium weekly limit |
+| xKiro | API key, or `XKIRO_API_KEY` | Plan windows, the daily free-token allowance, and the wallet balance |
+| IBM Bob | API key, or `BOBSHELL_API_KEY` | Monthly Bobcoin usage against the team budget |
+| Umans | API key, or `UMANS_AI_CODING_PLAN_API_KEY` | The 5-hour request limit (model-weighted) |
+| Neuralwatt | API key, or `NEURALWATT_API_KEY` | The billing period's kWh allowance, the key's allowance, and the prepaid balance |
+| Aixy | API key, or `AIXY_API_KEY` | Each budget that applies to the key |
+| ClawRouter | API key, or `CLAWROUTER_API_KEY` | The monthly spend budget and the month's cost |
 | OpenRouter | API key, or `OPENROUTER_API_KEY` | The key's limits, the balance, and spend |
 | DeepSeek | API key, or `DEEPSEEK_API_KEY` | The platform balance per currency |
 | Moonshot | API key, or `MOONSHOT_API_KEY` | The balance, international or China |
@@ -219,8 +254,15 @@ Turn the provider on under **Settings → Providers → More providers**, then s
 | DeepInfra | API key, or `DEEPINFRA_API_KEY` | The balance, spending limit, and this month's spend |
 | Vercel AI Gateway | API key, or `AI_GATEWAY_API_KEY` | Gateway credits and lifetime spend |
 | Poe | API key, or `POE_API_KEY` | The points balance |
+| Atlas Cloud | API key with balance access, or `ATLASCLOUD_API_KEY` | The USD balance |
+| Charm Hyper | API key, or `HYPER_API_KEY` | The Hypercredit balance |
+| Sail Research | API key, or `SAIL_API_KEY` | The credit balance and recent spend |
+| Sofya | API key, or `SOFYA_API_KEY` | Available credits, and the free-tier reset |
+| v0 | API key, or `V0_API_KEY` | The billing allowance, or the prepaid balance |
+| Manus | API key, or `MANUS_API_KEY` | The credit balance and the next refresh |
+| TypeSafe | The console's Cookie header, or `TYPESAFE_COOKIE`: TypeSafe has no balance API for keys | The prepaid balance, this cycle's spend, and credit expiry |
 
-Quotatank reads existing credentials and never writes authentication state; sign-in stays with each tool. Claude Code, OpenAI Codex, OpenCode Go, OpenRouter, and GitHub Copilot have been checked against live accounts. The other providers follow their documentation and established open-source readers and are tested against recorded responses. The [configuration reference](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#providers-and-authentication) lists the files and endpoints each provider uses.
+Quotatank reads existing credentials and never writes authentication state; sign-in stays with each tool. Claude Code, OpenAI Codex, OpenCode Go, OpenRouter, and GitHub Copilot have been checked against live accounts. The other providers follow their documentation and established open-source readers (CodexBar, oh-my-pi) and are tested against recorded responses; the ones without public documentation (Alibaba Coding Plan, IBM Bob, ClawRouter, TypeSafe) can break when the provider changes its site. The [configuration reference](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#providers-and-authentication) lists the files and endpoints each provider uses.
 
 ### Fusebox or CLIProxyAPI
 

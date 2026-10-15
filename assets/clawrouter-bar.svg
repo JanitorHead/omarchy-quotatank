@@ -1,0 +1,11 @@
+<svg width="24" height="24" viewBox="3.005 2.630 17.989 17.989" xmlns="http://www.w3.org/2000/svg">
+<title>ClawRouter</title>
+<g transform="scale(0.75)">
+<path d="M8 8 Q10 16 9 25" stroke="#fff" stroke-width="3" stroke-linecap="round" fill="none"/>
+<path d="M16 6 Q16 16 16 25" stroke="#fff" stroke-width="3" stroke-linecap="round" fill="none"/>
+<path d="M24 8 Q22 16 23 25" stroke="#fff" stroke-width="3" stroke-linecap="round" fill="none"/>
+<circle cx="9" cy="25" r="1.5" fill="#fff"/>
+<circle cx="16" cy="25" r="1.5" fill="#fff"/>
+<circle cx="23" cy="25" r="1.5" fill="#fff"/>
+</g>
+</svg>

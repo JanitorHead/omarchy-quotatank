@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Effects
 import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
@@ -34,6 +35,12 @@ Column {
   readonly property string proxyName: UsageLogic.proxyName(proxyImplementation)
   readonly property bool proxyMode: value("usageSource", "direct") === "cliproxy"
   readonly property string quotaMode: String(value("quotaMode", "Used")) === "Remaining" ? "Remaining" : "Used"
+  // Each monitored provider is a card like the ones in Limits (same fill, border, and corners), so
+  // its switches, key, and Customize read as one block.
+  readonly property real providerCardRadius: value("squareUsageCards", true) === true ? 0 : Style.cornerRadius
+  readonly property real providerCardPadding: Style.spacing.lg
+  readonly property real providerCardInset: providerCardPadding
+    + Border.right(Border.controlSpec("normal", foreground, Commons.Color.accent, urgent))
   readonly property bool percentageDisplay: String(value("barDisplayMode", "Percentages")) === "Percentages"
   readonly property var enabledProviders: UsageLogic.listOrEmpty(value("enabledProviders", UsageLogic.DEFAULT_SETTINGS.enabledProviders))
   readonly property var barProviders: UsageLogic.listOrEmpty(value("barProviders", UsageLogic.DEFAULT_SETTINGS.barProviders))
@@ -511,8 +518,9 @@ Column {
           required property var modelData
           width: parent.width
           spacing: Style.spacing.sm
+          ProviderMark { providerId: foundRow.modelData.id; anchors.verticalCenter: parent.verticalCenter }
           Label {
-            width: parent.width - foundMonitor.width - foundIgnore.width - parent.spacing * 2
+            width: parent.width - Style.space(14) - foundMonitor.width - foundIgnore.width - parent.spacing * 3
             anchors.verticalCenter: parent.verticalCenter
             text: foundRow.modelData.name
           }
@@ -549,10 +557,13 @@ Column {
       Hint { text: "Set up on this computer but not monitored. Ignored providers stay under More providers." }
     }
 
+    // Headings sit over the switches inside the cards, so they share the cards' inner edges.
     Row {
       visible: root.providerRows.length > 0
       width: parent.width
-      Label { width: parent.width - monitorHeading.width - barHeading.width; text: root.proxyMode ? "Provider" : "Monitored"; font.bold: true }
+      leftPadding: root.providerCardInset
+      rightPadding: root.providerCardInset
+      Label { width: parent.width - parent.leftPadding - parent.rightPadding - monitorHeading.width - barHeading.width; text: root.proxyMode ? "Provider" : "Monitored"; font.bold: true }
       Label { id: monitorHeading; visible: !root.proxyMode; width: visible ? Style.space(82) : 0; text: "Monitor"; horizontalAlignment: Text.AlignHCenter }
       Label { id: barHeading; visible: root.percentageDisplay; width: visible ? Style.space(82) : 0; text: "Menu bar"; horizontalAlignment: Text.AlignHCenter }
     }
@@ -576,7 +587,7 @@ Column {
       moveDisplaced: Transition { NumberAnimation { properties: "y"; duration: 150; easing.type: Easing.OutCubic } }
       move: Transition { NumberAnimation { properties: "y"; duration: 150; easing.type: Easing.OutCubic } }
 
-      delegate: Rectangle {
+      delegate: Ui.BorderSurface {
         id: providerRow
         required property string providerId
         required property string name
@@ -594,20 +605,29 @@ Column {
         readonly property bool keyEditor: !!entry && entry.auth !== "signin"
           && (entry.auth === "key" || hasKey || !reading || reading.status !== "ok")
         readonly property bool dragging: providerList.draggingId === providerId
+        // Key editor and Customize line up with the name, under the grip and the mark.
+        readonly property real indent: grip.width + mark.width + Style.spacing.sm * 2
         width: providerList.width
-        height: rowContent.implicitHeight
+        height: rowContent.implicitHeight + contentTopInset + contentBottomInset
         z: dragging ? 2 : 1
-        radius: Style.cornerRadius
-        color: dragging ? Style.hoverFillFor(root.foreground, Commons.Color.accent, root.urgent) : "transparent"
-        border.width: dragging ? Style.spacing.hairline : 0
-        border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.25)
+        padding: root.providerCardPadding
+        radius: root.providerCardRadius
+        color: dragging ? Style.hoverFillFor(root.foreground, Commons.Color.accent, root.urgent)
+          : Style.normalFillFor(root.foreground, Commons.Color.accent, root.urgent)
+        borderSpec: Border.controlSpec(dragging ? "hover-cursor" : "normal", root.foreground, Commons.Color.accent, root.urgent)
 
         Column {
           id: rowContent
-          width: parent.width
+          x: providerRow.contentLeftInset
+          y: providerRow.contentTopInset
+          width: providerRow.width - providerRow.contentLeftInset - providerRow.contentRightInset
           spacing: Style.spacing.md
 
+          // Grip, mark, and switches line up with the name, not with the middle of the text block,
+          // so a status line or a Sign in button below the name does not push them down.
           Row {
+            id: providerHeader
+            readonly property real band: Math.max(nameLabel.implicitHeight, grip.height, monitorSwitch.implicitHeight)
             width: parent.width
             spacing: Style.spacing.sm
 
@@ -617,7 +637,8 @@ Column {
               readonly property bool hot: gripArea.containsMouse || gripArea.pressed || activeFocus
               width: Style.space(16)
               height: Style.space(24)
-              anchors.verticalCenter: parent.verticalCenter
+              anchors.top: parent.top
+              anchors.topMargin: (providerHeader.band - height) / 2
               activeFocusOnTab: true
               Accessible.role: Accessible.Button
               Accessible.name: "Reorder " + providerRow.name + ". Drag, or use the up and down arrow keys."
@@ -665,11 +686,18 @@ Column {
                 onCanceled: root.finishProviderDrag()
               }
             }
+            ProviderMark {
+              id: mark
+              providerId: providerRow.providerId
+              anchors.top: parent.top
+              anchors.topMargin: (providerHeader.band - height) / 2
+            }
             Column {
-              width: parent.width - grip.width - monitorSwitch.width - barSwitch.width - parent.spacing * 3
-              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - grip.width - mark.width - monitorSwitch.width - barSwitch.width - parent.spacing * 4
+              anchors.top: parent.top
+              topPadding: (providerHeader.band - nameLabel.implicitHeight) / 2
               spacing: Style.spacing.xxs
-              Label { text: providerRow.name }
+              Label { id: nameLabel; text: providerRow.name; font.bold: true }
               // What the last refresh found: connected, or what is missing and how to fix it.
               Hint {
                 objectName: "status-" + providerRow.providerId
@@ -689,6 +717,8 @@ Column {
               id: monitorSwitch
               visible: !root.proxyMode
               width: visible ? Style.space(82) : 0
+              anchors.top: parent.top
+              anchors.topMargin: (providerHeader.band - implicitHeight) / 2
               objectName: "monitor-" + providerRow.providerId
               Accessible.name: "Monitor " + providerRow.name
               checked: providerRow.on
@@ -698,6 +728,8 @@ Column {
               id: barSwitch
               visible: root.percentageDisplay
               width: visible ? Style.space(82) : 0
+              anchors.top: parent.top
+              anchors.topMargin: (providerHeader.band - implicitHeight) / 2
               objectName: "bar-" + providerRow.providerId
               Accessible.name: "Show " + providerRow.name + " in the menu bar"
               enabled: providerRow.on
@@ -711,20 +743,20 @@ Column {
           Column {
             visible: providerRow.keyEditor && providerRow.on
             width: parent.width
-            leftPadding: Style.spacing.xl
+            leftPadding: providerRow.indent
             spacing: Style.spacing.md
 
             KeyRow {
               width: parent.width - parent.leftPadding
               objectName: providerRow.providerId + "KeyRow"
-              label: "API key"
+              label: providerRow.entry ? providerRow.entry.keyLabel : "API key"
               settingKey: providerRow.providerId + "KeyFile"
               hint: providerRow.entry ? UsageLogic.keyHint(providerRow.entry) : ""
             }
             LinkButton {
               objectName: providerRow.providerId + "KeysLink"
               visible: !!providerRow.entry && providerRow.entry.keysUrl !== ""
-              text: "Get a key ↗"
+              text: providerRow.entry ? providerRow.entry.keysLinkText : "Get a key ↗"
               url: providerRow.entry ? providerRow.entry.keysUrl : ""
             }
             // No key page to link to: the hint says where the key is created.
@@ -739,7 +771,7 @@ Column {
           Column {
             visible: providerRow.on
             width: parent.width
-            leftPadding: Style.spacing.xl
+            leftPadding: providerRow.indent
             SettingsSection {
               id: customizeSection
               objectName: "customize-" + providerRow.providerId
@@ -1852,9 +1884,17 @@ Column {
     width: parent.width
     spacing: Style.spacing.xs
 
+    // A hairline between options keeps a long list scannable without the weight of a card.
+    Rectangle {
+      width: parent.width
+      height: Style.spacing.hairline
+      color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
+    }
     Row {
       width: parent.width
-      Label { width: parent.width - optionSwitch.width; anchors.verticalCenter: parent.verticalCenter; text: option.modelData.name }
+      spacing: Style.spacing.sm
+      ProviderMark { id: optionMark; providerId: option.modelData.id; anchors.verticalCenter: parent.verticalCenter }
+      Label { width: parent.width - optionMark.width - optionSwitch.width - parent.spacing * 2; anchors.verticalCenter: parent.verticalCenter; text: option.modelData.name }
       Toggle {
         id: optionSwitch
         objectName: "monitor-" + option.modelData.id
@@ -1864,52 +1904,99 @@ Column {
         onToggled: root.setMonitored(option.modelData.id, !option.on)
       }
     }
-    Row {
-      // The sign-in hint is what the Sign in / Install button does, so the button replaces it.
-      readonly property bool hintShown: option.hint !== ""
-        && !(option.hint === option.modelData.signIn && (optionSetup.action.kind === "signin" || optionSetup.action.kind === "install"))
-      visible: hintShown || optionLink.visible
+    // Details line up with the name, under the mark.
+    Column {
+      id: optionDetails
+      readonly property real innerWidth: width - leftPadding
       width: parent.width
-      spacing: Style.spacing.sm
-      Hint {
-        visible: parent.hintShown
-        width: parent.width - (optionLink.visible ? optionLink.width + parent.spacing : 0)
-        anchors.verticalCenter: parent.verticalCenter
-        text: option.hint
+      leftPadding: optionMark.width + Style.spacing.sm
+      spacing: Style.spacing.xs
+      Row {
+        // The sign-in hint is what the Sign in / Install button does, so the button replaces it.
+        readonly property bool hintShown: option.hint !== ""
+          && !(option.hint === option.modelData.signIn && (optionSetup.action.kind === "signin" || optionSetup.action.kind === "install"))
+        visible: hintShown || optionLink.visible
+        width: optionDetails.innerWidth
+        spacing: Style.spacing.sm
+        Hint {
+          visible: parent.hintShown
+          width: parent.width - (optionLink.visible ? optionLink.width + parent.spacing : 0)
+          anchors.verticalCenter: parent.verticalCenter
+          text: option.hint
+        }
+        LinkButton {
+          id: optionLink
+          objectName: option.modelData.id + "KeysLink"
+          visible: option.modelData.keysUrl !== ""
+          text: option.modelData.keysLinkText
+          url: option.modelData.keysUrl
+        }
       }
-      LinkButton {
-        id: optionLink
-        objectName: option.modelData.id + "KeysLink"
-        visible: option.modelData.keysUrl !== ""
-        text: "Get a key ↗"
-        url: option.modelData.keysUrl
+      SetupAction {
+        id: optionSetup
+        entry: option.modelData
+        reading: UsageLogic.readingFor(root.shownReadings, option.modelData.id)
+      }
+      Ui.Button {
+        id: addKeyButton
+        objectName: option.modelData.id + "AddKey"
+        visible: option.keyEditable && option.on && !option.keyOpen
+        text: "Save a key…"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        fontSize: Style.font.caption
+        horizontalPadding: Style.spacing.sm
+        verticalPadding: Style.spacing.xs
+        focusable: true
+        onClicked: option.keyOpen = true
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(addKeyButton)
+      }
+      KeyRow {
+        visible: option.keyOpen
+        width: optionDetails.innerWidth
+        objectName: option.modelData.id + "KeyRow"
+        label: option.modelData.keyLabel
+        settingKey: option.modelData.id + "KeyFile"
+        hint: UsageLogic.keyHint(option.modelData)
       }
     }
-    SetupAction {
-      id: optionSetup
-      entry: option.modelData
-      reading: UsageLogic.readingFor(root.shownReadings, option.modelData.id)
+  }
+
+  // A provider's mark, tinted like its tile in Limits: brand colour when provider colours are on,
+  // otherwise the text colour. A provider without a mark file shows its initial.
+  component ProviderMark: Item {
+    id: providerMark
+    property string providerId: ""
+    readonly property color tint: root.value("providerColors", false) === true
+      ? UsageLogic.providerAccent(providerId, root.foreground) : root.foreground
+    width: Style.space(14)
+    height: width
+
+    Image {
+      id: markImage
+      anchors.fill: parent
+      source: UsageLogic.localProvider(providerMark.providerId) ? Qt.resolvedUrl("assets/" + providerMark.providerId + "-bar.svg") : ""
+      sourceSize.width: providerMark.width * 2
+      sourceSize.height: providerMark.height * 2
+      fillMode: Image.PreserveAspectFit
+      visible: false
+      layer.enabled: true
     }
-    Ui.Button {
-      id: addKeyButton
-      objectName: option.modelData.id + "AddKey"
-      visible: option.keyEditable && option.on && !option.keyOpen
-      text: "Save a key…"
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      fontSize: Style.font.caption
-      horizontalPadding: Style.spacing.sm
-      verticalPadding: Style.spacing.xs
-      focusable: true
-      onClicked: option.keyOpen = true
-      onActiveFocusChanged: if (activeFocus) root.revealRequested(addKeyButton)
+    MultiEffect {
+      anchors.fill: markImage
+      source: markImage
+      visible: markImage.status === Image.Ready
+      colorization: 1.0
+      colorizationColor: providerMark.tint
     }
-    KeyRow {
-      visible: option.keyOpen
-      objectName: option.modelData.id + "KeyRow"
-      label: "API key"
-      settingKey: option.modelData.id + "KeyFile"
-      hint: UsageLogic.keyHint(option.modelData)
+    Text {
+      anchors.centerIn: parent
+      visible: markImage.status !== Image.Ready
+      text: providerMark.providerId.charAt(0).toUpperCase()
+      color: providerMark.tint
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.bold: true
     }
   }
 

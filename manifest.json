@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "janitorhead.quotatank",
   "name": "Quotatank",
-  "version": "1.7.3",
+  "version": "1.7.4",
   "author": "JanitorHead",
   "license": "MIT",
-  "description": "Menu-bar AI usage tracker and monitor for coding agents. Shows how much of your Claude Code (Anthropic), Codex (ChatGPT), Gemini CLI, Antigravity, GitHub Copilot, Cursor, Kimi, Grok, Kiro, Z.ai GLM, MiniMax or OpenCode subscription is left: 5-hour and weekly rate limits, quotas, resets, pace. Tracks prepaid credits and balances for OpenRouter, DeepSeek, Moonshot and more. Finds your sign-ins on its own. A Costs tab charts tokens and LLM spend per model, like ccusage.",
+  "description": "Menu-bar AI usage tracker for coding agents, 49 providers. Shows how much of your Claude Code (Anthropic), Codex (ChatGPT), Gemini CLI, Antigravity, GitHub Copilot, Cursor, Kimi, Grok, Kiro, Z.ai GLM, MiniMax, Qwen or OpenCode subscription is left: 5-hour and weekly rate limits, quotas, resets, pace. Tracks prepaid credits and balances for OpenRouter, DeepSeek, Moonshot and more. Finds your sign-ins on its own. A Costs tab charts tokens and LLM spend per model, like ccusage.",
   "kinds": [
     "bar-widget"
   ],
@@ -32,6 +32,8 @@
         "grok",
         "kiro",
         "jetbrains",
+        "nous",
+        "muse",
         "factory",
         "amp",
         "kilo",
@@ -63,6 +65,22 @@
       "deepinfraKeyFile": "",
       "vercelKeyFile": "",
       "poeKeyFile": "",
+      "alibabaKeyFile": "",
+      "commandcodeKeyFile": "",
+      "devpassKeyFile": "",
+      "xkiroKeyFile": "",
+      "ibmbobKeyFile": "",
+      "umansKeyFile": "",
+      "neuralwattKeyFile": "",
+      "aixyKeyFile": "",
+      "clawrouterKeyFile": "",
+      "atlascloudKeyFile": "",
+      "hyperKeyFile": "",
+      "sailresearchKeyFile": "",
+      "sofyaKeyFile": "",
+      "v0KeyFile": "",
+      "manusKeyFile": "",
+      "typesafeKeyFile": "",
       "hideAccountEmails": true,
       "squareUsageCards": true,
       "providerColors": false,
@@ -82,6 +100,8 @@
         "grok",
         "kiro",
         "jetbrains",
+        "nous",
+        "muse",
         "factory",
         "amp",
         "kilo",
@@ -95,13 +115,29 @@
         "warp",
         "zenmux",
         "clinepass",
+        "alibaba",
+        "commandcode",
+        "devpass",
+        "xkiro",
+        "ibmbob",
+        "umans",
+        "neuralwatt",
+        "aixy",
+        "clawrouter",
         "openrouter",
         "deepseek",
         "moonshot",
         "venice",
         "deepinfra",
         "vercel",
-        "poe"
+        "poe",
+        "atlascloud",
+        "hyper",
+        "sailresearch",
+        "sofya",
+        "v0",
+        "manus",
+        "typesafe"
       ],
       "barWindow": "auto",
       "barWindowSecondary": "none",
@@ -293,6 +329,118 @@
         "description": "Managed automatically when you save a Poe API key in settings. POE_API_KEY in the environment takes precedence."
       },
       {
+        "key": "alibabaKeyFile",
+        "type": "string",
+        "label": "Alibaba Coding Plan key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Alibaba Coding Plan API key in settings. ALIBABA_CODING_PLAN_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "commandcodeKeyFile",
+        "type": "string",
+        "label": "Command Code key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Command Code API key in settings. COMMAND_CODE_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "devpassKeyFile",
+        "type": "string",
+        "label": "DevPass key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a DevPass API key in settings. DEVPASS_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "xkiroKeyFile",
+        "type": "string",
+        "label": "xKiro key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a xKiro API key in settings. XKIRO_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "ibmbobKeyFile",
+        "type": "string",
+        "label": "IBM Bob key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a IBM Bob API key in settings. BOBSHELL_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "umansKeyFile",
+        "type": "string",
+        "label": "Umans key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Umans API key in settings. UMANS_AI_CODING_PLAN_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "neuralwattKeyFile",
+        "type": "string",
+        "label": "Neuralwatt key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Neuralwatt API key in settings. NEURALWATT_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "aixyKeyFile",
+        "type": "string",
+        "label": "Aixy key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Aixy API key in settings. AIXY_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "clawrouterKeyFile",
+        "type": "string",
+        "label": "ClawRouter key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a ClawRouter API key in settings. CLAWROUTER_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "atlascloudKeyFile",
+        "type": "string",
+        "label": "Atlas Cloud key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Atlas Cloud API key in settings. ATLASCLOUD_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "hyperKeyFile",
+        "type": "string",
+        "label": "Charm Hyper key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Charm Hyper API key in settings. HYPER_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "sailresearchKeyFile",
+        "type": "string",
+        "label": "Sail Research key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Sail Research API key in settings. SAIL_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "sofyaKeyFile",
+        "type": "string",
+        "label": "Sofya key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Sofya API key in settings. SOFYA_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "v0KeyFile",
+        "type": "string",
+        "label": "v0 key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a v0 API key in settings. V0_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "manusKeyFile",
+        "type": "string",
+        "label": "Manus key file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Manus API key in settings. MANUS_API_KEY in the environment takes precedence."
+      },
+      {
+        "key": "typesafeKeyFile",
+        "type": "string",
+        "label": "TypeSafe session file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a TypeSafe Cookie header in settings. TYPESAFE_COOKIE in the environment takes precedence."
+      },
+      {
         "key": "hideAccountEmails",
         "type": "boolean",
         "label": "Hide account emails",
@@ -350,6 +498,8 @@
           "grok",
           "kiro",
           "jetbrains",
+          "nous",
+          "muse",
           "factory",
           "amp",
           "kilo",
@@ -400,6 +550,14 @@
           {
             "value": "jetbrains",
             "label": "JetBrains AI"
+          },
+          {
+            "value": "nous",
+            "label": "Nous Portal"
+          },
+          {
+            "value": "muse",
+            "label": "Muse Code"
           },
           {
             "value": "factory",
@@ -454,6 +612,42 @@
             "label": "Cline"
           },
           {
+            "value": "alibaba",
+            "label": "Alibaba Coding Plan"
+          },
+          {
+            "value": "commandcode",
+            "label": "Command Code"
+          },
+          {
+            "value": "devpass",
+            "label": "DevPass"
+          },
+          {
+            "value": "xkiro",
+            "label": "xKiro"
+          },
+          {
+            "value": "ibmbob",
+            "label": "IBM Bob"
+          },
+          {
+            "value": "umans",
+            "label": "Umans"
+          },
+          {
+            "value": "neuralwatt",
+            "label": "Neuralwatt"
+          },
+          {
+            "value": "aixy",
+            "label": "Aixy"
+          },
+          {
+            "value": "clawrouter",
+            "label": "ClawRouter"
+          },
+          {
             "value": "openrouter",
             "label": "OpenRouter"
           },
@@ -480,6 +674,34 @@
           {
             "value": "poe",
             "label": "Poe"
+          },
+          {
+            "value": "atlascloud",
+            "label": "Atlas Cloud"
+          },
+          {
+            "value": "hyper",
+            "label": "Charm Hyper"
+          },
+          {
+            "value": "sailresearch",
+            "label": "Sail Research"
+          },
+          {
+            "value": "sofya",
+            "label": "Sofya"
+          },
+          {
+            "value": "v0",
+            "label": "v0"
+          },
+          {
+            "value": "manus",
+            "label": "Manus"
+          },
+          {
+            "value": "typesafe",
+            "label": "TypeSafe"
           }
         ]
       },
@@ -542,6 +764,14 @@
             "label": "JetBrains AI"
           },
           {
+            "value": "nous",
+            "label": "Nous Portal"
+          },
+          {
+            "value": "muse",
+            "label": "Muse Code"
+          },
+          {
             "value": "factory",
             "label": "Droid"
           },
@@ -594,6 +824,42 @@
             "label": "Cline"
           },
           {
+            "value": "alibaba",
+            "label": "Alibaba Coding Plan"
+          },
+          {
+            "value": "commandcode",
+            "label": "Command Code"
+          },
+          {
+            "value": "devpass",
+            "label": "DevPass"
+          },
+          {
+            "value": "xkiro",
+            "label": "xKiro"
+          },
+          {
+            "value": "ibmbob",
+            "label": "IBM Bob"
+          },
+          {
+            "value": "umans",
+            "label": "Umans"
+          },
+          {
+            "value": "neuralwatt",
+            "label": "Neuralwatt"
+          },
+          {
+            "value": "aixy",
+            "label": "Aixy"
+          },
+          {
+            "value": "clawrouter",
+            "label": "ClawRouter"
+          },
+          {
             "value": "openrouter",
             "label": "OpenRouter"
           },
@@ -620,6 +886,34 @@
           {
             "value": "poe",
             "label": "Poe"
+          },
+          {
+            "value": "atlascloud",
+            "label": "Atlas Cloud"
+          },
+          {
+            "value": "hyper",
+            "label": "Charm Hyper"
+          },
+          {
+            "value": "sailresearch",
+            "label": "Sail Research"
+          },
+          {
+            "value": "sofya",
+            "label": "Sofya"
+          },
+          {
+            "value": "v0",
+            "label": "v0"
+          },
+          {
+            "value": "manus",
+            "label": "Manus"
+          },
+          {
+            "value": "typesafe",
+            "label": "TypeSafe"
           }
         ]
       },
@@ -749,6 +1043,8 @@
           "grok",
           "kiro",
           "jetbrains",
+          "nous",
+          "muse",
           "factory",
           "amp",
           "kilo",
@@ -762,13 +1058,29 @@
           "warp",
           "zenmux",
           "clinepass",
+          "alibaba",
+          "commandcode",
+          "devpass",
+          "xkiro",
+          "ibmbob",
+          "umans",
+          "neuralwatt",
+          "aixy",
+          "clawrouter",
           "openrouter",
           "deepseek",
           "moonshot",
           "venice",
           "deepinfra",
           "vercel",
-          "poe"
+          "poe",
+          "atlascloud",
+          "hyper",
+          "sailresearch",
+          "sofya",
+          "v0",
+          "manus",
+          "typesafe"
         ],
         "options": [
           {
@@ -814,6 +1126,14 @@
           {
             "value": "jetbrains",
             "label": "JetBrains AI"
+          },
+          {
+            "value": "nous",
+            "label": "Nous Portal"
+          },
+          {
+            "value": "muse",
+            "label": "Muse Code"
           },
           {
             "value": "factory",
@@ -868,6 +1188,42 @@
             "label": "Cline"
           },
           {
+            "value": "alibaba",
+            "label": "Alibaba Coding Plan"
+          },
+          {
+            "value": "commandcode",
+            "label": "Command Code"
+          },
+          {
+            "value": "devpass",
+            "label": "DevPass"
+          },
+          {
+            "value": "xkiro",
+            "label": "xKiro"
+          },
+          {
+            "value": "ibmbob",
+            "label": "IBM Bob"
+          },
+          {
+            "value": "umans",
+            "label": "Umans"
+          },
+          {
+            "value": "neuralwatt",
+            "label": "Neuralwatt"
+          },
+          {
+            "value": "aixy",
+            "label": "Aixy"
+          },
+          {
+            "value": "clawrouter",
+            "label": "ClawRouter"
+          },
+          {
             "value": "openrouter",
             "label": "OpenRouter"
           },
@@ -894,6 +1250,34 @@
           {
             "value": "poe",
             "label": "Poe"
+          },
+          {
+            "value": "atlascloud",
+            "label": "Atlas Cloud"
+          },
+          {
+            "value": "hyper",
+            "label": "Charm Hyper"
+          },
+          {
+            "value": "sailresearch",
+            "label": "Sail Research"
+          },
+          {
+            "value": "sofya",
+            "label": "Sofya"
+          },
+          {
+            "value": "v0",
+            "label": "v0"
+          },
+          {
+            "value": "manus",
+            "label": "Manus"
+          },
+          {
+            "value": "typesafe",
+            "label": "TypeSafe"
           }
         ]
       },
