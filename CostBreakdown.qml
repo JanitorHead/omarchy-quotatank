@@ -30,7 +30,7 @@ Column {
   readonly property int collapsedRows: 5
 
   readonly property color dim: Qt.darker(foreground, 1.55)
-  readonly property int rowMs: motion ? motion.duration(motion.row) : 260
+  readonly property int rowMs: motion ? motion.duration(motion.row) : 0
   readonly property var allRows: UsageLogic.costBreakdownRows(payload, mode, metric)
   readonly property var shownRows: expanded ? allRows : allRows.slice(0, collapsedRows)
   readonly property int rowPitch: rowMetrics.height + Style.spacing.sm * 2

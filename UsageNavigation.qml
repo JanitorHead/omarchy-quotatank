@@ -17,7 +17,10 @@ Column {
   property color urgent: Commons.Color.urgent
   property string fontFamily: Style.font.family
   property real cardRadius: 0
+  // Panel's Motion: the sliding tab indicator and the tiles follow reduced motion like the rest.
+  property var motion: null
   readonly property bool providerVisible: viewMode === "limits" && providerOptions.length > 1
+  readonly property alias tiles: providerTiles
 
   signal viewRequested(string value)
   signal providerRequested(string value)
@@ -32,6 +35,7 @@ Column {
     value: root.viewMode
     foreground: root.foreground
     fontFamily: root.fontFamily
+    motion: root.motion
     onChanged: function(value) { root.viewRequested(value) }
   }
 
@@ -53,6 +57,7 @@ Column {
     urgent: root.urgent
     fontFamily: root.fontFamily
     cardRadius: root.cardRadius
+    motion: root.motion
     onChanged: function(value) { root.providerRequested(value) }
   }
 }

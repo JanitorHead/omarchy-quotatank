@@ -26,11 +26,6 @@ ShellRoot {
   readonly property string fakeLive: Quickshell.env("MODEL_USAGE_FAKE_OMP_LIVE")
 
   QtObject {
-    id: costStub
-    property double lastSuccessAt: 0
-    property var enabledProviderIds: ["claude", "codex", "opencode"]
-  }
-  QtObject {
     id: liveStub
     property string state: "live"
     property string message: ""
@@ -107,9 +102,9 @@ ShellRoot {
     costs.ensureLoaded()
 
     activity = create("OmpActivity.qml", { scriptPath: fakeLive, settings: { ompStatsUrl: "http://talos:3847" },
-      status: { local: "ok" }, costBackend: costStub })
+      status: { local: "ok" } })
     twin = create("OmpActivity.qml", { scriptPath: fakeLive, settings: { ompStatsUrl: "http://talos:3847" },
-      status: { local: "ok" }, costBackend: costStub })
+      status: { local: "ok" } })
     broken = create("OmpActivity.qml", { scriptPath: fakeLive, settings: { ompLocal: false, ompStatsUrl: "http://broken:3847" } })
     check(activity.connection !== null && activity.connection === twin.connection, "panels following the same omp setup share one helper")
     check(broken.connection !== activity.connection, "another setup gets its own helper")
@@ -121,6 +116,13 @@ ShellRoot {
     var idle = create("OmpActivity.qml", { scriptPath: fakeLive, settings: {}, status: { local: "missing" } })
     check(idle.connection === null && idle.state === "off", "without omp here or elsewhere nothing runs")
     idle.destroy()
+    var unused = create("OmpActivity.qml", { scriptPath: fakeLive, settings: {}, status: { local: "unused", installed: true } })
+    check(unused.connection === null && unused.state === "off", "omp installed but not signed in: nothing to follow")
+    unused.destroy()
+    var proxied = create("OmpActivity.qml", { scriptPath: fakeLive, settings: { ompStatsUrl: "http://talos:3847" },
+      status: { local: "ok" }, proxyMode: true })
+    check(proxied.connection === null && proxied.state === "off", "a proxy source runs no omp helper")
+    proxied.destroy()
   }
 
   Timer {
@@ -163,8 +165,10 @@ ShellRoot {
       check(text("ompStatusText") === "omp found · its accounts are not read", "a switched-off reader still says omp is here")
       host({ ompLocal: true })
       form.usagePayload = payload({ local: "missing", gateway: "off", accounts: 0 })
-      check(text("ompStatusText") === "omp not found on this computer", "a missing omp is named")
       check(!shown("ompLocal").visible && text("ompLocalHint").indexOf("Install omp") === 0, "without omp the switch gives way to what to do")
+      form.usagePayload = payload({ local: "unused", installed: true, gateway: "off", message: "omp is installed but not set up on this computer." })
+      check(text("ompStatusText") === "omp is installed but not signed in to anything yet", "omp without its own state: " + text("ompStatusText"))
+      check(text("ompLocalHint").indexOf("Once you sign in to an account in omp") === 0, "and what changes that")
       form.usagePayload = payload({ local: "error", gateway: "off", message: "omp usage did not finish in time." })
       check(Qt.colorEqual(shown("ompStatusText").color, form.urgent) && text("ompLocalHint") === "omp usage did not finish in time.",
         "a failing omp is in the alert colour, with the backend's reason")
@@ -330,12 +334,11 @@ ShellRoot {
       check(remoteActivities === 1, "activity on omp stats is passed on")
       var recent = activity.recentByAccount
       check(Object.keys(recent).length === 1 && recent["claude@omp-0123456789ab"] > 0, "recentByAccount keys are provider@account")
-      check(activity.lastRequestAt > 0 && Math.abs(activity.lastRequestAt - Date.now() / 1000) < 30, "lastRequestAt is in epoch seconds")
-      check(Math.abs(activity.costSinceScan - 0.52) < 1e-9, "priced requests add up since the last scan: " + activity.costSinceScan)
-      costStub.enabledProviderIds = ["claude"]
-      check(Math.abs(activity.costSinceScan - 0.42) < 1e-9, "only providers the scan reads count")
-      costStub.lastSuccessAt = Date.now() + 60000
-      check(activity.costSinceScan === 0, "a newer scan holds them already")
+      var log = activity.requestLog
+      check(activity.requestRevision === 3 && log.length === 3, "every request lands in the log once: " + activity.requestRevision)
+      check(Math.abs(log[0][2] + log[1][2] - 0.52) < 1e-9 && log[2][2] === null, "priced requests keep their cost; background spend has none")
+      check(Math.abs(log[0][0] - Date.now() / 1000) < 30, "log times are epoch seconds")
+      check(activity.requestLog === twin.requestLog, "panels share one log")
       livePhase = 1
     } else if (livePhase === 1 && broken.state === "reconnecting") {
       check(broken.message !== "", "a broken feed says it is trying again")

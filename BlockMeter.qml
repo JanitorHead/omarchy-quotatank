@@ -16,7 +16,7 @@ Item {
   property color trackColor: Qt.rgba(fillColor.r, fillColor.g, fillColor.b, 0.14)
   property int blockWidth: Math.max(2, Style.space(5))
   property int blockGap: Math.max(1, Style.space(2))
-  // Shared Motion helper; without one the fill keeps its classic 180 ms ease.
+  // Shared Motion helper; without one the fill moves at once, as with reduced motion.
   property var motion: null
   property real animatedValue: Math.max(0, Math.min(1, value))
   // Pace tick: a centred mark on the block at `markValue` (0-1). Negative hides it.
@@ -81,7 +81,7 @@ Item {
   clip: false
 
   Behavior on animatedValue {
-    NumberAnimation { duration: root.motion ? root.motion.duration(root.motion.row) : 180; easing.type: Easing.OutCubic }
+    NumberAnimation { duration: root.motion ? root.motion.duration(root.motion.row) : 0; easing.type: Easing.OutCubic }
   }
 
   Repeater {

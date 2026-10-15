@@ -6,9 +6,10 @@ import qs.Ui as Ui
 
 // Hover card of a menu bar chip whose provider has two or more accounts (DESIGN §2.4), drawn from
 // UsageLogic.barHoverModel(). Same surface as Omarchy's popup cards. A header with the provider, the
-// account count and how accounts are chosen; one row per account with its dot, name, one status line, a
-// 24 h sparkline and compact meters; a footer with when the reading was taken. It fades and scales in
-// from the chip, and it never takes focus or input.
+// account count and how accounts are chosen; a row per account (at most six, then "+N more") with its
+// dot, name, one status line, a 24 h sparkline and compact meters; a footer with when the reading was
+// taken. Rows are keyed by account, so a new reading updates them in place. It fades and scales in from
+// the chip, and it never takes focus or input.
 Ui.BorderSurface {
   id: root
 
@@ -30,6 +31,14 @@ Ui.BorderSurface {
   property string barPosition: "top"
 
   readonly property var rows: model && model.rows ? model.rows : []
+  // Row keys (account ids) joined, so the rows' Repeater only rebuilds when the accounts shown change.
+  readonly property string rowKeys: rows.map(function(row) { return row.key }).join("\n")
+  readonly property var rowByKey: {
+    var map = {}
+    for (var i = 0; i < rows.length; i++) map[rows[i].key] = rows[i]
+    return map
+  }
+  readonly property int moreCount: model ? Number(model.more) || 0 : 0
   readonly property int contentWidth: Style.space(320)
 
   implicitWidth: contentWidth + contentLeftInset + contentRightInset
@@ -43,17 +52,16 @@ Ui.BorderSurface {
   scale: open ? 1 : 0.97
 
   // The property keeps its old value until an Animator ends, so it still tells the direction here.
+  // Without Panel's Motion nothing animates.
   Behavior on opacity {
     OpacityAnimator {
-      duration: root.motion ? root.motion.duration(root.opacity < 0.5 ? root.motion.popIn : root.motion.popOut)
-        : (root.opacity < 0.5 ? 180 : 120)
+      duration: root.motion ? root.motion.duration(root.opacity < 0.5 ? root.motion.popIn : root.motion.popOut) : 0
       easing.type: root.opacity < 0.5 ? Easing.OutCubic : Easing.InCubic
     }
   }
   Behavior on scale {
     ScaleAnimator {
-      duration: root.motion ? root.motion.duration(root.opacity < 0.5 ? root.motion.popIn : root.motion.popOut)
-        : (root.opacity < 0.5 ? 180 : 120)
+      duration: root.motion ? root.motion.duration(root.opacity < 0.5 ? root.motion.popIn : root.motion.popOut) : 0
       easing.type: root.opacity < 0.5 ? Easing.OutCubic : Easing.InCubic
     }
   }
@@ -99,29 +107,20 @@ Ui.BorderSurface {
       }
     }
 
-    Text {
-      objectName: "hoverCardNote"
-      visible: text !== ""
-      width: parent.width
-      text: root.model ? String(root.model.note || "") : ""
-      color: root.dim
-      wrapMode: Text.WordWrap
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-    }
-
     Column {
       width: parent.width
       spacing: Style.spacing.lg
 
       Repeater {
-        model: root.rows
+        model: root.rowKeys === "" ? [] : root.rowKeys.split("\n")
 
         delegate: Item {
           id: accountRow
-          required property var modelData
+          required property string modelData
           required property int index
-          readonly property bool spending: modelData.tone === "accent"
+          readonly property var row: root.rowByKey[modelData]
+            || ({ name: "", inUse: false, counted: false, state: "unknown", status: "", tone: "dim", spark: [], account: null })
+          readonly property bool spending: row.tone === "accent"
 
           objectName: "hoverCardRow-" + index
           width: parent.width
@@ -131,8 +130,8 @@ Ui.BorderSurface {
             id: rowDot
             objectName: "hoverCardDot-" + accountRow.index
             y: Math.round(nameLine.y + (nameLine.height - height) / 2)
-            strip: ({ dots: [{ index: accountRow.index, state: accountRow.modelData.state,
-                               counted: accountRow.modelData.counted, spending: accountRow.spending }], extra: 0 })
+            strip: ({ dots: [{ index: accountRow.index, state: accountRow.row.state,
+                               counted: accountRow.row.counted, spending: accountRow.spending }], extra: 0 })
             mode: "together"
             stale: !!(root.model && root.model.stale)
             motion: root.motion
@@ -157,7 +156,7 @@ Ui.BorderSurface {
               Text {
                 id: accountName
                 width: Math.min(implicitWidth, parent.width - (inUse.visible ? inUse.implicitWidth + Style.spacing.md : 0))
-                text: String(accountRow.modelData.name)
+                text: String(accountRow.row.name)
                 color: root.foreground
                 elide: Text.ElideRight
                 font.family: root.fontFamily
@@ -167,7 +166,7 @@ Ui.BorderSurface {
 
               Text {
                 id: inUse
-                visible: !!accountRow.modelData.inUse
+                visible: !!accountRow.row.inUse
                 x: accountName.width + Style.spacing.md
                 anchors.baseline: accountName.baseline
                 text: "in use"
@@ -181,8 +180,8 @@ Ui.BorderSurface {
             Text {
               objectName: "hoverCardStatus-" + accountRow.index
               width: parent.width
-              text: String(accountRow.modelData.status)
-              color: root.toneColor(accountRow.modelData.tone)
+              text: String(accountRow.row.status)
+              color: root.toneColor(accountRow.row.tone)
               elide: Text.ElideRight
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -194,7 +193,7 @@ Ui.BorderSurface {
             anchors.right: meters.left
             anchors.rightMargin: Style.spacing.lg
             anchors.verticalCenter: parent.verticalCenter
-            values: accountRow.modelData.spark
+            values: accountRow.row.spark
             endSeconds: root.endSeconds
             lineColor: accountRow.spending ? root.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.55)
             guideColor: root.foreground
@@ -209,7 +208,7 @@ Ui.BorderSurface {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             width: Style.space(96)
-            account: accountRow.modelData.account
+            account: accountRow.row.account
             quotaMode: root.quotaMode
             warningThreshold: root.warningThreshold
             criticalThreshold: root.criticalThreshold
@@ -243,8 +242,9 @@ Ui.BorderSurface {
 
       Text {
         id: detailsLabel
+        objectName: "hoverCardMore"
         anchors.right: parent.right
-        text: "Click for details"
+        text: (root.moreCount > 0 ? "+" + root.moreCount + " more · " : "") + "Click for details"
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption

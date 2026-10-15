@@ -57,8 +57,9 @@ Item {
   implicitWidth: content.implicitWidth
   implicitHeight: Math.max(pieDiameter, hintLabel.implicitHeight)
 
+  // Without Panel's Motion nothing animates, as with reduced motion.
   function duration(token) {
-    return motion ? motion.duration(token) : token
+    return motion ? motion.duration(token) : 0
   }
 
   function stateColor(state) {
@@ -113,7 +114,7 @@ Item {
         opacity: root.allUsedUp ? 0 : 1
 
         Behavior on opacity {
-          OpacityAnimator { duration: root.duration(root.motion ? root.motion.row : 260); easing.type: Easing.InOutCubic }
+          OpacityAnimator { duration: root.duration(root.motion ? root.motion.row : 0); easing.type: Easing.InOutCubic }
         }
 
         // Soft accent glow behind each counted dot whose account is spending, under every ring.
@@ -136,7 +137,7 @@ Item {
             opacity: shown ? 1 : 0
 
             Behavior on opacity {
-              OpacityAnimator { duration: root.duration(root.motion ? root.motion.row : 260); easing.type: Easing.InOutCubic }
+              OpacityAnimator { duration: root.duration(root.motion ? root.motion.row : 0); easing.type: Easing.InOutCubic }
             }
 
             ShapePath {
@@ -196,7 +197,7 @@ Item {
               border.color: root.stateColor(slot.dotState)
 
               Behavior on border.color {
-                ColorAnimation { duration: root.duration(root.motion ? root.motion.micro : 160) }
+                ColorAnimation { duration: root.duration(root.motion ? root.motion.micro : 0) }
               }
             }
 
@@ -230,7 +231,7 @@ Item {
               opacity: slot.filled && root.mode === "together" ? 1 : 0
 
               Behavior on opacity {
-                OpacityAnimator { duration: root.duration(root.motion ? root.motion.micro : 160); easing.type: Easing.OutCubic }
+                OpacityAnimator { duration: root.duration(root.motion ? root.motion.micro : 0); easing.type: Easing.OutCubic }
               }
             }
 
@@ -256,14 +257,14 @@ Item {
                   property: "size"
                   from: root.diameter
                   to: root.diameter * 2.6
-                  duration: root.duration(root.motion ? root.motion.ping : 700)
+                  duration: root.duration(root.motion ? root.motion.ping : 0)
                   easing.type: Easing.OutCubic
                 }
                 OpacityAnimator {
                   target: pingRing
                   from: 0.9
                   to: 0
-                  duration: root.duration(root.motion ? root.motion.ping : 700)
+                  duration: root.duration(root.motion ? root.motion.ping : 0)
                   easing.type: Easing.OutCubic
                 }
               }
@@ -287,13 +288,13 @@ Item {
           opacity: shown ? 1 : 0
 
           Behavior on x {
-            XAnimator { duration: root.duration(root.motion ? root.motion.row : 260); easing.type: Easing.InOutCubic }
+            XAnimator { duration: root.duration(root.motion ? root.motion.row : 0); easing.type: Easing.InOutCubic }
           }
           Behavior on opacity {
-            OpacityAnimator { duration: root.duration(root.motion ? root.motion.micro : 160); easing.type: Easing.OutCubic }
+            OpacityAnimator { duration: root.duration(root.motion ? root.motion.micro : 0); easing.type: Easing.OutCubic }
           }
           Behavior on color {
-            ColorAnimation { duration: root.duration(root.motion ? root.motion.micro : 160) }
+            ColorAnimation { duration: root.duration(root.motion ? root.motion.micro : 0) }
           }
         }
       }
@@ -312,7 +313,7 @@ Item {
         opacity: shown ? 1 : 0
 
         Behavior on opacity {
-          OpacityAnimator { duration: root.duration(root.motion ? root.motion.row : 260); easing.type: Easing.InOutCubic }
+          OpacityAnimator { duration: root.duration(root.motion ? root.motion.row : 0); easing.type: Easing.InOutCubic }
         }
 
         ShapePath {
@@ -363,23 +364,26 @@ Item {
       font.weight: Font.Medium
     }
 
-    // "→ Personal" or the time to the earliest reset; slides open with its width.
+    // "→ Personal" or the time to the earliest reset. It slides open and shut with its width; while it
+    // shows, a countdown that gets shorter or longer resizes it at once, so a routine tick never
+    // animates the bar.
     Item {
       id: hintBox
       objectName: "accountDotsHint"
       readonly property bool shown: root.hintShown
       readonly property string text: hintLabel.text
-      width: shown ? Math.ceil(hintLabel.implicitWidth) + Style.spacing.sm : 0
+      property real openness: shown ? 1 : 0
+      width: Math.round((Math.ceil(hintLabel.implicitWidth) + Style.spacing.sm) * openness)
       height: root.height
       clip: true
       opacity: shown ? 1 : 0
       visible: width > 0
 
-      Behavior on width {
-        NumberAnimation { duration: root.duration(root.motion ? root.motion.row : 260); easing.type: Easing.OutCubic }
+      Behavior on openness {
+        NumberAnimation { duration: root.duration(root.motion ? root.motion.row : 0); easing.type: Easing.OutCubic }
       }
       Behavior on opacity {
-        OpacityAnimator { duration: root.duration(root.motion ? root.motion.row : 260); easing.type: Easing.OutCubic }
+        OpacityAnimator { duration: root.duration(root.motion ? root.motion.row : 0); easing.type: Easing.OutCubic }
       }
 
       Text {

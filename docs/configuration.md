@@ -212,7 +212,7 @@ In **Settings → Costs → Custom prices**, add the exact model ID and its inpu
 | `barProviderLimits` | `"{}"` | JSON string managed by **Providers → Customize** in settings. Maps provider IDs to a `top` and/or `bottom` limit using the same values as `barWindow` and `barWindowSecondary`. A missing slot inherits the global value |
 | `barShowResets` | `false` | Append each chip's limit reset. Windows of a day or less (5h) show a time; longer windows (weekly, monthly) show a date |
 | `hideExhaustedProviders` | `false` | Remove a provider's chip while one of its weekly or monthly limits (a window of a week or longer) is used up. The chip returns when that limit resets; Limits keeps the provider, and its headline reads `Weekly limit is used up · back in 5d 10h` |
-| `barMaxChips` | `4` | Most chips the bar holds (`0` for all). Past it, the bar keeps the providers closest to a limit (failures first), in their usual order, and folds the rest into a `+N` chip whose tooltip names them |
+| `barMaxChips` | `4` | Most chips the bar holds (`0` for all). Past it, the bar keeps the providers closest to a limit (failures first), in their usual order, and folds the rest into a `+N` chip whose tooltip names them. With **One chip per account** the cap counts chips: a provider takes one chip per account it shows (at most four, never more than the cap) |
 | `barResetTimeFormat` | `24h` | Time format for limits that reset within a day: `24h` (14:30) or `12h` (2:30 PM) |
 | `barResetDateFormat` | `DD/MM` | Date format for weekly and monthly resets: `DD/MM` (22/04), `MM/DD` (04/22) or `D MMM` (22 Apr) |
 | `barProviders` | every provider | Enabled providers allowed to show percentage chips; independent of popup visibility |

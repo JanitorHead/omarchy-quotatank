@@ -513,6 +513,8 @@ Column {
         text: root.ompFound === false && root.omp.local
           ? "Install omp to add the accounts it signs in to, or read omp on another computer below."
           : failure !== "" ? failure
+          : root.omp.local && root.ompStatus && root.ompStatus.local === "unused"
+          ? "Once you sign in to an account in omp, its accounts join the providers below. Until then Quotatank does not run omp."
           : "Adds the accounts omp signs in to, with their limits, from omp usage on this computer. An account you also use here shows once."
         color: failure !== "" ? root.urgent : Qt.darker(root.foreground, 1.5)
       }
@@ -542,20 +544,20 @@ Column {
         TextRow {
           objectName: "ompGatewayUrl"
           label: "Gateway URL"
-          placeholder: "http://other-computer:" + UsageLogic.OMP_GATEWAY_PORT
+          placeholder: "http://100.x.y.z:" + UsageLogic.OMP_GATEWAY_PORT
           source: root.omp.gatewayUrl
-          validate: function(text) { return UsageLogic.ompServerUrlProblem(text) }
+          validate: function(text) { return UsageLogic.ompServerUrlProblem(text, true) }
           onApplied: function(text) { root.set("ompGatewayUrl", text) }
         }
         KeyRow {
           objectName: "ompGatewayToken"
           label: "Gateway token"
           settingKey: "ompGatewayKeyFile"
-          hint: "This token can also send model requests. Quotatank only asks the gateway for /v1/usage, keeps the token in a private file, and never shows it again."
+          hint: "This token can also send model requests. Quotatank only asks the gateway for /v1/usage, sends the token over plain HTTP only to this computer or over Tailscale, keeps it in a private file, and never shows it again."
         }
         TestBlock {
           objectName: "ompGatewayTest"
-          ready: root.omp.gatewayUrl !== "" && root.omp.gatewayKeyFile !== "" && UsageLogic.ompServerUrlProblem(root.omp.gatewayUrl) === ""
+          ready: root.omp.gatewayUrl !== "" && root.omp.gatewayKeyFile !== "" && UsageLogic.ompServerUrlProblem(root.omp.gatewayUrl, true) === ""
           blockedReason: root.omp.gatewayUrl === "" ? "Enter the gateway URL and save its token to test it."
             : root.omp.gatewayKeyFile === "" ? "Save the gateway token to test it." : ""
           running: gatewayProbe.active
@@ -1808,7 +1810,7 @@ Column {
       missing: "No transcripts", failed: "Unavailable", unavailable: "Unavailable", error: "Unavailable",
       off: "Off", duplicate: "Already included" }
     var name = source.id === "local-omp" ? "omp sessions on this computer"
-      : source.id === "omp-remote" ? "omp stats" + (source.host ? " on " + source.host : "") : source.name
+      : source.id === "omp-remote" ? "omp stats" + UsageLogic.ompPlace(source.host) : source.name
     var text = name + " · " + (labels[source.status] || source.status)
     if (source.status === "stale" && source.updatedAt)
       text += " · " + Qt.formatDateTime(new Date(Number(source.updatedAt)), "MMM d, HH:mm")
@@ -3249,7 +3251,7 @@ Column {
     var text = parts.length ? parts.join(", ") : "No local history"
     if (servers.count > 0) text += " · " + servers.count + (servers.count === 1 ? " server" : " servers")
     if (prices.priceCount > 0) text += " · " + prices.priceCount + " custom " + (prices.priceCount === 1 ? "price" : "prices")
-    if (omp.statsUrl !== "") text += " · omp stats" + (UsageLogic.ompOnHost(omp.statsUrl) || " through a tunnel")
+    if (omp.statsUrl !== "") text += " · omp stats" + UsageLogic.ompPlace(omp.statsUrl)
     return text
   }
 }

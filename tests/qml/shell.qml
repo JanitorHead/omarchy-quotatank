@@ -246,13 +246,14 @@ ShellRoot {
       proxyWidget.settings = Object.assign({}, proxyWidget.settings,
         {barDisplayMode: "Percentages", barProviders: ["codex"], quotaMode: "Remaining"})
       proxyWidget.selectProviderId("codex")
-      proxyWidget.accountActivity.providers = [{id: "codex", status: "ok", accountId: "0", lastUsedAt: 123}]
+      var nowSeconds = Date.now() / 1000
+      proxyWidget.accountActivity.providers = [{id: "codex", status: "ok", accountId: "0", lastUsedAt: nowSeconds}]
       var barLabel = namedChild(proxyWidget, "barAccountLabel")
       var barRemaining = namedChild(proxyWidget, "barAccountRemaining")
       assertTrue(barLabel === null, "bar contains no account name label")
       assertEqual(proxyWidget.lastAccount(proxyWidget.provider).label, "Account 1", "tooltip respects hidden account emails")
-      assertEqual(barRemaining ? barRemaining.text : "", "20%", "bar quota belongs to last-used account")
-      proxyWidget.accountActivity.providers = [{id: "codex", status: "ok", accountId: "1", lastUsedAt: 124}]
+      assertEqual(barRemaining ? barRemaining.text : "", "20%", "bar quota belongs to the account that just served a request")
+      proxyWidget.accountActivity.providers = [{id: "codex", status: "ok", accountId: "1", lastUsedAt: nowSeconds + 1}]
       assertEqual(proxyWidget.lastAccount(proxyWidget.provider).label, "Account 2", "tooltip follows account switches")
       assertEqual(barRemaining.text, "55%", "account switch updates quota together with label")
       proxyWidget.settings = Object.assign({}, proxyWidget.settings, {hideAccountEmails: false})
@@ -260,15 +261,11 @@ ShellRoot {
       assertEqual(proxyWidget.lastAccount(proxyWidget.provider).label, "codex-1@example.invalid", "tooltip reveals email only when requested")
       assertTrue(namedChild(proxyWidget, "barAccountLabel") === null, "emails stay out of the bar when privacy is disabled")
       proxyWidget.accountActivity.providers = []
-      assertEqual(barRemaining.text, "9%", "missing activity still shows the known pool quota")
+      assertEqual(barRemaining.text, "20%", "without recent activity the chip counts the account closest to its limit, as Limits does")
       var codexChip = namedChild(proxyWidget, "barChip-codex")
       assertTrue(codexChip !== null && codexChip.tooltipText === "", "accounts get the hover card instead of the plain tooltip")
-      proxyWidget.hoverChip = codexChip
-      assertTrue(codexChip.hoverModel.note.indexOf("most room left") >= 0,
-        "fallback hover card identifies the pool quota rather than claiming a last-used account")
-      proxyWidget.hoverChip = null
-      proxyWidget.accountActivity.providers = [{id: "codex", status: "ambiguous", lastUsedAt: 125}]
-      assertEqual(barRemaining.text, "9%", "ambiguous activity still shows the known pool quota")
+      proxyWidget.accountActivity.providers = [{id: "codex", status: "ambiguous", lastUsedAt: nowSeconds}]
+      assertEqual(barRemaining.text, "20%", "ambiguous activity names no account")
     }
     if (widget) {
       assertEqual(widget.moduleName, "janitorhead.quotatank", "moduleName injection")

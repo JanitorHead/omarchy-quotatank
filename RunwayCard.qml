@@ -46,9 +46,8 @@ Ui.BorderSurface {
   }
 
   function clock(epochSeconds) {
-    var date = new Date(Number(epochSeconds) * 1000)
-    return Math.abs(Number(epochSeconds) - nowSeconds) < 12 * 3600
-      ? Qt.formatTime(date, clockFormat) : Qt.formatDateTime(date, "ddd " + clockFormat)
+    var seconds = Number(epochSeconds)
+    return Qt.formatDateTime(new Date(seconds * 1000), UsageLogic.clockPattern(seconds, nowSeconds, clockFormat))
   }
 
   function laneFor(key) {

@@ -63,7 +63,7 @@ if args.source == "cliproxy":
     for i, remaining in enumerate((20, 55, 90)):
         account = json.loads(json.dumps(template))
         account.update(accountId=str(i), account=f"codex-{i}@example.invalid", planType="pro", notice="")
-        account["credits"]["resetCreditsAvailable"] = i
+        account["credits"] = dict(account.get("credits") or {}, resetCreditsAvailable=i)
         for window in account["windows"]:
             if window["id"] == "codex-secondary":
                 window.update(remaining=remaining, used=100-remaining)

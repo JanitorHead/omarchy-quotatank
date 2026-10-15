@@ -27,8 +27,8 @@ Column {
 
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property bool interactive: rows.length > 1
-  readonly property int microMs: motion ? motion.duration(motion.micro) : 160
-  readonly property int rowMs: motion ? motion.duration(motion.row) : 260
+  readonly property int microMs: motion ? motion.duration(motion.micro) : 0
+  readonly property int rowMs: motion ? motion.duration(motion.row) : 0
   // Rows key by provider id, so a refresh keeps them and only animates changed share bars.
   readonly property string rowIds: rows.map(function(row) { return row.id }).join("\n")
   readonly property var rowById: {

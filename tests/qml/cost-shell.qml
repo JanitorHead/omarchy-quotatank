@@ -111,7 +111,8 @@ ShellRoot {
     }})
     overview.periodRequested.connect(function(days) { root.overview.periodDays = days })
     root.rich = JSON.parse(dimensionsFile.text())
-    costs = create("UsageCosts.qml", { width: 420, payload: root.rich, ompActivity: fakeActivity })
+    costs = create("UsageCosts.qml", { width: 420, payload: root.rich, ompActivity: fakeActivity,
+      motion: create("Motion.qml", {}) })
     backend = create("CostBackend.qml", {settings: {costLocalProviders: ["claude"]}})
     openingBackend = create("CostBackend.qml", {settings: {costLocalProviders: ["claude"]}})
     openingBackend.refreshed.connect(function() { root.openingResponses++ })
@@ -397,15 +398,20 @@ ShellRoot {
     blockLoading: true
   }
 
-  // Stands in for Panel's OmpActivity (omp-live.py): live omp requests as they happen.
+  // Stands in for Panel's OmpActivity (omp-live.py): live omp requests as they happen, in its request log.
   QtObject {
     id: fakeActivity
     signal request(var event)
     signal remoteActivity()
     property string state: "live"
-    property real lastRequestAt: 0
     property var recentByAccount: ({})
-    property real costSinceScan: 0
+    property var requestLog: []
+    property int requestRevision: 0
+    function add(event) {
+      requestLog.push([event.at, event.provider, event.costUsd, event.tokens, "local"])
+      requestRevision++
+      request(event)
+    }
   }
 
   // The same scan over 30 days: 23 earlier days, then the 7 the week payload has.
@@ -502,17 +508,30 @@ ShellRoot {
       } else if (root.costsPhase === 4 && ++root.costsWait > 14) {
         root.check(chart.barCount === 7, "bars that left are released after they shrink away")
         var scan = Date.parse(root.rich.generatedAt) / 1000
-        fakeActivity.request({ type: "request", provider: "anthropic", model: "claude-opus-4-6", costUsd: 0.42, tokens: 1200,
+        fakeActivity.add({ type: "request", provider: "claude", model: "claude-opus-4-6", costUsd: 0.42, tokens: 1200,
           subagent: false, at: scan + 60 })
-        fakeActivity.request({ type: "request", provider: "claude", costUsd: 5, tokens: 10, subagent: false, at: scan - 60 })
+        fakeActivity.add({ type: "request", provider: "claude", costUsd: 5, tokens: 10, subagent: false, at: scan - 60 })
         root.check(root.find(root.costs, "costLiveLine").shown
           && root.find(root.costs, "costLiveText").text === "Live from omp · +$0.42 since the last scan",
           "a live omp request shows the live line: " + root.find(root.costs, "costLiveText").text)
         root.check(root.find(root.costs, "costSummaryValue").text === "$12.76", "the total includes requests after the scan, not before it")
         root.check(Math.abs(chart.buckets[6].raw.claude - 1.52) < 0.000001, "today's bar grows with the request")
-        root.costs.payload = JSON.parse(JSON.stringify(root.rich))
+        // A scan that started before the request but landed after it does not hold it: the request still counts.
+        var running = JSON.parse(JSON.stringify(root.rich))
+        running.generatedAt = new Date((scan + 30) * 1000).toISOString()
+        root.costs.payload = running
+        root.check(root.find(root.costs, "costSummaryValue").text === "$12.76", "a request that came in while a scan ran is not lost")
+        var next = JSON.parse(JSON.stringify(root.rich))
+        next.generatedAt = new Date((scan + 120) * 1000).toISOString()
+        root.costs.payload = next
         root.check(!root.find(root.costs, "costLiveLine").shown && root.find(root.costs, "costSummaryValue").text === "$12.34",
           "the next scan takes over from the live figures")
+        var remoteOnly = JSON.parse(JSON.stringify(next))
+        remoteOnly.sources = remoteOnly.sources.filter(function(source) { return source.id !== "local-omp" })
+        fakeActivity.add({ type: "request", provider: "claude", costUsd: 0.5, tokens: 10, subagent: false, at: scan + 180 })
+        root.costs.payload = remoteOnly
+        root.check(root.find(root.costs, "costSummaryValue").text === "$12.34",
+          "without this computer's omp sessions in the scan, live requests add nothing")
         root.costsDone = true
       }
     }

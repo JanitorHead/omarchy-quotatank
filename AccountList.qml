@@ -8,7 +8,9 @@ import "UsageLogic.js" as UsageLogic
 
 // ACCOUNTS: one row per account of the selected provider. Rows live in a ListModel keyed by account,
 // kept in step with move()/insert()/remove(), so a row keeps its delegate across readings and a new
-// order slides rows to their places instead of rebuilding the list.
+// order slides rows to their places instead of rebuilding the list. What a row says about counting,
+// spending, its ring and "in use" comes from the provider's UsageLogic.accountState, the same the chip,
+// its hover card and the tile read.
 Column {
   id: root
 
@@ -16,13 +18,14 @@ Column {
   property var accounts: []
   // Display names, by account index (the panel applies the email privacy setting).
   property var names: []
-  property string mode: "single"
-  property var counted: []
+  // UsageLogic.accountState() of the provider: mode, counted, spending, rings, inUse and the row order.
+  property var accountState: null
+  readonly property string mode: accountState ? accountState.mode : "single"
+  readonly property var counted: accountState ? accountState.counted : []
   // Display order as account indexes.
-  property var order: []
+  readonly property var order: accountState ? accountState.order : []
   property string selectedId: ""
   property real nowSeconds: 0
-  property var recentByAccount: ({})
   // Newest switch or reset per "<provider>@<accountId>".
   property var events: ({})
   property bool proxyMode: false
@@ -68,9 +71,16 @@ Column {
   }
 
   function clock(epochSeconds) {
-    var date = new Date(Number(epochSeconds) * 1000)
-    return Math.abs(Number(epochSeconds) - nowSeconds) < 12 * 3600
-      ? Qt.formatTime(date, clockFormat) : Qt.formatDateTime(date, "ddd " + clockFormat)
+    var seconds = Number(epochSeconds)
+    return Qt.formatDateTime(new Date(seconds * 1000), UsageLogic.clockPattern(seconds, nowSeconds, clockFormat))
+  }
+
+  // The newest point of an account's sparkline: when its reading was taken, where its 24 h buckets end.
+  function readingEnd(account) {
+    var at = account && account.activity ? Number(account.activity.lastReadingAt) : NaN
+    if (isFinite(at) && at > 0) return at
+    var fetched = new Date(String(account && account.fetchedAt || "")).getTime()
+    return isFinite(fetched) && fetched > 0 ? fetched / 1000 : nowSeconds
   }
 
   function statusText(status) {
@@ -164,7 +174,7 @@ Column {
         readonly property int accountIndex: root.indexOfKey(rowKey)
         readonly property var accountData: accountIndex >= 0 ? root.accounts[accountIndex] : null
         readonly property string accountId: accountData ? String(accountData.accountId || "") : ""
-        readonly property var status: UsageLogic.accountStatusLine(accountData, root.nowSeconds, root.recentByAccount,
+        readonly property var status: UsageLogic.accountStatusLine(accountData, spending, root.nowSeconds,
           root.events[root.providerId + "@" + accountId] || null, root.proxyMode)
         readonly property var resetCredits: accountData && accountData.credits ? accountData.credits.resetCreditsAvailable : null
 
@@ -174,13 +184,13 @@ Column {
         name: root.names[accountIndex] || ""
         selected: accountId !== "" && accountId === root.selectedId
         counted: UsageLogic.contains(root.counted, accountIndex)
-        spending: UsageLogic.spendingNow(accountData, root.nowSeconds, root.recentByAccount)
-        severity: UsageLogic.severity(accountData, root.warningThreshold, root.criticalThreshold)
+        spending: !!root.accountState && root.accountState.spending[accountIndex] === true
+        severity: root.accountState && accountIndex >= 0 ? String(root.accountState.rings[accountIndex]) : "unknown"
         statusText: root.statusText(status)
         statusTone: status.tone
         sparkValues: accountData && accountData.history ? UsageLogic.listOrEmpty(accountData.history.h24) : []
-        sparkEnd: root.nowSeconds
-        inUse: root.mode === "single" && !root.proxyMode && !!accountData && accountData.active === true
+        sparkEnd: root.readingEnd(accountData)
+        inUse: !!root.accountState && root.accountState.inUse[accountIndex] === true
         canUse: UsageLogic.accountCanUse(accountData, root.mode, root.proxyMode)
         useBusy: root.useBusyId !== "" && root.useBusyId === accountId
         // Banked resets apply through the proxy, so only its accounts show them.

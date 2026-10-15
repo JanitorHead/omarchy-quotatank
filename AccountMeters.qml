@@ -95,7 +95,7 @@ Column {
         anchors.verticalCenter: parent.verticalCenter
         width: captionMetrics.advanceWidth("100%")
         horizontalAlignment: Text.AlignRight
-        text: UsageLogic.windowUsed(meterRow.row) === null ? "—" : Math.round(meterRow.shown) + "%"
+        text: UsageLogic.windowUsed(meterRow.row) === null ? "—" : UsageLogic.compactPercent(UsageLogic.windowUsed(meterRow.row), root.quotaMode) + "%"
         color: meterRow.stressed ? root.urgent : root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption

@@ -41,14 +41,14 @@ Controls.TabBar {
       Behavior on x {
         enabled: root.settled
         XAnimator {
-          duration: root.motion ? root.motion.duration(root.motion.row) : 260
+          duration: root.motion ? root.motion.duration(root.motion.row) : 0
           easing.type: Easing.InOutCubic
         }
       }
       Behavior on width {
         enabled: root.settled
         NumberAnimation {
-          duration: root.motion ? root.motion.duration(root.motion.row) : 260
+          duration: root.motion ? root.motion.duration(root.motion.row) : 0
           easing.type: Easing.InOutCubic
         }
       }
@@ -88,7 +88,7 @@ Controls.TabBar {
         verticalAlignment: Text.AlignVCenter
 
         Behavior on color {
-          ColorAnimation { duration: root.motion ? root.motion.duration(root.motion.micro) : 160 }
+          ColorAnimation { duration: root.motion ? root.motion.duration(root.motion.micro) : 0 }
         }
       }
 
