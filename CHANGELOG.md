@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.8.1
+
+### Changed
+
+- The marketplace preview leads with Limits: the Claude panel with its menu-bar chips, pace, and run-out forecast, beside cards for several accounts, a balance, and daily costs, next to every provider's mark.
+
 ## 1.8.0
 
 ### Added
