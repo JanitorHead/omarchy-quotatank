@@ -94,6 +94,29 @@ Column {
   }
   readonly property string fuseboxRepositoryUrl: "https://github.com/DigitalPals/Fusebox"
 
+  // Motion (DESIGN §1): durations come from the panel's Motion; without one, the Display setting decides.
+  property var motion: null
+  readonly property bool reducedMotion: motion ? motion.reduced === true : String(value("motion", "system")) === "reduced"
+  readonly property int microMs: reducedMotion ? 0 : (motion ? motion.micro : 160)
+  readonly property int rowMs: reducedMotion ? 0 : (motion ? motion.row : 260)
+  readonly property int staggerMs: reducedMotion ? 0 : 60
+
+  // ---- omp (Oh My Pi): its accounts, read here and through its auth gateway (Providers), and its
+  // statistics and live feed from another computer (Costs). The panel passes its live feed in.
+  property var ompActivity: null
+  readonly property var omp: UsageLogic.ompSettings(settings)
+  readonly property var ompStatus: lastPayload && lastPayload.omp && typeof lastPayload.omp === "object" ? lastPayload.omp : null
+  // true, false, or null while no refresh has said.
+  readonly property var ompFound: UsageLogic.ompFound(ompStatus)
+  readonly property var ompLocalLine: UsageLogic.ompLocalStatus(ompStatus, omp.local, usageLoading)
+  readonly property var ompRemoteSource: UsageLogic.readingFor(costSources, "omp-remote")
+  readonly property string ompLiveState: ompActivity ? String(ompActivity.state) : ""
+  // How omp stats is reached on the Costs page; only the commands shown depend on it.
+  property string ompStatsVia: "tailscale"
+  readonly property var ompStatsRecipe: UsageLogic.ompStatsRecipe(ompStatsVia)
+  readonly property string usageFetchPath: decodeURIComponent(String(Qt.resolvedUrl("scripts/usage-fetch.py")).replace(/^file:\/\//, ""))
+  readonly property string costFetchPath: decodeURIComponent(String(Qt.resolvedUrl("scripts/cost-fetch.py")).replace(/^file:\/\//, ""))
+
   // Changes are batched per control: { key: value }. The host persists them and reports back
   // through finishSave(), which also commits or discards a staged secret.
   signal changeRequested(var values)
@@ -258,6 +281,10 @@ Column {
     servers.load(String(value("costT3Servers", "[]")))
     lastPricesJson = String(value("costPriceOverrides", "{}"))
     prices.begin(lastPricesJson)
+    // Test results describe the moment they ran; opening Settings again starts without them.
+    ompGatewayLines = []
+    ompStatsLines = []
+    ompStatsVia = UsageLogic.ompLoopbackHost(UsageLogic.ompHost(omp.statsUrl)) ? "ssh" : "tailscale"
   }
 
   function focusFirst() { root.forceActiveFocus() }
@@ -458,6 +485,89 @@ Column {
     }
     Hint { text: root.proxyMode ? "Limits come from every account on your " + root.proxyName + " server." : "Limits come from the CLIs, apps, and IDEs you are signed in to on this computer, plus API keys saved here or set in the environment." }
 
+    // omp (Oh My Pi) signs in to accounts of its own. Read here, they join the providers below; through
+    // omp's auth gateway, so do the accounts of omp on another computer.
+    Column {
+      id: ompSource
+      objectName: "ompSource"
+      visible: !root.proxyMode
+      width: parent.width
+      spacing: Style.spacing.md
+
+      Column {
+        width: parent.width
+        spacing: Style.spacing.xxs
+        Label { text: "omp"; font.bold: true }
+        StatusLine { objectName: "ompStatus"; line: root.ompLocalLine }
+      }
+      SwitchRow {
+        objectName: "ompLocal"
+        visible: !(root.ompFound === false && root.omp.local)
+        label: "Read omp's accounts"
+        checked: root.omp.local
+        onToggled: root.set("ompLocal", !checked)
+      }
+      Hint {
+        objectName: "ompLocalHint"
+        readonly property string failure: root.ompLocalLine.tone === "error" ? UsageLogic.ompLocalMessage(root.ompStatus) : ""
+        text: root.ompFound === false && root.omp.local
+          ? "Install omp to add the accounts it signs in to, or read omp on another computer below."
+          : failure !== "" ? failure
+          : "Adds the accounts omp signs in to, with their limits, from omp usage on this computer. An account you also use here shows once."
+        color: failure !== "" ? root.urgent : Qt.darker(root.foreground, 1.5)
+      }
+
+      SettingsSection {
+        id: ompGatewaySection
+        objectName: "ompGatewaySection"
+        width: parent.width
+        // Under the "omp" heading the name needs no repeating, which leaves the summary room.
+        title: "On another computer (limits)"
+        summary: UsageLogic.ompGatewaySummary(root.settings, root.ompStatus)
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onRevealRequested: function(item) { root.revealRequested(item) }
+
+        Hint { text: "Reads the limits of the accounts omp uses on another computer, through omp's auth gateway. Set it up only if you already run the gateway there; without it, limits come from this computer." }
+        WhereLabel { text: "On the other computer" }
+        Repeater {
+          model: UsageLogic.ompGatewayRecipe()
+          delegate: CommandBlock {
+            required property var modelData
+            required property int index
+            objectName: "ompGatewayCommand-" + index
+            command: modelData.command
+          }
+        }
+        TextRow {
+          objectName: "ompGatewayUrl"
+          label: "Gateway URL"
+          placeholder: "http://other-computer:" + UsageLogic.OMP_GATEWAY_PORT
+          source: root.omp.gatewayUrl
+          validate: function(text) { return UsageLogic.ompServerUrlProblem(text) }
+          onApplied: function(text) { root.set("ompGatewayUrl", text) }
+        }
+        KeyRow {
+          objectName: "ompGatewayToken"
+          label: "Gateway token"
+          settingKey: "ompGatewayKeyFile"
+          hint: "This token can also send model requests. Quotatank only asks the gateway for /v1/usage, keeps the token in a private file, and never shows it again."
+        }
+        TestBlock {
+          objectName: "ompGatewayTest"
+          ready: root.omp.gatewayUrl !== "" && root.omp.gatewayKeyFile !== "" && UsageLogic.ompServerUrlProblem(root.omp.gatewayUrl) === ""
+          blockedReason: root.omp.gatewayUrl === "" ? "Enter the gateway URL and save its token to test it."
+            : root.omp.gatewayKeyFile === "" ? "Save the gateway token to test it." : ""
+          running: gatewayProbe.active
+          waitingText: "Asking the gateway" + UsageLogic.ompOnHost(root.omp.gatewayUrl) + "…"
+          lines: root.ompGatewayLines
+          onRequested: root.testOmpGateway()
+        }
+      }
+    }
+    // Like the proxy's settings above them, the source's settings end with a rule before the providers.
+    Ui.PanelSeparator { visible: !root.proxyMode; width: parent.width; foreground: root.foreground }
+
     Column {
       visible: root.proxyMode
       width: parent.width
@@ -614,6 +724,9 @@ Column {
         readonly property bool keyEditor: !!entry && entry.auth !== "signin"
           && (entry.auth === "key" || hasKey || !reading || reading.status !== "ok")
         readonly property bool dragging: providerList.draggingId === providerId
+        // This provider's accounts in the last reading (Omarchy sign-ins, extra keys, omp, a proxy).
+        readonly property var accountReading: root.proxyMode ? UsageLogic.readingFor(root.proxyProviders, providerId) : reading
+        readonly property int accountCount: accountReading ? UsageLogic.listOrEmpty(accountReading.accounts).length : 0
         // Key editor and Customize line up with the name, under the grip and the mark.
         readonly property real indent: grip.width + mark.width + Style.spacing.sm * 2
         width: providerList.width
@@ -835,6 +948,22 @@ Column {
                 value: root.barLimitValue(providerRow.providerId, "bottom")
                 onChanged: function(next) { root.set("barProviderLimits", UsageLogic.setBarLimit(root.value("barProviderLimits", "{}"), providerRow.providerId, "bottom", next)) }
               }
+              SelectRow {
+                objectName: "accountMode-" + providerRow.providerId
+                visible: providerRow.accountCount >= 2
+                label: "Accounts are used"
+                options: [
+                  { value: "auto", label: "Automatically" },
+                  { value: "single", label: "One at a time" },
+                  { value: "together", label: "Together" }
+                ]
+                value: UsageLogic.parseAccountModes(root.value("accountModes", "{}"))[providerRow.providerId] || "auto"
+                onChanged: function(next) { root.set("accountModes", UsageLogic.setAccountMode(root.value("accountModes", "{}"), providerRow.providerId, next)) }
+              }
+              Hint {
+                visible: providerRow.accountCount >= 2
+                text: "Automatically: together while omp or a proxy spreads requests over the accounts, or when two of them spend within the same hour; otherwise one at a time."
+              }
               Hint { text: "Default follows the choices under Menu bar and Display." }
             }
           }
@@ -1001,6 +1130,15 @@ Column {
       }
       Hint { text: "Past that, the bar keeps the providers closest to a limit and folds the rest into a +N chip." }
 
+      SelectRow {
+        objectName: "barAccountModeControl"
+        label: "Accounts"
+        options: [{ value: "dots", label: "One chip with dots" }, { value: "chips", label: "One chip per account" }]
+        value: String(root.value("barAccountMode", "dots")) === "chips" ? "chips" : "dots"
+        onChanged: function(next) { root.set("barAccountMode", next) }
+      }
+      Hint { text: "For a provider with several accounts: one chip with a dot for each account, or a chip for each account, up to 4." }
+
       SwitchRow {
         objectName: "hideExhaustedProvidersToggle"
         label: "Hide providers that are used up"
@@ -1134,6 +1272,14 @@ Column {
       onToggled: root.set("hideAccountEmails", !checked)
     }
     Hint { text: "Shows Account 1, Account 2, … instead of account identities, on screen and in exports." }
+    SelectRow {
+      objectName: "motionControl"
+      label: "Motion"
+      options: [{ value: "system", label: "Follow Hyprland" }, { value: "reduced", label: "Reduced" }]
+      value: String(root.value("motion", "system")) === "reduced" ? "reduced" : "system"
+      onChanged: function(next) { root.set("motion", next) }
+    }
+    Hint { text: "Follow Hyprland animates changes while Hyprland's animations are on. Reduced shows every change without movement." }
   }
 
   // ---- Costs
@@ -1160,7 +1306,31 @@ Column {
         }
       }
     }
-    Hint { text: "Include sessions recorded on this computer. Costs are an estimate of API value, not subscription spend." }
+    // omp keeps its sessions here too. They are read with the providers above, so this row has a state
+    // instead of a switch, centred under the switches.
+    Item {
+      objectName: "costLocalOmp"
+      width: parent.width
+      implicitHeight: Math.max(ompLocalCostLabel.implicitHeight, ompLocalCostState.implicitHeight)
+      height: implicitHeight
+      Label {
+        id: ompLocalCostLabel
+        width: parent.width - ompLocalCostState.width
+        anchors.verticalCenter: parent.verticalCenter
+        text: "omp sessions on this computer"
+      }
+      Hint {
+        id: ompLocalCostState
+        objectName: "costLocalOmpState"
+        width: Style.space(82)
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        horizontalAlignment: Text.AlignHCenter
+        wrapMode: Text.NoWrap
+        text: UsageLogic.ompLocalCostState(root.costSources, root.value("costLocalProviders", UsageLogic.DEFAULT_SETTINGS.costLocalProviders))
+      }
+    }
+    Hint { text: "Include sessions recorded on this computer; omp's sessions count for the providers turned on above. Costs are an estimate of API value, not subscription spend." }
 
     SettingsSection {
       id: serverSection
@@ -1274,6 +1444,129 @@ Column {
         focusable: true
         onClicked: servers.addServer()
         onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
+
+    // omp stats, omp's own dashboard, on another computer: its costs and live activity, never credentials.
+    SettingsSection {
+      id: ompStatsSection
+      objectName: "ompStatsSection"
+      width: parent.width
+      title: "omp on another computer"
+      summary: UsageLogic.ompStatsSummary(root.settings, root.ompRemoteSource, root.ompLiveState)
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onRevealRequested: function(item) { root.revealRequested(item) }
+
+      Hint { text: "Costs and live activity from omp's dashboard, omp stats, on another computer. Quotatank reads only its statistics and live feed: it never sees credentials and cannot spend quota." }
+      Item {
+        width: parent.width
+        implicitHeight: Math.max(viaLabel.implicitHeight, viaGroup.implicitHeight)
+        height: implicitHeight
+        Label {
+          id: viaLabel
+          width: parent.width - viaGroup.width - Style.spacing.md
+          anchors.verticalCenter: parent.verticalCenter
+          text: "How to reach it"
+        }
+        Ui.ButtonGroup {
+          id: viaGroup
+          objectName: "ompStatsVia"
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.spacing.sm
+          options: [{ value: "tailscale", label: "Tailscale" }, { value: "ssh", label: "SSH tunnel" }]
+          value: root.ompStatsVia
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          fontSize: Style.font.caption
+          Accessible.name: "How to reach omp stats: " + (root.ompStatsVia === "ssh" ? "SSH tunnel" : "Tailscale")
+          onChanged: function(next) { root.ompStatsVia = next }
+          onActiveFocusChanged: if (activeFocus) root.revealRequested(viaGroup)
+        }
+      }
+      Column {
+        id: viaSteps
+        objectName: "ompStatsSteps"
+        width: parent.width
+        spacing: Style.spacing.sm
+        // Another way's commands fade in, so the switch is seen.
+        Connections {
+          target: root
+          function onOmpStatsViaChanged() { viaFade.restart() }
+        }
+        OpacityAnimator { id: viaFade; target: viaSteps; from: 0; to: 1; duration: root.microMs; easing.type: Easing.OutCubic }
+        Repeater {
+          model: root.ompStatsRecipe.steps
+          delegate: Column {
+            id: viaStep
+            required property var modelData
+            required property int index
+            width: viaSteps.width
+            spacing: Style.spacing.xs
+            WhereLabel { text: viaStep.modelData.where === "here" ? "On this computer" : "On the other computer" }
+            CommandBlock { objectName: "ompStatsCommand-" + viaStep.index; command: viaStep.modelData.command }
+          }
+        }
+        Hint {
+          text: root.ompStatsVia === "ssh" ? "Put that computer's SSH name in place of other-computer, then enter " + root.ompStatsRecipe.url + " below."
+            : "Then enter that computer's Tailscale name below."
+        }
+      }
+      UsageDisclosure {
+        id: ompUnitToggle
+        objectName: "ompStatsUnitToggle"
+        width: parent.width
+        text: root.ompStatsVia === "ssh" ? "Start both with the computers" : "Start it with the computer"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(ompUnitToggle)
+      }
+      Column {
+        id: ompUnits
+        objectName: "ompStatsUnits"
+        visible: ompUnitToggle.checked
+        width: parent.width
+        spacing: Style.spacing.md
+        Repeater {
+          model: ompUnitToggle.checked ? root.ompStatsRecipe.units : []
+          delegate: Column {
+            id: unitStep
+            required property var modelData
+            required property int index
+            width: ompUnits.width
+            spacing: Style.spacing.xs
+            WhereLabel { text: (unitStep.modelData.where === "here" ? "On this computer" : "On the other computer") + ", save this unit" }
+            CommandBlock { objectName: "ompStatsUnit-" + unitStep.index; command: unitStep.modelData.text }
+            WhereLabel { text: "Then start it, now and at every login" }
+            CommandBlock { objectName: "ompStatsEnable-" + unitStep.index; command: unitStep.modelData.enable }
+          }
+        }
+        Hint { text: "Units find omp through your login shell's PATH. If one does not start, put the path that command -v omp prints in place of omp." }
+      }
+      Warning {
+        objectName: "ompStatsWarning"
+        text: "The dashboard also serves your conversations. Keep it on Tailscale or behind an SSH tunnel, never on an open network."
+      }
+      TextRow {
+        objectName: "ompStatsUrl"
+        label: "Dashboard URL"
+        placeholder: root.ompStatsRecipe.url
+        source: root.omp.statsUrl
+        validate: function(text) { return UsageLogic.ompServerUrlProblem(text) }
+        onApplied: function(text) { root.set("ompStatsUrl", text) }
+      }
+      TestBlock {
+        objectName: "ompStatsTest"
+        ready: root.omp.statsUrl !== "" && UsageLogic.ompServerUrlProblem(root.omp.statsUrl) === ""
+        blockedReason: root.omp.statsUrl === "" ? "Enter the dashboard URL to test it." : ""
+        running: statsProbe.active
+        waitingText: "Asking omp stats" + UsageLogic.ompOnHost(root.omp.statsUrl) + "…"
+        lines: root.ompStatsLines
+        // The live feed follows the saved URL; its line keeps up with it after the test.
+        liveLine: root.ompStatsLines.length > 0 && root.ompStatsLines[0].tone === "ok"
+          ? UsageLogic.ompLiveFeedLine(root.ompLiveState, root.ompActivity ? root.ompActivity.message : "") : null
+        onRequested: root.testOmpStats()
       }
     }
 
@@ -1512,8 +1805,11 @@ Column {
   }
   function sourceDetail(source) {
     var labels = { ok: "Included", partial: "Partial history", stale: "Saved history · offline",
-      missing: "No transcripts", failed: "Unavailable", unavailable: "Unavailable", duplicate: "Already included" }
-    var text = source.name + " · " + (labels[source.status] || source.status)
+      missing: "No transcripts", failed: "Unavailable", unavailable: "Unavailable", error: "Unavailable",
+      off: "Off", duplicate: "Already included" }
+    var name = source.id === "local-omp" ? "omp sessions on this computer"
+      : source.id === "omp-remote" ? "omp stats" + (source.host ? " on " + source.host : "") : source.name
+    var text = name + " · " + (labels[source.status] || source.status)
     if (source.status === "stale" && source.updatedAt)
       text += " · " + Qt.formatDateTime(new Date(Number(source.updatedAt)), "MMM d, HH:mm")
     return text
@@ -1571,6 +1867,97 @@ Column {
     servers.load(String(value("costT3Servers", "[]")))
     var raw = String(value("costPriceOverrides", "{}"))
     if (raw !== lastPricesJson) { lastPricesJson = raw; prices.begin(raw) }
+    forgetStaleOmpTests()
+  }
+
+  // ---- omp: Test buttons run a backend once with only omp's flags, in a process bounded in time and
+  // output, and say what it found. The lines are kept while the address and token they tested stay.
+  property var ompGatewayLines: []
+  property var ompStatsLines: []
+  property string ompGatewayTested: ""
+  property string ompStatsTested: ""
+
+  // Read from `settings` itself: this also runs from onSettingsChanged, before `omp` has caught up.
+  function ompGatewayKey() {
+    var current = UsageLogic.ompSettings(settings)
+    return JSON.stringify([current.gatewayUrl, current.gatewayKeyFile])
+  }
+
+  function forgetStaleOmpTests() {
+    if (ompGatewayTested !== "" && ompGatewayTested !== ompGatewayKey()) { ompGatewayLines = []; ompGatewayTested = "" }
+    if (ompStatsTested !== "" && ompStatsTested !== UsageLogic.ompSettings(settings).statsUrl) { ompStatsLines = []; ompStatsTested = "" }
+  }
+
+  // usage-fetch.py reads only omp's gateway (--omp-only skips every other source and the history), for
+  // every provider omp signs in to, so the result names all the gateway has.
+  function testOmpGateway() {
+    if (gatewayProbe.active || omp.gatewayUrl === "" || omp.gatewayKeyFile === "") return
+    ompGatewayLines = []
+    ompGatewayTested = ompGatewayKey()
+    gatewayProbe.start(["python3", usageFetchPath, "--providers", UsageLogic.OMP_PROVIDER_IDS.join(","), "--source", "direct",
+      "--timeout", "12", "--omp-only", "--omp-gateway-url", omp.gatewayUrl, "--omp-gateway-key-file", omp.gatewayKeyFile])
+  }
+
+  // cost-fetch.py reads only omp stats (no local providers, no T3 server) for the last 7 days.
+  function testOmpStats() {
+    if (statsProbe.active || omp.statsUrl === "") return
+    ompStatsLines = []
+    ompStatsTested = omp.statsUrl
+    statsProbe.start(["python3", costFetchPath, "--providers", "", "--days", "7", "--timeout", "15", "--t3-servers", "[]",
+      "--price-overrides", prices.loadError === "" ? String(value("costPriceOverrides", "{}")) : "{}", "--omp-stats-url", omp.statsUrl])
+  }
+
+  Probe {
+    id: gatewayProbe
+    timeoutMs: 40000
+    onFinished: function(reply) {
+      if (root.ompGatewayTested === root.ompGatewayKey())
+        root.ompGatewayLines = UsageLogic.ompGatewayTestLines(reply, root.omp.gatewayUrl, root.enabledProviders)
+    }
+  }
+
+  Probe {
+    id: statsProbe
+    timeoutMs: 75000
+    onFinished: function(reply) {
+      if (root.ompStatsTested === root.omp.statsUrl) root.ompStatsLines = UsageLogic.ompStatsTestLines(reply, root.omp.statsUrl)
+    }
+  }
+
+  // Copy writes the clipboard with wl-copy in its own process, the way a paste reads it with wl-paste:
+  // the text is the widget's own command (never user input), passed as one argument without a shell,
+  // and the shell process never owns or reads the clipboard.
+  property var copyTarget: null
+  function copyCommand(block) {
+    if (clipboardWriter.running) return
+    copyTarget = block
+    clipboardWriter.exitCode = -1
+    clipboardWriter.command = ["wl-copy", "--type", "text/plain;charset=utf-8", "--", block.command]
+    clipboardWriter.running = true
+    copyTimeout.restart()
+  }
+  function finishCopy() {
+    copyTimeout.stop()
+    var block = copyTarget
+    copyTarget = null
+    if (block) block.showCopied(clipboardWriter.exitCode === 0)
+  }
+  Process {
+    id: clipboardWriter
+    property int exitCode: -1
+    stdout: SplitParser { splitMarker: "" }
+    stderr: SplitParser { splitMarker: "" }
+    onExited: function(code) { exitCode = code }
+    onRunningChanged: if (!running) root.finishCopy()
+  }
+  // wl-copy hands the text to a background copy of itself and returns at once; a missing one never starts.
+  Timer {
+    id: copyTimeout
+    interval: 2000
+    onTriggered: {
+      if (clipboardWriter.running) clipboardWriter.running = false
+      else root.finishCopy()
+    }
   }
 
   // ---- building blocks
@@ -1586,6 +1973,324 @@ Column {
   component Hint: Label {
     color: Qt.darker(root.foreground, 1.5)
     font.pixelSize: Style.font.caption
+  }
+
+  // Where the command below it runs ("On the other computer").
+  component WhereLabel: Hint {
+    topPadding: Style.spacing.xs
+  }
+
+  // A state mark and one line of status: a filled dot while something is found (accent) or failing
+  // (alert colour), a ring otherwise. The text says the same, so colour is never the only signal.
+  component StatusLine: Item {
+    id: statusLine
+    property var line: ({ tone: "off", text: "" })
+    readonly property bool filled: line.tone === "ok" || line.tone === "error"
+    readonly property color toneColor: line.tone === "error" ? root.urgent
+      : line.tone === "ok" ? Commons.Color.accent : Qt.darker(root.foreground, 1.5)
+    visible: String(line.text || "") !== ""
+    width: parent.width
+    implicitHeight: statusText.implicitHeight
+    height: implicitHeight
+    FontMetrics { id: statusMetrics; font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+    Rectangle {
+      id: statusDot
+      width: Style.space(6)
+      height: width
+      radius: width / 2
+      // Centred on the first line of text.
+      y: Math.round((statusMetrics.height - height) / 2)
+      color: statusLine.filled ? statusLine.toneColor : "transparent"
+      border.width: statusLine.filled ? 0 : Style.spacing.hairline
+      border.color: statusLine.toneColor
+      Behavior on color { ColorAnimation { duration: root.microMs } }
+    }
+    Hint {
+      id: statusText
+      objectName: statusLine.objectName + "Text"
+      x: statusDot.width + Style.spacing.sm
+      width: parent.width - x
+      text: statusLine.line.text
+      color: statusLine.line.tone === "error" ? root.urgent : Qt.darker(root.foreground, 1.5)
+    }
+  }
+
+  // A command for the user to run, selectable, with Copy beside it (see copyCommand).
+  component CommandBlock: Item {
+    id: commandBlock
+    property string command: ""
+    property bool copied: false
+    property bool failed: false
+    function showCopied(ok) {
+      copied = ok
+      failed = !ok
+      copiedReset.restart()
+    }
+    width: parent.width
+    implicitHeight: Math.max(copyButton.implicitHeight, commandText.implicitHeight + Style.spacing.sm * 2)
+    height: implicitHeight
+    Ui.BorderSurface {
+      anchors.left: parent.left
+      anchors.right: copyButton.left
+      anchors.rightMargin: Style.spacing.sm
+      height: parent.height
+      radius: Style.space(4)
+      color: Style.normalFillFor(root.foreground, Commons.Color.accent, root.urgent)
+      borderSpec: Border.flat(Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12), Style.spacing.hairline)
+      TextEdit {
+        id: commandText
+        objectName: commandBlock.objectName + "Text"
+        x: Style.spacing.md
+        width: parent.width - Style.spacing.md * 2
+        anchors.verticalCenter: parent.verticalCenter
+        // A file's closing newline is copied, not shown.
+        text: commandBlock.command.replace(/\n+$/, "")
+        textFormat: TextEdit.PlainText
+        // Long commands break between words when they can, so a flag stays whole on its line.
+        wrapMode: TextEdit.Wrap
+        readOnly: true
+        selectByMouse: true
+        color: root.foreground
+        selectionColor: Style.selectionFillFor(root.foreground, Commons.Color.accent)
+        selectedTextColor: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+    }
+    TextMetrics { id: copyMetrics; font.family: root.fontFamily; font.pixelSize: Style.font.caption; text: "Copied" }
+    Ui.Button {
+      id: copyButton
+      objectName: commandBlock.objectName + "Copy"
+      anchors.right: parent.right
+      anchors.top: parent.top
+      // As wide as its widest label, so the command beside it never shifts.
+      width: Math.max(implicitWidth, Math.ceil(copyMetrics.advanceWidth) + horizontalPadding * 2 + Style.spacing.hairline * 2)
+      text: commandBlock.copied ? "Copied" : commandBlock.failed ? "Failed" : "Copy"
+      tooltipText: commandBlock.failed ? "wl-copy could not copy it. Select the command and press Ctrl+C." : ""
+      foreground: commandBlock.copied ? Commons.Color.accent : commandBlock.failed ? root.urgent : root.foreground
+      fontFamily: root.fontFamily
+      fontSize: Style.font.caption
+      horizontalPadding: Style.spacing.sm
+      verticalPadding: Style.spacing.xs
+      focusable: true
+      Accessible.name: (commandBlock.copied ? "Copied: " : "Copy: ") + commandBlock.command
+      onClicked: root.copyCommand(commandBlock)
+      onActiveFocusChanged: if (activeFocus) root.revealRequested(copyButton)
+    }
+    Timer { id: copiedReset; interval: 1600; onTriggered: { commandBlock.copied = false; commandBlock.failed = false } }
+  }
+
+  // A caution in running text, marked by a bar in the alert colour.
+  component Warning: Item {
+    id: warning
+    property string text: ""
+    width: parent.width
+    implicitHeight: warningText.implicitHeight
+    height: implicitHeight
+    Rectangle { width: Style.space(2); height: parent.height; color: root.urgent }
+    Label {
+      id: warningText
+      objectName: warning.objectName + "Text"
+      x: Style.space(2) + Style.spacing.md
+      width: parent.width - x
+      text: warning.text
+      font.pixelSize: Style.font.caption
+    }
+  }
+
+  // One finding of a Test: ✓ in the accent colour, ✕ and the text in the alert colour, › for a note.
+  // It fades and rises in after `delay`, so a result's lines arrive one after another.
+  component ResultLine: Item {
+    id: result
+    property var line: ({ tone: "info", text: "" })
+    property int delay: 0
+    function replay() {
+      if (root.rowMs <= 0) { appear.stop(); opacity = 1; lift.y = 0; return }
+      opacity = 0
+      lift.y = Style.space(3)
+      appear.restart()
+    }
+    width: parent.width
+    implicitHeight: resultText.implicitHeight
+    height: implicitHeight
+    transform: Translate { id: lift }
+    Component.onCompleted: replay()
+    onVisibleChanged: if (visible) replay()
+    Text {
+      id: resultMark
+      width: Style.space(10)
+      text: result.line.tone === "ok" ? "✓" : result.line.tone === "error" ? "✕" : "›"
+      color: result.line.tone === "error" ? root.urgent : result.line.tone === "ok" ? Commons.Color.accent : Qt.darker(root.foreground, 1.5)
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.bold: true
+    }
+    Label {
+      id: resultText
+      objectName: result.objectName + "Text"
+      x: resultMark.width + Style.spacing.xs
+      width: parent.width - x
+      // Commands such as omp auth-gateway stay whole at a line break: word joiners hold their hyphens.
+      text: String(result.line.text).replace(/(\w)-(?=\w)/g, "$1\u2060-\u2060")
+      font.pixelSize: Style.font.caption
+      color: result.line.tone === "error" ? root.urgent : result.line.tone === "ok" ? root.foreground : Qt.darker(root.foreground, 1.5)
+      Behavior on color { ColorAnimation { duration: root.microMs } }
+    }
+    SequentialAnimation {
+      id: appear
+      PauseAnimation { duration: result.delay }
+      ParallelAnimation {
+        OpacityAnimator { target: result; from: 0; to: 1; duration: root.rowMs; easing.type: Easing.OutCubic }
+        NumberAnimation { target: lift; property: "y"; to: 0; duration: root.rowMs; easing.type: Easing.OutCubic }
+      }
+    }
+  }
+
+  // A Test button and what the test found: after 300 ms without an answer a spinner says what it is
+  // waiting for; then one line per finding. `liveLine` follows something that keeps changing after the
+  // test, such as omp's live feed.
+  component TestBlock: Column {
+    id: test
+    property bool running: false
+    property bool ready: true
+    property string blockedReason: ""
+    property string waitingText: "Testing…"
+    property var lines: []
+    property var liveLine: null
+    property bool slow: false
+    signal requested()
+    width: parent.width
+    spacing: Style.spacing.sm
+    onRunningChanged: if (!running) slow = false
+
+    TextMetrics { id: labelMetrics; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; text: testButton.text }
+    TextMetrics { id: testingMetrics; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; text: "Testing…" }
+    Ui.Button {
+      id: testButton
+      objectName: test.objectName + "Button"
+      text: test.running ? "Testing…" : "Test"
+      // As wide as "Testing…", so the button keeps its size while it waits.
+      width: implicitWidth + Math.max(0, Math.ceil(testingMetrics.advanceWidth) - Math.ceil(labelMetrics.advanceWidth))
+      enabled: test.ready && !test.running
+      opacity: enabled || test.running ? 1 : 0.45
+      bordered: true
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      fontSize: Style.font.bodySmall
+      focusable: true
+      Accessible.name: "Test" + (!test.ready && test.blockedReason !== "" ? ". " + test.blockedReason : "")
+      onClicked: if (enabled) test.requested()
+      onActiveFocusChanged: if (activeFocus) root.revealRequested(testButton)
+    }
+    Hint { objectName: test.objectName + "Blocked"; visible: !test.ready && test.blockedReason !== ""; text: test.blockedReason }
+    Timer { interval: 300; running: test.running && !test.slow; onTriggered: test.slow = true }
+    Item {
+      objectName: test.objectName + "Spinner"
+      visible: test.running && test.slow
+      width: parent.width
+      implicitHeight: waitingLabel.implicitHeight
+      height: implicitHeight
+      Text {
+        id: spinnerGlyph
+        width: Style.space(10)
+        horizontalAlignment: Text.AlignHCenter
+        text: "󰝲"
+        color: Commons.Color.accent
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        // Turns only while a test waits (each is bounded by its timeout) and never with reduced motion.
+        RotationAnimator on rotation {
+          from: 0
+          to: 360
+          duration: 900
+          loops: Animation.Infinite
+          running: spinnerGlyph.visible && test.running && !root.reducedMotion
+        }
+      }
+      Hint {
+        id: waitingLabel
+        objectName: test.objectName + "Waiting"
+        x: spinnerGlyph.width + Style.spacing.xs
+        width: parent.width - x
+        text: test.waitingText
+      }
+    }
+    Repeater {
+      model: test.running ? [] : test.lines
+      delegate: ResultLine {
+        required property var modelData
+        required property int index
+        objectName: test.objectName + "Line-" + index
+        line: modelData
+        delay: index * root.staggerMs
+      }
+    }
+    ResultLine {
+      objectName: test.objectName + "Live"
+      visible: !test.running && test.lines.length > 0 && test.liveLine !== null
+      line: test.liveLine || ({ tone: "info", text: "" })
+      delay: test.lines.length * root.staggerMs
+    }
+  }
+
+  // One run of a backend script for a Test button, bounded in output (2 MiB) and time. `finished`
+  // hands over the parsed reply, { probeError: "timeout" | "tooLarge" }, or null when nothing readable
+  // came back (for example when python3 could not start).
+  component Probe: QtObject {
+    id: probe
+    property int timeoutMs: 30000
+    property bool active: false
+    property string body: ""
+    property bool tooLarge: false
+    property bool timedOut: false
+    signal finished(var reply)
+    function start(command) {
+      if (active) return
+      active = true
+      body = ""
+      tooLarge = false
+      timedOut = false
+      probeProcess.command = command
+      probeProcess.running = true
+      probeTimer.restart()
+    }
+    function finish() {
+      if (!active) return
+      active = false
+      probeTimer.stop()
+      var reply = null
+      if (timedOut) reply = { probeError: "timeout" }
+      else if (tooLarge) reply = { probeError: "tooLarge" }
+      else { try { reply = JSON.parse(body) } catch (error) { reply = null } }
+      body = ""
+      finished(reply)
+    }
+    property Process process: Process {
+      id: probeProcess
+      stdout: SplitParser {
+        splitMarker: ""
+        onRead: function(data) {
+          if (probe.tooLarge) return
+          if (probe.body.length + data.length > 2097152) {
+            probe.tooLarge = true
+            probe.body = ""
+            probeProcess.running = false
+          } else probe.body += data
+        }
+      }
+      // Drain diagnostics in arbitrary chunks without retaining them.
+      stderr: SplitParser { splitMarker: "" }
+      onRunningChanged: if (!running) probe.finish()
+    }
+    property Timer timer: Timer {
+      id: probeTimer
+      interval: probe.timeoutMs
+      onTriggered: {
+        probe.timedOut = true
+        if (probeProcess.running) probeProcess.running = false
+        else probe.finish()
+      }
+    }
   }
 
   component Toggle: Ui.ToggleSwitch {
@@ -2470,8 +3175,11 @@ Column {
       return proxyMode ? proxyName + " · no providers yet" : found > 0 ? found + " found on this computer" : "Nothing set up yet"
     var list = names.length <= 3 ? names.join(", ") : names.slice(0, 2).join(", ") + " +" + (names.length - 2)
     var customized = customizedCount()
+    // omp counts once it adds accounts: read here, or through its gateway.
+    var ompAdds = !proxyMode && ompStatus && (ompStatus.local === "ok" || ompStatus.gateway === "ok")
     return (proxyMode ? proxyName + " · " : "") + list + (percentageDisplay ? " · " + shown + " in menu bar" : "")
       + (customized > 0 ? " · " + customized + " customized" : "") + (found > 0 ? " · " + found + " found" : "")
+      + (ompAdds ? " · omp" : "")
   }
 
   // ---- per-provider overrides: Show limits as, Limit shown, Second limit below
@@ -2489,6 +3197,8 @@ Column {
     if (top !== "default") parts.push(UsageLogic.windowSelectorLabel(top))
     var bottom = barLimitValue(providerId, "bottom")
     if (bottom !== "default") parts.push("+ " + (bottom === "none" ? "none" : UsageLogic.windowSelectorLabel(bottom)))
+    var accounts = UsageLogic.parseAccountModes(value("accountModes", "{}"))[providerId]
+    if (accounts) parts.push(UsageLogic.accountModeLabel(accounts))
     return parts.length ? parts.join(" · ") : "Default"
   }
 
@@ -2498,6 +3208,8 @@ Column {
     var limits = UsageLogic.parseBarLimits(value("barProviderLimits", "{}"))
     for (var id in modes) ids[id] = true
     for (var other in limits) ids[other] = true
+    var accountModes = UsageLogic.parseAccountModes(value("accountModes", "{}"))
+    for (var accountId in accountModes) ids[accountId] = true
     return Object.keys(ids).length
   }
 
@@ -2510,6 +3222,7 @@ Column {
     if (value("hideExhaustedProviders", false) === true) text += " · hides used up"
     var cap = Number(value("barMaxChips", UsageLogic.DEFAULT_SETTINGS.barMaxChips))
     if (cap > 0) text += " · up to " + cap + " chips"
+    if (String(value("barAccountMode", "dots")) === "chips") text += " · a chip per account"
     return text
   }
 
@@ -2525,6 +3238,7 @@ Column {
   function displaySummary() {
     return (quotaMode === "Remaining" ? "% left" : "% used") + " · " + (value("providerColors", false) === true ? "Brand colors" : "Theme colors")
       + (value("hideAccountEmails", true) !== false ? " · Emails hidden" : "")
+      + (String(value("motion", "system")) === "reduced" ? " · Reduced motion" : "")
   }
 
   function costsSummary() {
@@ -2535,6 +3249,7 @@ Column {
     var text = parts.length ? parts.join(", ") : "No local history"
     if (servers.count > 0) text += " · " + servers.count + (servers.count === 1 ? " server" : " servers")
     if (prices.priceCount > 0) text += " · " + prices.priceCount + " custom " + (prices.priceCount === 1 ? "price" : "prices")
+    if (omp.statsUrl !== "") text += " · omp stats" + (UsageLogic.ompOnHost(omp.statsUrl) || " through a tunnel")
     return text
   }
 }

@@ -1047,4 +1047,204 @@ console.log("Provider setup: passed");
   console.log("Costs tab: passed");
 }
 
+// ---- 1.9 QmlSettings ----
+// omp as a source: the backends' flags, the address rule, what Settings says, the Test results, and
+// the live feed's lines. Then the per-provider account mode, and the clipboard rule for settings fields.
+{
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+  const args = (value) => Array.from(value);
+  assert.deepEqual(args(context.ompUsageArguments({})), ["--omp", "local"], "omp on this computer is read unless turned off");
+  assert.deepEqual(args(context.ompUsageArguments({ ompLocal: false })), [], "turned off, omp gets no flag");
+  assert.deepEqual(args(context.ompUsageArguments({ ompLocal: false, ompGatewayUrl: "http://devbox:4000" })), [],
+    "a gateway without its token is not asked");
+  assert.deepEqual(args(context.ompUsageArguments({ ompLocal: false, ompGatewayUrl: " http://devbox:4000 ", ompGatewayKeyFile: "/private/key-1.key" })),
+    ["--omp-gateway-url", "http://devbox:4000", "--omp-gateway-key-file", "/private/key-1.key"], "the gateway's URL and token file pass together");
+  assert.deepEqual(args(context.ompCostArguments({})), []);
+  assert.deepEqual(args(context.ompCostArguments({ ompStatsUrl: "http://devbox:3847" })), ["--omp-stats-url", "http://devbox:3847"]);
+  assert.deepEqual(args(context.ompLiveArguments({}, null)), [], "the live feed waits until the backend finds omp");
+  assert.deepEqual(args(context.ompLiveArguments({}, { local: "missing" })), [], "no omp, no feed");
+  assert.deepEqual(args(context.ompLiveArguments({}, { local: "ok" })), ["--local", "--accounts"]);
+  assert.deepEqual(args(context.ompLiveArguments({}, { local: "off", installed: true })), ["--local", "--accounts"]);
+  assert.deepEqual(args(context.ompLiveArguments({ ompLocal: false }, { local: "ok" })), [], "turned off, omp's sessions are not followed");
+  assert.deepEqual(args(context.ompLiveArguments({ ompStatsUrl: "http://devbox:3847" }, { local: "missing" })), ["--stats-url", "http://devbox:3847"],
+    "omp stats elsewhere is followed without omp here");
+
+  const problem = context.ompServerUrlProblem;
+  assert.equal(problem(""), "", "empty turns the server off");
+  for (const good of ["https://stats.example.com", "https://203.0.113.9:3847", "http://devbox:3847", "http://devbox.tail1234.ts.net:3847",
+    "http://100.101.102.103:3847", "http://192.168.1.20:3847", "http://10.0.0.2", "http://172.16.0.1:4000", "http://127.0.0.1:3847",
+    "http://localhost:3847", "http://[::1]:3847", "http://[fd7a:115c:a1e0::1]:4000", "https://proxy.example.com/omp", "http://devbox:"])
+    assert.equal(problem(good), "", good + " is accepted");
+  for (const bad of ["ftp://devbox", "http://user:secret@devbox:3847", "http://devbox:3847?range=7d", "http://devbox:3847/#top", "devbox:3847",
+    "http://devbox:99999", "http://devbox/../api", "http://devbox/%2e%2e/api", "http://[::1"])
+    assert.equal(problem(bad), context.OMP_URL_PROBLEM, bad + " is refused");
+  for (const exposed of ["http://example.com:3847", "http://203.0.113.9:3847", "http://172.32.0.1", "http://100.128.0.1", "http://010.0.0.1",
+    "http://2130706433", "http://[2001:db8::1]:3847"])
+    assert.equal(problem(exposed), context.OMP_HTTP_PROBLEM, exposed + " needs HTTPS");
+  assert.equal(context.ompHost("http://devbox.tail1234.ts.net:3847"), "devbox", "MagicDNS names drop the tailnet");
+  assert.equal(context.ompHost("http://Devbox:4000/"), "devbox");
+  assert.equal(context.ompOnHost("http://127.0.0.1:3847"), "", "the end of a tunnel is not the computer's name");
+  assert.equal(context.ompOnHost("http://devbox:3847"), " on devbox");
+
+  const localStatus = (status, localOn = true, loading = false) => plain(context.ompLocalStatus(status, localOn, loading));
+  assert.deepEqual(localStatus({ local: "ok", version: "omp/18.10.3", localAccounts: 3, accounts: 4, gateway: "ok" }),
+    { tone: "ok", text: "omp 18.10 found · 3 accounts" }, "the status names the version and this computer's accounts");
+  assert.deepEqual(localStatus({ local: "ok", accounts: 1, gateway: "off" }), { tone: "ok", text: "omp found · 1 account" });
+  assert.deepEqual(localStatus({ local: "ok", accounts: 5, gateway: "ok" }), { tone: "ok", text: "omp found" },
+    "a merged count that includes the gateway's is not this computer's");
+  assert.deepEqual(localStatus({ local: "ok", localAccounts: 0 }), { tone: "ok", text: "omp found · no accounts signed in" });
+  assert.deepEqual(localStatus({ local: "missing" }), { tone: "off", text: "omp not found on this computer" });
+  assert.deepEqual(localStatus({ local: "error", message: "omp usage did not finish in time." }),
+    { tone: "error", text: "omp found · its accounts could not be read" });
+  assert.deepEqual(localStatus(null, true, true), { tone: "pending", text: "Looking for omp on this computer…" });
+  assert.deepEqual(localStatus(null), { tone: "pending", text: "" }, "nothing to say before a refresh");
+  assert.deepEqual(localStatus({ local: "off", installed: true }, false), { tone: "off", text: "omp found · its accounts are not read" });
+  assert.deepEqual(localStatus({ local: "off" }, false), { tone: "off", text: "Reading omp's accounts is off" });
+  assert.equal(context.ompLocalMessage({ message: "omp usage did not finish in time. The omp gateway refused the token." }),
+    "omp usage did not finish in time.", "the local part of a combined message");
+
+  const gateway = { ompGatewayUrl: "http://devbox:4000", ompGatewayKeyFile: "/private/key-1.key" };
+  assert.equal(context.ompGatewaySummary({}, null), "Not set up");
+  assert.equal(context.ompGatewaySummary({ ompGatewayUrl: "http://devbox:4000" }, null), "devbox · token needed");
+  assert.equal(context.ompGatewaySummary(gateway, { gateway: "ok", gatewayAccounts: 3 }), "devbox · 3 accounts");
+  assert.equal(context.ompGatewaySummary(gateway, { gateway: "error", message: "The omp gateway refused the token." }), "devbox · token refused");
+  assert.equal(context.ompGatewaySummary(gateway, { gateway: "error",
+    message: "omp usage exited with status 1. Could not reach the omp gateway. Check its URL, the network and its TLS certificate." }),
+  "devbox · not answering", "the gateway's part of a combined message decides");
+
+  const usageReply = (omp, providers) => ({ schemaVersion: 1, generatedAt: "2030-01-15T12:00:00Z", providers: providers || [], omp });
+  const ompAccount = (accountId) => ({ accountId, source: "omp usage report", origin: "omp", status: "ok" });
+  const gatewayOk = usageReply({ local: "off", gateway: "ok", gatewayAccounts: 3 }, [
+    { id: "claude", source: "omp usage report", origin: "omp", accounts: [ompAccount("omp-aaaaaaaaaaaa"), ompAccount("omp-bbbbbbbbbbbb")] },
+    { id: "codex", source: "omp usage report", origin: "omp", accounts: [ompAccount("omp-cccccccccccc"),
+      { accountId: "main", source: "Codex app-server RPC", origin: "signin", origins: ["signin"] }] },
+    { id: "kimi", status: "error", accounts: [] }]);
+  const gatewayLines = (reply, monitored) => plain(context.ompGatewayTestLines(reply, "http://devbox:4000", monitored));
+  assert.deepEqual(gatewayLines(gatewayOk, ["claude", "codex"]), [{ tone: "ok", text: "Gateway answers · 3 accounts: Claude 2, Codex 1" }],
+    "the result names what the gateway has");
+  assert.deepEqual(gatewayLines(gatewayOk, ["claude"])[1], { tone: "info", text: "Not monitored here: Codex. Monitor it to see its accounts in Limits." });
+  assert.deepEqual(gatewayLines(usageReply({ gateway: "ok" }, []), []).map((line) => line.tone), ["ok", "info"], "an empty gateway says so");
+  assert.deepEqual(gatewayLines(usageReply({ gateway: "error", message: "The omp gateway refused the token." }), []),
+    [{ tone: "error", text: "The gateway refused the token. Copy a fresh one with omp auth-gateway token on devbox, then save it here." }]);
+  assert.equal(gatewayLines(usageReply({ gateway: "error", message: "Could not reach the omp gateway. Check its URL, the network and its TLS certificate." }), [])[0].text,
+    "Nothing answers there. Is omp auth-gateway serve running on devbox?");
+  assert.equal(gatewayLines(usageReply({ gateway: "error", message: "The omp gateway answered HTTP 404." }), [])[0].text,
+    "The gateway answered HTTP 404. Check that the URL points at omp auth-gateway (port 4000 unless you chose another).");
+  assert.equal(gatewayLines(usageReply({ gateway: "error", message: "omp gateway token file must be a regular file owned by you with mode 0600." }), [])[0].text,
+    "omp gateway token file must be a regular file owned by you with mode 0600.", "a message the widget has no next step for stays as it is");
+  assert.equal(gatewayLines(usageReply({ local: "off", gateway: "off" }), [])[0].tone, "error", "a backend without gateway support says so");
+  assert.equal(gatewayLines(null, [])[0].text, "The test did not run. Check that Python 3 is installed, then try again.");
+  assert.equal(gatewayLines({ probeError: "timeout" }, [])[0].text, "No answer within 40 s. Check the URL, and that the other computer is awake.");
+  assert.equal(gatewayLines({ schemaVersion: 1, providers: [], backendError: "Backend failed" }, [])[0].text, "Backend failed");
+
+  const costReply = (source, totals) => ({ schemaVersion: 1, generatedAt: "2030-01-15T12:00:00Z", providers: [], models: [], periods: [],
+    totals: totals || { records: 0, costUsd: 0 }, sources: source ? [source] : [] });
+  const statsLines = (reply, url = "http://devbox:3847") => plain(context.ompStatsTestLines(reply, url));
+  assert.deepEqual(statsLines(costReply({ id: "omp-remote", status: "ok", host: "devbox" }, { records: 18811, costUsd: 1107.83 })),
+    [{ tone: "ok", text: "omp stats on devbox answers" }, { tone: "ok", text: "18,811 requests · $1,107.83 in the last 7 days" }],
+    "the result names what the server counted");
+  assert.equal(statsLines(costReply({ id: "omp-remote", status: "ok" }, { records: 12, costUsd: null }))[1].text, "12 requests · unpriced in the last 7 days");
+  assert.equal(statsLines(costReply({ id: "omp-remote", status: "ok" }, { records: 0, costUsd: 0 }))[1].text, "No requests in the last 7 days.");
+  assert.deepEqual(statsLines(costReply({ id: "omp-remote", status: "error", errorKind: "network", message: "Could not reach omp stats." })),
+    [{ tone: "error", text: "Nothing answers there. Is omp stats running on devbox?" }], "an error names the next step");
+  assert.equal(statsLines(costReply({ id: "omp-remote", status: "error", errorKind: "network", message: "" }), "http://127.0.0.1:3847")[0].text,
+    "Nothing answers there. Is the SSH tunnel open, and omp stats running on the other computer?");
+  assert.equal(statsLines(costReply({ id: "omp-remote", status: "error", errorKind: "timeout",
+    message: "omp stats did not answer within 15 seconds. It may still be indexing sessions; try again in a minute." }))[0].text,
+  "omp stats did not answer within 15 seconds. It may still be indexing sessions; try again in a minute.");
+  assert.equal(statsLines(costReply({ id: "omp-remote", status: "duplicate" }))[1].text, "It runs on this computer, so its sessions are already counted here.");
+  assert.equal(statsLines(costReply(null))[0].text, "This version of the backend cannot read omp stats. Update Quotatank, then try again.");
+  assert.equal(statsLines({ probeError: "timeout" })[0].text, "No answer within 75 s. Check the URL, and that the other computer is awake.");
+  assert.equal(context.ompLiveFeedLine("live", "").text, "Live feed on · new activity shows within 10 s");
+  assert.equal(context.ompLiveFeedLine("reconnecting", "").tone, "info");
+  assert.equal(context.ompLiveFeedLine("unavailable", "This omp has no live feed.").text, "Live feed unavailable. This omp has no live feed.");
+  assert.equal(context.ompLiveFeedLine("off", ""), null, "a server the feed does not follow gets no live line");
+  assert.equal(context.ompStatsSummary({}, null, ""), "Not set up");
+  assert.equal(context.ompStatsSummary({ ompStatsUrl: "http://devbox:3847" }, { status: "ok" }, "live"), "devbox · live");
+  assert.equal(context.ompStatsSummary({ ompStatsUrl: "http://devbox:3847" }, { status: "error" }, "live"), "devbox · not answering");
+  assert.equal(context.ompLocalCostState([], []), "Off");
+  assert.equal(context.ompLocalCostState([], ["claude"]), "Not yet read");
+  assert.equal(context.ompLocalCostState([{ id: "local-claude", status: "ok" }], ["claude"]), "None found");
+  assert.equal(context.ompLocalCostState([{ id: "local-omp", status: "ok" }], ["claude"]), "Included");
+
+  const tailscale = context.ompStatsRecipe("tailscale");
+  assert.equal(tailscale.steps[0].command, 'omp stats --host "$(tailscale ip -4)" --port 3847');
+  assert.ok(tailscale.units[0].text.startsWith("# ~/.config/systemd/user/omp-stats.service\n[Unit]\n"), "a unit's first line names its file");
+  assert.ok(tailscale.units[0].text.includes("ExecStart=/bin/sh -lc 'exec omp stats \\\n  --host \"$$(tailscale ip -4)\" --port 3847'\n"),
+    "systemd reads $$ as a literal dollar sign, and a backslash continues the line");
+  const ssh = context.ompStatsRecipe("ssh");
+  assert.equal(ssh.steps[0].command, "omp stats --host 127.0.0.1 --port 3847", "behind a tunnel the dashboard listens on loopback only");
+  assert.equal(ssh.steps[1].command, "ssh -N -L 3847:127.0.0.1:3847 other-computer");
+  assert.equal(problem(ssh.url) + problem(tailscale.url), "", "each way's address passes the address rule");
+  assert.deepEqual(Array.from(context.ompGatewayRecipe(), (step) => step.command),
+    ['omp auth-gateway serve \\\n  --bind="$(tailscale ip -4):4000"', "omp auth-gateway token"], "the long command breaks with a shell continuation");
+  assert.equal(context.ompStatsRecipe("ssh").units[1].enable, "systemctl --user daemon-reload\nsystemctl --user enable --now omp-stats-tunnel");
+
+  const line = (value) => context.parseOmpLiveLine(JSON.stringify(value));
+  const request = { schemaVersion: 1, type: "request", source: "local", provider: "claude", model: "claude-opus-5-5",
+    credentialId: 7, costUsd: 0.42, tokens: 1200, subagent: false, at: 1800000000 };
+  assert.deepEqual(plain(line(request)), { type: "request", source: "local", provider: "claude", model: "claude-opus-5-5",
+    credentialId: 7, costUsd: 0.42, tokens: 1200, subagent: false, at: 1800000000 });
+  for (const broken of [{ provider: "Claude!" }, { credentialId: 1.5 }, { costUsd: -1 }, { at: "now" }, { tokens: -3 }, { schemaVersion: 2 }])
+    assert.equal(line({ ...request, ...broken }), null, JSON.stringify(broken) + " breaks a request line");
+  assert.equal(plain(line({ ...request, credentialId: null, costUsd: null })).credentialId, null, "background spend has no credential");
+  assert.equal(context.parseOmpLiveLine("{not json"), null);
+  assert.equal(context.parseOmpLiveLine(JSON.stringify({ ...request, model: "x".repeat(70000) })), null, "an oversized line is refused");
+  assert.deepEqual(plain(line({ schemaVersion: 1, heartbeat: true })), { type: "heartbeat" });
+  assert.deepEqual(plain(line({ type: "state", state: "live", message: "Connected" })), { type: "state", state: "live", message: "Connected" });
+  assert.equal(line({ type: "state", state: "maybe", message: "" }), null);
+  assert.deepEqual(plain(line({ type: "accounts", map: { 7: { provider: "claude", accountId: "omp-0123456789ab" },
+    x: { provider: "claude", accountId: "omp-0123456789ab" }, 8: { provider: "codex", accountId: "someone@example.com" } } })),
+  { type: "accounts", map: { 7: { provider: "claude", accountId: "omp-0123456789ab" } } }, "malformed map entries are left out");
+  assert.deepEqual(plain(line({ schemaVersion: 1, type: "activity", source: "remote", version: 12, at: 1800000000 })),
+    { type: "activity", source: "remote", version: 12, at: 1800000000 });
+  assert.deepEqual(plain(line({ type: "future" })), { type: "other" }, "a newer helper's lines are skipped, not fatal");
+
+  const map = { 7: { provider: "claude", accountId: "omp-0123456789ab" } };
+  const resolved = context.resolveOmpRequest(context.parseOmpLiveLine(JSON.stringify(request)), map);
+  assert.equal(resolved.accountId, "omp-0123456789ab");
+  assert.equal(resolved.accountKey, "claude@omp-0123456789ab");
+  assert.equal(context.resolveOmpRequest({ ...request, credentialId: 9 }, map).accountId, undefined, "an unknown credential stays unattributed");
+  assert.equal(context.resolveOmpRequest({ ...request, provider: "codex" }, map).accountId, undefined, "another provider's credential is not this account");
+  const now = 1800000000;
+  assert.equal(context.noteOmpRequest({}, resolved, now)["claude@omp-0123456789ab"], now);
+  const recent = context.noteOmpRequest({ "codex@omp-aaaaaaaaaaaa": now - 4000 }, { ...resolved, at: now + 50 }, now);
+  assert.deepEqual(Object.keys(recent), ["claude@omp-0123456789ab"], "an hour without requests drops an account");
+  assert.equal(recent["claude@omp-0123456789ab"], now, "a request is never in the future");
+  const many = {};
+  for (let i = 0; i < 300; i++) many["claude@omp-" + String(i).padStart(12, "0")] = now - 300 + i;
+  const capped = context.noteOmpRequest(many, null, now);
+  assert.equal(Object.keys(capped).length, context.OMP_RECENT_LIMIT, "recentByAccount stays bounded");
+  assert.ok(!("claude@omp-000000000000" in capped) && "claude@omp-000000000299" in capped, "the oldest accounts go first");
+  let spend = context.noteOmpSpend([], { ...resolved, costUsd: 0.42, at: now - 10 }, now);
+  spend = context.noteOmpSpend(spend, { provider: "codex", costUsd: 0.1, at: now - 5 }, now);
+  spend = context.noteOmpSpend(spend, { provider: "codex", costUsd: null, at: now - 4 }, now);
+  assert.equal(spend.length, 2, "unpriced requests add nothing");
+  assert.equal(context.ompCostSince(spend, now - 60, null), 0.52);
+  assert.equal(context.ompCostSince(spend, now - 8, null), 0.1, "requests before the scan are already in its totals");
+  assert.equal(context.ompCostSince(spend, now - 60, ["claude"]), 0.42, "only providers the scan reads count");
+  assert.equal(context.noteOmpSpend(spend, null, now + context.OMP_SPEND_SECONDS + 60).length, 0, "old spend is dropped");
+  let long = [];
+  for (let i = 0; i < context.OMP_SPEND_LIMIT + 10; i++) long.push([now - 1, 0.01, "claude"]);
+  assert.equal(context.noteOmpSpend(long, { provider: "claude", costUsd: 1, at: now }, now).length, context.OMP_SPEND_LIMIT, "the spend log stays bounded");
+
+  assert.deepEqual(plain(context.parseAccountModes('{"claude":"together","codex":"single","kimi":"sometimes","Bad Id":"single"}')),
+    { claude: "together", codex: "single" });
+  assert.deepEqual(plain(context.parseAccountModes("not json")), {});
+  assert.equal(context.setAccountMode('{"claude":"together"}', "codex", "single"), '{"claude":"together","codex":"single"}');
+  assert.equal(context.setAccountMode('{"claude":"together"}', "claude", "auto"), "{}", "Automatic removes the override");
+  assert.equal(context.accountModeLabel("single") + "/" + context.accountModeLabel("together") + "/" + context.accountModeLabel(undefined),
+    "One at a time/Together/Automatic");
+
+  // The 1.7.3 clipboard rule: an editable TextInput (what TextField is built on) fetches every clipboard
+  // change, so the only text input in the widget is SettingsField's read-only secret field.
+  for (const file of fs.readdirSync(root).filter((name) => name.endsWith(".qml"))) {
+    const text = fs.readFileSync(path.join(root, file), "utf8");
+    const inputs = text.match(/\b(?:TextInput|TextField)\s*\{/g) || [];
+    if (file === "SettingsField.qml") assert.ok(inputs.length === 1 && /Ui\.TextField \{[^}]*readOnly: true/.test(text), "SettingsField's secret input stays read-only");
+    else assert.equal(inputs.length, 0, file + " declares no text input; settings fields use SettingsField");
+  }
+}
+console.log("omp settings, live feed and account modes: passed");
+
 console.log("UsageLogic.js: all assertions passed");
