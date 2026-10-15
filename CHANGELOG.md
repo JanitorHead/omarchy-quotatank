@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.1
+
+### Fixed
+
+- The marketplace description fits the listing's 500-character limit, so the 1.9 release can be verified.
+
 ## 1.9.0
 
 ### Added
