@@ -14,6 +14,7 @@ import calendar
 import concurrent.futures
 import contextvars
 import copy
+import ctypes
 import functools
 import hashlib
 import http.client
@@ -23,12 +24,14 @@ import re
 import select
 import shutil
 import signal
+import socket
 import sqlite3
 import ssl
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -38,7 +41,10 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 from xml.etree import ElementTree
 
-from model_usage_common import OMP_PROVIDERS, atomic_write_json, clean_message, normalize_server_url, omp_account_id
+from model_usage_common import (
+    OMP_PROVIDERS, atomic_write_json, clean_message, omp_account_id, open_private_directory, plain_http_token_addresses,
+    resolve_host, split_server_url,
+)
 
 SCHEMA_VERSION = 1
 # Every provider the collector can read, in the order the widget lists them by default. Plan
@@ -221,16 +227,18 @@ def read_json(path: Path, max_bytes: int = MAX_LOCAL_JSON_BYTES) -> Any:
 
 
 def number(value: Any) -> float | None:
+    """A finite number from a JSON number or numeric text (a `%` is ignored), or None. An integer too large
+    for a float, as a broken or hostile source can send, is None too."""
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
-        result = float(value)
-    elif isinstance(value, str):
-        try:
+    try:
+        if isinstance(value, (int, float)):
+            result = float(value)
+        elif isinstance(value, str):
             result = float(value.strip().replace("%", ""))
-        except ValueError:
+        else:
             return None
-    else:
+    except (OverflowError, ValueError):
         return None
     return result if result == result and result not in (float("inf"), float("-inf")) else None
 
@@ -381,14 +389,16 @@ class NoRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = None) -> Any:
-    """GET, or POST `body` as JSON when given. Redirects are refused and responses are size-capped."""
+def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = None,
+              opener: urllib.request.OpenerDirector | None = None) -> Any:
+    """GET, or POST `body` as JSON when given. Redirects are refused and responses are size-capped. `opener`
+    replaces the default one, which refuses redirects and follows the environment's proxy settings."""
     data = None if body is None else json.dumps(body, separators=(",", ":")).encode("utf-8")
     if data is not None and not any(name.lower() == "content-type" for name in headers):
         headers = {**headers, "Content-Type": "application/json"}
     request = urllib.request.Request(url, data=data, headers=headers, method="GET" if data is None else "POST")
     try:
-        with urllib.request.build_opener(NoRedirects()).open(request, timeout=timeout) as response:
+        with (opener or urllib.request.build_opener(NoRedirects())).open(request, timeout=timeout) as response:
             raw = response.read(MAX_HTTP_RESPONSE_BYTES + 1)
             if len(raw) > MAX_HTTP_RESPONSE_BYTES:
                 raise ProviderFailure(
@@ -1434,6 +1444,48 @@ def key_or_cli_token(provider_id: str, key_file: Path | None,
     return (token, "cli") if token else ("", "")
 
 
+# The process group of every CLI running now. Each CLI runs in a session of its own, out of reach of a signal
+# aimed at this process; Quickshell stops a helper with SIGTERM to the helper alone, so stop_on_signals ends
+# them first. SPAWN_LOCK is held while one starts, so a signal handler finds each started CLI registered.
+RUNNING_GROUPS: set[int] = set()
+SPAWN_LOCK = threading.Lock()
+PR_SET_PDEATHSIG = 1
+try:
+    PRCTL = ctypes.CDLL(None, use_errno=True).prctl
+except (OSError, AttributeError):  # No Linux prctl: a CLI is ended by stop_on_signals alone.
+    PRCTL = None
+
+
+def end_with_parent(parent: int) -> None:
+    """Runs in a CLI's process between fork and exec, so it stays trivial: the kernel kills the CLI when this
+    process dies, even of SIGKILL, which no handler sees (Quickshell's Process sends it when the shell
+    reloads). A CLI whose parent is already gone stops at once."""
+    if PRCTL is not None:
+        PRCTL(PR_SET_PDEATHSIG, int(signal.SIGKILL))
+    if os.getppid() != parent:
+        os._exit(1)
+
+
+def end_running_clis() -> None:
+    """Kill every CLI still running, with everything in its process group."""
+    for group in list(RUNNING_GROUPS):
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def stop_on_signals() -> None:
+    """Make SIGTERM, SIGHUP and SIGINT end the running CLIs before this process exits (128 + the signal)."""
+    def stop(signum: int, _frame: Any) -> None:
+        SPAWN_LOCK.acquire(timeout=2)  # A CLI starting now gets registered; none starts afterwards.
+        end_running_clis()
+        os._exit(128 + signum)
+
+    for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(signum, stop)
+
+
 def stop_process_group(process: subprocess.Popen[bytes]) -> None:
     """End everything a CLI started: TERM, a short grace period, then KILL for what remains."""
     for sig in (signal.SIGTERM, signal.SIGKILL):
@@ -1457,10 +1509,14 @@ def run_cli(argv: list[str], timeout: float, *, env: dict[str, str] | None = Non
     """Run a CLI without a shell or stdin and return (exit code, stdout, stderr).
 
     It gets its own process group, stopped afterwards: CLIs such as agy start helpers (a language
-    server) that would otherwise outlive the poll. Raises TimeoutError at the deadline, ValueError
-    when a stream outgrows `max_bytes`, and OSError when the CLI cannot start."""
-    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, env=env, cwd=cwd, start_new_session=True)
+    server) that would otherwise outlive the poll. The group is also ended when this process is
+    (stop_on_signals, end_with_parent). Raises TimeoutError at the deadline, ValueError when a stream
+    outgrows `max_bytes`, and OSError when the CLI cannot start."""
+    with SPAWN_LOCK:
+        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   env=env, cwd=cwd, start_new_session=True,
+                                   preexec_fn=functools.partial(end_with_parent, os.getpid()))
+        RUNNING_GROUPS.add(process.pid)
     deadline = time.monotonic() + timeout
     output = {process.stdout: bytearray(), process.stderr: bytearray()}
     pending = list(output)
@@ -1483,6 +1539,7 @@ def run_cli(argv: list[str], timeout: float, *, env: dict[str, str] | None = Non
         raise TimeoutError from None
     finally:
         stop_process_group(process)
+        RUNNING_GROUPS.discard(process.pid)
         for stream in output:
             stream.close()
     return code, bytes(output[process.stdout]), bytes(output[process.stderr])
@@ -8051,10 +8108,16 @@ def parse_extra_keys(values: list[str]) -> dict[str, list[tuple[str, Path]]]:
 # omp (Oh My Pi) keeps its own subscription sign-ins and reports their limits: on this computer with
 # `omp usage --json`, and remotely through its auth gateway's `GET /v1/usage`. Each omp account joins the provider
 # it belongs to as an `accounts` entry; omp is a source, never a provider of its own. The gateway token can also
-# spend model quota, so `/v1/usage` is the only path ever requested with it.
+# spend model quota, so `/v1/usage` is the only path ever requested with it. omp runs only where it has set
+# itself up already (omp_set_up): its first run creates omp's state, which is the user's to start.
 OMP_USAGE_ARGUMENTS = ("usage", "--json", "--no-extensions")
 OMP_USAGE_TIMEOUT = 45.0
 OMP_VERSION_TIMEOUT = 5.0
+OMP_LOOKUP_TIMEOUT = 2.0
+# The folder omp runs in, inside Quotatank's state folder.
+OMP_WORKDIR = "omp-workdir"
+# `omp --version` prints "omp/18.11.0".
+OMP_VERSION_OUTPUT = re.compile(rb"omp/(\d+(?:\.\d+){1,3})")
 MAX_OMP_OUTPUT_BYTES = 2 * 1024 * 1024
 MAX_OMP_REPORTS = 64
 MAX_OMP_LIMITS = 32
@@ -8067,8 +8130,11 @@ OMP_WINDOW_SECONDS = {"5h": FIVE_HOURS, "1d": ONE_DAY, "7d": SEVEN_DAYS, "1w": S
 # A native reading that failed this way has no account to show beside omp's.
 OMP_UNREAD_KINDS = frozenset({"no_credentials", "cli_unavailable"})
 OMP_SIGN_IN_AGAIN = "omp can't renew this sign-in. Sign in again in omp."
-OMP_GATEWAY_URL_RULE = ("The omp gateway URL must use HTTPS, or HTTP to this computer, a private network or Tailscale, "
-                        "with no user name, query or fragment.")
+OMP_NOT_SET_UP = "omp is installed but not set up on this computer."
+OMP_GATEWAY_URL_RULE = ("The omp gateway URL must be the gateway's address alone, https://host:port or plain HTTP to "
+                        "this computer or a Tailscale address, without a path, user name, query or fragment.")
+OMP_GATEWAY_PLAIN_HTTP = ("The omp gateway token goes over plain HTTP only to this computer or over Tailscale. "
+                          "Use an https:// address, or check that Tailscale is connected.")
 OMP_GATEWAY_FAILURES = {
     "expired": "The omp gateway refused the token.",
     "rate_limited": "The omp gateway is rate limiting usage checks.",
@@ -8076,31 +8142,55 @@ OMP_GATEWAY_FAILURES = {
     "network": "Could not reach the omp gateway. Check its URL, the network and its TLS certificate.",
     "malformed": "The omp gateway returned unreadable usage data.",
 }
+# What each source reports when the merge cannot take its data (merge_omp_safely).
+OMP_UNREADABLE = {"local": "omp usage returned unreadable data.", "gateway": OMP_GATEWAY_FAILURES["malformed"]}
 # (email in lower case, omp's account id, omp's org id), each "" when omp gives none.
 OmpIdentity = tuple[str, str, str]
+# One omp source's result: (status, message, document); the document is None unless the status is "ok".
+OmpRead = tuple[str, str, dict[str, Any] | None]
 
 
 def omp_executable() -> str | None:
     return shutil.which("omp", path=runtime_environment().get("PATH"))
 
 
-def run_omp(omp: str, arguments: tuple[str, ...], timeout: float, max_bytes: int) -> tuple[int, bytes]:
-    """omp's exit code and standard output, run from an empty folder so that no project's omp settings apply.
+def omp_set_up() -> bool:
+    """Whether omp keeps its own state on this computer: `agent.db` in its agent folder (omp's
+    PI_CODING_AGENT_DIR, else ~/.omp/agent) is a regular file. The file is never opened."""
+    try:
+        override = os.environ.get("PI_CODING_AGENT_DIR")
+        folder = Path(override).expanduser() if override else Path.home() / ".omp" / "agent"
+        return stat.S_ISREG(os.stat(folder / "agent.db").st_mode)
+    except (OSError, ValueError, RuntimeError):
+        return False
 
-    Raises like run_cli. omp's error output is dropped: it can name accounts."""
-    with tempfile.TemporaryDirectory(prefix="quotatank-omp-") as cwd:
-        code, output, _ = run_cli([omp, *arguments], timeout, env=runtime_environment(), cwd=cwd, max_bytes=max_bytes)
+
+def omp_workdir(state_dir: Path | None = None) -> str:
+    """The folder omp runs in: `omp-workdir` in Quotatank's state folder, private (0700) and empty, so that no
+    project's omp settings apply and a stopped run leaves nothing elsewhere. Raises OSError when the folder
+    cannot be made private."""
+    path = history_path(state_dir).parent / OMP_WORKDIR
+    os.close(open_private_directory(path, create=True, tighten=True))
+    return str(path)
+
+
+def run_omp(omp: str, arguments: tuple[str, ...], timeout: float, max_bytes: int,
+            state_dir: Path | None = None) -> tuple[int, bytes]:
+    """omp's exit code and standard output, run in omp_workdir. Raises like run_cli. omp's error output is
+    dropped: it can name accounts."""
+    code, output, _ = run_cli([omp, *arguments], timeout, env=runtime_environment(), cwd=omp_workdir(state_dir),
+                              max_bytes=max_bytes)
     return code, output
 
 
-def omp_version(omp: str) -> str:
-    """omp's version, such as "18.11.0", or "" when omp does not tell it."""
+def omp_version(omp: str, state_dir: Path | None = None) -> str:
+    """omp's version, such as "18.11.0", or "" when the program does not answer `--version` as omp does."""
     try:
-        code, output = run_omp(omp, ("--version",), OMP_VERSION_TIMEOUT, 4096)
+        code, output = run_omp(omp, ("--version",), OMP_VERSION_TIMEOUT, 4096, state_dir)
     except (OSError, TimeoutError, ValueError):
         return ""
-    match = re.search(rb"\d+(?:\.\d+){1,3}", output) if code == 0 else None
-    return match.group().decode("ascii") if match else ""
+    match = OMP_VERSION_OUTPUT.match(output.strip()) if code == 0 else None
+    return match.group(1).decode("ascii") if match else ""
 
 
 def omp_document(payload: Any, message: str) -> dict[str, Any]:
@@ -8115,10 +8205,10 @@ def omp_document(payload: Any, message: str) -> dict[str, Any]:
     return payload
 
 
-def read_omp_local(omp: str) -> tuple[str, str, dict[str, Any] | None]:
+def read_omp_local(omp: str, state_dir: Path | None = None) -> OmpRead:
     """("ok", "", document) from `omp usage --json` on this computer, else ("error", message, None)."""
     try:
-        code, output = run_omp(omp, OMP_USAGE_ARGUMENTS, OMP_USAGE_TIMEOUT, MAX_OMP_OUTPUT_BYTES)
+        code, output = run_omp(omp, OMP_USAGE_ARGUMENTS, OMP_USAGE_TIMEOUT, MAX_OMP_OUTPUT_BYTES, state_dir)
         if code != 0:
             return "error", f"omp usage exited with status {code}.", None
         return "ok", "", omp_document(output, "omp usage returned unreadable data.")
@@ -8134,17 +8224,59 @@ def read_omp_local(omp: str) -> tuple[str, str, dict[str, Any] | None]:
         return "error", "omp usage could not be read.", None
 
 
-def read_omp_gateway(address: str, key_file: Path | None, timeout: float) -> tuple[str, str, dict[str, Any] | None]:
-    """("ok", "", document) from an omp gateway's `GET /v1/usage`, else ("error", message, None)."""
+class CheckedAddresses(urllib.request.HTTPHandler):
+    """Plain HTTP that connects only to `addresses`, which the caller checked, in order, instead of looking the
+    host up again: a second answer could name another computer. The Host header still names the host."""
+
+    def __init__(self, addresses: list[Any]):
+        super().__init__()
+        self.addresses = addresses
+
+    def http_open(self, req: urllib.request.Request) -> Any:
+        return self.do_open(functools.partial(CheckedAddressConnection, addresses=self.addresses), req)
+
+
+class CheckedAddressConnection(http.client.HTTPConnection):
+    def __init__(self, host: str, *, addresses: list[Any], **kwargs: Any):
+        super().__init__(host, **kwargs)
+        self.addresses = addresses
+
+    def connect(self) -> None:
+        failure: OSError = ConnectionRefusedError()
+        for address in self.addresses:
+            try:
+                self.sock = socket.create_connection((str(address), self.port), self.timeout)
+                return
+            except OSError as exc:
+                failure = exc
+        raise failure
+
+
+def read_omp_gateway(address: str, key_file: Path | None, timeout: float) -> OmpRead:
+    """("ok", "", document) from an omp gateway's `GET /v1/usage`, else ("error", message, None).
+
+    The token goes over HTTPS, or over plain HTTP only to this computer or through Tailscale
+    (plain_http_token_addresses), and then only to the addresses checked. Proxy settings are ignored."""
     try:
-        url = normalize_server_url(address) + "/v1/usage"
+        parts = split_server_url(address)
     except ValueError:
         return "error", OMP_GATEWAY_URL_RULE, None
+    handlers: list[Any] = [urllib.request.ProxyHandler({}), NoRedirects()]
+    if parts.scheme == "http":
+        addresses = resolve_host(parts.hostname, OMP_LOOKUP_TIMEOUT)
+        if not addresses:
+            return "error", OMP_GATEWAY_FAILURES["network"], None
+        checked = plain_http_token_addresses(addresses)
+        if checked is None:
+            return "error", OMP_GATEWAY_PLAIN_HTTP, None
+        handlers.append(CheckedAddresses(checked))
     try:
         headers = {"Accept": "application/json"}
         if key_file is not None:
             headers["Authorization"] = "Bearer " + read_private_key(key_file, "omp gateway token")
-        return "ok", "", omp_document(http_json(url, headers, timeout), OMP_GATEWAY_FAILURES["malformed"])
+        body = http_json(urllib.parse.urlunsplit(parts) + "/v1/usage", headers, timeout,
+                         opener=urllib.request.build_opener(*handlers))
+        return "ok", "", omp_document(body, OMP_GATEWAY_FAILURES["malformed"])
     except ProviderFailure as exc:
         if exc.kind == "expired" and key_file is None:
             return "error", "The omp gateway asks for a token.", None
@@ -8359,10 +8491,12 @@ def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
     natives = [provider, *dict_list(provider.get("accounts"))]
     added = []
     for (email, _account, _org), entry in accounts:
-        # A native reading of the same account is the more reliable one and stays, listing both origins.
+        # A native reading of the same account is the more reliable one and stays. It lists both origins, and
+        # keeps the id the omp account would have had, which live omp requests name (scripts/omp-live.py).
         matches = [native for native in natives if email and str(native.get("account") or "").strip().lower() == email]
         for native in matches:
             native["origins"] = [native_origin(provider, native, cliproxy), "omp"]
+            native.setdefault("ompAccountId", entry["accountId"])
         if not matches:
             added.append(entry)
     if added:
@@ -8403,6 +8537,39 @@ def merge_omp(providers: list[dict[str, Any]], provider_ids: list[str], document
         else:
             providers[position] = merged
     return len(accounts)
+
+
+def merge_omp_safely(providers: list[dict[str, Any]], provider_ids: list[str], reads: dict[str, OmpRead],
+                     cliproxy: bool) -> tuple[list[dict[str, Any]], int, dict[str, OmpRead]]:
+    """merge_omp on a copy of `providers`, so that omp data the merge cannot take never costs a native reading.
+
+    `reads` maps "local" and "gateway" to (status, message, document). When the merge fails, the sources that
+    merge on their own are kept and each other one becomes an error: omp's data was unreadable. Returns the
+    providers, how many omp accounts merged, and the reads."""
+    def merge(names: list[str]) -> tuple[list[dict[str, Any]], int] | None:
+        candidate = copy.deepcopy(providers)
+        local = reads["local"][2] if "local" in names else None
+        try:
+            count = merge_omp(candidate, provider_ids, [reads[name][2] for name in names],
+                              local.get("capacity") if local else None, cliproxy)
+        except Exception:
+            return None
+        return candidate, count
+
+    usable = [name for name, (_status, _message, document) in reads.items() if document is not None]
+    if not usable:
+        return providers, 0, reads
+    result = merge(usable)
+    if result is None and len(usable) > 1:
+        alone = {name: merge([name]) for name in usable}
+        usable = [name for name, outcome in alone.items() if outcome is not None]
+        # Two sources that merge alone but not together cannot be told apart: neither is kept.
+        result = alone[usable[0]] if len(usable) == 1 else None
+    if result is None:
+        usable, result = [], (providers, 0)
+    reads = {name: read if read[2] is None or name in usable else ("error", OMP_UNREADABLE[name], None)
+             for name, read in reads.items()}
+    return result[0], result[1], reads
 
 
 # --------------------------------------------------------------- Orchestration
@@ -8471,11 +8638,11 @@ def build_payload(
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     omp = omp_executable()
-    reads_local = omp_local and omp is not None
+    reads_local = omp_local and omp is not None and omp_set_up()
     # omp takes longer than most providers, so it is read while they are.
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-        local = pool.submit(read_omp_local, omp) if reads_local else None
-        version = pool.submit(omp_version, omp) if reads_local else None
+        local = pool.submit(read_omp_local, omp, state_dir) if reads_local else None
+        version = pool.submit(omp_version, omp, state_dir) if reads_local else None
         gateway = pool.submit(read_omp_gateway, omp_gateway_url, omp_gateway_key_file, timeout) if omp_gateway_url else None
         if omp_only:
             providers: list[dict[str, Any]] = []
@@ -8491,18 +8658,22 @@ def build_payload(
             providers = collect_providers(provider_ids, timeout, key_files, extra_keys)
         if local:
             local_read = local.result()
+        elif not omp_local:
+            local_read = ("off", "", None)
+        elif omp is None:
+            local_read = ("missing", "omp was not found on this computer.", None)
         else:
-            local_read = ("missing", "omp was not found on this computer.", None) if omp_local else ("off", "", None)
+            local_read = ("unused", OMP_NOT_SET_UP, None)
         gateway_read = gateway.result() if gateway else ("off", "", None)
         omp_release = version.result() if version else ""
-    reads = (local_read, gateway_read)
-    merged = merge_omp(providers, provider_ids, [document for _, _, document in reads if document is not None],
-                       local_read[2].get("capacity") if local_read[2] else None, source == "cliproxy")
+    providers, merged, reads = merge_omp_safely(providers, provider_ids, {"local": local_read, "gateway": gateway_read},
+                                                source == "cliproxy")
+    local_read, gateway_read = reads["local"], reads["gateway"]
     if not omp_only:
         update_and_attach_history(providers, state_dir)
     omp_summary = {
         "local": local_read[0], "gateway": gateway_read[0],
-        "message": clean_message(" ".join(message for _, message, _ in reads if message)),
+        "message": clean_message(" ".join(message for _, message, _ in reads.values() if message)),
         "accounts": merged, "localAccounts": omp_account_count(local_read[2], provider_ids),
         "gatewayAccounts": omp_account_count(gateway_read[2], provider_ids), "installed": omp is not None,
     }
@@ -8565,4 +8736,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    stop_on_signals()
     raise SystemExit(main())

@@ -217,16 +217,19 @@ arrays, and a `null` `previous`.
 
 `--omp-stats-url URL` adds the aggregates of an `omp stats` dashboard (Oh My Pi 18),
 typically running on another computer as `omp stats --host <address> --port <port>`.
-The URL follows the omp gateway rule: HTTPS to any host; plain HTTP only to loopback,
-private (RFC 1918, IPv6 unique-local) and Tailscale (`100.64.0.0/10`, `*.ts.net`)
-addresses or single-label host names; never a user name, query or fragment. The
-dashboard has no authentication and also serves session transcripts, so
-`scripts/omp_stats.py` sends exactly four `GET` requests and nothing else:
-`/api/stats/overview`, `/api/stats/providers`, `/api/stats/models` and
-`/api/stats/folders`, each with `?range=24h|7d|30d` for the 1/7/30-day period. They
-run concurrently with each other and with the local scan, each with a 15-second
-timeout, a 2 MiB body limit and at most 4,096 rows per list. Redirects are refused,
-HTTPS certificates are verified, and nothing is cached.
+The URL is the server's address alone, `http` or `https`, a host and an optional port,
+with at most a trailing `/`; a path, query, fragment, user name, backslash or whitespace
+is refused (`normalize_server_url` in `scripts/model_usage_common.py`). HTTPS may reach
+any host; plain HTTP only loopback, private (RFC 1918, IPv6 unique-local) and Tailscale
+(`100.64.0.0/10`, `*.ts.net`) addresses or single-label host names. No credential is
+sent, so this is broader than the omp gateway rule. The dashboard has no authentication
+and also serves session transcripts, so `scripts/omp_stats.py` sends exactly four `GET`
+requests and nothing else: `/api/stats/overview`, `/api/stats/providers`,
+`/api/stats/models` and `/api/stats/folders`, each with `?range=24h|7d|30d` for the
+1/7/30-day period. They run concurrently with each other and with the local scan, each
+with a 15-second timeout, a 2 MiB body limit and at most 4,096 rows per list. Redirects
+are refused, the environment's proxy settings are ignored, HTTPS certificates are
+verified, and nothing is cached.
 
 Only counters, omp's own costs, provider and model ids and folder names are read.
 omp provider ids map to Quotatank ids (`anthropic` → `claude`, `openai-codex` →
@@ -359,6 +362,14 @@ know.
 - **`activity`** means the server indexed new requests: its event `version` grew.
 - **`accounts`** maps credential ids to Quotatank providers and account ids. Each
   line replaces the previous map; a reader keeps the last map when none arrives.
+  `usage-fetch.py` gives a native reading of the same account `ompAccountId`, so a
+  reader matches an account by `accountId` or `ompAccountId`.
+
+Local tailing and `--accounts` wait until omp has set itself up on this computer:
+`agent.db` in omp's agent folder (`${PI_CODING_AGENT_DIR:-~/.omp/agent}`) is a regular
+file, as `usage-fetch.py` requires before it runs omp (the file is never opened). Until
+then the helper reads no transcript, runs nothing and only sends heartbeats; it checks
+again before each tailing pass and each listing.
 
 Local tailing reads `${OMP_SESSIONS_DIR:-~/.omp/agent/sessions}` every 2 seconds and
 follows `.jsonl` transcripts modified in the last 15 minutes. A transcript is read
@@ -380,30 +391,41 @@ covered over several passes. A pass reads at most 1 MiB; lines longer than 64 Ki
 are skipped whole. At most 4,096 transcripts keep a read position; the least
 recently modified are forgotten first.
 
-The stats URL follows the omp gateway rule: HTTPS with certificate verification, or
-plain HTTP only to loopback, private (RFC 1918, IPv6 unique local), Tailscale
-(`100.64.0.0/10`, `*.ts.net`) or single-label hosts. The helper only ever requests
-`GET <url>/api/events` (server-sent events), never the `/api/sessions` or
-`/api/session/trace` endpoints that serve conversation contents. It sends no
-credentials, uses no proxy and follows no redirects. The first event sets the
-`version` baseline; each later increase is one `activity` line. The baseline
-survives reconnects, so activity during an outage is still reported once, while a
-restarted server (counting from 1 again) only resets the baseline. Connecting is
-limited to 10 seconds; a stream silent for 45 seconds (the server sends a
-keep-alive every 15) is reconnected. Lines and events are limited to 64 KiB.
-Reconnects back off from 2 to 60 seconds and reset after a connection that lasted
-30 seconds. A 404/405 or a response that is not an event stream is `unavailable`
-and retried every 60 seconds; a disallowed URL is `unavailable` and not retried.
-Error details are never forwarded.
+The stats URL follows the omp stats rule (see [Remote omp stats](#remote-omp-stats)):
+the server's address alone, HTTPS with certificate verification, or plain HTTP only to
+loopback, private (RFC 1918, IPv6 unique local), Tailscale (`100.64.0.0/10`,
+`*.ts.net`) or single-label hosts. The helper only ever requests `GET /api/events`
+(server-sent events), never the `/api/sessions` or `/api/session/trace` endpoints that
+serve conversation contents. It sends no credentials, uses no proxy and follows no
+redirects. The first event sets the `version` baseline; each later increase is one
+`activity` line. The baseline survives reconnects, so activity during an outage is
+still reported once, while a restarted server (counting from 1 again) only resets the
+baseline. Connecting is limited to 10 seconds; a stream silent for 45 seconds (the
+server sends a keep-alive every 15) is reconnected. Lines and events are limited to
+64 KiB. Reconnects back off from 2 to 60 seconds and reset after a connection that
+lasted 30 seconds. A 404/405 or a response that is not an event stream is
+`unavailable` and retried every 60 seconds; a disallowed URL is `unavailable` and not
+retried. Error details are never forwarded.
 
-`--accounts` runs `omp usage reset --no-extensions` at start and every 10 minutes
-(30-second timeout, 64 KiB of output). Without a target that command only lists
-saved resets; the helper never adds one, because `omp usage reset
-<provider>/<credential id>` spends a saved reset. Lines of the form
-`- <email> · <plan> [<name> · <omp provider>/<credential id>]: …` map the credential
-id to `{"provider": <Quotatank id>, "accountId": "omp-" + the first 12 hex digits of
-sha256("<omp provider>|<lowercase email>")}`, the id `usage-fetch.py` gives the same
-omp account. An email listed twice for one provider (one person in two
-organizations), a credential id listed for two accounts, and providers Quotatank
-does not read are left out. A missing `omp`, a failed or oversized run, or output
-without any account line produce no `accounts` line.
+`--accounts` runs `omp usage reset --json --no-extensions` (30-second timeout, 256 KiB
+of output). Without a target that command only lists each Claude and Codex account
+with its saved resets; the helper never adds one, because `omp usage reset
+<provider>/<credential id>` spends a saved reset. Listing makes omp ask Anthropic and
+OpenAI about every account, so it runs once when the helper starts and afterwards only
+when a Claude or Codex request names a credential id the last listing did not, at most
+once every 10 minutes (a listing that failed counts). It runs only after `omp --version`
+(5 seconds) answers `omp/<major>.<minor>…` with 18.9 or later, the first release with
+`omp usage reset`, and like `usage-fetch.py` it runs omp in the private `omp-workdir`
+folder of `${XDG_STATE_HOME:-~/.local/state}/omarchy/model-usage`. Each listed account
+maps its `credentialId` to `{"provider": <Quotatank id>, "accountId": "omp-" + the first
+12 hex digits of sha256("<omp provider>|<lowercase email>")}` (omp's account id when
+there is no email), the id `usage-fetch.py` gives the same omp account. An email listed
+twice for one provider (one person in two organizations), a credential id listed for
+two accounts, and providers Quotatank does not read are left out of the map, yet count
+as listed. A missing, unset-up or older `omp`, a failed or oversized run, or output
+that is not such a listing or lists no account produce no `accounts` line.
+
+When the helper stops (SIGTERM, SIGHUP or SIGINT, exit status 128 + the signal; or a
+closed stdout), it kills an omp run in progress with its process group first, and the
+kernel kills omp if the helper dies of SIGKILL (see the backend contract's resource
+ceilings).
