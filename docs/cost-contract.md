@@ -12,9 +12,15 @@ The `opencode` local source reads the OpenCode usage database
 (`OPENCODE_DB` / `OPENCODE_DATABASE`, otherwise the freshest `opencode*.db` —
 the write-ahead log is the clock — under `$XDG_DATA_HOME/opencode`). The Oh My
 Pi harness session transcripts (`${OMP_SESSIONS_DIR:-~/.omp/agent/sessions}`,
-one JSONL transcript per session) form a separate `omp` source. Each message
-counts under the provider it was billed to: `opencode*` → OpenCode,
-`openai-codex` → Codex, `anthropic` → Claude; other providers are dropped.
+one JSONL transcript per session) form a separate `omp` source. Each assistant
+message, and each background `model_usage` line (spend outside the conversation,
+such as cache warming), counts under the provider it was billed to: `opencode*` →
+OpenCode, `openai-codex` → Codex, `anthropic` → Claude; other providers are
+dropped. `model_usage` lines count toward the project and agent of their
+transcript and are deduplicated by their line id like messages. A transcript's
+session is the `id` of its own `session` line, so subagent transcripts that share
+a file name (`Explore.jsonl`) stay separate sessions; without that line the
+parent folder and file name identify it.
 Assistant rows recorded by OpenCode's own
 providers are mapped to `uncached_input` (`input`), `cached_input` (cache
 read), `cache_creation` (cache write), and `output`. The CLI database reports
@@ -22,7 +28,8 @@ reasoning beside output, so `output` plus `reasoning` is the output total; the
 harness reports reasoning inside output, so its `output` is used as-is and
 `reasoningTokens` stays informational. Rows are deduplicated by their message
 id, and the database is queried read-only with `query_only` set; no row content
-outside ids, model, timestamp, and the token split leaves SQLite. OpenCode's own
+outside ids, model, timestamp, the working directory's folder name, and the
+token split leaves SQLite. OpenCode's own
 recorded cost is kept and used, because the CLI priced each response with the
 rates of the provider that served it — the only reliable rate for model IDs the
 public table cannot disambiguate (`deepseek-v4.1-flash`, for instance, exists
@@ -152,6 +159,57 @@ The dollar fields are API-equivalent estimates, not subscription charges. Nullab
 
 Pricing statuses are `fresh`, `cached`, `unavailable`, or `notNeeded`. Coverage statuses are `ok`, `partial`, `missing`, or `failed`; unreadable files make coverage `partial` or `failed` rather than silently producing a complete-looking total. `scannedFiles` counts readable recent transcript files, including files with no usage-bearing rows, while `skippedFiles` counts files or directories that could not be inspected. `costSource` is `none`, `providerReported`, `modelPriced`, `customPriced`, `mixed`, or `unpriced`. Token totals always include unpriced records from readable files. `reasoningTokens` is informational and is already included in `outputTokens`; it must not be summed again.
 
+## Projects, agents, heatmap and comparison
+
+These fields are additive to schema v1 (`heatmap` is described below):
+
+```json
+{
+  "projects": [
+    {"id": "233ad9421d57", "name": "my-app", "costUsd": 8.5, "totalTokens": 3100000, "records": 31},
+    {"id": "other", "name": "Other", "costUsd": 0.42, "totalTokens": 90000, "records": 3}
+  ],
+  "agents": [
+    {"id": "main", "costUsd": 2.1, "totalTokens": 800000, "records": 9},
+    {"id": "subagent", "costUsd": 0.7, "totalTokens": 300000, "records": 5}
+  ],
+  "previous": {"costUsd": 10.2, "totalTokens": 4000000, "records": 40}
+}
+```
+
+`projects` covers the selected period across all included sources: at most 12 named rows, priced rows first, then by
+`costUsd` and `totalTokens`, both descending, followed by one `other` row (name `Other`) when further projects or
+activity without a known folder exist. `id` is the first 12 hex digits of SHA-256 over `project:` plus the name, so
+folders with the same name share a row. Only the last path component is kept; names containing non-printable
+characters count as unknown. At most 512 distinct names are tracked before later ones fold into `other`. Project
+folders come from:
+
+- Claude Code: the transcript's folder under `projects/`, which Claude Code names after the launch directory with
+  every character outside `[A-Za-z0-9]` replaced by `-`. A recorded `cwd` whose leading part encodes to that folder
+  supplies the real name, so `my-app` is not cut at its hyphen; without one, the text after the folder's last `-`
+  is used.
+- Codex: `cwd` of the rollout's first `session_meta`.
+- Oh My Pi: `cwd` of the transcript's `session` line, otherwise the session folder name (the cwd with `/` replaced by
+  `-`) decoded the same lossy way as Claude Code folders.
+- OpenCode: `path.cwd` of each assistant message.
+- T3 servers report no folders; their activity counts as `other`.
+
+`agents` splits Oh My Pi activity in the period into `main` and `subagent` rows, always both and in that order, and is
+empty when no Oh My Pi activity is included. A transcript inside a session's own directory
+(`<folder>/<session>/<agent>.jsonl`) belongs to a subagent; one directly in the project folder is the main session.
+
+`heatmap` is independent of the selected period: `{"days": [...], "cost": [[...], ...], "records": [[...], ...]}`
+covers the last 7 local calendar days (ISO dates, oldest first, today last), each with 24 local wall-clock hours.
+`cost` holds 7 rows of 24 USD values, `null` where a cell has only unpriced activity; `records` holds the matching
+counts. A repeated daylight-saving hour shares one cell and a skipped hour stays empty. Only included local sources
+are placed, because their timestamps are exact; remote buckets are not.
+
+`previous` sums the window of equal length that ends where the period starts: the 24 hours before the rolling day,
+or the 7 or 30 local calendar days before the first day. It is `null` when nothing was recorded there, when the
+window starts before the 32-day local retention (always for 30D), or when a remote source is included, because
+remote servers report only the selected period. Error payloads carry empty `projects`/`agents`, empty heatmap
+arrays, and a `null` `previous`.
+
 ## Pricing and custom rates
 
 The combined collector uses exact custom model rates, then the public model rate for every source. Transcript-reported costs are retained only in the parser cache for compatibility and are cleared before aggregation. `pricing.basis` is `currentBaseRates`; `pricing.customModels` counts configured overrides. Every totals/provider/model/period cell includes `customPricedRecords`, `providerReportedRecords`, `basePricedRecords`, and `variantPricedRecords`. The first three sum to `pricedRecords`; `variantPricedRecords` is a subset of `basePricedRecords` whose bracketed suffix was removed for lookup. Mixed sources or unpriced records yield `costSource: "mixed"`. These fields are additive to schema v1; older payloads without them remain readable.
@@ -180,11 +238,11 @@ Custom IDs are trimmed but retain case, provider prefixes, and variant suffixes.
 - Claude: `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/**/*.jsonl`
 - Codex: `${CODEX_HOME:-~/.codex}/sessions/**/*.jsonl`
 
-Files are streamed line by line. Scan-cache version 5 rebuilds Codex records with duplicate signatures that include cumulative usage counters, so distinct responses with equal token counts remain counted. It also excludes former proxy/app classification metadata; older caches rebuild safely. It retains a byte offset, SHA-256 hash of up to 64 bytes immediately before that offset, device/inode identity, and sanitized Codex reducer state. A strictly grown file resumes only after its identity and guard match. Shrinkage, replacement, changed same-size files, or a failed guard cause a full reparse. The guard checks the previous tail, not the entire prefix: it is a lightweight check for normal append-only CLI transcripts, not a guarantee against arbitrary earlier in-place edits. Concurrently changed snapshots are skipped with incomplete coverage and retried on the next scan.
+Files are streamed line by line. Scan-cache version 5 rebuilds Codex records with duplicate signatures that include cumulative usage counters, so distinct responses with equal token counts remain counted. It also excludes former proxy/app classification metadata; older caches rebuild safely. Scan-cache version 8 adds each record's project folder name and Oh My Pi agent kind; older caches rebuild. Oh My Pi transcripts are cached and resumed like the other transcripts. It retains a byte offset, SHA-256 hash of up to 64 bytes immediately before that offset, device/inode identity, and sanitized parser state (the Codex reducer, the hashed session id, and the session's project folder name). A strictly grown file resumes only after its identity and guard match. Shrinkage, replacement, changed same-size files, or a failed guard cause a full reparse. The guard checks the previous tail, not the entire prefix: it is a lightweight check for normal append-only CLI transcripts, not a guarantee against arbitrary earlier in-place edits. Concurrently changed snapshots are skipped with incomplete coverage and retried on the next scan.
 
-Records from a trailing segment without its final newline are provisional: they can appear in the current result but are replaced on the next append, never counted twice. Codex state at the last completed line preserves model attribution, duplicate signatures, and fork suppression across resumes. Each merge enforces per-file and global record limits, and scan byte limits include guard reads. Nanosecond mtimes remain exact integers. Old or corrupt positions cause a safe rebuild. Only usage-bearing records are parsed. The durable size/mtime cache stores token metadata and hashes every transcript path, session identifier, message identifier, and deduplication key with SHA-256. Prompts, responses, tool calls, tool results, and credentials are neither cached nor returned.
+Records from a trailing segment without its final newline are provisional: they can appear in the current result but are replaced on the next append, never counted twice. Parser state at the last completed line preserves Codex model attribution, duplicate signatures, fork suppression, the session id, and the project folder name across resumes. Each merge enforces per-file and global record limits, and scan byte limits include guard reads. Nanosecond mtimes remain exact integers. Old or corrupt positions cause a safe rebuild. Only usage-bearing records are parsed. The durable size/mtime cache stores token metadata and hashes every transcript path, session identifier, message identifier, and deduplication key with SHA-256. Project folders are stored by name only (the last path component), never as paths. Prompts, responses, tool calls, tool results, and credentials are neither cached nor returned.
 
-Resource use is bounded at every untrusted input boundary: 16 MiB per transcript line, 128 MiB per transcript file, 512 MiB of changed transcript input per scan, 20,000 usage records per file, and 50,000 records across a scan. Discovery is limited to 10,000 transcript files and 2,000 directories per provider without following symlinks. Scan-cache input is capped at 32 MiB, model names at 256 characters, and model output groups at 512 before remaining models are combined. Files that cross a ceiling are skipped atomically and make coverage `partial` or `failed`; their partial records are never reported as complete data.
+Resource use is bounded at every untrusted input boundary: 16 MiB per transcript line, 128 MiB per transcript file, 512 MiB of changed transcript input per scan, 20,000 usage records per file, and 50,000 records across a scan. Discovery is limited to 10,000 transcript files and 2,000 directories per provider without following symlinks. Scan-cache input is capped at 32 MiB, model names at 256 characters, project names at 255 characters, model output groups at 512 before remaining models are combined, and tracked projects at 512 before remaining ones join `other`. Files that cross a ceiling are skipped atomically and make coverage `partial` or `failed`; their partial records are never reported as complete data.
 
 `CostBackend.qml` streams backend stdout into a 4 MiB capped buffer and drains stderr without retaining it. Crossing the output ceiling terminates the process and preserves the last known-good cost document.
 

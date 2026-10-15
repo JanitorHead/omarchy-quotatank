@@ -20,7 +20,7 @@ from dataclasses import dataclass, replace
 from concurrent.futures import ThreadPoolExecutor
 import socket
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -30,7 +30,7 @@ import t3_costs
 
 
 SCHEMA_VERSION = 1
-SCAN_CACHE_VERSION = 7  # v7 stores each record's billing provider and origin (Oh My Pi splits by provider).
+SCAN_CACHE_VERSION = 8  # v8 stores each record's project folder name and Oh My Pi agent kind.
 RATE_CACHE_VERSION = 2  # v1 discarded provider prefixes and could cache conflicting rates.
 PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode")
 PROVIDER_NAMES = {
@@ -67,6 +67,13 @@ MAX_SCAN_CACHE_BYTES = 32 * 1024 * 1024
 MAX_SCAN_CACHE_FILES = 10_000
 MAX_MODEL_NAME_CHARS = 256
 MAX_MODEL_GROUPS = 512
+MAX_PROJECT_NAME_CHARS = 255
+MAX_PROJECT_GROUPS = 512
+MAX_PROJECT_ROWS = 12
+OTHER_PROJECT_ID = "other"
+OTHER_PROJECT_NAME = "Other"
+AGENT_KINDS = ("main", "subagent")
+HEATMAP_DAYS = 7
 TRANSCRIPT_GUARD_BYTES = 64
 
 
@@ -89,6 +96,8 @@ class UsageRecord:
     dedupe_key: str | None
     record_count: int = 1
     origin: str = "local"
+    project: str = ""
+    agent: str = ""
 
     @property
     def total_tokens(self) -> int:
@@ -147,9 +156,9 @@ def read_bounded_json(path: Path, max_bytes: int) -> Any:
     return json.loads(raw)
 
 
-def initial_codex_state() -> dict[str, Any]:
+def initial_cursor_state() -> dict[str, Any]:
     return dict(model="", session_id="", last_signature=None, saw_session_meta=False,
-                suppressing_fork_copies=False, fork_copy_anchor_ms=0)
+                suppressing_fork_copies=False, fork_copy_anchor_ms=0, project="")
 
 
 class TranscriptCursor:
@@ -159,7 +168,7 @@ class TranscriptCursor:
         self.stats = stats
         self.budget = budget
         self.entry = entry
-        self.state = initial_codex_state()
+        self.state = initial_cursor_state()
         self.position: dict[str, Any] | None = None
         self.base: list[UsageRecord] = []
         self.resumed = False
@@ -258,6 +267,33 @@ def bounded_model(value: Any) -> str:
     return value.strip()[:MAX_MODEL_NAME_CHARS]
 
 
+def project_name(path: Any) -> str:
+    """Return the folder name at the end of a working directory, or "" when there is none.
+
+    Only this last component is kept; full paths are never stored or emitted.
+    """
+    if not isinstance(path, str):
+        return ""
+    name = path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    if name in ("", ".", "..") or not name.isprintable():
+        return ""
+    return name[:MAX_PROJECT_NAME_CHARS]
+
+
+def project_id(name: str) -> str:
+    """Stable key of a project row; folders with the same name share one row."""
+    return opaque_id("project:" + name)[:12]
+
+
+def folder_basename(folder: str) -> str:
+    """Name the project of a folder that encodes its cwd with "/" turned into "-".
+
+    The encoding is lossy ("my-app" and "my/app" look alike), so this is only the
+    fallback when no transcript line recorded the cwd itself.
+    """
+    return project_name(folder.strip("-").rsplit("-", 1)[-1])
+
+
 def state_path(name: str, state_dir: Path | None = None) -> Path:
     if state_dir is None:
         state_home = Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state"))
@@ -279,14 +315,18 @@ def serialize_record(record: UsageRecord) -> list[Any]:
         record.dedupe_key,
         record.provider,
         record.origin,
+        record.project,
+        record.agent,
     ]
 
 
 def deserialize_record(row: Any) -> UsageRecord | None:
-    if not isinstance(row, list) or len(row) != 12:
+    if not isinstance(row, list) or len(row) != 14:
         return None
-    provider, origin = row[10], row[11]
+    provider, origin, project, agent = row[10:14]
     if provider not in PROVIDER_ORDER or origin not in ("local", "omp"):
+        return None
+    if project_name(project) != project or agent not in ("", *AGENT_KINDS):
         return None
     timestamp = finite_number(row[0])
     model = bounded_model(row[1])
@@ -313,6 +353,8 @@ def deserialize_record(row: Any) -> UsageRecord | None:
         reported_cost_usd=reported,
         dedupe_key=dedupe,
         origin=origin,
+        project=project,
+        agent=agent,
     )
 
 
@@ -330,7 +372,7 @@ def decode_position(value: Any, size: int) -> dict[str, Any] | None:
     if value["offset"] > size or not valid_hash(value.get("guard")):
         return None
     state = value.get("state")
-    if not isinstance(state, dict) or set(state) != set(initial_codex_state()):
+    if not isinstance(state, dict) or set(state) != set(initial_cursor_state()):
         return None
     if (not isinstance(state["model"], str) or len(state["model"]) > MAX_MODEL_NAME_CHARS
             or (state["session_id"] != "" and not valid_hash(state["session_id"]))
@@ -338,7 +380,8 @@ def decode_position(value: Any, size: int) -> dict[str, Any] | None:
             or type(state["saw_session_meta"]) is not bool
             or type(state["suppressing_fork_copies"]) is not bool
             or type(state["fork_copy_anchor_ms"]) is not int
-            or not 0 <= state["fork_copy_anchor_ms"] <= 10**16):
+            or not 0 <= state["fork_copy_anchor_ms"] <= 10**16
+            or project_name(state["project"]) != state["project"]):
         return None
     return {key: value[key] for key in ("offset", "device", "inode", "guard", "state")}
 
@@ -361,7 +404,8 @@ def load_scan_cache(path: Path) -> dict[str, dict[str, Any]]:
         if not isinstance(key, str) or len(key) != 64 or not isinstance(entry, dict):
             continue
         provider = entry.get("p")
-        if provider not in PROVIDER_ORDER:
+        # Entries are keyed by scanned source; "omp" transcripts bill to several providers.
+        if provider not in PARSERS:
             continue
         # Nanosecond mtimes exceed float's exact integer range. Keep JSON ints
         # intact or an unchanged file can miss the cache on every refresh.
@@ -435,7 +479,36 @@ def save_scan_cache(path: Path, cache: dict[str, dict[str, Any]]) -> None:
     atomic_write_json(path, {"schemaVersion": SCAN_CACHE_VERSION, "files": files})
 
 
-def record_from_claude(document: Any) -> UsageRecord | None:
+def folder_below(root: Path, path: Path) -> tuple[str, int]:
+    """Return the first folder between root and a transcript, and how many folders deep it lies."""
+    try:
+        folders = path.relative_to(root).parts[:-1]
+    except ValueError:
+        return "", 0
+    return (folders[0] if folders else ""), len(folders)
+
+
+def claude_folder_name(path: str) -> str:
+    return "".join(character if character.isascii() and character.isalnum() else "-" for character in path)
+
+
+def claude_project(folder: str, cwd: Any) -> str:
+    """Name a Claude Code project folder from a cwd recorded inside that project.
+
+    Claude Code names the folder after the launch directory with every character
+    outside [A-Za-z0-9] turned into "-", so "my-app" and "my/app" look alike. The
+    recorded cwd may be a subdirectory; its prefix of the folder's length is the
+    launch directory when it encodes to the same name.
+    """
+    if not folder or not isinstance(cwd, str):
+        return ""
+    launch = cwd[:len(folder)]
+    if cwd[len(folder):len(folder) + 1] not in ("", "/") or claude_folder_name(launch) != claude_folder_name(folder):
+        return ""
+    return project_name(launch)
+
+
+def record_from_claude(document: Any, project: str) -> UsageRecord | None:
     if not isinstance(document, dict) or document.get("type") != "assistant":
         return None
     message = document.get("message")
@@ -465,6 +538,7 @@ def record_from_claude(document: Any) -> UsageRecord | None:
         reasoning=0,
         reported_cost_usd=cost,
         dedupe_key=opaque_id("claude:" + raw_dedupe) if raw_dedupe else None,
+        project=project,
     )
     return record if record.total_tokens > 0 else None
 
@@ -472,14 +546,20 @@ def record_from_claude(document: Any) -> UsageRecord | None:
 def parse_claude_file(path: Path, retention_start_ms: int, cursor: TranscriptCursor | None = None) -> list[UsageRecord] | None:
     records: list[UsageRecord] = []
     seen: set[str] = set()
+    state = cursor.state if cursor is not None else initial_cursor_state()
+    folder, _ = folder_below(transcript_root("claude"), path)
+    fallback = folder_basename(folder)
     try:
         for line in bounded_jsonl_lines(path, cursor):
             if '"usage"' not in line:
                 continue
             try:
-                record = record_from_claude(json.loads(line))
+                document = json.loads(line)
             except (json.JSONDecodeError, RecursionError):
                 continue
+            if not state["project"] and isinstance(document, dict):
+                state["project"] = claude_project(folder, document.get("cwd"))
+            record = record_from_claude(document, state["project"] or fallback)
             if record is None or record.timestamp_ms < retention_start_ms:
                 continue
             if record.dedupe_key is not None:
@@ -498,8 +578,8 @@ def parse_claude_file(path: Path, retention_start_ms: int, cursor: TranscriptCur
 #
 # OpenCode keeps one SQLite database per installation instead of JSONL
 # transcripts: usage lives in the JSON `data` column of `message`. Only ids,
-# the model, the timestamp, and the token split are streamed out, so prompts and
-# responses never leave SQLite.
+# the model, the working directory, the timestamp, and the token split are
+# streamed out, so prompts and responses never leave SQLite.
 
 OPENCODE_SQL = (
     "SELECT id, session_id, time_created,"
@@ -509,7 +589,8 @@ OPENCODE_SQL = (
     " CAST(COALESCE(json_extract(data, '$.tokens.reasoning'), 0) AS INTEGER),"
     " CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),"
     " CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),"
-    " CAST(COALESCE(json_extract(data, '$.cost'), 0) AS REAL)"
+    " CAST(COALESCE(json_extract(data, '$.cost'), 0) AS REAL),"
+    " CASE WHEN json_type(data, '$.path.cwd') = 'text' THEN json_extract(data, '$.path.cwd') END"
     " FROM message"
     " WHERE data LIKE '%\"role\"%:%\"assistant\"%'"
     " AND data LIKE '%\"providerID\"%:%\"opencode%'"
@@ -602,7 +683,7 @@ def parse_opencode_database(path: Path, retention_start_ms: int,
         newest = connection.execute("SELECT MAX(time_created) FROM message").fetchone()
         unit = 1000 if newest and newest[0] is not None and int(newest[0]) < 1e12 else 1
         for row in connection.execute(OPENCODE_SQL, (retention_start_ms // unit,)):
-            raw_id, session, created, model, inp, out, reasoning, cache_read, cache_write, recorded = row
+            raw_id, session, created, model, inp, out, reasoning, cache_read, cache_write, recorded, cwd = row
             if not isinstance(raw_id, str) or not raw_id or created is None:
                 continue
             timestamp = parse_timestamp_ms(int(created) * unit)
@@ -632,6 +713,7 @@ def parse_opencode_database(path: Path, retention_start_ms: int,
                 reasoning=reasoned,
                 reported_cost_usd=recorded_cost,
                 dedupe_key=opaque_id("opencode:" + raw_id),
+                project=project_name(cwd),
             )
             if record.total_tokens <= 0 or record.timestamp_ms < retention_start_ms:
                 continue
@@ -672,21 +754,46 @@ def omp_record_provider(name: Any) -> str | None:
 
 def parse_omp_file(path: Path, retention_start_ms: int,
                    cursor: TranscriptCursor | None = None) -> list[UsageRecord] | None:
-    """Read one Oh My Pi harness session transcript (JSONL, one record per billing provider)."""
+    """Read one Oh My Pi harness session transcript (JSONL, one record per billing provider).
+
+    Main sessions sit directly in their project folder; a subagent's transcript sits
+    inside the folder of the session that started it. Assistant messages and
+    background `model_usage` lines (e.g. cache warming) both carry spend.
+    """
     records: list[UsageRecord] = []
-    session_id = opaque_id("omp:" + path.stem) if path.stem else ""
+    state = cursor.state if cursor is not None else initial_cursor_state()
+    folder, depth = folder_below(omp_sessions_root(), path)
+    fallback = folder_basename(folder)
+    # Subagent files share names such as Explore.jsonl, so the file's own
+    # session line identifies it; the parent folder disambiguates without one.
+    fallback_session = opaque_id(f"omp:{path.parent.name}/{path.name}")
+    agent = "subagent" if depth > 1 else "main"
     try:
         for line in bounded_jsonl_lines(path, cursor):
-            if '"usage"' not in line:
+            names_session = (not state["project"] or not state["session_id"]) and '"session"' in line
+            if '"usage"' not in line and not names_session:
                 continue
             try:
                 document = json.loads(line)
             except (json.JSONDecodeError, RecursionError):
                 continue
-            if not isinstance(document, dict) or document.get("type") != "message":
+            if not isinstance(document, dict):
                 continue
-            message = document.get("message")
-            if not isinstance(message, dict) or message.get("role") != "assistant":
+            kind = document.get("type")
+            if kind == "session":
+                if not state["project"]:
+                    state["project"] = project_name(document.get("cwd"))
+                raw_session = document.get("id")
+                if not state["session_id"] and isinstance(raw_session, str) and raw_session:
+                    state["session_id"] = opaque_id("omp:" + raw_session)
+                continue
+            if kind == "message":
+                message = document.get("message")
+                if not isinstance(message, dict) or message.get("role") != "assistant":
+                    continue
+            elif kind == "model_usage":
+                message = document
+            else:
                 continue
             provider = omp_record_provider(message.get("provider"))
             if provider is None:
@@ -710,7 +817,7 @@ def parse_omp_file(path: Path, retention_start_ms: int,
                 provider=provider,
                 timestamp_ms=timestamp,
                 model=bounded_model(message.get("model")) or "<unattributed>",
-                session_id=session_id,
+                session_id=state["session_id"] or fallback_session,
                 uncached_input=nonnegative_int(usage.get("input")),
                 cached_input=nonnegative_int(usage.get("cacheRead")),
                 cache_creation=nonnegative_int(usage.get("cacheWrite")),
@@ -720,6 +827,8 @@ def parse_omp_file(path: Path, retention_start_ms: int,
                 reported_cost_usd=reported,
                 dedupe_key=dedupe,
                 origin="omp",
+                project=state["project"] or fallback,
+                agent=agent,
             )
             if record.total_tokens <= 0:
                 continue
@@ -746,7 +855,7 @@ def codex_forked(payload: dict[str, Any]) -> bool:
 
 def parse_codex_file(path: Path, retention_start_ms: int, cursor: TranscriptCursor | None = None) -> list[UsageRecord] | None:
     records: list[UsageRecord] = []
-    state = cursor.state if cursor is not None else initial_codex_state()
+    state = cursor.state if cursor is not None else initial_cursor_state()
     try:
         for line in bounded_jsonl_lines(path, cursor):
             if not any(marker in line for marker in ('"session_meta"', '"turn_context"', '"token_count"')):
@@ -766,6 +875,7 @@ def parse_codex_file(path: Path, retention_start_ms: int, cursor: TranscriptCurs
                 raw_id = payload.get("id") or payload.get("session_id")
                 if isinstance(raw_id, str):
                     state["session_id"] = opaque_id("codex:" + raw_id)
+                state["project"] = project_name(payload.get("cwd"))
                 timestamp = parse_timestamp_ms(document.get("timestamp"))
                 if timestamp is not None and codex_forked(payload):
                     state["suppressing_fork_copies"] = True
@@ -811,6 +921,7 @@ def parse_codex_file(path: Path, retention_start_ms: int, cursor: TranscriptCurs
                 reasoning=min(output, nonnegative_int(last.get("reasoning_output_tokens"))),
                 reported_cost_usd=None,
                 dedupe_key=None,
+                project=state["project"],
             )
             if record.total_tokens > 0 and record.timestamp_ms >= retention_start_ms:
                 if len(records) >= MAX_TRANSCRIPT_RECORDS_PER_FILE:
@@ -983,12 +1094,17 @@ def discover_transcripts(
     return candidates, live, errors, complete
 
 
+def retention_start(now_ms: int) -> int:
+    """Oldest record timestamp the transcript scan keeps."""
+    return now_ms - int((CACHE_RETENTION_DAYS * 86400 + MTIME_SLACK_SECONDS) * 1000)
+
+
 def scan_transcripts(
     provider_ids: list[str], state_dir: Path | None, now_ms: int
 ) -> tuple[list[UsageRecord], list[dict[str, Any]]]:
     cache_path = state_path("cost-scan-cache.json", state_dir)
     cache = load_scan_cache(cache_path)
-    retention_start_ms = now_ms - int((CACHE_RETENTION_DAYS * 86400 + MTIME_SLACK_SECONDS) * 1000)
+    retention_start_ms = retention_start(now_ms)
     records: list[UsageRecord] = []
     coverage: list[dict[str, Any]] = []
     walked: set[str] = set()
@@ -1502,6 +1618,54 @@ def finish_cell(cell: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def summary_row(cell: dict[str, Any]) -> dict[str, Any]:
+    finished = finish_cell(cell)
+    return {"costUsd": finished["costUsd"], "totalTokens": finished["totalTokens"], "records": finished["records"]}
+
+
+def merge_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sum dimension rows that share an id, dropping empty ones.
+
+    Every kept row has records, so a null cost still means "only unpriced activity".
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not row["records"]:
+            continue
+        current = merged.get(row["id"])
+        if current is None:
+            merged[row["id"]] = {key: row[key] for key in ("id", "name", "costUsd", "totalTokens", "records") if key in row}
+            continue
+        if current["costUsd"] is None or row["costUsd"] is None:
+            current["costUsd"] = current["costUsd"] if row["costUsd"] is None else row["costUsd"]
+        else:
+            current["costUsd"] = round(current["costUsd"] + row["costUsd"], 8)
+        current["totalTokens"] += row["totalTokens"]
+        current["records"] += row["records"]
+    return list(merged.values())
+
+
+def rank_projects(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the costliest projects and fold the rest, with unknown folders, into one "other" row.
+
+    Ranked output can be ranked again together with more rows: ids merge, so totals stay exact.
+    """
+    merged = merge_rows(rows)
+    named = [row for row in merged if row["id"] != OTHER_PROJECT_ID]
+    named.sort(key=lambda row: (row["costUsd"] is not None, row["costUsd"] or 0, row["totalTokens"]), reverse=True)
+    folded = [row for row in merged if row["id"] == OTHER_PROJECT_ID] + named[MAX_PROJECT_ROWS:]
+    other = merge_rows({**row, "id": OTHER_PROJECT_ID, "name": OTHER_PROJECT_NAME} for row in folded)
+    return named[:MAX_PROJECT_ROWS] + other
+
+
+def rank_agents(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the main and subagent rows when any agent activity exists, else no rows."""
+    merged = {row["id"]: row for row in merge_rows(rows) if row["id"] in AGENT_KINDS}
+    if not merged:
+        return []
+    return [merged.get(kind, {"id": kind, "costUsd": 0.0, "totalTokens": 0, "records": 0}) for kind in AGENT_KINDS]
+
+
 def period_window(days: int, now_ms: int, zone) -> tuple[dict[str, Any], list[str], Callable[[int], str | None]]:
     if days == 1:
         until_ms = now_ms
@@ -1549,6 +1713,17 @@ def period_window(days: int, now_ms: int, zone) -> tuple[dict[str, Any], list[st
     )
 
 
+def unique_records(records: Iterable[UsageRecord]) -> Iterable[UsageRecord]:
+    """Skip repeated copies of one response; resumed and forked transcripts share dedupe keys."""
+    seen: set[str] = set()
+    for record in records:
+        if record.dedupe_key is not None:
+            if record.dedupe_key in seen:
+                continue
+            seen.add(record.dedupe_key)
+        yield record
+
+
 def aggregate_usage(
     records: list[UsageRecord],
     provider_ids: list[str],
@@ -1567,15 +1742,10 @@ def aggregate_usage(
         key: {provider: empty_cell() for provider in provider_ids} for key in period_keys
     }
     total = empty_cell()
-    seen: set[str] = set()
+    project_cells: dict[str, dict[str, Any]] = {}
+    agent_cells: dict[str, dict[str, Any]] = {}
 
-    for record in records:
-        if record.provider not in provider_cells:
-            continue
-        if record.dedupe_key is not None:
-            if record.dedupe_key in seen:
-                continue
-            seen.add(record.dedupe_key)
+    for record in unique_records(r for r in records if r.provider in provider_cells):
         bucket = bucket_for(record.timestamp_ms)
         if bucket is None:
             continue
@@ -1589,6 +1759,12 @@ def aggregate_usage(
         add_record(period_cells[bucket], record, rates, overrides)
         add_record(period_provider_cells[bucket][record.provider], record, rates, overrides)
         add_record(total, record, rates, overrides)
+        project = record.project
+        if project not in project_cells and len(project_cells) >= MAX_PROJECT_GROUPS:
+            project = ""
+        add_record(project_cells.setdefault(project, empty_cell()), record, rates, overrides)
+        if record.agent:
+            add_record(agent_cells.setdefault(record.agent, empty_cell()), record, rates, overrides)
 
     providers: list[dict[str, Any]] = []
     for provider in provider_ids:
@@ -1628,13 +1804,61 @@ def aggregate_usage(
                 ],
             }
         )
+    projects = rank_projects(
+        {"id": project_id(name) if name else OTHER_PROJECT_ID, "name": name or OTHER_PROJECT_NAME, **summary_row(cell)}
+        for name, cell in project_cells.items()
+    )
     return {
         "period": period,
         "totals": finish_cell(total),
         "providers": providers,
         "models": models,
         "periods": periods,
+        "projects": projects,
+        "agents": rank_agents({"id": agent, **summary_row(cell)} for agent, cell in agent_cells.items()),
     }
+
+
+def heatmap_window(now_ms: int, zone) -> tuple[list[date], int]:
+    """Return the last HEATMAP_DAYS local calendar days and the epoch milliseconds of the first midnight."""
+    today = datetime.fromtimestamp(now_ms / 1000, tz=zone).date()
+    days = [today - timedelta(days=offset) for offset in range(HEATMAP_DAYS - 1, -1, -1)]
+    return days, int(datetime.combine(days[0], datetime.min.time(), tzinfo=zone).timestamp() * 1000)
+
+
+def aggregate_heatmap(
+    records: Iterable[UsageRecord],
+    now_ms: int,
+    zone,
+    rates: dict[str, tuple[float, float, float, float]],
+    overrides: dict[str, tuple[float, float, float, float]] | None = None,
+) -> dict[str, Any]:
+    """Cost and record counts per local wall-clock hour of each recent day, whatever the period."""
+    days, start_ms = heatmap_window(now_ms, zone)
+    cells = [[empty_cell() for _ in range(24)] for _ in days]
+    for record in unique_records(r for r in records if start_ms <= r.timestamp_ms <= now_ms):
+        moment = datetime.fromtimestamp(record.timestamp_ms / 1000, tz=zone)
+        add_record(cells[(moment.date() - days[0]).days][moment.hour], record, rates, overrides)
+    rows = [[summary_row(cell) for cell in day] for day in cells]
+    return {
+        "days": [day.isoformat() for day in days],
+        "cost": [[cell["costUsd"] for cell in day] for day in rows],
+        "records": [[cell["records"] for cell in day] for day in rows],
+    }
+
+
+def aggregate_previous(
+    records: Iterable[UsageRecord],
+    since_ms: int,
+    until_ms: int,
+    rates: dict[str, tuple[float, float, float, float]],
+    overrides: dict[str, tuple[float, float, float, float]] | None = None,
+) -> dict[str, Any] | None:
+    """Totals of the window [since_ms, until_ms), or None when nothing was recorded there."""
+    cell = empty_cell()
+    for record in unique_records(r for r in records if since_ms <= r.timestamp_ms < until_ms):
+        add_record(cell, record, rates, overrides)
+    return summary_row(cell) if cell["records"] else None
 
 
 def parse_provider_ids(value: str) -> list[str]:
@@ -1657,6 +1881,13 @@ def build_payload(
     period, _, bucket_for = period_window(days, stamp, zone)
     end = datetime.fromtimestamp(stamp / 1000, zone)
     start = stamp - 86400000 if days == 1 else int(datetime.fromisoformat(period["since"]).replace(tzinfo=zone).timestamp() * 1000)
+    # The comparison window has the period's length and ends where the period starts.
+    # Local history ends at the scan retention, so an older window cannot be compared.
+    previous_start = start - 86400000 if days == 1 else int(
+        (datetime.fromisoformat(period["since"]) - timedelta(days=days)).replace(tzinfo=zone).timestamp() * 1000)
+    previous_retained = previous_start >= retention_start(stamp)
+    # Local records before the period still feed the heatmap and the comparison.
+    history_start = min(previous_start if previous_retained else start, heatmap_window(stamp, zone)[1])
     query = {"sinceDay": datetime.fromtimestamp(start / 1000, zone).date().isoformat(),
              "untilDay": end.date().isoformat(), "timeZone": getattr(zone, "key", "UTC"),
              "resolution": "hour" if days == 1 else "day"}
@@ -1686,11 +1917,12 @@ def build_payload(
                 # Oh My Pi keeps each message's billing provider, so its records are selected
                 # by origin; each provider's own transcripts never carry them.
                 selected = [r for r in local if r.origin == "omp" and r.provider in provider_ids
-                            and start <= r.timestamp_ms <= stamp]
+                            and history_start <= r.timestamp_ms <= stamp]
             else:
                 selected = [r for r in local if r.origin != "omp" and r.provider == provider
-                            and start <= r.timestamp_ms <= stamp]
-            records = [r if r.provider == "opencode" else replace(r, reported_cost_usd=None) for r in selected]
+                            and history_start <= r.timestamp_ms <= stamp]
+            history = [r if r.provider == "opencode" else replace(r, reported_cost_usd=None) for r in selected]
+            records = [r for r in history if r.timestamp_ms >= start]
             session_counts = None
             if provider == "omp":
                 session_counts = {p: len({r.session_id for r in records if r.provider == p and r.session_id})
@@ -1699,7 +1931,7 @@ def build_payload(
             candidates.append({"id": "local-" + provider, "name": "Local " + ("Claude" if provider == "claude" else PROVIDER_NAMES.get(provider, provider.title())),
                 "kind": "local", "provider": provider, "providers": sorted(session_counts) if session_counts is not None else [provider],
                 "fingerprint": fp, "status": item["status"],
-                "updatedAt": stamp, "message": item["message"], "records": records,
+                "updatedAt": stamp, "message": item["message"], "records": records, "history": history,
                 "scannedFiles": item.get("scannedFiles", 0), "skippedFiles": item.get("skippedFiles", 0),
                 "sessions": len({r.session_id for r in records if r.session_id}), "sessionCounts": session_counts})
         for server, future in futures:
@@ -1750,14 +1982,20 @@ def build_payload(
     rank = {"ok": 0, "partial": 1, "stale": 2, "missing": 3, "failed": 3}
     candidates.sort(key=lambda c: (rank.get(c["status"], 3), c["kind"] != "local", c["id"]))
     seen, records, sessions = set(), [], {}
+    local_history: list[UsageRecord] = []
+    remote_included = False
     for candidate in candidates:
         available = candidate["status"] in ("ok", "partial", "stale")
         included = available and candidate["fingerprint"] not in seen
-        public = {k: v for k, v in candidate.items() if k not in ("records", "sessions", "sessionCounts", "fingerprint")}
+        public = {k: v for k, v in candidate.items() if k not in ("records", "history", "sessions", "sessionCounts", "fingerprint")}
         public["included"] = included
         if included:
             seen.add(candidate["fingerprint"])
             records.extend(candidate["records"])
+            if candidate["kind"] == "local":
+                local_history.extend(candidate["history"])
+            else:
+                remote_included = True
             for session_provider, count in (candidate.get("sessionCounts") or {candidate["provider"]: candidate["sessions"]}).items():
                 current = sessions.get(session_provider, 0)
                 sessions[session_provider] = None if current is None or count is None else current + count
@@ -1769,12 +2007,17 @@ def build_payload(
     provider_ids = sorted({c["provider"] for c in candidates if c["provider"] != "omp"})
     if rates_override is not None:
         rates, pricing = rates_override
-    elif force_rates or any(r.model not in overrides for r in records):
+    elif force_rates or any(r.model not in overrides for batch in (records, local_history) for r in batch):
         rates, pricing = load_rates(state_dir, timeout, stamp // 1000, force=force_rates)
     else:
         rates, pricing = {}, {"status": "notNeeded", "source": LITELLM_RATES_URL,
                              "fetchedAt": None, "knownModels": 0, "message": "Public prices are not needed for this selection."}
     result = aggregate_usage(records, provider_ids, days, stamp, rates, zone_name, overrides)
+    # Exact local timestamps place activity by hour; remote buckets cannot be split that finely.
+    result["heatmap"] = aggregate_heatmap(local_history, stamp, zone, rates, overrides)
+    # Remote servers report only the selected period, so they cannot be compared.
+    comparable = previous_retained and not remote_included
+    result["previous"] = aggregate_previous(local_history, previous_start, start, rates, overrides) if comparable else None
     coverage = []
     for provider in result["providers"]:
         relevant = [s for s in sources if s["status"] != "duplicate"
@@ -1851,6 +2094,10 @@ def main(argv: list[str] | None = None) -> int:
             "providers": [],
             "models": [],
             "periods": [],
+            "projects": [],
+            "agents": [],
+            "heatmap": {"days": [], "cost": [], "records": []},
+            "previous": None,
             "scanDurationMs": 0,
         }
     json.dump(payload, os.sys.stdout, separators=(",", ":"))

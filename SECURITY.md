@@ -35,6 +35,7 @@ Private state is stored below
 `${XDG_STATE_HOME:-~/.local/state}/omarchy/model-usage/`. The directory uses mode
 `0700`; files use mode `0600`. Transcript paths, session identifiers, message
 identifiers, and de-duplication keys are hashed before they enter durable state.
+Project folders are kept by name only (the last path component), never as paths.
 Usage caches contain no prompts, responses, tool calls, tool results, or credentials.
 T3 access tokens are stored separately in private authentication state files.
 Incremental scan positions retain bounded numeric file identity/offset metadata, a SHA-256 tail guard, and sanitized parser state; they never retain the raw guard bytes. Custom prices are non-secret, validated settings bounded to 64 KiB and 128 models.
