@@ -915,4 +915,136 @@ assert.equal(context.providerStatus(entryOf("gemini"), { status: "error", errorK
   "Sign-in expired", "beside a Sign in button the status drops the instruction");
 console.log("Provider setup: passed");
 
+// ---- 1.9 QmlCosts ----
+{
+  const day = context.costBucketDate("2030-01-09");
+  assert.equal(day.getFullYear() * 10000 + (day.getMonth() + 1) * 100 + day.getDate(), 20300109,
+    "a day bucket is that calendar day where the user is, not UTC midnight");
+  assert.equal(day.getHours(), 0);
+  assert.equal(context.costBucketDate("garbage"), null);
+  assert.equal(context.costBucketDate(""), null);
+  assert.equal(context.costBucketKey("2030-01-09"), "d2030-01-09");
+  assert.equal(context.costBucketKey("2030-01-15T10:27:13Z"), context.costBucketKey("2030-01-15T10:37:13Z"),
+    "a rescan minutes later keeps every rolling hour bucket on its bar");
+  assert.notEqual(context.costBucketKey("2030-01-15T10:27:13Z"), context.costBucketKey("2030-01-15T11:27:13Z"));
+  assert.equal(context.costBucketKey("nonsense"), "");
+  assert.equal(context.costDayName(new Date(2030, 0, 15)), "Tue");
+  assert.equal(context.costMonthDay(new Date(2030, 0, 9)), "Jan 9");
+  assert.equal(context.costPeriodPhrase(1), "24 h");
+  assert.equal(context.costPeriodPhrase(30), "30 days");
+
+  assert.equal(context.costDeltaText(context.costDelta(12.34, 10.46), 7), "▲ 18% vs previous 7 days");
+  assert.equal(context.costDeltaText(context.costDelta(8, 10), 30), "▼ 20% vs previous 30 days");
+  assert.equal(context.costDeltaText(context.costDelta(10, 10.04), 1), "Same as previous 24 h");
+  assert.equal(context.costDeltaText(context.costDelta(1000, 1), 7), "▲ 99,900% vs previous 7 days");
+  assert.equal(context.costDelta(5, null), null, "no previous window, no delta");
+  assert.equal(context.costDelta(null, 5), null, "an unpriced total has no delta");
+  assert.equal(context.costDelta(5, 0), null, "an empty previous window has no meaningful ratio");
+  assert.equal(context.costDeltaText(null, 7), "");
+
+  const dimensions = {
+    models: [
+      { provider: "codex", providerName: "OpenAI Codex", model: "gpt-5.6-sol", costUsd: 4.84, totalTokens: 1400000, basePricedRecords: 3 },
+      { provider: "claude", providerName: "Claude Code", model: "claude-opus-4-6", costUsd: 7.5, totalTokens: 3800000, customPricedRecords: 2 },
+      { provider: "kimi", providerName: "Kimi", model: "kimi-k2", costUsd: null, totalTokens: 9000000 },
+      { provider: "kimi", providerName: "Kimi", model: "kimi-k2", costUsd: null, totalTokens: 1 }
+    ],
+    projects: [
+      { id: "other", name: "Other", costUsd: 9, totalTokens: 10, records: 3 },
+      { id: "a1", name: "quotatank", costUsd: 3, totalTokens: 5, records: 1 },
+      { id: "b2", name: "homelab", costUsd: 5, totalTokens: 5, records: 1375 }
+    ],
+    agents: [{ id: "subagent", costUsd: 2, totalTokens: 100, records: 4 }, { id: "main", costUsd: 6, totalTokens: 50, records: 9 }]
+  };
+  assert.equal(context.costBreakdownModes(dimensions).map(mode => mode.label).join(","), "Model,Project,Agent");
+  assert.equal(context.costBreakdownModes({ models: [], projects: [] }).map(mode => mode.value).join(","), "model",
+    "Project and Agent appear only when the payload has them");
+  const models = context.costBreakdownRows(dimensions, "model", "cost");
+  assert.equal(models.map(row => row.name).join(","), "claude-opus-4-6,gpt-5.6-sol,kimi-k2,kimi-k2", "largest cost first, unpriced last");
+  assert.equal(models.map(row => row.context).join("|"),
+    "Claude · custom prices|Codex · base rates|Kimi · pricing unavailable|Kimi · pricing unavailable",
+    "model rows keep their pricing notes beside the provider's short name");
+  assert.equal(context.costBreakdownRows({ models: [{ provider: "lab", providerName: "Lab server", model: "m", costUsd: 1, basePricedRecords: 1 }] },
+    "model", "cost")[0].context, "Lab server · base rates", "a source outside the registry keeps its own name");
+  assert.equal(new Set(models.map(row => row.key)).size, 4, "repeated models still get unique keys");
+  assert.equal(models[0].fraction, 1);
+  assert.equal(models[1].fraction.toFixed(4), (4.84 / 7.5).toFixed(4));
+  assert.equal(models[2].fraction, 0);
+  assert.equal(context.costBreakdownRows(dimensions, "model", "tokens")[0].name, "kimi-k2", "Tokens ranks by tokens, priced or not");
+  const projects = context.costBreakdownRows(dimensions, "project", "cost");
+  assert.equal(projects.map(row => row.name).join(","), "homelab,quotatank,Other", "the folded Other folder stays last");
+  assert.equal(projects[0].context + "|" + projects[1].context, "1,375 requests|1 request");
+  const agents = context.costBreakdownRows(dimensions, "agent", "cost");
+  assert.equal(agents.map(row => row.name + " · " + row.context).join("|"),
+    "Main sessions · what you type|Subagents · tasks and workpools");
+
+  const grid = fill => Array.from({ length: 7 }, (_, d) => Array.from({ length: 24 }, (_, h) => fill(d, h)));
+  const days = ["2030-01-09", "2030-01-10", "2030-01-11", "2030-01-12", "2030-01-13", "2030-01-14", "2030-01-15"];
+  const heatmap = {
+    days,
+    cost: grid((d, h) => (d === 6 && h === 15 ? 4.2 : d === 0 && h === 3 ? null : 1)),
+    records: grid((d, h) => (d === 6 && h === 15 ? 63 : d === 0 && h === 3 ? 2 : 1))
+  };
+  const heat = context.costHeatmapGrid(heatmap, "cost");
+  assert.equal(heat.cells.length, 168, "seven days of 24 hours");
+  assert.equal(heat.dayNames.join(","), "Wed,Thu,Fri,Sat,Sun,Mon,Tue");
+  assert.equal(heat.busiest, 6 * 24 + 15);
+  assert.equal(heat.cells[heat.busiest].level, 1);
+  assert.equal(heat.cells[0].level.toFixed(4), Math.sqrt(1 / 4.2).toFixed(4), "levels use a square-root scale");
+  assert.ok(heat.cells[3].unpriced && heat.cells[3].level === 0, "only-unpriced hours are marked, not scaled");
+  assert.equal(context.costHeatmapText(heat.cells[heat.busiest], "15:00"), "Tue 15:00 · $4.20 · 63 requests");
+  assert.equal(context.costHeatmapText(heat.cells[3], "03:00"), "Wed 03:00 · not priced · 2 requests");
+  assert.equal(context.costHeatmapText({ dayName: "Mon", cost: 0, records: 0 }, "04:00"), "Mon 04:00 · no requests");
+  assert.equal(context.costHeatmapGrid(heatmap, "tokens").busiest, 6 * 24 + 15, "Tokens weighs hours by requests");
+  assert.equal(context.costHeatmapGrid({ days: days.slice(1), cost: heatmap.cost, records: heatmap.records }, "cost"), null);
+  assert.equal(context.costHeatmapGrid({ days, cost: heatmap.cost.map((row, d) => (d === 2 ? row.slice(1) : row)), records: heatmap.records }, "cost"), null);
+  assert.equal(context.costHeatmapGrid(null, "cost"), null);
+
+  assert.equal(context.costCacheSummary({ cachedInputTokens: 4200000, uncachedInputTokens: 850000, cacheCreationTokens: 120000,
+    cacheSavingsUsd: 21.5 }).text, "81% read from cache · saved $21.50");
+  assert.equal(context.costCacheSummary({ cachedInputTokens: 999999, uncachedInputTokens: 1 }).text, "99% read from cache",
+    "a remainder never rounds up to all of it");
+  assert.equal(context.costCacheSummary({ cachedInputTokens: 0, uncachedInputTokens: 10 }), null);
+  assert.equal(context.costCacheSummary({}), null);
+
+  const local = [{ id: "local-claude", kind: "local", included: true }, { id: "local-omp", kind: "local", provider: "omp", included: true }];
+  assert.equal(context.costSourceSummary(local.concat([{ id: "omp-remote", status: "ok", host: "talos:3847" }]), true),
+    "Local transcripts + omp on talos · live");
+  assert.equal(context.costSourceSummary([{ id: "lab-claude", kind: "t3", name: "Lab · Claude", included: true },
+    { id: "lab-codex", kind: "t3", name: "Lab · Codex", included: true }, { id: "x", kind: "t3", name: "Off", included: false }], false),
+    "T3 on Lab", "a server counts once, excluded ones not at all");
+  assert.equal(context.costSourceSummary([{ id: "omp-remote", status: "error", host: "talos" }], false), "omp on talos unavailable");
+  assert.equal(context.costSourceSummary([], true), "", "nothing to name, nothing to call live");
+  assert.equal(context.costSourceSummary(local.concat(["A", "B", "C"].map(name => ({ id: name, kind: "t3", name, included: true }))), false),
+    "Local transcripts + 3 more sources");
+  assert.ok(context.costScanHasOmp(local));
+  assert.ok(!context.costScanHasOmp([{ id: "local-omp", kind: "local", provider: "omp", included: false }]));
+  assert.ok(context.costScanHasOmp([{ id: "omp-remote", status: "ok" }]));
+  assert.ok(!context.costScanHasOmp([{ id: "omp-remote", status: "error" }]));
+
+  const charted = ["claude", "codex"];
+  const first = context.costLiveFold(null, { provider: "anthropic", costUsd: 0.25, tokens: 1000, at: 200 }, 100, charted);
+  let live = context.costLiveFold(first, { provider: "claude", costUsd: 0.17, tokens: 500, at: 210 }, 100, charted);
+  live = context.costLiveFold(live, { provider: "codex", costUsd: null, tokens: 300, at: 220 }, 100, charted);
+  live = context.costLiveFold(live, { provider: "claude", costUsd: 5, tokens: 5, at: 90 }, 100, charted);
+  live = context.costLiveFold(live, { provider: "grok", costUsd: 5, tokens: 5, at: 230 }, 100, charted);
+  assert.equal(live.cost.claude.toFixed(2), "0.42", "omp provider ids fold onto the chart's ids");
+  assert.equal(JSON.stringify(live.tokens), '{"claude":1500,"codex":300}');
+  assert.equal(live.cost.codex, undefined, "an unpriced request adds tokens, not cost");
+  assert.equal(live.requests + "|" + live.lastAt, "3|220", "requests already in the scan or off the chart are skipped");
+  assert.equal(first.requests + "|" + JSON.stringify(first.cost), '1|{"claude":0.25}', "folding never changes the earlier state");
+
+  const keyedList = keys => ({ keys, ops: [], count() { return this.keys.length }, keyAt(index) { return this.keys[index] },
+    move(from, to) { this.ops.push("move"); this.keys.splice(to, 0, this.keys.splice(from, 1)[0]) },
+    insert(index, key) { this.ops.push("insert"); this.keys.splice(index, 0, key) } });
+  const list = keyedList(["a", "b", "c", "d"]);
+  context.syncKeyedOrder(list, ["c", "a", "e"]);
+  assert.equal(list.keys.join(","), "c,a,e,b,d", "kept keys move, new ones insert, stale ones trail in order");
+  assert.equal(list.ops.join(","), "move,insert");
+  const settled = keyedList(["a", "b"]);
+  context.syncKeyedOrder(settled, ["a", "b"]);
+  assert.equal(settled.ops.length, 0, "an unchanged order touches nothing");
+  console.log("Costs tab: passed");
+}
+
 console.log("UsageLogic.js: all assertions passed");

@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2030-01-15T12:00:00Z",
+  "pricing": { "status": "fresh", "source": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json", "fetchedAt": "2030-01-15T12:00:00Z", "knownModels": 900, "message": "" },
+  "coverage": [
+    { "id": "claude", "name": "Claude Code", "status": "ok", "message": "", "scannedFiles": 3, "skippedFiles": 1, "sessions": 2 },
+    { "id": "codex", "name": "OpenAI Codex", "status": "ok", "message": "", "scannedFiles": 4, "skippedFiles": 0, "sessions": 3 },
+    { "id": "kimi", "name": "Kimi Code", "status": "partial", "message": "Kimi records tokens but not reliable historical model names; cost is unavailable.", "scannedFiles": 1, "skippedFiles": 0, "sessions": 1 }
+  ],
+  "sources": [
+    { "id": "local-claude", "name": "Local Claude", "kind": "local", "provider": "claude", "status": "ok", "included": true, "updatedAt": null, "message": "" },
+    { "id": "local-codex", "name": "Local OpenAI Codex", "kind": "local", "provider": "codex", "status": "ok", "included": true, "updatedAt": null, "message": "" },
+    { "id": "local-omp", "name": "Local Oh My Pi", "kind": "local", "provider": "omp", "status": "ok", "included": true, "updatedAt": null, "message": "" },
+    { "id": "omp-remote", "status": "ok", "message": "", "host": "talos" }
+  ],
+  "scanDurationMs": 37,
+  "period": { "days": 7, "resolution": "day", "since": "2030-01-09", "until": "2030-01-15", "label": "Past 7 days" },
+  "totals": { "costUsd": 12.34, "cacheSavingsUsd": 21.5, "uncachedInputTokens": 850000, "cachedInputTokens": 4200000, "cacheCreationTokens": 120000, "outputTokens": 330000, "reasoningTokens": 70000, "totalTokens": 5500000, "records": 42, "pricedRecords": 38, "unpricedRecords": 4, "sessions": 6, "costSource": "mixed" },
+  "previous": { "costUsd": 10.46, "totalTokens": 5000000, "records": 37 },
+  "providers": [
+    { "id": "claude", "name": "Claude Code", "status": "ok", "message": "", "costUsd": 7.5, "cacheSavingsUsd": 15, "uncachedInputTokens": 500000, "cachedInputTokens": 3000000, "cacheCreationTokens": 100000, "outputTokens": 200000, "reasoningTokens": 0, "totalTokens": 3800000, "records": 22, "pricedRecords": 22, "unpricedRecords": 0, "sessions": 2, "costSource": "modelPriced" },
+    { "id": "codex", "name": "OpenAI Codex", "status": "ok", "message": "", "costUsd": 4.84, "cacheSavingsUsd": 6.5, "uncachedInputTokens": 250000, "cachedInputTokens": 1100000, "cacheCreationTokens": 20000, "outputTokens": 100000, "reasoningTokens": 70000, "totalTokens": 1470000, "records": 16, "pricedRecords": 16, "unpricedRecords": 0, "sessions": 3, "costSource": "modelPriced" },
+    { "id": "kimi", "name": "Kimi Code", "status": "partial", "message": "Kimi records tokens but not reliable historical model names; cost is unavailable.", "costUsd": null, "cacheSavingsUsd": null, "uncachedInputTokens": 100000, "cachedInputTokens": 100000, "cacheCreationTokens": 0, "outputTokens": 30000, "reasoningTokens": 0, "totalTokens": 230000, "records": 4, "pricedRecords": 0, "unpricedRecords": 4, "sessions": 1, "costSource": "unpriced" }
+  ],
+  "models": [
+    { "provider": "claude", "providerName": "Claude Code", "model": "claude-opus-4-6", "costUsd": 7.5, "cacheSavingsUsd": 15, "uncachedInputTokens": 500000, "cachedInputTokens": 3000000, "cacheCreationTokens": 100000, "outputTokens": 200000, "reasoningTokens": 0, "totalTokens": 3800000, "records": 22, "pricedRecords": 22, "unpricedRecords": 0, "sessions": 2, "costSource": "modelPriced" },
+    { "provider": "codex", "providerName": "OpenAI Codex", "model": "gpt-5.6-sol", "costUsd": 4.84, "cacheSavingsUsd": 6.5, "uncachedInputTokens": 250000, "cachedInputTokens": 1100000, "cacheCreationTokens": 20000, "outputTokens": 100000, "reasoningTokens": 70000, "totalTokens": 1470000, "records": 16, "pricedRecords": 16, "unpricedRecords": 0, "sessions": 3, "costSource": "modelPriced" },
+    { "provider": "kimi", "providerName": "Kimi Code", "model": "Unknown model", "costUsd": null, "cacheSavingsUsd": null, "uncachedInputTokens": 100000, "cachedInputTokens": 100000, "cacheCreationTokens": 0, "outputTokens": 30000, "reasoningTokens": 0, "totalTokens": 230000, "records": 4, "pricedRecords": 0, "unpricedRecords": 4, "sessions": 1, "costSource": "unpriced" }
+  ],
+  "projects": [
+    { "id": "6f1d0c2a9b31", "name": "quotatank", "costUsd": 6.1, "totalTokens": 2600000, "records": 19 },
+    { "id": "a83e5b7c41d0", "name": "homelab", "costUsd": 3.2, "totalTokens": 1500000, "records": 12 },
+    { "id": "c09f2e6d1a74", "name": "estudio-medicina", "costUsd": 1.9, "totalTokens": 900000, "records": 7 },
+    { "id": "other", "name": "Other", "costUsd": 1.14, "totalTokens": 500000, "records": 4 }
+  ],
+  "agents": [
+    { "id": "main", "costUsd": 8.9, "totalTokens": 3900000, "records": 30 },
+    { "id": "subagent", "costUsd": 3.44, "totalTokens": 1600000, "records": 12 }
+  ],
+  "periods": [
+    { "start": "2030-01-09", "costUsd": 0.7, "totalTokens": 400000, "records": 4, "pricedRecords": 4, "unpricedRecords": 0, "sessions": 1, "providers": [{ "id": "claude", "costUsd": 0.5, "totalTokens": 300000 }, { "id": "codex", "costUsd": 0.2, "totalTokens": 100000 }, { "id": "kimi", "costUsd": 0, "totalTokens": 0 }] },
+    { "start": "2030-01-10", "costUsd": 1.2, "totalTokens": 600000, "records": 5, "pricedRecords": 5, "unpricedRecords": 0, "sessions": 2, "providers": [{ "id": "claude", "costUsd": 0.8, "totalTokens": 400000 }, { "id": "codex", "costUsd": 0.4, "totalTokens": 200000 }, { "id": "kimi", "costUsd": 0, "totalTokens": 0 }] },
+    { "start": "2030-01-11", "costUsd": 0.9, "totalTokens": 500000, "records": 4, "pricedRecords": 3, "unpricedRecords": 1, "sessions": 2, "providers": [{ "id": "claude", "costUsd": 0.6, "totalTokens": 300000 }, { "id": "codex", "costUsd": 0.3, "totalTokens": 150000 }, { "id": "kimi", "costUsd": null, "totalTokens": 50000 }] },
+    { "start": "2030-01-12", "costUsd": 2.4, "totalTokens": 1000000, "records": 7, "pricedRecords": 7, "unpricedRecords": 0, "sessions": 3, "providers": [{ "id": "claude", "costUsd": 1.5, "totalTokens": 650000 }, { "id": "codex", "costUsd": 0.9, "totalTokens": 350000 }, { "id": "kimi", "costUsd": 0, "totalTokens": 0 }] },
+    { "start": "2030-01-13", "costUsd": 1.8, "totalTokens": 800000, "records": 6, "pricedRecords": 5, "unpricedRecords": 1, "sessions": 3, "providers": [{ "id": "claude", "costUsd": 1.1, "totalTokens": 500000 }, { "id": "codex", "costUsd": 0.7, "totalTokens": 250000 }, { "id": "kimi", "costUsd": null, "totalTokens": 50000 }] },
+    { "start": "2030-01-14", "costUsd": 3.1, "totalTokens": 1300000, "records": 8, "pricedRecords": 7, "unpricedRecords": 1, "sessions": 4, "providers": [{ "id": "claude", "costUsd": 1.9, "totalTokens": 800000 }, { "id": "codex", "costUsd": 1.2, "totalTokens": 420000 }, { "id": "kimi", "costUsd": null, "totalTokens": 80000 }] },
+    { "start": "2030-01-15", "costUsd": 2.24, "totalTokens": 900000, "records": 8, "pricedRecords": 7, "unpricedRecords": 1, "sessions": 4, "providers": [{ "id": "claude", "costUsd": 1.1, "totalTokens": 500000 }, { "id": "codex", "costUsd": 1.14, "totalTokens": 330000 }, { "id": "kimi", "costUsd": null, "totalTokens": 70000 }] }
+  ],
+  "heatmap": {
+    "days": ["2030-01-09", "2030-01-10", "2030-01-11", "2030-01-12", "2030-01-13", "2030-01-14", "2030-01-15"],
+    "cost": [
+      [0.41, 0.64, 0, null, 0, 0, 0, 0, 0, 1.3, 1.95, 1.17, 1.82, 2.47, 0, 2.34, 1.56, 2.21, 1.43, 2.08, 1.3, 0, 0.41, 0.64],
+      [0.73, 0.45, 0, 0, 0, 0, 0, 0, 0, 2.21, 1.43, 2.08, 1.3, 1.95, 0, 1.82, 2.47, 1.69, 2.34, 1.56, 2.21, 0, 0.73, 0.45],
+      [0.55, 0.77, 0, 0, 0, 0, 0, 0, 0, 1.69, 2.34, 1.56, 2.21, 1.43, 0, 1.3, 1.95, 1.17, 1.82, 2.47, 1.69, 0, 0.55, 0.77],
+      [0.26, 0.18, 0, 0, 0, 0, 0, 0, 0, 0.35, 0.55, 0.74, 0.51, 0.7, 0, 0.66, 0.43, 0.62, 0.39, 0.58, 0.35, 0, 0.26, 0.18],
+      [0.2, 0.12, 0, 0, 0, 0, 0, 0, 0, 0.62, 0.39, 0.58, 0.35, 0.55, 0, 0.51, 0.7, 0.47, 0.66, 0.43, 0.62, 0, 0.2, 0.12],
+      [0.5, 0.73, 0, 0, 0, 0, 0, 0, 0, 1.56, 2.21, 1.43, 2.08, 1.3, 0, 1.17, 1.82, 2.47, 1.69, 2.34, 1.56, 0, 0.5, 0.73],
+      [0.82, 0.55, 0, 0, 0, 0, 0, 0, 0, 2.47, 1.69, 2.34, 1.56, 2.21, 0, 4.2, 1.3, 1.95, 1.17, 1.82, 2.47, 0, 0.82, 0.55]
+    ],
+    "records": [
+      [6, 9, 0, 2, 0, 0, 0, 0, 0, 18, 27, 16, 25, 34, 0, 32, 22, 31, 20, 29, 18, 0, 6, 9],
+      [10, 6, 0, 0, 0, 0, 0, 0, 0, 31, 20, 29, 18, 27, 0, 25, 34, 23, 32, 22, 31, 0, 10, 6],
+      [8, 11, 0, 0, 0, 0, 0, 0, 0, 23, 32, 22, 31, 20, 0, 18, 27, 16, 25, 34, 23, 0, 8, 11],
+      [4, 2, 0, 0, 0, 0, 0, 0, 0, 5, 8, 10, 7, 10, 0, 9, 6, 9, 5, 8, 5, 0, 4, 2],
+      [3, 2, 0, 0, 0, 0, 0, 0, 0, 9, 5, 8, 5, 8, 0, 7, 10, 6, 9, 6, 9, 0, 3, 2],
+      [7, 10, 0, 0, 0, 0, 0, 0, 0, 22, 31, 20, 29, 18, 0, 16, 25, 34, 23, 32, 22, 0, 7, 10],
+      [11, 8, 0, 0, 0, 0, 0, 0, 0, 34, 23, 32, 22, 31, 0, 63, 18, 27, 16, 25, 34, 0, 11, 8]
+    ]
+  }
+}

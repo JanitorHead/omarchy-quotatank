@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 
 ShellRoot {
   id: root
@@ -17,6 +18,13 @@ ShellRoot {
   property int phase: 0
   property string backupFile: ""
   property var backupReply: null
+  // 1.9 Costs tab: a view over a payload with projects, agents, heatmap and previous totals.
+  property var costs: null
+  property var rich: null
+  property var keptBars: []
+  property int costsPhase: 0
+  property int costsWait: 0
+  property bool costsDone: false
   readonly property string custom: '{"vendor/Example[1m]":{"inputCostPerMillionTokens":2,"outputCostPerMillionTokens":8,"cacheReadCostPerMillionTokens":0}}'
   readonly property var sixProviders: ["claude", "codex", "kimi", "opencode", "openrouter", "deepseek"]
 
@@ -102,6 +110,8 @@ ShellRoot {
       models: models, periods: [{start: "2030-01-15", costUsd: 1234.56, totalTokens: 1000000}]
     }})
     overview.periodRequested.connect(function(days) { root.overview.periodDays = days })
+    root.rich = JSON.parse(dimensionsFile.text())
+    costs = create("UsageCosts.qml", { width: 420, payload: root.rich, ompActivity: fakeActivity })
     backend = create("CostBackend.qml", {settings: {costLocalProviders: ["claude"]}})
     openingBackend = create("CostBackend.qml", {settings: {costLocalProviders: ["claude"]}})
     openingBackend.refreshed.connect(function() { root.openingResponses++ })
@@ -137,9 +147,10 @@ ShellRoot {
         root.check(root.saved.costPriceOverrides === root.custom, "reset keeps custom prices")
         root.form.settings = { costPriceOverrides: root.custom, enabledProviders: root.sixProviders }
         root.saves = 0
-        root.check(!root.find(root.overview, "costModelDetails").visible, "model breakdown starts collapsed")
+        root.check(root.find(root.overview, "costModel-4") !== null && !root.find(root.overview, "costModelDisclosure").checked,
+          "the breakdown starts with its top five models")
         root.check(!root.find(root.overview, "costTokenDetails").visible, "cost overview starts without token details")
-        root.check(root.find(root.overview, "costModel-0") === null, "collapsed models are not instantiated")
+        root.check(root.find(root.overview, "costModel-5") === null, "models past the top five are not instantiated")
         root.check(root.find(root.overview, "costSummaryValue").text === "$1,234.56", "currency has readable thousands separators")
         root.check(!root.find(root.overview, "costPricingNotice").visible, "high pricing coverage does not warn")
         root.check(root.overview.providerMetaText(root.overview.providers[0]).indexOf("99%") >= 0,
@@ -253,7 +264,8 @@ ShellRoot {
           && root.find(root.form, "refreshMinutesFieldInput") === null, "fields on hidden pages keep no live input")
         root.savesBeforeBlankRow = root.saves
         root.check(root.find(root.overview, "costModel-9") !== null, "expanded breakdown includes models beyond the former top eight")
-        root.check(root.find(root.overview, "costModelDetails").visible, "expanded models render")
+        root.check(root.find(root.overview, "costBreakdown").count === 10 && root.find(root.overview, "costModelDisclosure").checked,
+          "expanded breakdown lists every model")
         root.overview.modelsExpanded = false
         root.check(root.find(root.overview, "costModel-9") === null, "collapsing releases model rows")
         root.check(root.find(root.form, "costSource-remote").text.indexOf("Unavailable") >= 0, "source diagnostics are available in Costs settings")
@@ -367,7 +379,7 @@ ShellRoot {
         root.form.runBackup({ action: "restore", path: root.backupFile, passphrase: "contract passphrase" },
           function(response) { root.backupReply = response })
         root.phase++
-      } else if (root.phase === 13 && root.backupReply) {
+      } else if (root.phase === 13 && root.backupReply && root.costsDone) {
         root.check(root.backupReply.ok, "the backup restores: " + JSON.stringify(root.backupReply))
         var restored = JSON.parse(root.backupReply.settings.extraKeys).openrouter.keys[0]
         var original = JSON.parse(root.saved.extraKeys).openrouter.keys[0]
@@ -378,5 +390,132 @@ ShellRoot {
       }
     }
   }
-  Timer { interval: 25000; running: true; onTriggered: { root.check(false, "timed out at phase " + root.phase + "; responses=" + root.responses + "; error=" + root.backend.fetchError + "; loading=" + root.backend.loading + "; request=" + JSON.stringify(root.backend.payload.testRequest)); Qt.quit() } }
+
+  FileView {
+    id: dimensionsFile
+    path: Quickshell.env("MODEL_USAGE_COST_DIMENSIONS_FIXTURE")
+    blockLoading: true
+  }
+
+  // Stands in for Panel's OmpActivity (omp-live.py): live omp requests as they happen.
+  QtObject {
+    id: fakeActivity
+    signal request(var event)
+    signal remoteActivity()
+    property string state: "live"
+    property real lastRequestAt: 0
+    property var recentByAccount: ({})
+    property real costSinceScan: 0
+  }
+
+  // The same scan over 30 days: 23 earlier days, then the 7 the week payload has.
+  function month() {
+    var payload = JSON.parse(JSON.stringify(root.rich))
+    payload.period = { days: 30, resolution: "day", since: "2029-12-17", until: "2030-01-15", label: "Past 30 days" }
+    var earlier = []
+    for (var i = 0; i < 23; i++) {
+      var claude = 0.3 + (i % 5) * 0.2
+      var codex = 0.1 + (i % 3) * 0.15
+      earlier.push({ start: new Date(Date.UTC(2029, 11, 17 + i)).toISOString().substring(0, 10),
+        costUsd: claude + codex, totalTokens: 400000, records: 4, pricedRecords: 4, unpricedRecords: 0, sessions: 1,
+        providers: [{ id: "claude", costUsd: claude, totalTokens: 300000 }, { id: "codex", costUsd: codex, totalTokens: 100000 }] })
+    }
+    payload.periods = earlier.concat(payload.periods)
+    return payload
+  }
+
+  // 1.9 Costs tab, data -> what is drawn: delta chip, heatmap, breakdown dimensions, isolation that
+  // rescales, bars that keep their delegates across period changes, and the live omp line.
+  Timer {
+    interval: 50
+    running: !root.costsDone
+    repeat: true
+    onTriggered: {
+      var chart = root.find(root.costs, "costChart")
+      if (root.costsPhase === 0) {
+        root.check(chart.chartMaximum > 0 && root.find(root.costs, "costSummaryValue").text === "$12.34", "the week renders its total")
+        var delta = root.find(root.costs, "costDelta")
+        root.check(delta.visible && delta.text === "▲ 18% vs previous 7 days", "the total shows its change on the previous week: " + delta.text)
+        root.check(root.costs.sourceSummary === "Local transcripts + omp on talos · live", "the footer names the sources: " + root.costs.sourceSummary)
+        root.check(root.find(root.costs, "costCacheLine").visible && root.costs.cache.text === "81% read from cache · saved $21.50",
+          "the cache line reads the totals")
+        var noPrevious = JSON.parse(JSON.stringify(root.rich))
+        noPrevious.previous = null
+        root.costs.payload = noPrevious
+        root.check(!delta.visible, "no previous window, no delta chip")
+        root.costs.payload = root.rich
+        root.costs.metric = "tokens"
+        root.check(delta.visible && delta.text === "▲ 10% vs previous 7 days", "the delta follows the metric: " + delta.text)
+        root.costs.metric = "cost"
+
+        var when = root.find(root.costs, "costWhen")
+        root.check(when.visible && when.cellCount === 168 && root.find(root.costs, "costHeatCell-167") !== null, "seven days of 24 hours")
+        when.hoveredCell = 6 * 24 + 15
+        var readout = root.find(root.costs, "costHeatReadout")
+        root.check(readout.text === "Tue 15:00 · $4.20 · 63 requests", "hovering a cell reads it out: " + readout.text)
+        when.hoveredCell = -1
+        root.check(readout.text.indexOf("Busiest: Tue 15:00") === 0, "without hover the line names the busiest hour: " + readout.text)
+
+        var dimensions = root.find(root.costs, "costBreakdownMode")
+        root.check(dimensions.visible && dimensions.options.length === 3, "Model, Project and Agent are offered")
+        root.check(root.find(root.costs, "costModel-0").name === "claude-opus-4-6", "models rank by cost")
+        dimensions.changed("project")
+        root.check(root.find(root.costs, "costModel-0") === null && root.find(root.costs, "costProject-0").name === "quotatank"
+          && root.find(root.costs, "costProject-3").name === "Other", "Project lists folders, the folded rest last")
+        dimensions.changed("agent")
+        root.check(root.find(root.costs, "costAgent-0").name === "Main sessions" && root.find(root.costs, "costAgent-1").name === "Subagents"
+          && root.find(root.costs, "costAgent-1").context === "tasks and workpools", "Agent splits main sessions from subagents")
+        dimensions.changed("model")
+        root.check(root.find(root.costs, "costModel-1").name === "gpt-5.6-sol", "Model comes back")
+
+        root.find(root.costs, "costProviders").isolateRequested("codex")
+        root.costsPhase++
+        root.costsWait = 0
+      } else if (root.costsPhase === 1 && ++root.costsWait > 14) {
+        root.check(Math.abs(chart.maxSegmentHeight("codex") - chart.plotHeight) < 0.5 && chart.maxSegmentHeight("claude") === 0,
+          "isolating a provider rescales the chart to it: " + chart.maxSegmentHeight("codex") + " of " + chart.plotHeight)
+        root.check(root.find(root.costs, "costProviderHint").text === "OpenAI Codex only · click again for all", "the header says how to go back")
+        root.find(root.costs, "costProviders").isolateRequested("codex")
+        root.costsPhase++
+        root.costsWait = 0
+      } else if (root.costsPhase === 2 && ++root.costsWait > 14) {
+        root.check(chart.maxSegmentHeight("claude") > 0 && chart.maxSegmentHeight("codex") < chart.plotHeight - 0.5,
+          "clicking again shows every provider")
+        root.keptBars = [chart.barItem("d2030-01-09"), chart.barItem("d2030-01-15")]
+        var refreshed = JSON.parse(JSON.stringify(root.rich))
+        refreshed.periods[6].providers[0].costUsd = 1.3
+        root.costs.payload = refreshed
+        root.check(chart.barItem("d2030-01-09") === root.keptBars[0] && !chart.morphing, "a routine refresh keeps every bar and morphs nothing")
+        root.costs.payload = root.month()
+        root.check(chart.barItem("d2030-01-09") === root.keptBars[0] && chart.barItem("d2030-01-15") === root.keptBars[1],
+          "bars for timestamps both periods share keep their delegates")
+        root.check(chart.barItem("d2029-12-17") !== null && chart.morphing, "the earlier days grow in")
+        root.costsPhase++
+        root.costsWait = 0
+      } else if (root.costsPhase === 3 && ++root.costsWait > 14) {
+        root.check(chart.barCount === 30 && root.find(root.costs, "costHistoryGap-29") !== null, "thirty days, newest on the right")
+        root.costs.payload = root.rich
+        root.check(chart.barItem("d2029-12-17") === null && chart.barItem("d2030-01-15") === root.keptBars[1],
+          "back to the week, the earlier days leave and the shared ones stay")
+        root.costsPhase++
+        root.costsWait = 0
+      } else if (root.costsPhase === 4 && ++root.costsWait > 14) {
+        root.check(chart.barCount === 7, "bars that left are released after they shrink away")
+        var scan = Date.parse(root.rich.generatedAt) / 1000
+        fakeActivity.request({ type: "request", provider: "anthropic", model: "claude-opus-4-6", costUsd: 0.42, tokens: 1200,
+          subagent: false, at: scan + 60 })
+        fakeActivity.request({ type: "request", provider: "claude", costUsd: 5, tokens: 10, subagent: false, at: scan - 60 })
+        root.check(root.find(root.costs, "costLiveLine").shown
+          && root.find(root.costs, "costLiveText").text === "Live from omp · +$0.42 since the last scan",
+          "a live omp request shows the live line: " + root.find(root.costs, "costLiveText").text)
+        root.check(root.find(root.costs, "costSummaryValue").text === "$12.76", "the total includes requests after the scan, not before it")
+        root.check(Math.abs(chart.buckets[6].raw.claude - 1.52) < 0.000001, "today's bar grows with the request")
+        root.costs.payload = JSON.parse(JSON.stringify(root.rich))
+        root.check(!root.find(root.costs, "costLiveLine").shown && root.find(root.costs, "costSummaryValue").text === "$12.34",
+          "the next scan takes over from the live figures")
+        root.costsDone = true
+      }
+    }
+  }
+  Timer { interval: 25000; running: true; onTriggered: { root.check(false, "timed out at phase " + root.phase + "; costs phase " + root.costsPhase + "; responses=" + root.responses + "; error=" + root.backend.fetchError + "; loading=" + root.backend.loading + "; request=" + JSON.stringify(root.backend.payload.testRequest)); Qt.quit() } }
 }

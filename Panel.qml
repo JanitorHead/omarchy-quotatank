@@ -587,9 +587,10 @@ Ui.Panel {
     return backend.loading ? "Refreshing…" : "Waiting for first refresh"
   }
 
-  // A countdown, written so it cannot be read as a clock time beside "Updated 14:56".
+  // A countdown, written so it cannot be read as a clock time beside "Updated 14:56". Costs names its
+  // sources there instead.
   function footerRight() {
-    if (viewMode === "costs") return ""
+    if (viewMode === "costs") return costsView.sourceSummary
     if (backend.nextRefreshAt <= 0) return ""
     var seconds = Math.max(0, Math.floor((backend.nextRefreshAt - nowMs) / 1000))
     if (seconds < 60) return "Next refresh in " + Math.max(1, seconds) + " s"
@@ -1376,6 +1377,7 @@ Ui.Panel {
             urgent: root.urgent
             surface: root.surface
             fontFamily: root.fontFamily
+            clockFormat: root.tickTimeFormat
             onPeriodRequested: function(days) { costBackend.selectPeriod(days) }
             onMenuClosed: Qt.callLater(function() {
               if (root.opened && !root.configuring && !resetBackend.active)

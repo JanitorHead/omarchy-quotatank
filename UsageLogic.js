@@ -1819,3 +1819,314 @@ function decodeCostPrices(raw) {
   encodeCostPrices(rows)
   return rows
 }
+
+// ---- 1.9 QmlCosts ----
+
+// Costs tab (DESIGN §4). Labels stay English like the rest of the panel; clock times are formatted by
+// the QML caller in the user's clock format.
+var COST_DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+var COST_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+var COST_AGENT_LABELS = {
+  main: { name: "Main sessions", context: "what you type" },
+  subagent: { name: "Subagents", context: "tasks and workpools" }
+}
+
+// Whole number with thousands separators: 1375 -> "1,375".
+function costCount(value) {
+  var amount = Math.round(Number(value) || 0)
+  return (amount < 0 ? "-" : "") + String(Math.abs(amount)).replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+}
+
+function costRequestsText(count) {
+  var amount = Math.max(0, Math.round(Number(count) || 0))
+  return costCount(amount) + (amount === 1 ? " request" : " requests")
+}
+
+// A bucket start as a local Date. A day ("2030-01-09") is that calendar day where the user is, not
+// UTC midnight; a timestamp keeps its instant. Null when unreadable.
+function costBucketDate(start) {
+  var text = String(start || "")
+  var day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text)
+  if (day) return new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3]))
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(text)) return null
+  var date = new Date(text)
+  return isNaN(date.getTime()) ? null : date
+}
+
+// The chart keys a bar by its time, so it keeps its delegate across refreshes and period switches.
+// Days key by date. The 24-hour window rolls with every scan, so an hour bucket keys by the clock
+// hour it starts in: a rescan ten minutes later lands on the same bars. "" when unreadable.
+function costBucketKey(start) {
+  var text = String(start || "")
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return "d" + text
+  var date = costBucketDate(text)
+  return date ? "h" + Math.floor(date.getTime() / 3600000) : ""
+}
+
+function costDayName(date) {
+  return date ? COST_DAY_NAMES[date.getDay()] : ""
+}
+
+function costMonthDay(date) {
+  return date ? COST_MONTH_NAMES[date.getMonth()] + " " + date.getDate() : ""
+}
+
+// The span a total covers, for "vs previous …".
+function costPeriodPhrase(days) {
+  var count = Math.round(Number(days) || 0)
+  return count === 1 ? "24 h" : count + " days"
+}
+
+// A row's figure for the chosen metric: tokens always count; cost is null when nothing was priced.
+function costMetricValue(row, metric) {
+  if (!row) return null
+  if (metric === "tokens") return Math.max(0, Number(row.totalTokens) || 0)
+  if (row.costUsd === null || row.costUsd === undefined) return null
+  var amount = Number(row.costUsd)
+  return isFinite(amount) ? Math.max(0, amount) : null
+}
+
+// Change against the equal window just before, in whole percent. Null when either side is missing
+// or the earlier window was empty, where a ratio means nothing.
+function costDelta(current, previous) {
+  if (current === null || current === undefined || previous === null || previous === undefined) return null
+  var now = Number(current)
+  var before = Number(previous)
+  if (!isFinite(now) || !isFinite(before) || now < 0 || before <= 0) return null
+  var percent = Math.round((now / before - 1) * 100)
+  return { percent: percent, direction: percent > 0 ? 1 : (percent < 0 ? -1 : 0) }
+}
+
+function costDeltaText(delta, days) {
+  if (!delta) return ""
+  var span = costPeriodPhrase(days)
+  if (delta.direction === 0) return "Same as previous " + span
+  return (delta.direction > 0 ? "▲ " : "▼ ") + costCount(Math.abs(delta.percent)) + "% vs previous " + span
+}
+
+// Breakdown dimensions the payload can fill: models always, projects and agents when present.
+function costBreakdownModes(payload) {
+  var modes = [{ value: "model", label: "Model" }]
+  if (payload && listOrEmpty(payload.projects).length > 0) modes.push({ value: "project", label: "Project" })
+  if (payload && listOrEmpty(payload.agents).length > 0) modes.push({ value: "agent", label: "Agent" })
+  return modes
+}
+
+// The pricing note a model row has always carried.
+function costModelNote(row) {
+  if (!row) return ""
+  if (row.costUsd === null || row.costUsd === undefined) return "pricing unavailable"
+  if (Number(row.customPricedRecords || 0) > 0) return "custom prices"
+  if (Number(row.basePricedRecords || 0) > 0) return "base rates"
+  if (row.costSource === "providerReported") return "reported cost"
+  return ""
+}
+
+// Rows for the breakdown in one dimension, largest first for the metric (unpriced rows last, the
+// folded "Other" project always last), each with a unique key and its share of the largest row.
+function costBreakdownRows(payload, mode, metric) {
+  var source = mode === "project" ? listOrEmpty(payload && payload.projects)
+    : mode === "agent" ? listOrEmpty(payload && payload.agents) : listOrEmpty(payload && payload.models)
+  var rows = []
+  var seen = {}
+  for (var i = 0; i < source.length; i++) {
+    var item = source[i]
+    if (!item || typeof item !== "object") continue
+    var row = { key: "", name: "", context: "", provider: "", value: costMetricValue(item, metric),
+      tokens: Math.max(0, Number(item.totalTokens) || 0), last: false, fraction: 0 }
+    if (mode === "project") {
+      row.last = String(item.id) === "other"
+      row.key = "p:" + String(item.id || item.name || i)
+      row.name = row.last ? "Other" : String(item.name || "Unknown folder")
+      row.context = costRequestsText(item.records)
+    } else if (mode === "agent") {
+      var label = Object.prototype.hasOwnProperty.call(COST_AGENT_LABELS, String(item.id))
+        ? COST_AGENT_LABELS[String(item.id)] : null
+      row.key = "a:" + String(item.id || i)
+      row.name = label ? label.name : String(item.id || "Agent")
+      row.context = label ? label.context : costRequestsText(item.records)
+    } else {
+      var note = costModelNote(item)
+      var known = localProvider(item.provider)
+      row.key = "m:" + String(item.provider || "") + "/" + String(item.model || "")
+      row.name = String(item.model || "Unknown model")
+      row.provider = String(item.provider || "")
+      row.context = (known ? known.short : String(item.providerName || item.provider || "")) + (note ? " · " + note : "")
+    }
+    if (seen[row.key]) row.key += "#" + i
+    seen[row.key] = true
+    rows.push(row)
+  }
+  rows.sort(function(left, right) {
+    if (left.last !== right.last) return left.last ? 1 : -1
+    var a = left.value === null ? -1 : left.value
+    var b = right.value === null ? -1 : right.value
+    if (a !== b) return b - a
+    if (left.tokens !== right.tokens) return right.tokens - left.tokens
+    return left.name < right.name ? -1 : (left.name > right.name ? 1 : 0)
+  })
+  var peak = 0
+  for (var j = 0; j < rows.length; j++) if (rows[j].value !== null) peak = Math.max(peak, rows[j].value)
+  for (var k = 0; k < rows.length; k++)
+    rows[k].fraction = peak > 0 && rows[k].value !== null ? rows[k].value / peak : 0
+  return rows
+}
+
+// The "When" grid: 7 local days x 24 hours from the payload's `heatmap`, oldest day first. Cells keep
+// their cost (null = only unpriced use) and requests; `level` (0-1, square-root scale so one busy hour
+// does not wash out the rest) follows cost, or requests for the Tokens metric, which the grid lacks.
+// Null when the payload has no well-formed grid.
+function costHeatmapGrid(heatmap, metric) {
+  if (!heatmap || typeof heatmap !== "object") return null
+  var days = listOrEmpty(heatmap.days)
+  var costs = listOrEmpty(heatmap.cost)
+  var records = listOrEmpty(heatmap.records)
+  if (days.length !== 7 || costs.length !== 7 || records.length !== 7) return null
+  var cells = []
+  var dayNames = []
+  var peak = 0
+  var busiest = -1
+  for (var d = 0; d < 7; d++) {
+    var costRow = listOrEmpty(costs[d])
+    var recordRow = listOrEmpty(records[d])
+    if (costRow.length !== 24 || recordRow.length !== 24) return null
+    dayNames.push(costDayName(costBucketDate(days[d])))
+    for (var h = 0; h < 24; h++) {
+      var raw = costRow[h]
+      var amount = raw === null || raw === undefined || !isFinite(Number(raw)) ? null : Math.max(0, Number(raw))
+      var count = Math.max(0, Math.round(Number(recordRow[h]) || 0))
+      var weight = metric === "tokens" ? count : (amount === null ? 0 : amount)
+      cells.push({ day: d, hour: h, dayName: dayNames[d], cost: amount, records: count, weight: weight,
+        unpriced: amount === null && count > 0, level: 0 })
+      if (weight > peak) {
+        peak = weight
+        busiest = cells.length - 1
+      }
+    }
+  }
+  for (var i = 0; i < cells.length; i++)
+    cells[i].level = peak > 0 && cells[i].weight > 0 ? Math.sqrt(cells[i].weight / peak) : 0
+  return { cells: cells, dayNames: dayNames, busiest: busiest }
+}
+
+// "Tue 15:00 · $4.20 · 63 requests"; `hourLabel` comes formatted in the user's clock format.
+function costHeatmapText(cell, hourLabel) {
+  if (!cell) return ""
+  var when = cell.dayName + " " + hourLabel
+  if (cell.records === 0 && !(cell.cost > 0)) return when + " · no requests"
+  return when + " · " + (cell.cost === null ? "not priced" : formatUsd(cell.cost)) + " · " + costRequestsText(cell.records)
+}
+
+// "92% read from cache · saved $3,412.00": the share of input tokens served from cache, from the
+// totals any source reports, also split as `percent` and `label` for the panel's value column.
+// Null without cached input.
+function costCacheSummary(totals) {
+  if (!totals) return null
+  var cached = Number(totals.cachedInputTokens)
+  if (!isFinite(cached) || cached <= 0) return null
+  var input = cached + Math.max(0, Number(totals.uncachedInputTokens) || 0)
+    + Math.max(0, Number(totals.cacheCreationTokens) || 0)
+  var share = Math.min(1, cached / input)
+  var percent = Math.round(share * 100)
+  if (percent >= 100 && share < 1) percent = 99
+  var label = "read from cache"
+  var saved = Number(totals.cacheSavingsUsd)
+  if (totals.cacheSavingsUsd !== null && totals.cacheSavingsUsd !== undefined && isFinite(saved) && saved > 0)
+    label += " · saved " + formatUsd(saved)
+  return { share: share, percent: percent + "%", label: label, text: percent + "% " + label }
+}
+
+// Whether the scan the totals come from reads omp (local sessions, or omp stats on another computer),
+// so live omp requests belong on top of it.
+function costScanHasOmp(sources) {
+  var list = listOrEmpty(sources)
+  for (var i = 0; i < list.length; i++) {
+    var source = list[i]
+    if (!source) continue
+    if (source.id === "omp-remote" && source.status === "ok") return true
+    if ((source.id === "local-omp" || source.provider === "omp") && source.included === true) return true
+  }
+  return false
+}
+
+// Footer line naming where the totals come from: "Local transcripts + omp on talos · live".
+function costSourceSummary(sources, live) {
+  var list = listOrEmpty(sources)
+  var local = false
+  var servers = []
+  var omp = ""
+  for (var i = 0; i < list.length; i++) {
+    var source = list[i]
+    if (!source || typeof source !== "object") continue
+    if (source.id === "omp-remote") {
+      var host = String(source.host || "").replace(/:\d+$/, "") || "another computer"
+      if (source.status === "ok") omp = "omp on " + host
+      else if (source.status === "error") omp = "omp on " + host + " unavailable"
+      continue
+    }
+    if (source.included !== true) continue
+    if (source.kind === "local") local = true
+    else if (source.kind === "t3") {
+      var name = String(source.name || "").split(" · ")[0]
+      if (name !== "" && servers.indexOf(name) < 0) servers.push(name)
+    }
+  }
+  var parts = []
+  if (local) parts.push("Local transcripts")
+  for (var j = 0; j < servers.length; j++) parts.push("T3 on " + servers[j])
+  if (omp !== "") parts.push(omp)
+  if (parts.length > 3) parts = [parts[0], (parts.length - 1) + " more sources"]
+  var text = parts.join(" + ")
+  return text !== "" && live ? text + " · live" : text
+}
+
+// omp names providers its own way; the chart uses Quotatank ids (cost-fetch maps them the same way).
+function costOmpProvider(provider) {
+  var id = String(provider || "")
+  if (id === "anthropic") return "claude"
+  if (id === "openai-codex") return "codex"
+  if (id.indexOf("opencode") === 0) return "opencode"
+  return id
+}
+
+// Folds one live omp request into what happened since the scan: cost and tokens per provider, the
+// request count and the newest time. Requests at or before the scan are already in it; providers
+// the scan does not chart are skipped, so live growth never shows spend the next scan will not.
+function costLiveFold(state, event, scanSeconds, providerIds) {
+  var previous = state || {}
+  var next = { cost: {}, tokens: {}, requests: Number(previous.requests) || 0, lastAt: Number(previous.lastAt) || 0 }
+  var key
+  for (key in previous.cost || {}) next.cost[key] = previous.cost[key]
+  for (key in previous.tokens || {}) next.tokens[key] = previous.tokens[key]
+  if (!event || typeof event !== "object") return next
+  var at = Number(event.at)
+  var provider = costOmpProvider(event.provider)
+  if (!isFinite(at) || at <= Number(scanSeconds) || listOrEmpty(providerIds).indexOf(provider) < 0) return next
+  var cost = Number(event.costUsd)
+  if (event.costUsd !== null && event.costUsd !== undefined && isFinite(cost) && cost > 0)
+    next.cost[provider] = (next.cost[provider] || 0) + cost
+  var tokens = Number(event.tokens)
+  if (isFinite(tokens) && tokens > 0) next.tokens[provider] = (next.tokens[provider] || 0) + tokens
+  next.requests += 1
+  next.lastAt = Math.max(next.lastAt, at)
+  return next
+}
+
+// Brings a keyed list to `keys` order with moves and inserts only, so the delegates of kept keys
+// survive (object constancy in the cost chart, rows sliding to their new place in lists). `list`
+// adapts a ListModel: count(), keyAt(index), move(from, to), insert(index, key). Entries `keys` no
+// longer names end up after keys.length, in their previous relative order, for the caller to drop.
+function syncKeyedOrder(list, keys) {
+  for (var target = 0; target < keys.length; target++) {
+    var found = -1
+    for (var i = target; i < list.count(); i++) {
+      if (list.keyAt(i) === keys[target]) {
+        found = i
+        break
+      }
+    }
+    if (found === target) continue
+    if (found > target) list.move(found, target)
+    else list.insert(target, keys[target])
+  }
+}
