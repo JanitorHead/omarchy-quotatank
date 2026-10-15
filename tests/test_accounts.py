@@ -193,6 +193,20 @@ class ClaudeLoginTests(AccountsTestCase):
         self.assertNotIn("primary-token", json.dumps(result))
         self.assertNotIn("work-token", json.dumps(result))
 
+    def test_logins_carry_their_origin_and_omarchy_switching_rule(self) -> None:
+        work = self.add_work_login()
+        self.registry.joinpath("claude.json").write_text(json.dumps({
+            "switch": "auto", "threshold": 120, "active": "work",
+            "accounts": [{"id": "work", "label": "Work", "home": str(work)}]}))
+        with mock.patch.object(usage, "http_json", side_effect=self.fake_usage):
+            result = usage.fetch_claude_accounts(5)
+        self.assertEqual([account["origin"] for account in result["accounts"]], ["omarchy", "omarchy"])
+        self.assertEqual(result["accountSwitch"], {"mode": "auto", "threshold": 100})
+        self.assertEqual(result["source"], "Claude OAuth usage API")
+
+    def test_an_unknown_switching_mode_reads_as_omarchys_default(self) -> None:
+        self.assertEqual(usage.registry_switch({"switch": "sometimes"}), {"mode": "manual", "threshold": 95})
+
     def test_a_login_that_cannot_be_read_fails_only_itself(self) -> None:
         work = self.add_work_login()
         (work / ".credentials.json").unlink()

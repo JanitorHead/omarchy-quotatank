@@ -36,6 +36,11 @@ This contract covers live subscription limits only. The on-demand transcript/cos
       "history": {
         "h24": [0, 0, 42],
         "d7": [0, 42]
+      },
+      "activity": {
+        "lastIncreaseAt": 1893455100,
+        "lastDelta": 3.0,
+        "lastReadingAt": 1893456000
       }
     }
   ],
@@ -76,13 +81,17 @@ The top-level `source` identifies the selected source. The collector lists accou
 
 Quota requests use `GET /v0/management/auth-files` and `POST /v0/management/api-call`, with `$TOKEN$` substitution. Fixed Claude, Codex, and Kimi usage URLs use upstream GET; Antigravity’s `retrieveUserQuotaSummary` uses a read-only upstream POST containing the managed account’s project ID. Antigravity model-group buckets and Codex code-review/additional windows use the existing window contract. Missing Antigravity quota fractions produce `used: null` and `remaining: null`, with no meter.
 
-History uses a separate `cliproxy-<SHA-256 server prefix>/history.json` directory for each normalized server URL; it contains no server address, account identifier, management key, or provider token. It stores provider pool summaries, including dynamically discovered providers.
+History uses a separate `cliproxy-<SHA-256 server prefix>/history.json` directory for each normalized server URL; it contains no server address, management key, or provider token. It stores provider pool summaries, including dynamically discovered providers, and each managed account's own series under its opaque `accountId`.
 
 Percentages are numbers in the inclusive range 0–100. `resetsAt` is a Unix timestamp in seconds or `null`. `windowSeconds` is the known window duration or `null`. Additional windows require no UI schema change.
 
-Each window of a provider whose refresh succeeded may carry `samples`: rows of `[unixSeconds, used]` for that window, kept for seven days. The desktop uses them for pacing. Samples are not attached to windows of failed refreshes.
+Each window of a provider or account whose refresh succeeded may carry `samples`: rows of `[unixSeconds, used]` for that window, kept for seven days. The desktop uses them for pacing. Samples are not attached to windows of failed refreshes.
 
 The provider history chart records the binding active quota window: the highest `used` percentage among the provider's current windows. For proxy pools this is independent of the last-used menubar account and prevents an idle model-specific window from hiding usage in another active window. Pacing never uses this maximum; it reads each window's own `samples`.
+
+Every entry in `accounts` keeps series of its own, recorded exactly like its provider's: its own `history` buckets and its own window `samples`. They live in the same `history.json` under `<providerId>@<accountId>`; the file stays at schema 2, so earlier files load unchanged. A provider keeps series for at most 64 accounts: the accounts of the current reading first, in order, then the most recently read ones. Accounts beyond that carry no `samples` or `activity`, and their `history` stays empty. An account's series is dropped once it has gone seven days without a successful reading. When the file would grow past the 2 MiB ceiling it is read back with, the least recently read account series are dropped first, so account history never costs the provider history.
+
+Each provider, and each account within that limit, carries `activity`, computed from its samples on every refresh. `lastIncreaseAt` is when any of its windows last rose (Unix seconds), `lastDelta` the largest rise in percentage points among the windows that rose then, and `lastReadingAt` when its last successful reading was taken. A fall, such as a window reset, is not a rise. A field is `null` while it is unknown within the seven days of samples: the rise fields until a window's reading is higher than its previous one, `lastReadingAt` until a reading succeeds. A provider with accounts reports the latest activity of its accounts, because its own fields can switch from one account to another (the active login, the pool's best account) without any use.
 
 `credits`, when present, has this stable shape:
 
@@ -121,6 +130,8 @@ Omarchy logins come from `${XDG_STATE_HOME:-~/.local/state}/omarchy/agents/accou
 
 Logins and keys are read with at most four concurrent reads under one shared deadline. A failing login or key keeps its own `status` and error fields and does not affect the others. Tokens and keys are never written to the output.
 
+Each entry in `accounts` carries `origin`, the kind of reading: `omarchy` (an Omarchy login), `key` (an API key, primary or extra), `signin` (the provider's single native reading), `omp` (an account read from omp), or `proxy` (a Fusebox or CLIProxyAPI account). `source` keeps its meaning: a human description of the API that answered. A provider with two or more Omarchy logins also carries `accountSwitch` from the registry: `{"mode": "manual" | "auto", "threshold": 50..100}`. `auto` means Omarchy moves new sessions to the account with the most headroom at the threshold, `manual` that it only notifies. A missing or invalid value reads as Omarchy's default, `manual` at 95.
+
 ## Backup helper
 
 `scripts/backup.py` reads one JSON request line on stdin and writes one JSON line: `{"ok": true, …}` or `{"ok": false, "error": "<fixed message>"}` (exit 1). Actions:
@@ -131,7 +142,7 @@ Logins and keys are read with at most four concurrent reads under one shared dea
 
 ## Resource ceilings
 
-Provider HTTP bodies and local JSON inputs are read with a 2 MiB ceiling before parsing. An oversized HTTP response becomes a provider-local `malformed` error and cannot suppress healthy providers. Codex app-server output is read incrementally in bounded chunks with a 2 MiB ceiling per JSON-RPC line; the same request deadline remains active even when a line is incomplete.
+Provider HTTP bodies and local JSON inputs are read with a 2 MiB ceiling before parsing. An oversized HTTP response becomes a provider-local `malformed` error and cannot suppress healthy providers. Codex app-server output is read incrementally in bounded chunks with a 2 MiB ceiling per JSON-RPC line; the same request deadline remains active even when a line is incomplete. `history.json` keeps account series only while the file stays within its 2 MiB ceiling, at most 64 per provider.
 
 CLIProxyAPI management responses have the same 2 MiB ceiling. The management key file is capped at 8 KiB, checked for ownership and private permissions, and opened without following symlinks or blocking on FIFOs. After listing accounts, discovery covers at most 32 providers and 32 accounts per provider, with at most four provider groups running, four account workers per group, and a shared timeout budget; queued checks do not receive fresh timeout budgets. The QML process timeout remains the final wall-clock bound. TLS verification stays enabled and management redirects are rejected.
 
