@@ -1,12 +1,14 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls as Controls
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui as Ui
 import "UsageLogic.js" as UsageLogic
 
+// The Costs tab (DESIGN §4): controls, the total with its change against the previous window, the
+// live omp line, the chart, providers, breakdown, when, cache and token details. Panel's footer shows
+// `sourceSummary` beside the update time.
 Item {
   id: root
 
@@ -17,6 +19,15 @@ Item {
   property string metric: "cost"
   property bool tokenDetailsExpanded: false
   property bool modelsExpanded: false
+  property string breakdownMode: "model"
+  // Hovering a provider row dims the others in the chart; clicking isolates and rescales to it.
+  property string focusedProvider: ""
+  property string isolatedProvider: ""
+  property bool isolateHintSeen: false
+  // Panel's Motion (DESIGN §1) and OmpActivity (live omp requests); either may be null.
+  property var motion: null
+  property var ompActivity: null
+  property string clockFormat: "HH:mm"
   readonly property bool menuOpen: metricMenu.menuOpen
   readonly property int displayedPeriodDays: payload && payload.period && Number(payload.period.days) > 0
     ? Number(payload.period.days) : periodDays
@@ -33,14 +44,86 @@ Item {
   readonly property var models: payload ? UsageLogic.listOrEmpty(payload.models) : []
   readonly property var periods: payload ? UsageLogic.listOrEmpty(payload.periods) : []
   readonly property bool hasResult: !!(payload && payload.generatedAt && periods.length > 0)
-  readonly property real chartMaximum: maximumPeriodValue()
+  readonly property bool hourly: displayedPeriodDays === 1
+  readonly property real chartMaximum: chart.chartMaximum
+  // Chart series in the payload's provider order: brand colours (the cost chart always uses them),
+  // theme colours for sources without one.
+  readonly property var series: {
+    var list = []
+    var spare = 0
+    var fallbacks = [Commons.Color.accent, alpha(foreground, 0.7), alpha(Commons.Color.accent, 0.5), alpha(foreground, 0.4)]
+    for (var i = 0; i < providers.length; i++) {
+      var id = String(providers[i] && providers[i].id || "")
+      if (id === "") continue
+      var brand = UsageLogic.providerAccent(id, "")
+      list.push({ id: id, name: String(providers[i].name || id), color: brand !== "" ? brand : fallbacks[spare++ % fallbacks.length] })
+    }
+    return list
+  }
+  readonly property var seriesColors: {
+    var map = {}
+    for (var i = 0; i < series.length; i++) map[series[i].id] = series[i].color
+    return map
+  }
+  readonly property var breakdownModes: UsageLogic.costBreakdownModes(payload)
+  readonly property string shownBreakdownMode: breakdownModes.some(function(mode) { return mode.value === root.breakdownMode })
+    ? breakdownMode : "model"
+  // Requests omp reported since the scan (UsageLogic.costLiveFold); null until one arrives.
+  property var live: null
+  property real nowSeconds: Date.now() / 1000
+  readonly property bool scanHasOmp: UsageLogic.costScanHasOmp(payload ? payload.sources : [])
+  readonly property bool liveActive: hasResult && !!live && live.requests > 0 && nowSeconds - live.lastAt <= 120
+  readonly property var delta: UsageLogic.costDelta(currentTotal(),
+    payload && payload.previous ? (metric === "tokens" ? payload.previous.totalTokens : payload.previous.costUsd) : null)
+  readonly property string deltaText: hasResult ? UsageLogic.costDeltaText(delta, displayedPeriodDays) : ""
+  readonly property var cache: UsageLogic.costCacheSummary(totals)
+  readonly property string sourceSummary: hasResult
+    ? UsageLogic.costSourceSummary(payload.sources, !!ompActivity && ompActivity.state === "live") : ""
+  // Providers and breakdown share their bar and value columns, so both lists line up.
+  readonly property real valueColumnWidth: Math.max(Style.space(40), providerList.widestValue, breakdown.widestValue)
+  readonly property real barColumnWidth: Style.space(72)
+  readonly property var providerRows: {
+    var values = []
+    var total = 0
+    for (var i = 0; i < providers.length; i++) {
+      var row = providers[i] || {}
+      var base = UsageLogic.costMetricValue(row, metric)
+      var extra = liveAmount(String(row.id || ""))
+      var value = unavailable(row) ? null : base === null ? (extra > 0 ? extra : null) : base + extra
+      values.push(value)
+      if (value !== null) total += value
+    }
+    var rows = []
+    for (var j = 0; j < providers.length; j++) {
+      var item = providers[j] || {}
+      var id = String(item.id || "")
+      if (id === "") continue
+      rows.push({
+        id: id, name: String(item.name || id), color: seriesColors[id] || foreground,
+        valueText: unavailable(item) ? "—" : format(values[j]),
+        share: total > 0 && values[j] !== null ? values[j] / total : 0,
+        meta: unavailable(item) ? providerMetaText(item) : ""
+      })
+    }
+    return rows
+  }
 
   signal periodRequested(int days)
   signal menuClosed()
 
   implicitHeight: content.implicitHeight
   onMetricChanged: tokenDetailsExpanded = metric === "tokens"
-  onVisibleChanged: if (!visible) closeMenu()
+  onVisibleChanged: if (!visible) {
+    closeMenu()
+    focusedProvider = ""
+  }
+  // A new scan already contains everything before it.
+  onPayloadChanged: live = null
+  onProvidersChanged: {
+    var known = providers.some(function(row) { return row && String(row.id) === root.isolatedProvider })
+    if (!known) isolatedProvider = ""
+    if (!providers.some(function(row) { return row && String(row.id) === root.focusedProvider })) focusedProvider = ""
+  }
 
   function openMetricMenu() { metricMenu.openMenu() }
   function closeMenu() { metricMenu.closeMenu() }
@@ -54,36 +137,65 @@ Item {
     return Math.max(0, Math.min(1, Number(row.pricedRecords || 0) / Number(row.records)))
   }
 
-  function providerColor(providerId) {
-    return UsageLogic.providerAccent(providerId, foreground)
+  function unavailable(row) {
+    return !!row && (row.status === "missing" || row.status === "failed" || row.historyStatus === "unavailable")
   }
 
-  function periodValue(period) {
-    if (!period) return 0
-    if (metric === "tokens") return Math.max(0, Number(period.totalTokens) || 0)
-    return period.costUsd === null ? 0 : Math.max(0, Number(period.costUsd) || 0)
-  }
-
-  function maximumPeriodValue() {
-    var maximum = 0
-    for (var i = 0; i < periods.length; i++) maximum = Math.max(maximum, periodValue(periods[i]))
-    return maximum
-  }
-
-  function axisLabel(period) {
-    if (!period) return ""
-    if (displayedPeriodDays === 1) {
-      var date = new Date(String(period.start || ""))
-      return isNaN(date.getTime()) ? "" : Qt.formatTime(date, "HH:mm")
-    }
-    var value = String(period.start || "")
-    return value.length >= 10 ? value.substring(5).replace("-", "/") : value
+  function format(value) {
+    return metric === "tokens" ? UsageLogic.formatTokens(value) : UsageLogic.formatUsd(value)
   }
 
   function primaryValue(row) {
-    if (row && (row.status === "missing" || row.status === "failed" || row.historyStatus === "unavailable")) return "—"
+    if (unavailable(row)) return "—"
     return metric === "tokens" ? UsageLogic.formatTokens(row ? row.totalTokens : 0)
       : UsageLogic.formatUsd(row ? row.costUsd : null)
+  }
+
+  // Live omp spend since the scan for one provider (or every provider), in the chosen metric.
+  function liveAmount(providerId) {
+    if (!live || !scanHasOmp) return 0
+    var values = metric === "tokens" ? live.tokens : live.cost
+    if (providerId !== undefined) return Number(values[providerId] || 0)
+    var sum = 0
+    for (var id in values) sum += Number(values[id] || 0)
+    return sum
+  }
+
+  function currentTotal() {
+    if (unavailable(totals)) return null
+    var base = UsageLogic.costMetricValue(totals, metric)
+    return base === null ? null : base + liveAmount()
+  }
+
+  function totalText() {
+    var base = primaryValue(totals)
+    if (base === "—" || liveAmount() <= 0) return base
+    return format(currentTotal())
+  }
+
+  function liveText() {
+    var amount = liveAmount()
+    if (amount <= 0) return "Live from omp"
+    return "Live from omp · +" + (metric === "tokens" ? UsageLogic.formatTokens(amount) + " tokens" : UsageLogic.formatUsd(amount))
+      + " since the last scan"
+  }
+
+  function foldLive(event) {
+    if (!hasResult || !scanHasOmp) return
+    var scanSeconds = Date.parse(String(payload.generatedAt)) / 1000
+    if (!isFinite(scanSeconds)) return
+    var next = UsageLogic.costLiveFold(live, event, scanSeconds, series.map(function(entry) { return entry.id }))
+    if (next.requests === (live ? live.requests : 0)) return
+    live = next
+    nowSeconds = Date.now() / 1000
+    liveExpiry.restart()
+  }
+
+  function toggleIsolation(providerId) {
+    if (providers.length < 2) return
+    isolateHintSeen = true
+    focusedProvider = ""
+    isolatedProvider = isolatedProvider === providerId ? "" : providerId
   }
 
   function providerMetaText(row) {
@@ -93,7 +205,7 @@ Item {
     if (row.historyStatus === "unavailable") return "History unavailable"
     return UsageLogic.formatTokens(row.totalTokens) + " tokens"
       + (Number(row.records || 0) > 0
-        ? " · " + pricingPercent(row) + " of responses priced" : "")
+        ? " · " + pricingPercent(row) + " of requests priced" : "")
   }
 
   function pricingPercent(row) {
@@ -105,18 +217,45 @@ Item {
   function pricingNotice() {
     if (!lowPricingCoverage) return ""
     if (Number(totals.pricedRecords || 0) === 0) return "Pricing unavailable · tokens are still included"
-    return "Incomplete estimate · " + pricingPercent(totals) + " of responses priced"
+    return "Incomplete estimate · " + pricingPercent(totals) + " of requests priced"
   }
 
+  // The period behind the figures, which can differ from the selected tab while a new scan runs.
   function summaryDetail() {
     var records = Number(totals.records || 0)
     var parts = [displayedPeriodDays === 1 ? "24 hours" : displayedPeriodDays + " days",
-      records.toLocaleString(Qt.locale("en_US"), "f", 0) + " responses"]
+      UsageLogic.costRequestsText(records)]
     if (totals.sessions !== null && totals.sessions !== undefined)
-      parts.push(Number(totals.sessions).toLocaleString(Qt.locale("en_US"), "f", 0) + " sessions")
+      parts.push(UsageLogic.costCount(totals.sessions) + (Number(totals.sessions) === 1 ? " session" : " sessions"))
     return parts.join(" · ")
   }
 
+  function summaryLine() {
+    var requests = UsageLogic.costRequestsText(Number(totals.records || 0) + (live && scanHasOmp ? live.requests : 0))
+    return (metric === "cost" ? "Estimated API value, not subscription spend" : "Tokens processed, cache reads included")
+      + " · " + requests
+  }
+
+  function chartRange() {
+    if (periods.length === 0) return ""
+    if (hourly) return "last 24 hours"
+    var first = UsageLogic.costBucketDate(periods[0].start)
+    var last = UsageLogic.costBucketDate(periods[periods.length - 1].start)
+    return first && last ? UsageLogic.costMonthDay(first) + " – " + UsageLogic.costMonthDay(last) : ""
+  }
+
+  Connections {
+    target: root.ompActivity
+    ignoreUnknownSignals: true
+    function onRequest(event) { root.foldLive(event) }
+  }
+
+  // Ends the live line two minutes after the last request; one shot per request, never a loop.
+  Timer {
+    id: liveExpiry
+    interval: Math.max(1000, root.live ? Math.ceil((root.live.lastAt + 121) * 1000 - Date.now()) : 1000)
+    onTriggered: root.nowSeconds = Date.now() / 1000
+  }
 
   Column {
     id: content
@@ -132,6 +271,7 @@ Item {
         id: metricMenu
         objectName: "costMetricMenu"
         anchors.left: parent.left
+        anchors.verticalCenter: parent.verticalCenter
         width: Math.min(implicitWidth, Math.max(0, costControls.width - periodSwitch.width - Style.spacing.md))
         options: [
           { value: "cost", label: "API estimate" },
@@ -150,6 +290,7 @@ Item {
         id: periodSwitch
         objectName: "costPeriodTabs"
         anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
         options: [
           { value: "1", label: "24H" },
           { value: "7", label: "7D" },
@@ -159,6 +300,7 @@ Item {
         foreground: root.foreground
         fontFamily: root.fontFamily
         fontSize: Style.font.caption
+        motion: root.motion
         onChanged: function(value) { root.periodRequested(Number(value)) }
       }
     }
@@ -194,6 +336,7 @@ Item {
         anchors.rightMargin: errorCard.contentRightInset
         anchors.topMargin: errorCard.contentTopInset
         text: root.errorText
+        textFormat: Text.PlainText
         color: root.urgent
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
@@ -206,29 +349,68 @@ Item {
       width: parent.width
       spacing: Style.spacing.labelGap
 
-      Text {
+      Item {
         width: parent.width
-        objectName: "costSummaryValue"
-        text: root.primaryValue(root.totals)
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.display
-        font.weight: Font.DemiBold
+        implicitHeight: Math.max(total.implicitHeight, deltaChip.visible ? deltaChip.height : 0)
+
+        RollingNumber {
+          id: total
+          objectName: "costSummaryValue"
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          width: Math.min(implicitWidth, parent.width)
+          text: root.totalText()
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.display
+          font.weight: Font.DemiBold
+          motion: root.motion
+
+          HoverHandler { id: totalHover }
+          Ui.PanelToolTip {
+            visible: totalHover.hovered
+            text: root.summaryDetail()
+            fontFamily: root.fontFamily
+          }
+        }
+
+        // Change against the equal window before; a direction, not a verdict, so it stays neutral.
+        Rectangle {
+          id: deltaChip
+          objectName: "costDelta"
+          readonly property string text: root.deltaText
+          visible: text !== ""
+          anchors.left: total.right
+          anchors.leftMargin: Style.spacing.lg
+          anchors.verticalCenter: total.verticalCenter
+          width: deltaLabel.implicitWidth + Style.spacing.lg * 2
+          height: deltaLabel.implicitHeight + Style.spacing.sm
+          radius: height / 2
+          color: root.alpha(root.foreground, 0.08)
+          border.width: Style.spacing.hairline
+          border.color: root.alpha(root.foreground, 0.22)
+          Accessible.role: Accessible.StaticText
+          Accessible.name: root.delta ? (root.delta.direction === 0 ? text
+            : (root.delta.direction > 0 ? "Up " : "Down ") + Math.abs(root.delta.percent) + "% on the previous "
+              + UsageLogic.costPeriodPhrase(root.displayedPeriodDays)) : ""
+
+          Text {
+            id: deltaLabel
+            anchors.centerIn: parent
+            text: deltaChip.text
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.weight: Font.DemiBold
+            font.features: { "tnum": 1 }
+          }
+        }
       }
 
       Text {
+        objectName: "costSummaryLine"
         width: parent.width
-        text: root.summaryDetail()
-        color: root.dim
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        wrapMode: Text.WordWrap
-      }
-
-      Text {
-        visible: root.metric === "cost"
-        width: parent.width
-        text: "Estimated API value, not subscription spend"
+        text: root.summaryLine()
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -245,145 +427,93 @@ Item {
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap
       }
-    }
 
+      // Only while omp reports requests (last 2 minutes); the dot is static, the figures move.
+      Item {
+        id: liveLine
+        objectName: "costLiveLine"
+        readonly property bool shown: root.liveActive
+        width: parent.width
+        height: shown ? liveRow.implicitHeight + Style.spacing.xs : 0
+        visible: height > 0
+        clip: true
+        opacity: shown ? 1 : 0
+
+        Behavior on height {
+          NumberAnimation { duration: root.motion ? root.motion.duration(root.motion.row) : 260; easing.type: Easing.OutCubic }
+        }
+        Behavior on opacity {
+          OpacityAnimator { duration: root.motion ? root.motion.duration(root.motion.row) : 260; easing.type: Easing.OutCubic }
+        }
+
+        Row {
+          id: liveRow
+          y: Style.spacing.xs
+          spacing: Style.spacing.md
+
+          Rectangle {
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.space(6)
+            height: width
+            radius: width / 2
+            color: Commons.Color.accent
+          }
+
+          Text {
+            objectName: "costLiveText"
+            text: root.liveText()
+            color: Commons.Color.accent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.weight: Font.Medium
+          }
+        }
+      }
+    }
 
     Column {
       visible: root.hasResult
       width: parent.width
       spacing: Style.spacing.lg
 
-      Ui.PanelSectionHeader {
-        text: root.displayedPeriodDays === 1 ? "By hour" : "By day"
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-      }
-
-      Row {
-        id: chart
-        width: parent.width
-        height: Style.space(82)
-        spacing: Style.spacing.xxs
-
-        Repeater {
-          model: root.periods
-
-          delegate: Item {
-            id: bucket
-            required property var modelData
-            required property int index
-
-            width: root.periods.length > 0
-              ? (chart.width - chart.spacing * (root.periods.length - 1)) / root.periods.length
-              : 0
-            height: chart.height
-
-            function providerValue(row) {
-              if (!row) return 0
-              if (root.metric === "tokens") return Math.max(0, Number(row.totalTokens) || 0)
-              return row.costUsd === null ? 0 : Math.max(0, Number(row.costUsd) || 0)
-            }
-
-            function cumulative(endIndex) {
-              var total = 0
-              var rows = modelData && modelData.providers ? modelData.providers : []
-              for (var i = 0; i < endIndex && i < rows.length; i++) total += providerValue(rows[i])
-              return total
-            }
-
-            Rectangle {
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.bottom: parent.bottom
-              height: Style.spacing.hairline
-              color: root.alpha(root.foreground, 0.12)
-            }
-
-            Rectangle {
-              objectName: "costHistoryGap-" + bucket.index
-              anchors.fill: parent
-              visible: bucket.modelData.historyStatus === "unavailable"
-              color: root.alpha(root.foreground, 0.035)
-              border.width: Style.spacing.hairline
-              border.color: root.alpha(root.foreground, 0.15)
-              Text {
-                anchors.centerIn: parent
-                text: "—"
-                color: root.dim
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            HoverHandler { id: bucketHover }
-            Controls.ToolTip {
-              visible: bucketHover.hovered
-              text: root.axisLabel(bucket.modelData) + " · " + root.primaryValue(bucket.modelData)
-                + (bucket.modelData.historyStatus === "unavailable" ? " · History unavailable" : "")
-            }
-
-            Rectangle {
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.bottom: parent.bottom
-              height: Math.max(2, Style.spacing.hairline)
-              visible: root.metric === "cost" && bucket.modelData.costUsd === null
-                && Number(bucket.modelData.records || 0) > 0
-              color: root.urgent
-              opacity: 0.8
-            }
-
-            Repeater {
-              model: bucket.modelData && bucket.modelData.providers
-                ? bucket.modelData.providers : []
-
-              delegate: Rectangle {
-                required property var modelData
-                required property int index
-                readonly property real amount: bucket.providerValue(modelData)
-                readonly property real through: bucket.cumulative(index + 1)
-                width: bucket.width
-                height: root.chartMaximum > 0 ? amount / root.chartMaximum * bucket.height : 0
-                y: bucket.height - (root.chartMaximum > 0
-                  ? through / root.chartMaximum * bucket.height : 0)
-                color: root.providerColor(String(modelData.id || ""))
-                opacity: 0.82
-              }
-            }
-          }
-        }
-      }
-
       Item {
         width: parent.width
-        implicitHeight: Math.max(axisStart.implicitHeight, axisMiddle.implicitHeight, axisEnd.implicitHeight)
+        implicitHeight: chartTitle.implicitHeight
 
-        Text {
-          id: axisStart
+        Ui.PanelSectionHeader {
+          id: chartTitle
           anchors.left: parent.left
-          text: root.periods.length > 0 ? root.axisLabel(root.periods[0]) : ""
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
+          text: root.hourly ? "BY HOUR" : "BY DAY"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
         }
 
         Text {
-          id: axisMiddle
-          anchors.horizontalCenter: parent.horizontalCenter
-          text: root.periods.length > 0
-            ? root.axisLabel(root.periods[Math.floor(root.periods.length / 2)]) : ""
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-
-        Text {
-          id: axisEnd
           anchors.right: parent.right
-          text: "now"
+          anchors.baseline: chartTitle.baseline
+          text: root.chartRange()
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
         }
+      }
+
+      CostChart {
+        id: chart
+        objectName: "costChart"
+        width: parent.width
+        periods: root.periods
+        series: root.series
+        metric: root.metric
+        hourly: root.hourly
+        focusedProvider: root.focusedProvider
+        isolatedProvider: root.isolatedProvider
+        live: root.scanHasOmp ? root.live : null
+        motion: root.motion
+        foreground: root.foreground
+        urgent: root.urgent
+        fontFamily: root.fontFamily
+        clockFormat: root.clockFormat
       }
 
       Text {
@@ -397,97 +527,124 @@ Item {
       }
     }
 
-    Column {
+    CostProviders {
+      id: providerList
+      objectName: "costProviders"
       visible: root.hasResult && root.providers.length > 0
       width: parent.width
-      spacing: Style.spacing.lg
+      rows: root.providerRows
+      focusedProvider: root.focusedProvider
+      isolatedProvider: root.isolatedProvider
+      hintSeen: root.isolateHintSeen
+      valueWidth: root.valueColumnWidth
+      barWidth: root.barColumnWidth
+      motion: root.motion
+      foreground: root.foreground
+      urgent: root.urgent
+      fontFamily: root.fontFamily
+      onFocusRequested: function(providerId) { if (root.isolatedProvider === "") root.focusedProvider = providerId }
+      onIsolateRequested: function(providerId) { root.toggleIsolation(providerId) }
+    }
+
+    CostBreakdown {
+      id: breakdown
+      objectName: "costBreakdown"
+      visible: root.hasResult && allRows.length > 0
+      width: parent.width
+      payload: root.payload
+      metric: root.metric
+      mode: root.shownBreakdownMode
+      modes: root.breakdownModes
+      expanded: root.modelsExpanded
+      colors: root.seriesColors
+      surface: root.surface
+      valueWidth: root.valueColumnWidth
+      barWidth: root.barColumnWidth
+      motion: root.motion
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onModeRequested: function(mode) { root.breakdownMode = mode }
+      onExpandRequested: function(expanded) { root.modelsExpanded = expanded }
+    }
+
+    CostHeatmap {
+      objectName: "costWhen"
+      visible: root.hasResult && hasActivity
+      width: parent.width
+      heatmap: root.payload ? root.payload.heatmap : null
+      metric: root.metric
+      clockFormat: root.clockFormat
+      foreground: root.foreground
+      urgent: root.urgent
+      fontFamily: root.fontFamily
+    }
+
+    // Laid out like the list rows above: label, then the share in the bar and value columns.
+    Item {
+      objectName: "costCacheLine"
+      visible: root.hasResult && root.cache !== null
+      width: parent.width
+      implicitHeight: Math.max(cacheTitle.implicitHeight, cacheValue.implicitHeight)
+      Accessible.role: Accessible.StaticText
+      Accessible.name: root.cache ? root.cache.text : ""
 
       Ui.PanelSectionHeader {
-        text: "By provider"
+        id: cacheTitle
+        anchors.left: parent.left
+        anchors.verticalCenter: parent.verticalCenter
+        text: "CACHE"
         foreground: root.foreground
         fontFamily: root.fontFamily
       }
 
-      Ui.BorderSurface {
-        id: providerSurface
-        width: parent.width
-        implicitHeight: providerRows.implicitHeight + contentTopInset + contentBottomInset
-        color: Style.normalFillFor(root.foreground, Commons.Color.accent, root.urgent)
-        borderSpec: Border.flat(root.alpha(root.foreground, 0.22), Style.spacing.hairline)
-        padding: Style.spacing.xl
-        radius: Style.cornerRadius
+      Text {
+        anchors.left: cacheTitle.right
+        anchors.leftMargin: Style.spacing.controlGap
+        anchors.right: cacheMeter.left
+        anchors.rightMargin: Style.spacing.controlGap
+        anchors.verticalCenter: parent.verticalCenter
+        text: root.cache ? root.cache.label : ""
+        elide: Text.ElideRight
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
 
-        Column {
-          id: providerRows
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.top: parent.top
-          anchors.leftMargin: providerSurface.contentLeftInset
-          anchors.rightMargin: providerSurface.contentRightInset
-          anchors.topMargin: providerSurface.contentTopInset
-          spacing: Style.spacing.lg
+      Item {
+        id: cacheMeter
+        anchors.right: cacheValue.left
+        anchors.rightMargin: Style.spacing.controlGap
+        anchors.verticalCenter: parent.verticalCenter
+        width: root.barColumnWidth
+        height: Style.space(4)
 
-          Repeater {
-            model: root.providers
-
-            delegate: Item {
-              required property var modelData
-              width: providerRows.width
-              implicitHeight: Math.max(providerName.implicitHeight, providerValue.implicitHeight)
-                + (providerMeta.visible ? providerMeta.implicitHeight + Style.spacing.labelGap : 0)
-
-              Rectangle {
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.topMargin: Style.space(4)
-                width: Style.space(7)
-                height: width
-                radius: width / 2
-                color: root.providerColor(String(parent.modelData.id || ""))
-              }
-
-              Text {
-                id: providerName
-                anchors.left: parent.left
-                anchors.leftMargin: Style.space(14)
-                anchors.right: providerValue.left
-                anchors.rightMargin: Style.spacing.controlGap
-                text: String(parent.modelData.name || parent.modelData.id || "")
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.weight: Font.Medium
-                elide: Text.ElideRight
-              }
-
-              Text {
-                id: providerMeta
-                visible: parent.modelData.status === "missing" || parent.modelData.status === "failed"
-                  || parent.modelData.historyStatus === "unavailable"
-                anchors.right: parent.right
-                wrapMode: Text.WordWrap
-                anchors.left: providerName.left
-                anchors.top: providerName.bottom
-                anchors.topMargin: Style.spacing.labelGap
-                text: root.providerMetaText(parent.modelData)
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Text {
-                id: providerValue
-                anchors.right: parent.right
-                anchors.top: parent.top
-                text: root.primaryValue(parent.modelData)
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.weight: Font.Medium
-              }
-            }
-          }
+        Rectangle {
+          anchors.fill: parent
+          radius: Math.min(Style.cornerRadius, height / 2)
+          color: root.alpha(root.foreground, 0.08)
         }
+
+        Rectangle {
+          width: Math.round(parent.width * (root.cache ? root.cache.share : 0))
+          height: parent.height
+          radius: Math.min(Style.cornerRadius, height / 2)
+          color: root.alpha(root.foreground, 0.55)
+        }
+      }
+
+      Text {
+        id: cacheValue
+        anchors.right: parent.right
+        anchors.rightMargin: Style.spacing.md
+        anchors.verticalCenter: parent.verticalCenter
+        width: Math.max(root.valueColumnWidth, implicitWidth)
+        horizontalAlignment: Text.AlignRight
+        text: root.cache ? root.cache.percent : ""
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.weight: Font.Medium
+        font.features: { "tnum": 1 }
       }
     }
 
@@ -561,101 +718,6 @@ Item {
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
-          }
-        }
-      }
-    }
-
-    Column {
-      visible: root.hasResult && root.models.length > 0
-      width: parent.width
-      spacing: Style.spacing.lg
-
-      UsageDisclosure {
-        objectName: "costModelDisclosure"
-        width: parent.width
-        text: "Model breakdown · " + root.models.length + (root.models.length === 1 ? " model" : " models")
-        checked: root.modelsExpanded
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        onToggled: root.modelsExpanded = checked
-      }
-
-      Ui.BorderSurface {
-        id: modelSurface
-        objectName: "costModelDetails"
-        visible: root.modelsExpanded
-        width: parent.width
-        implicitHeight: modelRows.implicitHeight + contentTopInset + contentBottomInset
-        color: Style.normalFillFor(root.foreground, Commons.Color.accent, root.urgent)
-        borderSpec: Border.flat(root.alpha(root.foreground, 0.22), Style.spacing.hairline)
-        padding: Style.spacing.xl
-        radius: Style.cornerRadius
-
-        Column {
-          id: modelRows
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.top: parent.top
-          anchors.leftMargin: modelSurface.contentLeftInset
-          anchors.rightMargin: modelSurface.contentRightInset
-          anchors.topMargin: modelSurface.contentTopInset
-          spacing: Style.spacing.lg
-
-          Repeater {
-            model: root.modelsExpanded ? root.models : []
-
-            delegate: Item {
-              required property var modelData
-              required property int index
-              objectName: "costModel-" + index
-              width: modelRows.width
-              implicitHeight: Math.max(modelName.implicitHeight + modelMeta.implicitHeight
-                + Style.spacing.labelGap, modelValue.implicitHeight)
-
-              TextEdit {
-                id: modelName
-                anchors.left: parent.left
-                anchors.right: modelValue.left
-                anchors.rightMargin: Style.spacing.controlGap
-                text: String(parent.modelData.model || "Unknown model")
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                readOnly: true
-                selectByMouse: true
-                textFormat: TextEdit.PlainText
-                wrapMode: TextEdit.Wrap
-              }
-
-              Text {
-                id: modelMeta
-                anchors.left: parent.left
-                anchors.top: modelName.bottom
-                anchors.topMargin: Style.spacing.labelGap
-                text: String(parent.modelData.providerName || "") + " · "
-                  + UsageLogic.formatTokens(parent.modelData.totalTokens) + " tokens"
-                  + (Number(parent.modelData.customPricedRecords || 0) > 0 ? " · custom prices"
-                    : Number(parent.modelData.basePricedRecords || 0) > 0 ? " · base rates"
-                    : parent.modelData.costSource === "providerReported" ? " · reported cost" : "")
-                anchors.right: parent.right
-                wrapMode: Text.WordWrap
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Text {
-                id: modelValue
-                anchors.right: parent.right
-                anchors.top: parent.top
-                text: root.primaryValue(parent.modelData)
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.weight: Font.Medium
-              }
-            }
           }
         }
       }

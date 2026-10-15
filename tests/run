@@ -135,6 +135,7 @@ LIVEPY
   MODEL_USAGE_REPO_URL="$repo_url" \
   MODEL_USAGE_FAKE_COST_BACKEND="$repo_root/tests/fake_cost_backend.py" \
   MODEL_USAGE_COST_FIXTURE="$repo_root/tests/fixtures/normalized-costs.json" \
+  MODEL_USAGE_COST_DIMENSIONS_FIXTURE="$repo_root/tests/fixtures/normalized-costs-dimensions.json" \
   PATH="$repo_root/tests/fake-bin:$PATH" \
   QML_IMPORT_PATH="$quattro_root/shell${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}" \
     timeout 30 quickshell -p "$cost_root" --no-color >"$cost_root/runtime.log" 2>&1 || {
