@@ -49,15 +49,12 @@ Ui.BorderSurface {
     return Qt.rgba(color.r, color.g, color.b, opacity)
   }
 
-  // A time today reads as a clock time; later ones carry the weekday.
+  // Clock times follow the panel's one rule (UsageLogic.clockPattern): the time today, the weekday
+  // within the week, the date further out.
   function clock(epochSeconds) {
     var seconds = Number(epochSeconds)
     if (!isFinite(seconds)) return ""
-    var date = new Date(seconds * 1000)
-    var sameDay = new Date(root.nowSeconds * 1000).toDateString() === date.toDateString()
-    return sameDay || Math.abs(seconds - root.nowSeconds) < 12 * 3600
-      ? Qt.formatTime(date, root.clockFormat)
-      : Qt.formatDateTime(date, "ddd " + root.clockFormat)
+    return Qt.formatDateTime(new Date(seconds * 1000), UsageLogic.clockPattern(seconds, root.nowSeconds, root.clockFormat))
   }
 
   implicitHeight: limitContent.implicitHeight + contentTopInset + contentBottomInset

@@ -68,17 +68,30 @@ Item {
   readonly property var breakdownModes: UsageLogic.costBreakdownModes(payload)
   readonly property string shownBreakdownMode: breakdownModes.some(function(mode) { return mode.value === root.breakdownMode })
     ? breakdownMode : "model"
-  // Requests omp reported since the scan (UsageLogic.costLiveFold); null until one arrives.
-  property var live: null
-  property real nowSeconds: Date.now() / 1000
+  // What omp's live requests add to this scan (UsageLogic.costLiveTotals over OmpActivity's request
+  // log): only when the scan read the omp sessions on this computer, and only the requests after the
+  // scan started, so one that came in while the scan ran is never lost. Null without any.
   readonly property bool scanHasOmp: UsageLogic.costScanHasOmp(payload ? payload.sources : [])
-  readonly property bool liveActive: hasResult && !!live && live.requests > 0 && nowSeconds - live.lastAt <= 120
+  // The log grows in place; its revision says when.
+  readonly property int liveRevision: ompActivity && typeof ompActivity.requestRevision === "number" ? ompActivity.requestRevision : 0
+  readonly property var live: {
+    var revision = liveRevision
+    if (!hasResult || !scanHasOmp || !ompActivity || revision <= 0) return null
+    var totals = UsageLogic.costLiveTotals(ompActivity.requestLog, Date.parse(String(payload.generatedAt)) / 1000,
+      series.map(function(entry) { return entry.id }))
+    return totals.requests > 0 ? totals : null
+  }
+  property real nowSeconds: Date.now() / 1000
+  readonly property bool liveActive: !!live && nowSeconds - live.lastAt <= 120
   readonly property var delta: UsageLogic.costDelta(currentTotal(),
     payload && payload.previous ? (metric === "tokens" ? payload.previous.totalTokens : payload.previous.costUsd) : null)
   readonly property string deltaText: hasResult ? UsageLogic.costDeltaText(delta, displayedPeriodDays) : ""
   readonly property var cache: UsageLogic.costCacheSummary(totals)
-  readonly property string sourceSummary: hasResult
-    ? UsageLogic.costSourceSummary(payload.sources, !!ompActivity && ompActivity.state === "live") : ""
+  // "· live" only where something here follows omp as it happens: live requests on top of a scan of
+  // this computer's omp sessions, or omp stats elsewhere whose news starts a new scan.
+  readonly property var remoteSource: payload ? UsageLogic.readingFor(payload.sources, "omp-remote") : null
+  readonly property string sourceSummary: hasResult ? UsageLogic.costSourceSummary(payload.sources, !!ompActivity
+    && ompActivity.state === "live" && (scanHasOmp || (!!remoteSource && remoteSource.status === "ok"))) : ""
   // Providers and breakdown share their bar and value columns, so both lists line up.
   readonly property real valueColumnWidth: Math.max(Style.space(40), providerList.widestValue, breakdown.widestValue)
   readonly property real barColumnWidth: Style.space(72)
@@ -117,8 +130,11 @@ Item {
     closeMenu()
     focusedProvider = ""
   }
-  // A new scan already contains everything before it.
-  onPayloadChanged: live = null
+  // A new request starts the live line's two minutes again.
+  onLiveRevisionChanged: {
+    nowSeconds = Date.now() / 1000
+    liveExpiry.restart()
+  }
   onProvidersChanged: {
     var known = providers.some(function(row) { return row && String(row.id) === root.isolatedProvider })
     if (!known) isolatedProvider = ""
@@ -153,7 +169,7 @@ Item {
 
   // Live omp spend since the scan for one provider (or every provider), in the chosen metric.
   function liveAmount(providerId) {
-    if (!live || !scanHasOmp) return 0
+    if (!live) return 0
     var values = metric === "tokens" ? live.tokens : live.cost
     if (providerId !== undefined) return Number(values[providerId] || 0)
     var sum = 0
@@ -178,17 +194,6 @@ Item {
     if (amount <= 0) return "Live from omp"
     return "Live from omp · +" + (metric === "tokens" ? UsageLogic.formatTokens(amount) + " tokens" : UsageLogic.formatUsd(amount))
       + " since the last scan"
-  }
-
-  function foldLive(event) {
-    if (!hasResult || !scanHasOmp) return
-    var scanSeconds = Date.parse(String(payload.generatedAt)) / 1000
-    if (!isFinite(scanSeconds)) return
-    var next = UsageLogic.costLiveFold(live, event, scanSeconds, series.map(function(entry) { return entry.id }))
-    if (next.requests === (live ? live.requests : 0)) return
-    live = next
-    nowSeconds = Date.now() / 1000
-    liveExpiry.restart()
   }
 
   function toggleIsolation(providerId) {
@@ -231,7 +236,7 @@ Item {
   }
 
   function summaryLine() {
-    var requests = UsageLogic.costRequestsText(Number(totals.records || 0) + (live && scanHasOmp ? live.requests : 0))
+    var requests = UsageLogic.costRequestsText(Number(totals.records || 0) + (live ? live.requests : 0))
     return (metric === "cost" ? "Estimated API value, not subscription spend" : "Tokens processed, cache reads included")
       + " · " + requests
   }
@@ -242,12 +247,6 @@ Item {
     var first = UsageLogic.costBucketDate(periods[0].start)
     var last = UsageLogic.costBucketDate(periods[periods.length - 1].start)
     return first && last ? UsageLogic.costMonthDay(first) + " – " + UsageLogic.costMonthDay(last) : ""
-  }
-
-  Connections {
-    target: root.ompActivity
-    ignoreUnknownSignals: true
-    function onRequest(event) { root.foldLive(event) }
   }
 
   // Ends the live line two minutes after the last request; one shot per request, never a loop.
@@ -440,10 +439,10 @@ Item {
         opacity: shown ? 1 : 0
 
         Behavior on height {
-          NumberAnimation { duration: root.motion ? root.motion.duration(root.motion.row) : 260; easing.type: Easing.OutCubic }
+          NumberAnimation { duration: root.motion ? root.motion.duration(root.motion.row) : 0; easing.type: Easing.OutCubic }
         }
         Behavior on opacity {
-          OpacityAnimator { duration: root.motion ? root.motion.duration(root.motion.row) : 260; easing.type: Easing.OutCubic }
+          OpacityAnimator { duration: root.motion ? root.motion.duration(root.motion.row) : 0; easing.type: Easing.OutCubic }
         }
 
         Row {
@@ -508,7 +507,7 @@ Item {
         hourly: root.hourly
         focusedProvider: root.focusedProvider
         isolatedProvider: root.isolatedProvider
-        live: root.scanHasOmp ? root.live : null
+        live: root.live
         motion: root.motion
         foreground: root.foreground
         urgent: root.urgent

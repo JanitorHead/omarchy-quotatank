@@ -970,12 +970,21 @@ function barProviders(providers, selector) {
 
 // At most `max` chips (0 = no cap): the providers under the most pressure, kept in their usual
 // order so chips do not jump around as figures change. `pressure(provider)` is lower when the
-// provider is closer to a limit; ties keep the earlier provider. The rest are returned as
-// `hidden` for the overflow chip.
-function limitChips(providers, max, pressure) {
+// provider is closer to a limit; ties keep the earlier provider. `size(provider)` is how many chips
+// a provider takes (default one; one per account under "One chip per account"), so the cap counts
+// chips: a provider that no longer fits leaves its room to a later, smaller one. The rest are
+// returned as `hidden` for the overflow chip.
+function limitChips(providers, max, pressure, size) {
   var list = listOrEmpty(providers)
   var cap = Math.floor(Number(max))
-  if (!isFinite(cap) || cap <= 0 || list.length <= cap) return { shown: list.slice(), hidden: [] }
+  var sizes = []
+  var total = 0
+  for (var s = 0; s < list.length; s++) {
+    var chips = typeof size === "function" ? Math.max(1, Math.floor(Number(size(list[s])) || 1)) : 1
+    sizes.push(chips)
+    total += chips
+  }
+  if (!isFinite(cap) || cap <= 0 || total <= cap) return { shown: list.slice(), hidden: [] }
   var ranked = list.map(function (provider, index) { return { index: index, pressure: Number(pressure(provider)) } })
   ranked.sort(function (a, b) {
     var pa = isFinite(a.pressure) ? a.pressure : 100
@@ -983,7 +992,12 @@ function limitChips(providers, max, pressure) {
     return pa - pb || a.index - b.index
   })
   var keep = {}
-  for (var i = 0; i < cap; i++) keep[ranked[i].index] = true
+  var room = cap
+  for (var i = 0; i < ranked.length && room > 0; i++) {
+    if (sizes[ranked[i].index] > room) continue
+    keep[ranked[i].index] = true
+    room -= sizes[ranked[i].index]
+  }
   var result = { shown: [], hidden: [] }
   for (var j = 0; j < list.length; j++) result[keep[j] ? "shown" : "hidden"].push(list[j])
   return result
@@ -2043,20 +2057,20 @@ function costCacheSummary(totals) {
   return { share: share, percent: percent + "%", label: label, text: percent + "% " + label }
 }
 
-// Whether the scan the totals come from reads omp (local sessions, or omp stats on another computer),
-// so live omp requests belong on top of it.
+// Whether the cost scan read the omp sessions on this computer. Live requests come only from those
+// sessions (omp-live.py --local), so only then do the ones after the scan add to its totals; omp stats
+// on another computer is never live here.
 function costScanHasOmp(sources) {
   var list = listOrEmpty(sources)
   for (var i = 0; i < list.length; i++) {
     var source = list[i]
-    if (!source) continue
-    if (source.id === "omp-remote" && source.status === "ok") return true
-    if ((source.id === "local-omp" || source.provider === "omp") && source.included === true) return true
+    if (source && (source.id === "local-omp" || source.provider === "omp") && source.included === true) return true
   }
   return false
 }
 
-// Footer line naming where the totals come from: "Local transcripts + omp on devbox · live".
+// Footer line naming where the totals come from: "Local transcripts + omp on devbox · live", or "omp
+// through a tunnel" when the server is reached through this computer.
 function costSourceSummary(sources, live) {
   var list = listOrEmpty(sources)
   var local = false
@@ -2066,9 +2080,9 @@ function costSourceSummary(sources, live) {
     var source = list[i]
     if (!source || typeof source !== "object") continue
     if (source.id === "omp-remote") {
-      var host = String(source.host || "").replace(/:\d+$/, "") || "another computer"
-      if (source.status === "ok") omp = "omp on " + host
-      else if (source.status === "error") omp = "omp on " + host + " unavailable"
+      var place = ompPlace(source.host) || " on another computer"
+      if (source.status === "ok") omp = "omp" + place
+      else if (source.status === "error") omp = "omp" + place + " unavailable"
       continue
     }
     if (source.included !== true) continue
@@ -2087,36 +2101,27 @@ function costSourceSummary(sources, live) {
   return text !== "" && live ? text + " · live" : text
 }
 
-// omp names providers its own way; the chart uses Quotatank ids (cost-fetch maps them the same way).
-function costOmpProvider(provider) {
-  var id = String(provider || "")
-  if (id === "anthropic") return "claude"
-  if (id === "openai-codex") return "codex"
-  if (id.indexOf("opencode") === 0) return "opencode"
-  return id
-}
-
-// Folds one live omp request into what happened since the scan: cost and tokens per provider, the
-// request count and the newest time. Requests at or before the scan are already in it; providers
-// the scan does not chart are skipped, so live growth never shows spend the next scan will not.
-function costLiveFold(state, event, scanSeconds, providerIds) {
-  var previous = state || {}
-  var next = { cost: {}, tokens: {}, requests: Number(previous.requests) || 0, lastAt: Number(previous.lastAt) || 0 }
-  var key
-  for (key in previous.cost || {}) next.cost[key] = previous.cost[key]
-  for (key in previous.tokens || {}) next.tokens[key] = previous.tokens[key]
-  if (!event || typeof event !== "object") return next
-  var at = Number(event.at)
-  var provider = costOmpProvider(event.provider)
-  if (!isFinite(at) || at <= Number(scanSeconds) || listOrEmpty(providerIds).indexOf(provider) < 0) return next
-  var cost = Number(event.costUsd)
-  if (event.costUsd !== null && event.costUsd !== undefined && isFinite(cost) && cost > 0)
-    next.cost[provider] = (next.cost[provider] || 0) + cost
-  var tokens = Number(event.tokens)
-  if (isFinite(tokens) && tokens > 0) next.tokens[provider] = (next.tokens[provider] || 0) + tokens
-  next.requests += 1
-  next.lastAt = Math.max(next.lastAt, at)
-  return next
+// What the live omp requests after the scan add to it: cost and tokens per provider, the request count
+// and the newest time. `log` is OmpActivity's request log ([at, provider, costUsd | null, tokens,
+// source] per request); `scanSeconds` is the scan's `generatedAt`, the moment it started, so a request
+// that arrived while the scan ran still counts until the next scan. Only requests from this computer's
+// sessions count, and only for providers the scan charts, so live growth never shows spend the next
+// scan will not.
+function costLiveTotals(log, scanSeconds, providerIds) {
+  var result = { cost: {}, tokens: {}, requests: 0, lastAt: 0 }
+  var since = finiteOrNull(scanSeconds)
+  if (since === null) return result
+  var list = listOrEmpty(log)
+  for (var i = 0; i < list.length; i++) {
+    var entry = list[i]
+    if (!entry || !(entry[0] > since) || entry[4] === "remote" || !contains(providerIds, entry[1])) continue
+    var provider = entry[1]
+    if (entry[2] !== null && entry[2] > 0) result.cost[provider] = (result.cost[provider] || 0) + entry[2]
+    if (entry[3] > 0) result.tokens[provider] = (result.tokens[provider] || 0) + entry[3]
+    result.requests++
+    result.lastAt = Math.max(result.lastAt, entry[0])
+  }
+  return result
 }
 
 // Brings a keyed list to `keys` order with moves and inserts only, so the delegates of kept keys
@@ -2150,11 +2155,14 @@ var OMP_STATS_PORT = 3847
 var OMP_GATEWAY_PORT = 4000
 var OMP_RECENT_SECONDS = 3600       // an account counts as recently used this long after a request
 var OMP_RECENT_LIMIT = 256          // accounts kept in recentByAccount
-var OMP_SPEND_SECONDS = 6 * 3600    // live requests kept to add up the spend since the last cost scan
-var OMP_SPEND_LIMIT = 4096
+var OMP_LOG_SECONDS = 6 * 3600      // live requests kept for the cost scans that do not hold them yet
+var OMP_LOG_LIMIT = 4096            // entries in the live request log
 var OMP_LINE_LIMIT = 65536          // characters in one live line
-var OMP_URL_PROBLEM = "Enter an HTTP or HTTPS address without a user name, query, or fragment."
+var OMP_URL_PROBLEM = "Enter an HTTP or HTTPS address with a host name and, if needed, a port: no path, user name, query, or fragment."
 var OMP_HTTP_PROBLEM = "Use HTTPS, or plain HTTP only to this computer, a private network, or Tailscale."
+// The gateway's token can spend model quota, so it never goes over plain HTTP outside this computer and
+// Tailscale (the backend checks where a name leads before it sends anything).
+var OMP_GATEWAY_HTTP_PROBLEM = "Use HTTPS, or plain HTTP only to this computer or over Tailscale (a 100.x.y.z address or the computer's Tailscale name)."
 
 // The omp settings with their defaults. `local` reads omp on this computer unless turned off.
 function ompSettings(settings) {
@@ -2186,20 +2194,22 @@ function ompCostArguments(settings) {
 }
 
 // Whether omp is on this computer, from the usage backend's `omp` status: true, false, or null while
-// nothing says.
+// nothing says. omp that is installed but not set up ("unused") is found, though there is nothing to read.
 function ompFound(status) {
   if (!status || typeof status !== "object") return null
-  if (status.installed === true || status.local === "ok" || status.local === "error") return true
+  if (status.installed === true || status.local === "ok" || status.local === "error" || status.local === "unused") return true
   if (status.installed === false || status.local === "missing") return false
   return null
 }
 
-// omp-live.py flags, or [] while there is nothing to follow: omp's sessions here once omp is found
-// (with --accounts, the map that names the account behind each request), and omp stats elsewhere.
-function ompLiveArguments(settings, status) {
+// omp-live.py flags, or [] while there is nothing to follow: omp's sessions here once omp is found and
+// set up (with --accounts, the map that names the account behind each request), and omp stats
+// elsewhere. Nothing through a proxy: its accounts are the proxy's, and omp is not read then.
+function ompLiveArguments(settings, status, proxyMode) {
+  if (proxyMode === true) return []
   var omp = ompSettings(settings)
   var args = []
-  if (omp.local && ompFound(status) === true) args.push("--local", "--accounts")
+  if (omp.local && ompFound(status) === true && status.local !== "unused") args.push("--local", "--accounts")
   if (omp.statsUrl !== "") args.push("--stats-url", omp.statsUrl)
   return args
 }
@@ -2248,24 +2258,33 @@ function ompPlainHttpHost(host) {
     || /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+ts\.net$/.test(host)
 }
 
+// The gateway's plain-HTTP hosts: this computer, Tailscale addresses (100.64.0.0/10, fd7a:115c:a1e0::/48),
+// and names that may lead there (single-label and MagicDNS names); the backend resolves a name and
+// refuses it unless every address is on Tailscale.
+function ompTailscaleHost(host) {
+  if (ompLoopbackHost(host)) return true
+  var v4 = /^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$/.exec(host)
+  if (v4) return Number(v4[1]) === 100 && Number(v4[2]) >= 64 && Number(v4[2]) <= 127 && Number(v4[3]) <= 255 && Number(v4[4]) <= 255
+  if (host.indexOf(":") >= 0) return /^fd7a:115c:a1e0(?::|$)/.test(host)
+  return /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(host)
+    || /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+ts\.net$/.test(host)
+}
+
 // What is wrong with an omp server address, or "" when the backends take it (normalize_server_url
-// in scripts/model_usage_common.py): HTTPS anywhere, plain HTTP only to this computer, a private
-// network or Tailscale; no user name, query, fragment, or dot segments. Empty turns the server off.
-function ompServerUrlProblem(text) {
+// in scripts/model_usage_common.py): a scheme, a host and an optional port, nothing after them but one
+// "/"; HTTPS anywhere, plain HTTP only to this computer, a private network or Tailscale. With `gateway`
+// (the token it sends can spend model quota) plain HTTP stays on this computer and Tailscale. Empty turns
+// the server off.
+function ompServerUrlProblem(text, gateway) {
   var value = String(text === undefined || text === null ? "" : text).trim()
   if (value === "") return ""
-  var match = /^(https?):\/\/([^\s\/?#@]+)(\/[^\s?#]*)?$/i.exec(value)
+  var match = /^(https?):\/\/([^\s\/?#@\\]+)\/?$/i.exec(value)
   if (!match || /[\x00-\x1f\x7f]/.test(value)) return OMP_URL_PROBLEM
   var address = ompSplitHost(match[2])
   if (!address) return OMP_URL_PROBLEM
-  var segments = (match[3] || "").split("/")
-  for (var i = 0; i < segments.length; i++) {
-    var segment = segments[i]
-    try { segment = decodeURIComponent(segment) } catch (error) { return OMP_URL_PROBLEM }
-    if (segment === "." || segment === "..") return OMP_URL_PROBLEM
-  }
-  if (match[1].toLowerCase() === "https" || ompPlainHttpHost(address.host)) return ""
-  return OMP_HTTP_PROBLEM
+  if (match[1].toLowerCase() === "https") return ""
+  if (gateway === true) return ompTailscaleHost(address.host) ? "" : OMP_GATEWAY_HTTP_PROBLEM
+  return ompPlainHttpHost(address.host) ? "" : OMP_HTTP_PROBLEM
 }
 
 // The computer an omp server address names, for "omp stats on devbox": MagicDNS names drop the
@@ -2284,6 +2303,21 @@ function ompOnHost(url) {
   return host === "" || ompLoopbackHost(host) ? "" : " on " + host
 }
 
+// Where an omp server is, for the footer and the summaries: " on devbox", " through a tunnel" for an
+// address on this computer (the near end of an SSH tunnel, never "127.0.0.1"), "" without an address.
+// `address` is a URL, or a host with an optional port as cost-fetch.py reports it.
+function ompPlace(address) {
+  var text = String(address || "").trim()
+  var url = /^https?:\/\//i.test(text) ? text : "http://" + text
+  return ompOnHost(url) || (ompHost(url) !== "" ? " through a tunnel" : "")
+}
+
+// A section summary's name for an omp server: its host, "SSH tunnel" for this computer, "Set" without one.
+function ompSummaryName(url) {
+  var host = ompHost(url)
+  return host === "" ? "Set" : ompLoopbackHost(host) ? "SSH tunnel" : host
+}
+
 function ompShortVersion(version) {
   var match = /([0-9]+)\.([0-9]+)/.exec(String(version || ""))
   return match ? match[1] + "." + match[2] : ""
@@ -2292,7 +2326,7 @@ function ompShortVersion(version) {
 // "1 account", "18,811 requests".
 function ompCount(count, one, many) {
   var value = Math.max(0, Math.round(Number(count) || 0))
-  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " " + (value === 1 ? one : many)
+  return costCount(value) + " " + (value === 1 ? one : many)
 }
 
 function ompLine(tone, text) {
@@ -2308,6 +2342,7 @@ function ompLocalStatus(status, localOn, loading) {
   if (!status || typeof status !== "object" || status.local === undefined || status.local === "off")
     return ompLine("pending", loading ? "Looking for omp on this computer…" : "")
   if (status.local === "missing") return ompLine("off", "omp not found on this computer")
+  if (status.local === "unused") return ompLine("off", "omp is installed but not signed in to anything yet")
   var version = ompShortVersion(status.version)
   var name = "omp " + (version !== "" ? version + " " : "") + "found"
   if (status.local === "error") return ompLine("error", name + " · its accounts could not be read")
@@ -2347,6 +2382,8 @@ function ompGatewayProblem(message, url) {
     return { summary: "HTTP " + http[1], text: "The gateway answered HTTP " + http[1] + ". Check that the URL points at omp auth-gateway (port " + OMP_GATEWAY_PORT + " unless you chose another)." }
   if (/unreadable usage data/.test(text))
     return { summary: "not a gateway", text: "That address did not answer like omp's auth gateway. Check the URL, and update omp there if it is older." }
+  if (/plain HTTP only to this computer or over Tailscale/.test(text))
+    return { summary: "needs HTTPS or Tailscale", text: "The token goes over plain HTTP only to this computer or over Tailscale. Use an https:// address, or check that Tailscale is connected on both computers." }
   var sentences = text.split(/\.\s+/)
   var kept = []
   for (var i = 0; i < sentences.length; i++)
@@ -2358,7 +2395,7 @@ function ompGatewayProblem(message, url) {
 function ompGatewaySummary(settings, status) {
   var omp = ompSettings(settings)
   if (omp.gatewayUrl === "") return "Not set up"
-  var host = ompHost(omp.gatewayUrl) || "Set"
+  var host = ompSummaryName(omp.gatewayUrl)
   if (omp.gatewayKeyFile === "") return host + " · token needed"
   if (!status || typeof status !== "object" || status.gateway === undefined || status.gateway === "off") return host
   if (status.gateway === "error") return host + " · " + ompGatewayProblem(status.message, omp.gatewayUrl).summary
@@ -2468,7 +2505,7 @@ function ompLiveFeedLine(state, message) {
 function ompStatsSummary(settings, source, liveState) {
   var url = ompSettings(settings).statsUrl
   if (url === "") return "Not set up"
-  var host = ompHost(url) || "Set"
+  var host = ompSummaryName(url)
   if (source && source.status === "error") return host + " · not answering"
   if (source && source.status === "duplicate") return host + " · counted here"
   return host + (liveState === "live" ? " · live" : "")
@@ -2588,61 +2625,58 @@ function parseOmpLiveLine(line) {
 }
 
 // A request with the account that served it, when omp's credential map names its credential:
-// `accountId`, and `accountKey` ("<provider>@<accountId>", the key of recentByAccount).
+// `accountId`, and `accountKey` ("<provider>@<accountId>", the key of recentByAccount). The parsed line
+// is completed in place: it belongs to the feed, and copying it for every request buys nothing.
 function resolveOmpRequest(event, map) {
-  var result = {}
-  for (var key in event) result[key] = event[key]
-  var entry = event && event.credentialId !== null && event.credentialId !== undefined && map
+  if (!event || typeof event !== "object") return event
+  var entry = event.credentialId !== null && event.credentialId !== undefined && map
     ? map[String(event.credentialId)] : null
   if (entry && entry.provider === event.provider) {
-    result.accountId = entry.accountId
-    result.accountKey = event.provider + "@" + entry.accountId
+    event.accountId = entry.accountId
+    event.accountKey = event.provider + "@" + entry.accountId
   }
-  return result
+  return event
 }
 
 // recentByAccount after a request: the newest request time per account (never in the future), only
-// the last hour, at most OMP_RECENT_LIMIT accounts.
+// the last hour, at most OMP_RECENT_LIMIT accounts. When nothing changes (a request omp's map cannot
+// name, or an older one) the same object comes back, so nothing that reads the map is evaluated again.
 function noteOmpRequest(recent, event, nowSeconds) {
-  var next = {}
+  var current = recent && typeof recent === "object" ? recent : {}
   var cutoff = nowSeconds - OMP_RECENT_SECONDS
-  for (var key in recent) if (Number(recent[key]) >= cutoff) next[key] = Number(recent[key])
-  if (event && event.accountKey) {
+  var key = event && event.accountKey ? String(event.accountKey) : ""
+  var at = key !== "" ? Math.min(Number(event.at), nowSeconds) : NaN
+  var update = key !== "" && at >= cutoff && !(Number(current[key]) >= at)
+  var keys = Object.keys(current)
+  var expired = keys.length > OMP_RECENT_LIMIT
+  for (var k = 0; k < keys.length && !expired; k++) expired = !(Number(current[keys[k]]) >= cutoff)
+  if (!update && !expired) return current
+  var next = {}
+  for (var j = 0; j < keys.length; j++) if (Number(current[keys[j]]) >= cutoff) next[keys[j]] = Number(current[keys[j]])
+  if (update) next[key] = at
+  var kept = Object.keys(next)
+  if (kept.length > OMP_RECENT_LIMIT) {
+    kept.sort(function (a, b) { return next[a] - next[b] })
+    for (var i = 0; i < kept.length - OMP_RECENT_LIMIT; i++) delete next[kept[i]]
+  }
+  return next
+}
+
+// The live request log after a request: [at, provider, costUsd | null, tokens, source] per request,
+// in arrival order, only the last OMP_LOG_SECONDS and at most OMP_LOG_LIMIT entries. The log is
+// changed in place and returned; its owner counts a revision so bindings read it again (costLiveTotals).
+function noteOmpLog(log, event, nowSeconds) {
+  var list = log && typeof log.push === "function" ? log : []
+  if (event && typeof event === "object") {
     var at = Math.min(Number(event.at), nowSeconds)
-    if (at >= cutoff && !(next[event.accountKey] >= at)) next[event.accountKey] = at
+    if (isFinite(at)) list.push([at, String(event.provider || ""), typeof event.costUsd === "number" && event.costUsd > 0 ? event.costUsd : null,
+      Math.max(0, Math.floor(Number(event.tokens) || 0)), event.source === "remote" ? "remote" : "local"])
   }
-  var keys = Object.keys(next)
-  if (keys.length > OMP_RECENT_LIMIT) {
-    keys.sort(function (a, b) { return next[a] - next[b] })
-    for (var i = 0; i < keys.length - OMP_RECENT_LIMIT; i++) delete next[keys[i]]
-  }
-  return next
-}
-
-// The live spend log after a request: [at, costUsd, provider] per priced request, oldest first, only
-// the last OMP_SPEND_SECONDS, at most OMP_SPEND_LIMIT entries.
-function noteOmpSpend(log, event, nowSeconds) {
-  var list = listOrEmpty(log)
-  var cutoff = nowSeconds - OMP_SPEND_SECONDS
-  var next = []
-  for (var i = Math.max(0, list.length - OMP_SPEND_LIMIT + 1); i < list.length; i++)
-    if (list[i][0] >= cutoff) next.push(list[i])
-  if (event && typeof event.costUsd === "number" && event.costUsd > 0)
-    next.push([Math.min(Number(event.at), nowSeconds), event.costUsd, String(event.provider)])
-  return next
-}
-
-// What the live requests after `sinceSeconds` (the last cost scan) add up to, counting only the
-// providers that scan reads; `providers` null counts every provider.
-function ompCostSince(log, sinceSeconds, providers) {
-  var list = listOrEmpty(log)
-  var total = 0
-  for (var i = 0; i < list.length; i++) {
-    if (list[i][0] <= sinceSeconds) continue
-    if (providers && !contains(providers, list[i][2])) continue
-    total += list[i][1]
-  }
-  return Math.round(total * 1000000) / 1000000
+  var cutoff = nowSeconds - OMP_LOG_SECONDS
+  var drop = 0
+  while (drop < list.length && (list.length - drop > OMP_LOG_LIMIT || !(list[drop][0] >= cutoff))) drop++
+  if (drop > 0) list.splice(0, drop)
+  return list
 }
 
 // One omp-live.py per omp setup, shared like the proxy's live connection (see acquireLive). The
@@ -2652,13 +2686,17 @@ function acquireOmpLive(key, properties) {
   return acquireLive(key, Qt.createComponent("OmpLiveConnection.qml"), properties)
 }
 
-// Per-provider account mode (`accountModes`, a JSON object of provider id → "single" | "together");
-// a provider without one follows the automatic rule.
+// Per-provider account mode (`accountModes`, a JSON object of provider id → "single" | "together", as
+// text or already parsed); a provider without one follows the automatic rule. The one reading of the
+// setting: Settings shows what the panel applies.
 function parseAccountModes(raw) {
-  var parsed
-  try { parsed = JSON.parse(String(raw === undefined || raw === null ? "{}" : raw)) }
-  catch (error) { return {} }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
+  var parsed = raw
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw === "string") {
+    if (raw.length > 65536) return {}
+    try { parsed = JSON.parse(raw) } catch (error) { return {} }
+  }
+  if (!parsed || typeof parsed !== "object" || isListLike(parsed)) return {}
   var result = {}
   var ids = Object.keys(parsed)
   for (var i = 0; i < ids.length; i++)
@@ -2699,27 +2737,54 @@ function providerAccounts(provider) {
   return listOrEmpty(provider && provider.accounts)
 }
 
-// The mode chosen in Settings for one provider (`accountModes`, JSON keyed by provider id), or "" for
-// automatic. Settings owns writing it; anything but "single" or "together" counts as automatic.
+// The mode chosen in Settings for one provider (`accountModes`, read by parseAccountModes), or "" for
+// automatic. Settings owns writing it; anything parseAccountModes drops counts as automatic.
 function accountModeChoice(raw, providerId) {
-  var parsed = raw
-  if (typeof raw === "string") {
-    if (raw.length > 65536) return ""
-    try { parsed = JSON.parse(raw) } catch (error) { return "" }
-  }
-  if (!parsed || typeof parsed !== "object" || isListLike(parsed)) return ""
-  var value = parsed[String(providerId)]
-  return value === "single" || value === "together" ? value : ""
+  var modes = parseAccountModes(raw)
+  var id = String(providerId)
+  return Object.prototype.hasOwnProperty.call(modes, id) ? modes[id] : ""
 }
 
-// Key of an account in omp's live request map: "<provider>@<accountId>".
-function accountKey(account) {
-  return String(account && account.id || "") + "@" + String(account && account.accountId || "")
-}
-
+// The newest live request for an account in a "<provider>@<accountId>" map (live omp requests, a
+// proxy's activity). A native login that omp also reads carries omp's id for it (`ompAccountId`), and
+// omp's requests name it by that id, so both keys count.
 function accountLiveAt(account, recentByAccount) {
   if (!account || !recentByAccount || typeof recentByAccount !== "object") return null
-  return finiteOrNull(recentByAccount[accountKey(account)])
+  var provider = String(account.id || "")
+  var at = finiteOrNull(recentByAccount[provider + "@" + String(account.accountId || "")])
+  var omp = typeof account.ompAccountId === "string" ? account.ompAccountId : ""
+  var also = omp !== "" ? finiteOrNull(recentByAccount[provider + "@" + omp]) : null
+  return also !== null && (at === null || also > at) ? also : at
+}
+
+// Whether a live request naming `accountId` (omp's or the proxy's id) was served by this account.
+function accountAnswersTo(account, accountId) {
+  var id = String(accountId || "")
+  return !!account && id !== "" && (String(account.accountId || "") === id
+    || (typeof account.ompAccountId === "string" && account.ompAccountId === id))
+}
+
+// The latest sign of use per account ("<provider>@<accountId>" → epoch seconds), one map for every
+// surface: live omp requests (`ompRecent`, OmpActivity.recentByAccount) and, through a proxy, its own
+// activity: `nowSeconds` for an account with a request in flight (`inFlight`, the live connection's
+// accounts), else when its last request ended (`lastUsed`, UsageActivityBackend.providers). Where
+// several say something about one account, the newest wins, so a request in flight always does.
+function mergeRecentActivity(ompRecent, inFlight, lastUsed, nowSeconds) {
+  var result = {}
+  var key
+  function note(name, at) {
+    var value = finiteOrNull(at)
+    if (value !== null && value > 0 && !(result[name] >= value)) result[name] = value
+  }
+  if (ompRecent && typeof ompRecent === "object") for (key in ompRecent) note(key, ompRecent[key])
+  var used = listOrEmpty(lastUsed)
+  for (var i = 0; i < used.length; i++)
+    if (used[i] && used[i].status === "ok" && used[i].accountId) note(String(used[i].id) + "@" + String(used[i].accountId), used[i].lastUsedAt)
+  var flying = listOrEmpty(inFlight)
+  for (var j = 0; j < flying.length; j++)
+    if (flying[j] && Number(flying[j].inFlight) > 0 && flying[j].accountId)
+      note(String(flying[j].provider) + "@" + String(flying[j].accountId), nowSeconds)
+  return result
 }
 
 function accountLastRise(account) {
@@ -2817,11 +2882,12 @@ function countedAccounts(provider, mode, nowSeconds, recentByAccount) {
 // Where an account's reading comes from (its `origin`): "omarchy" (a login in Omarchy's registry),
 // "signin" (the one native sign-in next to omp accounts), "key", "omp", or "proxy". Readings from a
 // backend without `origin` are told apart by their ids. `source` is the API's description, not a kind.
+// The one rule for every surface: rows, dots, hints and notices.
 function accountSourceKind(account, proxyMode) {
   if (!account) return ""
   var origin = String(account.origin || "")
   if (origin === "omarchy" || origin === "signin" || origin === "key" || origin === "omp" || origin === "proxy") return origin
-  if (proxyMode) return "proxy"
+  if (proxyMode || account.proxyImplementation) return "proxy"
   var id = String(account.accountId || "")
   if (id === "primary" || /^k-[0-9a-f]{8}$/.test(id)) return "key"
   if (/^omp-/.test(id)) return "omp"
@@ -2879,26 +2945,40 @@ function accountMeterRows(account) {
   return { short: short, long: long }
 }
 
-// When an account that used up a limit is usable again: the latest reset among its used-up windows
-// (each must refill), 0 when one has no reset time, null when nothing is used up.
-function accountUsedUpUntil(account) {
+// A whole percent for the compact account meters, on the side shown (`used` is % used): a window with
+// some room left never reads as used up (100% used, 0% left) through rounding.
+function compactPercent(used, mode) {
+  var value = finiteOrNull(used)
+  if (value === null) return null
+  var shown = Math.round(sideOfUsed(clamp(value, 0, 100), mode))
+  if (value < 100) shown = mode === "Remaining" ? Math.max(1, shown) : Math.min(99, shown)
+  return shown
+}
+
+// The limit an account is blocked on and when it is usable again: of its used-up windows, the one that
+// resets last ({ row, resetsAt }), since each must refill. `resetsAt` is null as soon as one used-up
+// window reports no reset time: then nothing says when the account is back. Null while every window
+// still has room. Rows and the hover card both read it, so they agree on "back 18:02".
+function accountUsedUp(account) {
   if (!account || account.status !== "ok") return null
   var rows = listOrEmpty(account.windows)
-  var until = null
+  var found = null
   for (var i = 0; i < rows.length; i++) {
     var used = windowUsed(rows[i])
     if (used === null || used < 100) continue
     var at = finiteOrNull(rows[i].resetsAt)
-    until = Math.max(until === null ? 0 : until, at === null ? 0 : at)
+    if (at === null) return { row: rows[i], resetsAt: null }
+    if (!found || at > found.resetsAt) found = { row: rows[i], resetsAt: at }
   }
-  return until
+  return found
 }
 
 // One status line for an account row, most useful first: a failed or paused reading, a limit used up
-// (with when it is back), a last-known reading, spending now, a recent switch or reset, the plan, the
-// source. `event` is this account's newest {kind: "switch"|"reset", at}, or null. Returns
-// {kind, text, at, tone}; tone is "urgent", "accent" or "dim", and `at` is a time to append.
-function accountStatusLine(account, nowSeconds, recentByAccount, event, proxyMode) {
+// (with when it is back), a last-known reading, spending now (`spending`, from accountState), a recent
+// switch or reset, the plan, the source. `event` is this account's newest {kind: "switch"|"reset", at},
+// or null. Returns {kind, text, at, tone}; tone is "urgent", "accent" or "dim", and `at` is a time to
+// append.
+function accountStatusLine(account, spending, nowSeconds, event, proxyMode) {
   if (!account) return { kind: "", text: "", at: null, tone: "dim" }
   var status = String(account.status || "")
   if (status === "error") {
@@ -2907,10 +2987,10 @@ function accountStatusLine(account, nowSeconds, recentByAccount, event, proxyMod
       text: Object.prototype.hasOwnProperty.call(ACCOUNT_ERROR_TEXT, kind) ? ACCOUNT_ERROR_TEXT[kind] : "unavailable" }
   }
   if (status === "disabled") return { kind: "paused", text: "paused", at: null, tone: "dim" }
-  var usedUp = accountUsedUpUntil(account)
-  if (usedUp !== null) return { kind: "usedup", text: "used up", at: usedUp > 0 ? usedUp : null, tone: "urgent" }
+  var usedUp = accountUsedUp(account)
+  if (usedUp !== null) return { kind: "usedup", text: "used up", at: usedUp.resetsAt, tone: "urgent" }
   if (account.stale === true) return { kind: "stale", text: "last known reading", at: null, tone: "dim" }
-  if (spendingNow(account, nowSeconds, recentByAccount)) return { kind: "spending", text: "spending now", at: null, tone: "accent" }
+  if (spending === true) return { kind: "spending", text: "spending now", at: null, tone: "accent" }
   var now = finiteOrNull(nowSeconds)
   var eventAt = event ? finiteOrNull(event.at) : null
   if (event && (event.kind === "switch" || event.kind === "reset") && withinSeconds(eventAt, now, ACCOUNT_EVENT_SECONDS))
@@ -2937,18 +3017,20 @@ function accountCanUse(account, mode, proxyMode) {
     && accountSourceKind(account, proxyMode) === "omarchy"
 }
 
-// Right side of the ACCOUNTS header: how new sessions pick an account.
-function accountsHeaderText(provider, mode, proxyMode, proxyLabel) {
+// How new sessions pick among a provider's accounts, for the ACCOUNTS header and the hover card alike:
+// "Used together · omp" (omp's pool, or an account omp reads), "Used together · Fusebox" (a proxy, named
+// by `proxyLabel`), "Omarchy · switches at 95%" or "Omarchy · notifies at 95%"; "" otherwise.
+function accountModeText(provider, mode, proxyMode, proxyLabel) {
   if (!provider) return ""
   if (mode === "together") {
-    if (proxyMode) return "used together · " + String(proxyLabel || "proxy")
+    if (proxyMode) return "Used together · " + String(proxyLabel || "proxy")
     var accounts = providerAccounts(provider)
     var omp = !!provider.pool
     for (var i = 0; i < accounts.length && !omp; i++) {
       var origins = listOrEmpty(accounts[i] && accounts[i].origins)
       omp = accountSourceKind(accounts[i], false) === "omp" || contains(origins, "omp")
     }
-    return "used together" + (omp ? " · omp" : "")
+    return "Used together" + (omp ? " · omp" : "")
   }
   var policy = provider.accountSwitch
   if (!policy || typeof policy !== "object") return ""
@@ -2959,28 +3041,75 @@ function accountsHeaderText(provider, mode, proxyMode, proxyLabel) {
   return ""
 }
 
-// Dots for a provider tile: one per account in stable order, at most four. Five or more show three,
-// counted accounts first among them, and `more` for the rest. Each dot: {index, counted, severity}.
-function accountDots(provider, counted, warningThreshold, criticalThreshold) {
+// An account's ring wherever it has a dot (chip, tile, hover card, row): "ok", "warning" or "critical"
+// from its tightest limit, so an account blocked on a used-up weekly limit is critical whatever window a
+// chip shows; "error" for a failed or paused reading, "unknown" without one.
+function accountRingState(account, warningThreshold, criticalThreshold) {
+  if (!account) return "unknown"
+  if (account.status === "error" || account.status === "disabled") return "error"
+  if (account.status !== "ok") return "unknown"
+  var level = severity(account, warningThreshold, criticalThreshold)
+  return level === "ok" || level === "warning" || level === "critical" ? level : "unknown"
+}
+
+// Up to `keep` of the account indexes in `order`, counted ones first so a counted account is never
+// folded away, listed in `order`.
+function pickAccounts(order, counted, keep) {
+  var list = listOrEmpty(order)
+  var chosen = []
+  for (var c = 0; c < list.length && chosen.length < keep; c++)
+    if (contains(counted, list[c])) chosen.push(list[c])
+  for (var o = 0; o < list.length && chosen.length < keep; o++)
+    if (!contains(chosen, list[o])) chosen.push(list[o])
+  return Array.prototype.filter.call(list, function (index) { return contains(chosen, index) })
+}
+
+// What every surface says about a provider's accounts (DESIGN §2–3), worked out once per provider and
+// clock tick so the chip, its dots and hover card, the tile, the Limits rows and the runway agree.
+// `options`: modes (the accountModes setting, text or parsed), proxyMode, nowSeconds (the panel's one
+// clock), recentByAccount (mergeRecentActivity), warningThreshold, criticalThreshold. Returns null
+// without accounts, else:
+// - mode: "single" | "together"; counted: indexes the chip counts (ascending); value: the counted
+//   account with the least headroom, whose figure the tile shows;
+// - spending, rings, inUse: one entry per account ("in use" only one at a time, never through a proxy);
+// - order: the Limits rows' order; stable: the dots' order (Omarchy logins, keys, omp);
+// - dots: { dots: [{ index, state, counted, spending }], extra }, at most four dots in stable order,
+//   three and "+N" from five accounts on, counted accounts kept.
+function accountState(provider, options) {
   var accounts = providerAccounts(provider)
-  var marked = listOrEmpty(counted)
-  var order = accountOrder(accounts, "single", false)
-  var shown = order
-  if (order.length > 4) {
-    shown = []
-    for (var c = 0; c < order.length && shown.length < 3; c++)
-      if (contains(marked, order[c])) shown.push(order[c])
-    for (var o = 0; o < order.length && shown.length < 3; o++)
-      if (!contains(shown, order[o])) shown.push(order[o])
-    shown.sort(function (a, b) { return order.indexOf(a) - order.indexOf(b) })
+  if (accounts.length === 0) return null
+  var opts = options || {}
+  var proxyMode = opts.proxyMode === true
+  var mode = accountMode(provider, opts.modes, proxyMode, opts.nowSeconds, opts.recentByAccount)
+  var counted = countedAccounts(provider, mode, opts.nowSeconds, opts.recentByAccount)
+  var spending = []
+  var rings = []
+  var inUse = []
+  for (var i = 0; i < accounts.length; i++) {
+    spending.push(spendingNow(accounts[i], opts.nowSeconds, opts.recentByAccount))
+    rings.push(accountRingState(accounts[i], opts.warningThreshold, opts.criticalThreshold))
+    inUse.push(mode === "single" && !proxyMode && !!accounts[i] && accounts[i].active === true)
   }
+  var stable = accountOrder(accounts, "single", proxyMode)
+  var shown = stable.length <= 4 ? stable : pickAccounts(stable, counted, 3)
   var dots = []
-  for (var i = 0; i < shown.length; i++) {
-    var account = accounts[shown[i]]
-    dots.push({ index: shown[i], counted: contains(marked, shown[i]),
-      severity: severity(account, warningThreshold, criticalThreshold) })
+  for (var d = 0; d < shown.length; d++) {
+    var index = shown[d]
+    var isCounted = contains(counted, index)
+    dots.push({ index: index, state: rings[index], counted: isCounted, spending: isCounted && spending[index] })
   }
-  return { dots: dots, more: order.length - shown.length }
+  var value = leastHeadroomIndex(accounts, counted)
+  return {
+    mode: mode,
+    counted: counted,
+    value: value >= 0 ? value : (counted.length > 0 ? counted[0] : -1),
+    spending: spending,
+    rings: rings,
+    inUse: inUse,
+    order: mode === "together" ? accountOrder(accounts, "together", proxyMode) : stable,
+    stable: stable,
+    dots: { dots: accounts.length > 1 ? dots : [], extra: accounts.length > 1 ? stable.length - shown.length : 0 }
+  }
 }
 
 // Where a limit is heading at the current pace. `projected` is the use expected at reset (at most
@@ -3210,6 +3339,37 @@ function poolLine(pool, row) {
   return ""
 }
 
+// Whether a window reset between two readings of it ({ used, resetsAt }, resetsAt in epoch seconds or
+// null): its use fell, its old reset time was due (at most five minutes ahead of `nowSeconds`), and
+// the new reset time lies past the old one, or there is none any more (an idle window whose provider
+// reports no reset). A rolling window that sheds old use keeps a reset time that is not due yet, or
+// never reports one, so it never counts. The one rule for Limits notices and chip flashes.
+function windowWasReset(old, next, nowSeconds) {
+  if (!old || !next) return false
+  var before = finiteOrNull(old.used)
+  var after = finiteOrNull(next.used)
+  var was = finiteOrNull(old.resetsAt)
+  var now = finiteOrNull(nowSeconds)
+  if (before === null || after === null || was === null || now === null) return false
+  if (!(after < before - 0.5) || was > now + 300) return false
+  var is = finiteOrNull(next.resetsAt)
+  return is === null || is > was + 60
+}
+
+// The Qt format of a clock time shown next to `nowSeconds`: the time alone today or within twelve hours,
+// with the weekday within six days, with the date further out. The one rule behind every clock time the
+// panel and the bar show (rows, limit cards, the runway, the hover card, notices); `timeFormat` is the
+// user's clock format.
+function clockPattern(epochSeconds, nowSeconds, timeFormat) {
+  var format = String(timeFormat || "HH:mm")
+  var at = finiteOrNull(epochSeconds)
+  var now = finiteOrNull(nowSeconds)
+  if (at === null || now === null) return format
+  var distance = Math.abs(at - now)
+  if (distance < 12 * 3600 || new Date(at * 1000).toDateString() === new Date(now * 1000).toDateString()) return format
+  return (distance < 6 * 86400 ? "ddd " : "d MMM ") + format
+}
+
 // Changes between two readings worth one notice: Omarchy moving new sessions to another login, a
 // limit that reset after it was nearly used up, and omp losing a sign-in it was renewing. The first
 // reading of a provider only seeds `state`. Returns {state, events}; each event is
@@ -3265,9 +3425,7 @@ function accountEvents(previous, providers, nowSeconds, warningThreshold) {
         var reading = { used: used, resetsAt: finiteOrNull(row.resetsAt) }
         entry.windows[key] = reading
         var old = before && before.windows ? before.windows[key] : null
-        if (!old || old.resetsAt === null || reading.resetsAt === null || now === null) continue
-        if (reading.resetsAt > old.resetsAt + 60 && old.resetsAt <= now + 300 && used < old.used
-            && old.used >= 100 - warning)
+        if (old && old.used >= 100 - warning && windowWasReset(old, reading, now))
           events.push({ id: "reset|" + id + "|" + key + "|" + old.resetsAt, kind: "reset", provider: id,
             accountId: accountId, from: "", fromUsed: old.used, label: String(row.label || "Usage limit"),
             at: Math.min(old.resetsAt, now) })
@@ -3305,22 +3463,11 @@ function eventNoticeText(event, provider, names, clock, manual) {
 }
 
 // ---- 1.9 QmlBar ----
-// The menu bar chip of a provider with several accounts (DESIGN §2): which accounts it counts, its
-// account dots, its hint, the clock pie once every account is used up, one chip per account, the
+// The menu bar chip of a provider with several accounts (DESIGN §2): its account strip (the dots of
+// accountState, the hint, the clock pie once every account is used up), one chip per account, the
 // hover card, and the one-shot flashes.
 
-// What kind of account a reading is: "omarchy" (an Omarchy login), "key", "omp", "proxy" or "signin".
-// The backend's `origin` says; without it the kind is told from the account id.
-function barAccountOrigin(account) {
-  if (!account) return ""
-  var origin = String(account.origin || "")
-  if (["omarchy", "key", "omp", "proxy", "signin"].indexOf(origin) !== -1) return origin
-  var id = String(account.accountId || "")
-  if (id === "primary" || /^k-[0-9a-f]{8}$/.test(id)) return "key"
-  if (id.indexOf("omp-") === 0) return "omp"
-  if (account.proxyImplementation) return "proxy"
-  return account.label || id === "main" ? "omarchy" : "signin"
-}
+var BAR_HOVER_ROWS = 6  // accounts the hover card lists before "+N more"
 
 // An account's name for the bar and the hover card: the name it was given, else "Account N". Never an
 // email, whatever the privacy setting: the bar is on screen all day.
@@ -3360,56 +3507,6 @@ function barAccountInitials(names) {
   return result
 }
 
-// The window an account is blocked on and when it is back: the latest reset among its used-up windows.
-// Null while the account still has allowance everywhere. `resetsAt` is null when a used-up window has
-// no reset time.
-function barUsedUpWindow(account) {
-  if (!account || account.status !== "ok") return null
-  var rows = listOrEmpty(account.windows)
-  var found = null
-  for (var i = 0; i < rows.length; i++) {
-    var left = remainingOf(rows[i])
-    if (left === null || left > 0) continue
-    var at = finiteOrNull(rows[i].resetsAt)
-    if (!found || at === null || (found.resetsAt !== null && at > found.resetsAt))
-      found = { row: rows[i], resetsAt: at }
-    if (at === null) break
-  }
-  return found
-}
-
-// Ring state of one account on the chip's window: ok, warning, critical, error, or unknown without a
-// reading. An account blocked on any used-up window is critical whatever the chip's window says.
-function barAccountState(account, selector, warningThreshold, criticalThreshold) {
-  if (!account) return "unknown"
-  if (account.status === "error" || account.status === "disabled") return "error"
-  if (account.status !== "ok") return "unknown"
-  if (minRemaining(account) === 0) return "critical"
-  var level = severity(account, warningThreshold, criticalThreshold, remainingForWindow(account, selector))
-  return level === "none" ? "unknown" : level
-}
-
-// `keep` of `count` account indexes, counted accounts first so a counted account is never folded away;
-// all of them when they fit. Indexes stay in account order.
-function barPickAccounts(count, counted, keep) {
-  var result = []
-  if (count <= keep) {
-    for (var i = 0; i < count; i++) result.push(i)
-    return result
-  }
-  var wanted = listOrEmpty(counted)
-  for (var j = 0; j < wanted.length && result.length < keep; j++)
-    if (wanted[j] >= 0 && wanted[j] < count && result.indexOf(wanted[j]) === -1) result.push(wanted[j])
-  for (var k = 0; k < count && result.length < keep; k++)
-    if (result.indexOf(k) === -1) result.push(k)
-  return result.sort(function (a, b) { return a - b })
-}
-
-// Which accounts get a dot: up to four, one each; five or more show three dots and "+N".
-function barDotSlots(count, counted) {
-  return barPickAccounts(count, counted, count <= 4 ? 4 : 3)
-}
-
 // The counted account whose figure the chip shows: the one with the least headroom on the chip's
 // window, so a chip never claims more room than the busiest account has. A used-up account only wins
 // when every counted account is used up: new sessions go where there is room. -1 without a counted
@@ -3432,36 +3529,29 @@ function barValueIndex(provider, counted, selector) {
   return best
 }
 
-// Everything the chip's account strip shows (DESIGN §2.1). `options`: selector (the chip's window),
-// warningThreshold and criticalThreshold (% left), nowSeconds, recentByAccount, stale, extraKeys.
-// Returns { count, dots: [{ index, state, counted, spending }], extra, allUsedUp, resetAt, pieFraction,
-// hint, hintKind ("" | "switch" | "reset") }. A switch hint only appears in single mode under Omarchy's
-// manual switching, when the counted login is critical and another login is below warning.
-function barAccountStrip(provider, counted, mode, options) {
+// Everything the chip's account strip shows (DESIGN §2.1): the provider's dots (accountState().dots),
+// the switch hint, and the clock pie once every account is used up. `state` is accountState();
+// `options`: selector (the chip's window), nowSeconds, stale, extraKeys. Returns { count, dots:
+// [{ index, state, counted, spending }], extra, allUsedUp, resetAt, pieFraction, hint, hintKind ("" |
+// "switch" | "reset") }. A switch hint only appears in single mode under Omarchy's manual switching,
+// when the counted login is critical and another login is ok.
+function barAccountStrip(provider, state, options) {
   var opts = options || {}
   var accounts = listOrEmpty(provider && provider.accounts)
-  var wanted = listOrEmpty(counted)
   var now = Number(opts.nowSeconds) || 0
   var result = { count: accounts.length, dots: [], extra: 0, allUsedUp: false, resetAt: 0, pieFraction: -1,
                  hint: "", hintKind: "" }
-  if (accounts.length < 2) return result
-  var states = []
-  for (var i = 0; i < accounts.length; i++)
-    states.push(barAccountState(accounts[i], opts.selector, opts.warningThreshold, opts.criticalThreshold))
-  var slots = barDotSlots(accounts.length, wanted)
-  for (var s = 0; s < slots.length; s++) {
-    var index = slots[s]
-    var isCounted = wanted.indexOf(index) !== -1
-    result.dots.push({ index: index, state: states[index], counted: isCounted,
-                       spending: isCounted && spendingNow(accounts[index], now, opts.recentByAccount) })
-  }
-  result.extra = accounts.length - slots.length
+  if (accounts.length < 2 || !state) return result
+  var wanted = listOrEmpty(state.counted)
+  var states = listOrEmpty(state.rings)
+  result.dots = listOrEmpty(state.dots && state.dots.dots)
+  result.extra = Number(state.dots && state.dots.extra) || 0
 
   var usedUp = 0
   var soonest = null
   for (var j = 0; j < accounts.length; j++) {
     if (states[j] === "error") continue
-    var blocked = barUsedUpWindow(accounts[j])
+    var blocked = accountUsedUp(accounts[j])
     if (!blocked) return withSwitchHint(result)
     usedUp++
     if (blocked.resetsAt !== null && (!soonest || blocked.resetsAt < soonest.resetsAt)) soonest = blocked
@@ -3482,13 +3572,13 @@ function barAccountStrip(provider, counted, mode, options) {
 
   function withSwitchHint(strip) {
     var choice = provider.accountSwitch
-    if (mode === "together" || opts.stale || wanted.length !== 1 || !choice || choice.mode !== "manual") return strip
+    if (state.mode === "together" || opts.stale || wanted.length !== 1 || !choice || choice.mode !== "manual") return strip
     var current = wanted[0]
-    if (states[current] !== "critical" || barAccountOrigin(accounts[current]) !== "omarchy") return strip
+    if (states[current] !== "critical" || accountSourceKind(accounts[current], false) !== "omarchy") return strip
     var target = -1
     var targetLeft = -1
     for (var k = 0; k < accounts.length; k++) {
-      if (k === current || states[k] !== "ok" || barAccountOrigin(accounts[k]) !== "omarchy") continue
+      if (k === current || states[k] !== "ok" || accountSourceKind(accounts[k], false) !== "omarchy") continue
       var left = remainingForWindow(accounts[k], opts.selector)
       if (left !== null && left > targetLeft) {
         target = k
@@ -3502,23 +3592,35 @@ function barAccountStrip(provider, counted, mode, options) {
   }
 }
 
-// Chips in the bar. Under "chips", a provider with two or more accounts gets one chip per account (at
-// most four, counted accounts first when some must stay out), each with the account's initial; every
-// other provider keeps one chip. `countedFor(provider)` gives the counted account indexes. Keys are
-// stable across readings so chips keep their state: "<provider>" or "<provider>@<account id>".
-function barChipEntries(providers, barAccountMode, countedFor, extraRaw) {
+// How many chips a provider takes in the bar: one, or under "chips" one per account, at most four and
+// never more than the bar's cap (`max`, 0 for none), so a provider always fits the cap on its own.
+function barChipCount(provider, barAccountMode, max) {
+  var accounts = listOrEmpty(provider && provider.accounts)
+  if (barAccountMode !== "chips" || accounts.length < 2 || String(provider && provider.status) === "error") return 1
+  var cap = Math.floor(Number(max))
+  return Math.min(accounts.length, 4, isFinite(cap) && cap > 0 ? cap : 4)
+}
+
+// Chips in the bar. Under "chips", a provider with two or more accounts gets one chip per account
+// (barChipCount of them, counted accounts first when some must stay out, in the dots' order), each with
+// the account's initial; every other provider keeps one chip. `stateFor(provider)` gives its
+// accountState(); `max` is the bar's chip cap. Keys are stable across readings so chips keep their state:
+// "<provider>" or "<provider>@<account id>".
+function barChipEntries(providers, barAccountMode, stateFor, extraRaw, max) {
   var list = listOrEmpty(providers)
   var result = []
   for (var i = 0; i < list.length; i++) {
     var provider = list[i]
     var id = String(provider && provider.id)
     var accounts = listOrEmpty(provider && provider.accounts)
-    if (barAccountMode !== "chips" || accounts.length < 2 || String(provider.status) === "error") {
+    var count = barChipCount(provider, barAccountMode, max)
+    var state = count > 1 && typeof stateFor === "function" ? stateFor(provider) : null
+    if (!state) {
       result.push({ key: id, providerId: id, accountIndex: -1, initial: "", counted: false })
       continue
     }
-    var counted = listOrEmpty(countedFor ? countedFor(provider) : [])
-    var slots = barPickAccounts(accounts.length, counted, 4)
+    var counted = listOrEmpty(state.counted)
+    var slots = pickAccounts(state.stable, counted, count)
     var names = []
     for (var n = 0; n < accounts.length; n++) names.push(barAccountName(accounts[n], n, extraRaw))
     var initials = barAccountInitials(names)
@@ -3526,27 +3628,28 @@ function barChipEntries(providers, barAccountMode, countedFor, extraRaw) {
       var index = slots[s]
       var accountId = accounts[index].accountId
       result.push({ key: id + "@" + (accountId !== undefined && accountId !== null && accountId !== "" ? String(accountId) : "#" + index),
-                    providerId: id, accountIndex: index, initial: initials[index], counted: counted.indexOf(index) !== -1 })
+                    providerId: id, accountIndex: index, initial: initials[index], counted: contains(counted, index) })
     }
   }
   return result
 }
 
-// One-shot chip flash (DESIGN §2.2): "alert" when the chip's reading moves to a worse severity, "reset"
-// when the same account's window resets (its usage falls back), "" otherwise. Readings are
-// { key, severity, used }; the first one only seeds, and staying at a severity never flashes again.
-function barFlashKind(previous, next) {
-  if (!previous || !next) return ""
-  if (previous.key === next.key && previous.used !== null && next.used !== null
-      && Number(next.used) < Number(previous.used) - 0.5) return "reset"
+// One-shot chip flash (DESIGN §2.2) from two readings of a chip, { key, severity, used, resetsAt }
+// with `key` naming the account and window shown: "reset" when that window reset (windowWasReset, the
+// rule Limits notices use, so a rolling window shedding old use never flashes), "alert" when it moved to
+// a worse severity, "" otherwise. Another key (the chip moved to another account or window) only seeds,
+// and staying at a severity never flashes again.
+function barFlashKind(previous, next, nowSeconds) {
+  if (!previous || !next || previous.key !== next.key) return ""
+  if (windowWasReset(previous, next, nowSeconds)) return "reset"
   var before = SEVERITY_RANK[previous.severity]
   var after = SEVERITY_RANK[next.severity]
   return before !== undefined && after !== undefined && before > 0 && after > before ? "alert" : ""
 }
 
-// A chip fades when its reading is old: the last refresh failed, the reading is a kept last-known one,
-// or the last success is more than two refresh intervals ago.
-function barReadingStale(nowMs, lastSuccessMs, intervalSeconds, refreshFailed, reading) {
+// A reading is old once the last refresh failed, it is a kept last-known one, or the last success is
+// more than two refresh intervals ago: chips fade, Limits' footer says "retrying". One rule, one clock.
+function readingStale(nowMs, lastSuccessMs, intervalSeconds, refreshFailed, reading) {
   if (refreshFailed || (reading && reading.stale === true)) return true
   var last = Number(lastSuccessMs)
   if (!isFinite(last) || last <= 0) return false
@@ -3561,72 +3664,93 @@ function barAgoText(seconds) {
   return formatDuration(value)
 }
 
-// The hover card of a chip with several accounts (DESIGN §2.4), as plain text and values. `options`:
-// selector, warningThreshold, criticalThreshold, nowSeconds, recentByAccount, proxyMode, extraKeys,
-// readAtSeconds, stale, formatClock(epochSeconds) → "18:02", note (one extra line under the header).
-function barHoverModel(provider, counted, mode, options) {
+// The hover card of a chip with several accounts (DESIGN §2.4), as plain text and values, from the
+// provider's accountState() so it says what the chip and Limits say. It lists every account up to
+// BAR_HOVER_ROWS; past that the counted ones, then those closest to a limit, and `more` for the rest.
+// Rows follow the dots' order and are keyed by account. `options`: proxyMode, proxyLabel, nowSeconds,
+// extraKeys, readAtSeconds, stale, formatClock(epochSeconds) → "18:02".
+function barHoverModel(provider, state, options) {
   var opts = options || {}
   var accounts = listOrEmpty(provider && provider.accounts)
-  var wanted = listOrEmpty(counted)
   var now = Number(opts.nowSeconds) || 0
   var clock = typeof opts.formatClock === "function" ? opts.formatClock : function (seconds) { return String(seconds) }
-  var modeText = ""
-  if (mode === "together") {
-    var via = provider && provider.pool ? "omp" : opts.proxyMode ? proxyName(provider && provider.proxyImplementation) : ""
-    modeText = "Used together" + (via ? " · " + via : "")
-  } else if (provider && provider.accountSwitch) {
-    var threshold = clamp(provider.accountSwitch.threshold, 0, 100)
-    if (provider.accountSwitch.mode === "auto") modeText = "Omarchy · switches at " + formatPercent(threshold) + "%"
-    else if (provider.accountSwitch.mode === "manual") modeText = "Omarchy · notifies at " + formatPercent(threshold) + "%"
+  var counted = state ? listOrEmpty(state.counted) : []
+  var stable = state ? listOrEmpty(state.stable) : []
+  var shown = stable
+  if (stable.length > BAR_HOVER_ROWS) {
+    var ranked = Array.prototype.slice.call(stable)
+    ranked.sort(function (a, b) {
+      var first = (contains(counted, a) ? 0 : 1) - (contains(counted, b) ? 0 : 1)
+      if (first !== 0) return first
+      var left = minRemaining(accounts[a])
+      var right = minRemaining(accounts[b])
+      left = left === null ? Infinity : left
+      right = right === null ? Infinity : right
+      return left !== right ? (left < right ? -1 : 1) : stable.indexOf(a) - stable.indexOf(b)
+    })
+    var chosen = ranked.slice(0, BAR_HOVER_ROWS)
+    shown = Array.prototype.filter.call(stable, function (index) { return contains(chosen, index) })
   }
   var rows = []
-  for (var i = 0; i < accounts.length; i++) {
+  for (var r = 0; r < shown.length; r++) {
+    var i = shown[r]
     var account = accounts[i]
-    var state = barAccountState(account, opts.selector, opts.warningThreshold, opts.criticalThreshold)
-    var blocked = barUsedUpWindow(account)
+    var ring = state.rings[i]
+    var blocked = accountUsedUp(account)
     var activity = account.activity || {}
     var delta = finiteOrNull(activity.lastDelta)
     var increased = finiteOrNull(activity.lastIncreaseAt)
     var readAt = finiteOrNull(activity.lastReadingAt)
     var status = "idle"
     var tone = "dim"
-    if (state === "error") {
+    if (ring === "error") {
       status = errorReasonLabel(account.errorKind)
       tone = "urgent"
     } else if (blocked) {
       status = "used up" + (blocked.resetsAt !== null ? " · back " + clock(blocked.resetsAt) : "")
       tone = "urgent"
-    } else if (spendingNow(account, now, opts.recentByAccount)) {
+    } else if (state.spending[i]) {
       status = "spending now"
       tone = "accent"
     } else if (delta !== null && delta > 0 && increased !== null && readAt !== null && increased >= readAt) {
       status = "+" + formatPercent(delta) + " last reading"
     }
     var history = account.history || {}
-    rows.push({ index: i, name: barAccountName(account, i, opts.extraKeys), inUse: account.active === true,
-                counted: wanted.indexOf(i) !== -1, state: state, status: status, tone: tone,
+    var accountId = account.accountId
+    rows.push({ key: accountId !== undefined && accountId !== null && accountId !== "" ? String(accountId) : "#" + i,
+                index: i, name: barAccountName(account, i, opts.extraKeys), inUse: state.inUse[i] === true,
+                counted: contains(counted, i), state: ring, status: status, tone: tone,
                 spark: listOrEmpty(history.h24), account: account })
   }
   var readAtSeconds = Number(opts.readAtSeconds) || 0
   var readText = readAtSeconds <= 0 ? "" : opts.stale
     ? "Read " + barAgoText(now - readAtSeconds) + " ago" : "Read at " + clock(readAtSeconds)
   return { title: providerShortName(provider) + " · " + accounts.length + " accounts",
-           modeText: modeText, note: String(opts.note || ""), rows: rows, readText: readText, stale: !!opts.stale }
+           modeText: accountModeText(provider, state ? state.mode : "single", opts.proxyMode === true, opts.proxyLabel),
+           rows: rows, more: Math.max(0, accounts.length - rows.length), readText: readText, stale: !!opts.stale }
 }
 
-// What a screen reader hears for a chip: "Claude, Work in use, 72% used, Personal 3% used".
-function barAccessibleName(provider, options) {
+// What a screen reader hears for a chip: "Claude, Work in use, 72% used, Personal 3% used", then what
+// its strip says (`strip`: barAccountStrip): "switch to Personal", or "all used up, back in 1h 0m". A
+// chip per account names only its own account (`accountIndex`). `state` is accountState(); `options`:
+// selector, quotaMode, extraKeys, accountIndex, strip.
+function barAccessibleName(provider, state, options) {
   var opts = options || {}
   var parts = [providerShortName(provider)]
   var accounts = listOrEmpty(provider && provider.accounts)
+  var only = typeof opts.accountIndex === "number" && opts.accountIndex >= 0 ? opts.accountIndex : -1
   for (var i = 0; i < accounts.length; i++) {
+    if (only >= 0 && i !== only) continue
     var account = accounts[i]
     var left = remainingForWindow(account, opts.selector)
     var shown = left === null ? null : opts.quotaMode === "Remaining" ? left : usedFromRemaining(left)
     var figure = account.status === "error" ? errorReasonLabel(account.errorKind)
       : shown === null ? "no reading" : quotaText(shown, opts.quotaMode)
     var name = barAccountName(account, i, opts.extraKeys)
-    parts.push(account.active === true ? name + " in use, " + figure : name + " " + figure)
+    parts.push(state && state.inUse[i] === true ? name + " in use, " + figure : name + " " + figure)
   }
+  var strip = opts.strip
+  if (strip && strip.hintKind === "switch" && strip.hint) parts.push("switch to " + String(strip.hint).replace(/^→ /, ""))
+  else if (strip && strip.allUsedUp) parts.push(strip.resetAt > 0 ? "all used up, back in " + strip.hint : "all used up")
   return parts.join(", ")
 }

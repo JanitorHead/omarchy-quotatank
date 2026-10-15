@@ -91,9 +91,11 @@ Ui.Panel {
     function (provider) { return barLimitsFor(provider.id).top })
     .filter(function (provider) { return !hideUsedUpProviders || UsageLogic.usedUpLongWindow(provider) === null })
   // With many providers the bar keeps the ones closest to a limit (failures first) and folds the
-  // rest into one "+N" chip, so the bar never pushes into the clock.
-  readonly property var chipSelection: UsageLogic.limitChips(barCandidates,
-    Number(setting("barMaxChips", UsageLogic.DEFAULT_SETTINGS.barMaxChips)), chipPressure)
+  // rest into one "+N" chip, so the bar never pushes into the clock. The cap counts chips: under "One
+  // chip per account" a provider takes one chip per account it shows.
+  readonly property int barMaxChips: Number(setting("barMaxChips", UsageLogic.DEFAULT_SETTINGS.barMaxChips))
+  readonly property var chipSelection: UsageLogic.limitChips(barCandidates, barMaxChips, chipPressure,
+    function (provider) { return UsageLogic.barChipCount(provider, root.barAccountMode, root.barMaxChips) })
   readonly property var percentageProviders: chipSelection.shown
   readonly property var overflowProviders: chipSelection.hidden
   function chipPressure(provider) {
@@ -108,6 +110,8 @@ Ui.Panel {
     return UsageLogic.barLimitsFor(barProviderLimits, providerId, barWindow, barWindowSecondary)
   }
   property alias accountActivity: activityBackend
+  property alias usageBackend: backend
+  readonly property alias providerTiles: navigation.tiles
   readonly property bool percentageMode: displayMode === "Percentages"
     && !(bar && bar.vertical) && percentageProviders.length > 0
   readonly property bool alarming: anyProviderAlarming()
@@ -134,40 +138,69 @@ Ui.Panel {
     return result
   }
 
-  // omp's live requests by "<provider>@<accountId>" (epoch seconds), from the omp activity helper.
-  readonly property var recentByAccount: ompActivity.recentByAccount || ({})
+  // ---- Accounts: one state per provider (UsageLogic.accountState), read by the chip, its dots and
+  // hover card, the tile, the Limits rows, the detail and the runway, so they all count, order and ring
+  // the same accounts. It follows the panel's one clock (`nowMs`: every second while the panel is
+  // open, every 30 s for the bar while it is closed) and one map of recent use.
   readonly property real nowSeconds: nowMs / 1000
-  // A request in flight through the proxy means its account is spending now, like an omp request.
-  readonly property var liveRecent: {
-    var merged = Object.assign({}, recentByAccount || {})
-    if (proxyMode && activityBackend.useLive) {
-      var rows = UsageLogic.listOrEmpty(activityBackend.liveAccounts)
-      for (var i = 0; i < rows.length; i++)
-        if (rows[i] && Number(rows[i].inFlight) > 0) merged[rows[i].provider + "@" + rows[i].accountId] = nowSeconds
-    }
-    return merged
+  // omp's live feed (OmpActivity.qml): requests as they happen, with their accounts. Tests put a
+  // stand-in with the same signals and properties here.
+  property QtObject ompActivity: ompActivityHelper
+  // The latest sign of use per account: live omp requests and, through a proxy, its requests in flight
+  // (now) and each account's last request; the newest wins (UsageLogic.mergeRecentActivity).
+  readonly property var recentByAccount: UsageLogic.mergeRecentActivity(
+    ompActivity && ompActivity.recentByAccount ? ompActivity.recentByAccount : null,
+    proxyMode && activityBackend.useLive ? activityBackend.liveAccounts : [],
+    proxyMode ? activityBackend.providers : [], nowSeconds)
+  readonly property var accountModeChoices: UsageLogic.parseAccountModes(setting("accountModes", "{}"))
+  readonly property var accountStates: {
+    var states = {}
+    for (var i = 0; i < providers.length; i++)
+      states[String(providers[i].id)] = UsageLogic.accountState(providers[i], { modes: accountModeChoices,
+        proxyMode: proxyMode, nowSeconds: nowSeconds, recentByAccount: recentByAccount,
+        warningThreshold: warningThreshold, criticalThreshold: criticalThreshold })
+    return states
   }
-  readonly property var accountModes: setting("accountModes", "{}")
-  function accountModeOf(reading) {
-    return UsageLogic.accountMode(reading, accountModes, proxyMode, nowSeconds, liveRecent)
+  function accountStateOf(reading) {
+    return reading ? accountStates[String(reading.id)] || null : null
   }
-  // One at a time ("single") or used together, for the provider on screen.
-  readonly property string accountMode: accountModeOf(providerSummary)
-  readonly property var countedIndexes: UsageLogic.countedAccounts(providerSummary, accountMode, nowSeconds, liveRecent)
-  readonly property var accountOrderIndexes: UsageLogic.accountOrder(proxyAccounts, accountMode, proxyMode)
+  // The provider on screen: one at a time ("single") or used together, the counted accounts, row order.
+  readonly property var providerState: accountStateOf(providerSummary)
+  readonly property string accountMode: providerState ? providerState.mode : "single"
+  readonly property var countedIndexes: providerState ? providerState.counted : []
+  readonly property var accountOrderIndexes: providerState ? providerState.order : []
   readonly property var accountNames: {
     var names = []
     for (var i = 0; i < proxyAccounts.length; i++) names.push(accountRowName(proxyAccounts[i], i + 1))
     return names
   }
-  // The account the detail shows. Empty follows the account the chip counts.
+  // The account the detail shows: the one the user picked; without a pick, the counted account as it
+  // was when the panel opened or the provider was chosen (`defaultAccountId`). Counted accounts change
+  // with every request, so the detail never follows them while it is on screen.
   property string selectedAccountId: ""
-  readonly property int selectedAccountIndex: {
+  property string defaultAccountId: ""
+  function accountIndexOf(accountId) {
+    if (accountId === "") return -1
     for (var i = 0; i < proxyAccounts.length; i++)
-      if (selectedAccountId !== "" && String(proxyAccounts[i].accountId) === selectedAccountId) return i
-    var counted = UsageLogic.leastHeadroomIndex(proxyAccounts, countedIndexes)
-    return counted >= 0 ? counted : countedIndexes.length > 0 ? countedIndexes[0] : (proxyAccounts.length > 0 ? 0 : -1)
+      if (String(proxyAccounts[i].accountId) === accountId) return i
+    return -1
   }
+  function countedAccountIndex() {
+    var index = providerState ? providerState.value : -1
+    return index >= 0 ? index : (proxyAccounts.length > 0 ? 0 : -1)
+  }
+  function latchDefaultAccount() {
+    var index = countedAccountIndex()
+    defaultAccountId = index >= 0 ? String(proxyAccounts[index].accountId) : ""
+  }
+  readonly property int selectedAccountIndex: {
+    var picked = accountIndexOf(selectedAccountId)
+    if (picked >= 0) return picked
+    var latched = accountIndexOf(defaultAccountId)
+    return latched >= 0 ? latched : countedAccountIndex()
+  }
+  // New accounts, or the latched one gone: latch again once the reading has settled.
+  onProxyAccountsChanged: Qt.callLater(function() { if (root.accountIndexOf(root.defaultAccountId) < 0) root.latchDefaultAccount() })
   readonly property var selectedAccount: accountOverview && selectedAccountIndex >= 0 ? proxyAccounts[selectedAccountIndex] : null
   // The reading the detail shows: the selected account, or the provider itself.
   readonly property var detail: accountOverview ? selectedAccount : provider
@@ -206,9 +239,10 @@ Ui.Panel {
     detailSwapAnimation.start()
   }
 
-  // Session details of the selected proxy account, opened from its session badge.
+  // Session details of the selected proxy account, opened from its session badge. They close when
+  // another account is shown, not when a reading moves the same account to another row.
   property bool accountActivityExpanded: false
-  onSelectedAccountIndexChanged: accountActivityExpanded = false
+  onDetailKeyChanged: accountActivityExpanded = false
 
   // A proxy account's banked reset: the confirmation takes over the panel, as before.
   function resetAccount(accountId) {
@@ -260,13 +294,12 @@ Ui.Panel {
     onRefreshRequested: backend.refresh()
   }
 
-  // A time today reads as a clock time; later ones carry the weekday.
+  // Every clock time the panel and the bar show, in the user's clock format: the time alone today, with
+  // the weekday within the week, with the date further out (UsageLogic.clockPattern).
   function clockText(epochSeconds) {
     var seconds = Number(epochSeconds)
-    if (!isFinite(seconds)) return ""
-    var date = new Date(seconds * 1000)
-    return Math.abs(seconds - Date.now() / 1000) < 12 * 3600
-      ? Qt.formatTime(date, tickTimeFormat) : Qt.formatDateTime(date, "ddd " + tickTimeFormat)
+    if (!isFinite(seconds) || seconds <= 0) return ""
+    return Qt.formatDateTime(new Date(seconds * 1000), UsageLogic.clockPattern(seconds, nowSeconds, tickTimeFormat))
   }
 
   // Limit cards keep their delegates across readings (keyed by account and window), so a new reading
@@ -314,15 +347,15 @@ Ui.Panel {
 
   // One overview tile: logo, short name, the most pressing figure on the chosen side, and a mini
   // meter. Money providers show dollars on that side too. A failed refresh shows its short reason.
-  // A provider with several accounts shows the account the chip counts, and one dot per account.
+  // A provider with several accounts shows the counted account with the least headroom and the dots
+  // of its account state, like its chip.
   function providerTile(provider) {
     var id = String(provider.id)
     var failed = String(provider.status) === "error"
     var mode = quotaModeFor(id)
     var accounts = UsageLogic.providerAccounts(provider)
-    var counted = accounts.length > 1 ? UsageLogic.countedAccounts(provider, accountModeOf(provider), nowSeconds, liveRecent) : []
-    var countedPick = proxyMode ? -1 : UsageLogic.leastHeadroomIndex(accounts, counted)
-    var reading = !failed && countedPick >= 0 ? accounts[countedPick] : provider
+    var state = accounts.length > 1 ? accountStateOf(provider) : null
+    var reading = !failed && state && state.value >= 0 ? accounts[state.value] : provider
     var money = failed ? null : UsageLogic.moneyView(reading, mode)
     var remaining = failed ? null : UsageLogic.minRemaining(reading)
     var shown = remaining === null ? null : (mode === "Remaining" ? remaining : UsageLogic.usedFromRemaining(remaining))
@@ -339,7 +372,7 @@ Ui.Panel {
       fill: money !== null ? (money.share === null ? 0 : money.share / 100) : shown === null ? 0 : shown / 100,
       alert: providerNeedsAttention(provider),
       failed: failed,
-      dots: accounts.length > 1 ? UsageLogic.accountDots(provider, counted, warningThreshold, criticalThreshold) : null
+      dots: state ? state.dots : null
     }
   }
 
@@ -636,15 +669,6 @@ Ui.Panel {
     return Math.max(1, secs) + "s"
   }
 
-  function absoluteReset(epochSeconds) {
-    var seconds = Number(epochSeconds)
-    if (!isFinite(seconds) || seconds <= 0) return ""
-    var date = new Date(seconds * 1000)
-    return seconds * 1000 - nowMs < 86400000
-      ? Qt.formatTime(date, "HH:mm")
-      : Qt.formatDateTime(date, "MMM d, HH:mm")
-  }
-
   function barResetText(row) {
     if (!row) return ""
     var seconds = Number(row.resetsAt)
@@ -659,7 +683,7 @@ Ui.Panel {
   function resetText(window) {
     if (!window || !window.resetsAt) return ""
     var relative = durationUntil(window.resetsAt)
-    var absolute = absoluteReset(window.resetsAt)
+    var absolute = clockText(window.resetsAt)
     if (relative === "") return ""
     return "Resets in " + relative + (absolute !== "" ? " · " + absolute : "")
   }
@@ -756,9 +780,10 @@ Ui.Panel {
       : message
   }
 
-  // A reading is stale once two refresh intervals pass without a new one, or the last refresh failed.
-  readonly property bool usageStale: backend.fetchError !== ""
-    || (backend.lastSuccessAt > 0 && nowMs - backend.lastSuccessAt > backend.refreshIntervalSec * 2000)
+  // A reading is stale once two refresh intervals pass without a new one, or the last refresh failed;
+  // the chips fade by the same rule on the same clock.
+  readonly property bool usageStale: UsageLogic.readingStale(nowMs, backend.lastSuccessAt, backend.refreshIntervalSec,
+    backend.fetchError !== "", null)
   // Share of the time left until the next reading: 1 just after one, 0 when the next is due.
   readonly property real readingDrain: backend.nextRefreshAt <= 0 || backend.loading ? 0
     : clamp((backend.nextRefreshAt - nowMs) / (backend.refreshIntervalSec * 1000), 0, 1)
@@ -797,10 +822,15 @@ Ui.Panel {
   readonly property real openPanelIndicatorWidth: implicitWidth
 
   onProvidersChanged: ensureSelection()
-  onSelectedProviderIdChanged: selectedAccountId = ""
+  onSelectedProviderIdChanged: {
+    selectedAccountId = ""
+    Qt.callLater(latchDefaultAccount)
+  }
   onOpenedChanged: if (opened) {
     nowMs = Date.now()
+    latchDefaultAccount()
     costBackend.ensureLoaded()
+    if (remoteCostsChanged && !remoteCostTimer.running) scanRemoteCosts()
     if (panelFlick) panelFlick.contentY = 0
     Qt.callLater(function() {
       if (resetBackend.active) resetForm.focusFirst()
@@ -823,6 +853,7 @@ Ui.Panel {
     id: backend
     settings: root.settings
     onRefreshed: {
+      root.nowMs = Date.now()
       activityBackend.refresh()
       root.checkLimitCrossings()
       accountEventsTracker.track(Date.now() / 1000)
@@ -853,12 +884,34 @@ Ui.Panel {
     settings: root.settings
   }
 
-  // omp's live feed: requests as they happen, with their accounts (OmpActivity.qml).
+  // omp's live feed: requests as they happen, with their accounts (OmpActivity.qml). Through a proxy
+  // there is nothing of omp's to follow.
   OmpActivity {
-    id: ompActivity
+    id: ompActivityHelper
     settings: root.settings
     status: backend.ompStatus
-    costBackend: costBackend
+    proxyMode: root.proxyMode
+  }
+
+  // omp stats on another computer indexed new requests. Its figures change only with a new scan: while
+  // the panel is open that runs at most once a minute; a closed panel scans when it next opens.
+  property bool remoteCostsChanged: false
+  property int remoteCostScans: 0
+  function followRemoteActivity() {
+    if (!costBackend.requested) return
+    remoteCostsChanged = true
+    if (opened && !remoteCostTimer.running) scanRemoteCosts()
+  }
+  function scanRemoteCosts() {
+    remoteCostsChanged = false
+    remoteCostScans++
+    remoteCostTimer.restart()
+    costBackend.requestRefresh()
+  }
+  Timer {
+    id: remoteCostTimer
+    interval: 60000
+    onTriggered: if (root.remoteCostsChanged && root.opened) root.scanRemoteCosts()
   }
 
   // A first open with nothing read yet shows placeholder blocks, but only once reading takes over a
@@ -876,11 +929,19 @@ Ui.Panel {
     onTriggered: root.skeletonDue = root.waitingForFirstReading
   }
 
+  // The panel's one clock: every second while the panel is open, and every 30 s while it is closed for
+  // the chips (fading old readings, the reset countdown); a new reading sets it too.
   Timer {
     interval: 1000
     running: root.opened
     repeat: true
     triggeredOnStart: true
+    onTriggered: root.nowMs = Date.now()
+  }
+  Timer {
+    interval: 30000
+    running: !root.opened && root.percentageMode
+    repeat: true
     onTriggered: root.nowMs = Date.now()
   }
 
@@ -903,36 +964,18 @@ Ui.Panel {
 
   // ---- Menu bar chips ----
   Motion {
-    id: motion
+    id: motionTokens
     preference: String(root.setting("motion", "system"))
     panelOpen: root.opened
   }
-  // Children take `motion: root.motionHelper`: inside a child, a bare `motion` names its own property.
-  readonly property alias motionHelper: motion
+  // The panel's Motion, as the UI contract names it. Children take `motion: root.motion` (qualified:
+  // inside a child, a bare `motion` names its own property).
+  readonly property alias motion: motionTokens
 
   // Several accounts in the bar: "dots" keeps one chip per provider with a dot per account, "chips"
-  // gives each account its own chip (at most four per provider).
+  // gives each account its own chip (at most four per provider, within the bar's chip cap).
   readonly property string barAccountMode: String(setting("barAccountMode", "dots")) === "chips" ? "chips" : "dots"
-  // The bar's own clock: ages readings and counts resets down while the panel is closed.
-  property double barNowMs: Date.now()
-
-  // Live activity the bar reads: a ring per request, recent spending per account. Tests swap it.
-  property QtObject liveActivity: ompActivity
   signal barLivePing(string providerId, string accountId)
-
-  // Last activity per account ("<provider>@<accountId>" → epoch seconds): live omp requests, plus the
-  // proxy's last-used account.
-  readonly property var barRecentByAccount: {
-    var result = Object.assign({}, liveActivity && liveActivity.recentByAccount ? liveActivity.recentByAccount : {})
-    if (!proxyMode) return result
-    var rows = UsageLogic.listOrEmpty(activityBackend.providers)
-    for (var i = 0; i < rows.length; i++) {
-      if (rows[i].status !== "ok" || !rows[i].accountId) continue
-      var key = String(rows[i].id) + "@" + String(rows[i].accountId)
-      result[key] = Math.max(Number(result[key]) || 0, Number(rows[i].lastUsedAt) || 0)
-    }
-    return result
-  }
 
   readonly property var barProviderMap: {
     var map = {}
@@ -940,44 +983,27 @@ Ui.Panel {
     return map
   }
   readonly property var barChipEntries: UsageLogic.barChipEntries(root.percentageProviders, barAccountMode,
-    function (provider) { return root.chipCounted(provider, root.chipAccountMode(provider)) }, setting("extraKeys", "{}"))
+    function (provider) { return root.accountStateOf(provider) }, setting("extraKeys", "{}"), barMaxChips)
   onBarChipEntriesChanged: syncBarChips()
-
-  function chipAccountMode(provider) {
-    return UsageLogic.accountMode(provider, setting("accountModes", "{}"), proxyMode, barNowMs / 1000, barRecentByAccount)
-  }
-
-  // Accounts a chip counts. A proxy picks accounts itself, so there it is the account that served the
-  // last request, when one is known.
-  function chipCounted(provider, mode) {
-    var accounts = UsageLogic.listOrEmpty(provider && provider.accounts)
-    if (accounts.length < 2) return []
-    if (proxyMode) {
-      var last = lastAccount(provider)
-      var index = last.reading ? accounts.indexOf(last.reading) : -1
-      return index >= 0 ? [index] : []
-    }
-    return UsageLogic.countedAccounts(provider, mode, barNowMs / 1000, barRecentByAccount)
-  }
 
   // Keeps one row per chip key, moved and updated in place, so chips survive readings.
   function syncBarChips() {
     var wanted = barChipEntries
     var keys = wanted.map(function (entry) { return entry.key })
-    for (var r = barChipModel.count - 1; r >= 0; r--)
-      if (keys.indexOf(barChipModel.get(r).chipKey) === -1) barChipModel.remove(r)
-    for (var i = 0; i < wanted.length; i++) {
-      var entry = wanted[i]
-      var row = { chipKey: entry.key, providerId: entry.providerId, accountIndex: entry.accountIndex, initial: entry.initial }
-      var at = -1
-      for (var j = i; j < barChipModel.count && at < 0; j++) if (barChipModel.get(j).chipKey === entry.key) at = j
-      if (at < 0) {
-        barChipModel.insert(i, row)
-        continue
+    UsageLogic.syncKeyedOrder({
+      count: function() { return barChipModel.count },
+      keyAt: function(index) { return barChipModel.get(index).chipKey },
+      move: function(from, to) { barChipModel.move(from, to, 1) },
+      insert: function(index, key) {
+        var entry = wanted[keys.indexOf(key)]
+        barChipModel.insert(index, { chipKey: key, providerId: entry.providerId, accountIndex: entry.accountIndex, initial: entry.initial })
       }
-      if (at !== i) barChipModel.move(at, i, 1)
+    }, keys)
+    while (barChipModel.count > keys.length) barChipModel.remove(barChipModel.count - 1)
+    for (var i = 0; i < wanted.length; i++) {
       var current = barChipModel.get(i)
-      if (current.accountIndex !== entry.accountIndex || current.initial !== entry.initial) barChipModel.set(i, row)
+      if (current.accountIndex !== wanted[i].accountIndex) barChipModel.setProperty(i, "accountIndex", wanted[i].accountIndex)
+      if (current.initial !== wanted[i].initial) barChipModel.setProperty(i, "initial", wanted[i].initial)
     }
   }
 
@@ -992,39 +1018,24 @@ Ui.Panel {
     return isFinite(fetched) && fetched > 0 ? fetched / 1000 : backend.lastSuccessAt / 1000
   }
 
-  // A time today or tomorrow in the user's clock format, a date further out.
-  function barClockText(epochSeconds) {
-    var date = new Date(epochSeconds * 1000)
-    if (Math.abs(epochSeconds * 1000 - barNowMs) < 86400000) return Qt.formatTime(date, tickTimeFormat)
-    return Qt.formatDate(date, UsageLogic.barResetFormat("date", setting("barResetTimeFormat", "24h"), setting("barResetDateFormat", "DD/MM")))
-  }
-
-  Timer {
-    interval: 30000
-    running: root.percentageMode
-    repeat: true
-    onTriggered: root.barNowMs = Date.now()
-  }
-
   Connections {
-    target: backend
-    function onRefreshed() { root.barNowMs = Date.now() }
-  }
-
-  Connections {
-    target: root.liveActivity
+    target: root.ompActivity
     ignoreUnknownSignals: true
     function onRequest(event) {
       if (event) root.barLivePing(String(event.provider || ""), String(event.accountId || ""))
     }
+    function onRemoteActivity() { root.followRemoteActivity() }
   }
 
   // Hover card: opens 350 ms after the pointer settles on a chip with several accounts, closes 150 ms
-  // after it leaves both the chip and the card, and stays out of the way while the panel is open.
+  // after it leaves both the chip and the card, and stays out of the way while the panel is open. Only
+  // the hovered chip builds the card's model, and only while the card shows; once it has faded out the
+  // chip is let go.
   property Item hoverChip: null
   property Item hoverCandidate: null
   property bool hoverCardOpen: false
   property alias hoverCard: hoverCardSurface
+  readonly property bool hoverCardShown: hoverCardSurface.open || hoverCardSurface.opacity > 0
 
   function chipHoverChanged(chip, hovered) {
     if (hovered && !opened) {
@@ -1098,7 +1109,8 @@ Ui.Panel {
       anchors.fill: parent
       open: root.hoverCardOpen && !root.opened && !!hoverCardWindow.chip
       model: hoverCardWindow.chip ? hoverCardWindow.chip.hoverModel : null
-      motion: root.motionHelper
+      motion: root.motion
+      onOpacityChanged: if (opacity === 0 && !open) root.hoverChip = null
       quotaMode: hoverCardWindow.chip ? hoverCardWindow.chip.quotaMode : root.quotaMode
       warningThreshold: root.warningThreshold
       criticalThreshold: root.criticalThreshold
@@ -1155,7 +1167,7 @@ Ui.Panel {
       font.family: root.fontFamily
       font.pixelSize: chipLine.pixelSize
       font.weight: Font.Medium
-      motion: root.motionHelper
+      motion: root.motion
     }
 
     Text {
@@ -1213,17 +1225,19 @@ Ui.Panel {
           readonly property bool multiAccount: accounts.length >= 2
           // Chips per account: this chip is one account of its provider.
           readonly property bool accountChip: accountIndex >= 0 && accountIndex < accounts.length
-          readonly property string accountMode: multiAccount ? root.chipAccountMode(modelData) : "single"
-          readonly property var counted: multiAccount ? root.chipCounted(modelData, accountMode) : []
+          // The provider's account state, shared with its tile, the Limits rows and the runway.
+          readonly property var accountState: multiAccount ? root.accountStateOf(modelData) : null
+          readonly property string accountMode: accountState ? accountState.mode : "single"
+          readonly property var counted: accountState ? accountState.counted : []
           readonly property bool countedAccount: accountChip && counted.indexOf(accountIndex) !== -1
 
           readonly property var lastAccount: root.lastAccount(modelData)
-          readonly property bool usingPoolQuota: root.proxyMode && !lastAccount.reading && !accountChip
+          // A proxy provider with one account shows the pool's summary when its last request is unknown.
+          readonly property bool usingPoolQuota: root.proxyMode && !multiAccount && !lastAccount.reading
           // The account whose figure the chip shows: its own on a per-account chip, else the counted
-          // account with the least headroom; -1 shows the provider's summary reading.
+          // account with the least headroom on the chip's window; -1 shows the provider's own reading.
           readonly property int valueIndex: accountChip ? accountIndex
             : !multiAccount ? -1
-            : root.proxyMode ? (counted.length > 0 ? counted[0] : -1)
             : UsageLogic.barValueIndex(modelData, counted, limits.top)
           readonly property var reading: valueIndex >= 0 ? accounts[valueIndex]
             : root.proxyMode && lastAccount.reading ? lastAccount.reading : modelData
@@ -1295,21 +1309,18 @@ Ui.Panel {
           readonly property color bottomColor: brandColor !== "" && !failed && bottomStressed ? stressColor : contentColor
 
           // An old reading fades the chip: the last refresh failed, or it is two intervals old.
-          readonly property bool stale: UsageLogic.barReadingStale(root.barNowMs, backend.lastSuccessAt,
+          readonly property bool stale: UsageLogic.readingStale(root.nowMs, backend.lastSuccessAt,
             backend.refreshIntervalSec, backend.fetchError !== "", reading)
-          readonly property var strip: multiAccount && !accountChip ? UsageLogic.barAccountStrip(modelData, counted, accountMode, {
-            selector: topWindow, warningThreshold: root.warningThreshold, criticalThreshold: root.criticalThreshold,
-            nowSeconds: root.barNowMs / 1000, recentByAccount: root.barRecentByAccount, stale: stale,
-            extraKeys: root.setting("extraKeys", "{}") }) : null
-          // A provider with several accounts gets the hover card instead of the plain tooltip.
+          readonly property var strip: multiAccount && !accountChip ? UsageLogic.barAccountStrip(modelData, accountState, {
+            selector: topWindow, nowSeconds: root.nowSeconds, stale: stale, extraKeys: root.setting("extraKeys", "{}") }) : null
+          // A provider with several accounts gets the hover card instead of the plain tooltip; its model is
+          // built only while this chip's card shows.
           readonly property bool hoverCardEligible: multiAccount
-          readonly property var hoverModel: root.hoverChip === providerChip && multiAccount
-            ? UsageLogic.barHoverModel(modelData, counted, accountMode, {
-              selector: topWindow, warningThreshold: root.warningThreshold, criticalThreshold: root.criticalThreshold,
-              nowSeconds: root.barNowMs / 1000, recentByAccount: root.barRecentByAccount, proxyMode: root.proxyMode,
+          readonly property var hoverModel: root.hoverChip === providerChip && multiAccount && root.hoverCardShown
+            ? UsageLogic.barHoverModel(modelData, accountState, { proxyMode: root.proxyMode,
+              proxyLabel: UsageLogic.proxyName(backend.proxyImplementation), nowSeconds: root.nowSeconds,
               extraKeys: root.setting("extraKeys", "{}"), readAtSeconds: root.readingSeconds(modelData), stale: stale,
-              formatClock: root.barClockText,
-              note: usingPoolQuota ? "Figure shown: the account with the most room left" : "" })
+              formatClock: root.clockText })
             : null
           readonly property string plainTooltip: failed
             ? String(modelData.name || modelData.id) + " · " + root.errorBody(failure)
@@ -1326,19 +1337,28 @@ Ui.Panel {
             + (root.proxyMode ? "\n" + root.lastAccountTooltip(lastAccount) : "")
             + (usingPoolQuota ? "\nQuota shown: account with the most remaining capacity." : "")
 
-          // One-shot flash: worse severity, or the same account's window reset. Seeded at creation, so
-          // existing limits never flash on startup.
+          // One-shot flash: the same account's window moved to a worse severity, or it reset (the rule
+          // Limits notices use). Seeded at creation, so existing limits never flash on startup; a chip that
+          // moves to another account or window only seeds again. Reduced motion skips it: the colour
+          // already says it.
           property var flashSeed: null
-          readonly property var flashReading: ({ key: String(valueIndex) + "|" + topWindow, severity: topSeverity,
-            used: failed || moneyChip ? null : UsageLogic.usedForWindow(reading, topWindow) })
+          readonly property var topRow: failed || moneyChip ? null : UsageLogic.windowRowFor(reading, topWindow, true)
+          readonly property var flashReading: ({ key: String(reading && reading.accountId || "") + "|" + topWindow,
+            severity: topSeverity, used: topRow ? UsageLogic.usedForWindow(reading, topWindow) : null,
+            resetsAt: topRow ? topRow.resetsAt : null })
           onFlashReadingChanged: {
-            var kind = UsageLogic.barFlashKind(flashSeed, flashReading)
+            var kind = UsageLogic.barFlashKind(flashSeed, flashReading, Date.now() / 1000)
             flashSeed = flashReading
-            if (kind !== "") flash(kind)
+            if (kind !== "" && !root.motion.reduced) flash(kind)
           }
           Component.onCompleted: flashSeed = flashReading
 
+          // Flashes so far and the last kind, for the contract tests.
+          property int flashes: 0
+          property string lastFlash: ""
           function flash(kind) {
+            flashes++
+            lastFlash = kind
             flashFill.tint = kind === "reset" ? Commons.Color.accent : root.urgent
             flashAnimation.restart()
           }
@@ -1353,7 +1373,8 @@ Ui.Panel {
           tooltipText: hoverCardEligible ? "" : plainTooltip
           Accessible.role: Accessible.Button
           Accessible.name: multiAccount
-            ? UsageLogic.barAccessibleName(modelData, { selector: topWindow, quotaMode: quotaMode, extraKeys: root.setting("extraKeys", "{}") })
+            ? UsageLogic.barAccessibleName(modelData, accountState, { selector: topWindow, quotaMode: quotaMode,
+              extraKeys: root.setting("extraKeys", "{}"), accountIndex: accountChip ? accountIndex : -1, strip: strip })
             : plainTooltip.split("\n").join(", ")
           onPressed: function(buttonCode) {
             root.closeHoverCard()
@@ -1361,13 +1382,15 @@ Ui.Panel {
           }
           onTooltipHoveredChanged: root.chipHoverChanged(providerChip, tooltipHovered && hoverCardEligible)
 
+          // One ring per live request from the dot of the account that served it: omp names a native
+          // login by its own id, so either id finds the account.
           Connections {
             target: root
             function onBarLivePing(pingProvider, pingAccount) {
               if (pingProvider !== String(providerChip.modelData.id) || providerChip.strip === null) return
               var index = -1
               for (var i = 0; i < providerChip.accounts.length; i++)
-                if (String(providerChip.accounts[i].accountId) === pingAccount) index = i
+                if (UsageLogic.accountAnswersTo(providerChip.accounts[i], pingAccount)) index = i
               accountDots.ping(index)
             }
           }
@@ -1389,7 +1412,7 @@ Ui.Panel {
               target: flashFill
               from: 1
               to: 0
-              duration: root.motionHelper.duration(root.motionHelper.flash)
+              duration: root.motion.duration(root.motion.flash)
               easing.type: Easing.OutCubic
             }
           }
@@ -1402,7 +1425,7 @@ Ui.Panel {
             opacity: providerChip.stale ? 0.5 : 1
 
             Behavior on opacity {
-              OpacityAnimator { duration: root.motionHelper.duration(root.motionHelper.row); easing.type: Easing.InOutCubic }
+              OpacityAnimator { duration: root.motion.duration(root.motion.row); easing.type: Easing.InOutCubic }
             }
 
             Item {
@@ -1515,7 +1538,7 @@ Ui.Panel {
               strip: providerChip.strip
               mode: providerChip.accountMode
               stale: providerChip.stale
-              motion: root.motionHelper
+              motion: root.motion
               foreground: root.foreground
               urgent: root.urgent
               accent: Commons.Color.accent
@@ -1697,6 +1720,7 @@ Ui.Panel {
               urgent: root.urgent
               fontFamily: root.fontFamily
               cardRadius: root.usageCardRadius
+              motion: root.motion
               onViewRequested: function(value) { root.viewMode = value }
               onProviderRequested: function(value) { root.selectProviderId(value) }
             }
@@ -1748,8 +1772,8 @@ Ui.Panel {
             usageLoading: backend.loading
             proxyImplementation: backend.proxyImplementation
             costSources: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sources) : []
-            ompActivity: ompActivity
-            motion: root.motionHelper
+            ompActivity: root.ompActivity
+            motion: root.motion
             onSetupRequested: function(entry, action) { root.startSetup(entry, action) }
             onChangeRequested: function(values) { root.saveSettings(values) }
             onCloseRequested: root.leaveSettings()
@@ -1769,7 +1793,7 @@ Ui.Panel {
             accent: Commons.Color.accent
             fontFamily: root.fontFamily
             cardRadius: root.usageCardRadius
-            motion: root.motionHelper
+            motion: root.motion
             onDismissed: root.accountEvents.dismiss()
           }
 
@@ -1798,17 +1822,14 @@ Ui.Panel {
               providerId: root.provider ? String(root.provider.id) : ""
               accounts: root.proxyAccounts
               names: root.accountNames
-              mode: root.accountMode
-              counted: root.countedIndexes
-              order: root.accountOrderIndexes
+              accountState: root.providerState
               selectedId: root.selectedAccount ? String(root.selectedAccount.accountId) : ""
               nowSeconds: root.nowSeconds
-              recentByAccount: root.liveRecent
               events: root.accountEvents.eventLog
               proxyMode: root.proxyMode
               resetsActionable: root.proxyMode && !resetBackend.active && !resetBackend.busy
               useBusyId: root.accountEvents.useBusyId
-              headerText: UsageLogic.accountsHeaderText(root.provider, root.accountMode, root.proxyMode,
+              headerText: UsageLogic.accountModeText(root.provider, root.accountMode, root.proxyMode,
                 UsageLogic.proxyName(backend.proxyImplementation))
               quotaMode: root.selectedQuotaMode
               warningThreshold: root.warningThreshold
@@ -1818,7 +1839,7 @@ Ui.Panel {
               fontFamily: root.fontFamily
               clockFormat: root.tickTimeFormat
               cardRadius: root.usageCardRadius
-              motion: root.motionHelper
+              motion: root.motion
               onAccountSelected: function(accountId) { root.selectAccount(accountId) }
               onUseRequested: function(accountId) { root.useAccount(accountId) }
               onResetRequested: function(accountId) { root.resetAccount(accountId) }
@@ -1876,14 +1897,14 @@ Ui.Panel {
                 target: detailColumn
                 from: 0
                 to: 1
-                duration: root.motionHelper.duration(root.motionHelper.row)
+                duration: root.motion.duration(root.motion.row)
                 easing.type: Easing.OutCubic
               }
               XAnimator {
                 target: detailColumn
                 from: root.detailSlideFrom
                 to: 0
-                duration: root.motionHelper.duration(root.motionHelper.row)
+                duration: root.motion.duration(root.motion.row)
                 easing.type: Easing.OutCubic
               }
             }
@@ -1932,7 +1953,7 @@ Ui.Panel {
                       var parts = []
                       var plan = account.plan || account.planType ? UsageLogic.accountPlanLabel(account) : ""
                       if (plan !== "" && plan !== detailName.text) parts.push(plan)
-                      if (!root.proxyMode && root.accountMode === "single" && account.active === true) parts.push("in use")
+                      if (root.providerState && root.providerState.inUse[root.selectedAccountIndex] === true) parts.push("in use")
                       if (UsageLogic.accountSourceKind(account, root.proxyMode) === "omp") parts.push("from omp")
                       return parts.length > 0 ? " · " + parts.join(" · ") : ""
                     }
@@ -2115,7 +2136,7 @@ Ui.Panel {
                   clockFormat: root.tickTimeFormat
                   warningThreshold: root.warningThreshold
                   criticalThreshold: root.criticalThreshold
-                  motion: root.motionHelper
+                  motion: root.motion
                 }
               }
               PacingLegend {
@@ -2140,7 +2161,7 @@ Ui.Panel {
               urgent: root.urgent
               fontFamily: root.fontFamily
               cardRadius: root.usageCardRadius
-              motion: root.motionHelper
+              motion: root.motion
             }
 
             Column {
@@ -2213,6 +2234,7 @@ Ui.Panel {
                 ? String(costBackend.payload.period.label || "") : ""
               foreground: root.foreground
               fontFamily: root.fontFamily
+              motion: root.motion
             }
           }
 
@@ -2229,8 +2251,8 @@ Ui.Panel {
             surface: root.surface
             fontFamily: root.fontFamily
             clockFormat: root.tickTimeFormat
-            motion: root.motionHelper
-            ompActivity: ompActivity
+            motion: root.motion
+            ompActivity: root.ompActivity
             onPeriodRequested: function(days) { costBackend.selectPeriod(days) }
             onMenuClosed: Qt.callLater(function() {
               if (root.opened && !root.configuring && !resetBackend.active)
@@ -2422,6 +2444,7 @@ Ui.Panel {
       }
 
       BlockMeter {
+        objectName: "moneyMeter"
         visible: moneyCard.share !== null
         width: parent.width
         height: Style.space(12)
@@ -2429,6 +2452,7 @@ Ui.Panel {
         fillColor: moneyCard.stressed ? root.urgent
           : root.providerColors ? UsageLogic.providerAccent(String(moneyCard.provider ? moneyCard.provider.id : ""), root.foreground) : root.foreground
         trackColor: root.alpha(root.foreground, 0.14)
+        motion: root.motion
       }
 
       Text {
@@ -2513,12 +2537,14 @@ Ui.Panel {
       }
 
       BlockMeter {
+        objectName: "creditsMeter"
         visible: creditsCard.hasMeter
         width: parent.width
         value: creditsCard.hasMeter
           ? UsageLogic.sideOfUsed(Number(creditsCard.credits.used) / Number(creditsCard.credits.limit) * 100, root.selectedQuotaMode) / 100 : 0
         fillColor: root.foreground
         trackColor: root.alpha(root.foreground, 0.14)
+        motion: root.motion
       }
 
       Text {

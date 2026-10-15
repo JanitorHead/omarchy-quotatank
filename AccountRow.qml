@@ -18,8 +18,8 @@ Ui.BorderSurface {
   // Counted by the chip (filled dot); otherwise a hollow ring in the account's state colour.
   property bool counted: false
   property bool spending: false
-  // "ok" | "warning" | "critical" | "error" | "none"
-  property string severity: "none"
+  // The account's ring (UsageLogic.accountRingState): "ok" | "warning" | "critical" | "error" | "unknown"
+  property string severity: "unknown"
   property string statusText: ""
   property string statusTone: "dim"
   property var sparkValues: []

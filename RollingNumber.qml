@@ -43,12 +43,13 @@ Item {
   Accessible.role: Accessible.StaticText
   Accessible.name: text
 
+  // Without Panel's Motion nothing animates: digits change in place, as with reduced motion.
   Behavior on color {
-    ColorAnimation { duration: root.motion ? root.motion.duration(root.motion.micro) : 160 }
+    ColorAnimation { duration: root.motion ? root.motion.duration(root.motion.micro) : 0 }
   }
 
   function rollDuration() {
-    return root.motion ? root.motion.duration(root.motion.digit) : 350
+    return root.motion ? root.motion.duration(root.motion.digit) : 0
   }
 
   function shapeOf(value) {

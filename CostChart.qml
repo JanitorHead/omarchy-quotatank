@@ -20,7 +20,7 @@ Item {
   property bool hourly: false
   property string focusedProvider: ""
   property string isolatedProvider: ""
-  // Requests since the scan (UsageLogic.costLiveFold), added to the newest bucket.
+  // Requests since the scan (UsageLogic.costLiveTotals), added to the newest bucket.
   property var live: null
   property var motion: null
   property color foreground: Commons.Color.foreground
@@ -30,9 +30,10 @@ Item {
   property int hoveredIndex: -1
 
   readonly property color dim: Qt.darker(foreground, 1.55)
-  readonly property int microMs: motion ? motion.duration(motion.micro) : 160
-  readonly property int rowMs: motion ? motion.duration(motion.row) : 260
-  readonly property int morphMs: motion ? motion.duration(motion.morph) : 420
+  // Without Panel's Motion nothing animates, as with reduced motion.
+  readonly property int microMs: motion ? motion.duration(motion.micro) : 0
+  readonly property int rowMs: motion ? motion.duration(motion.row) : 0
+  readonly property int morphMs: motion ? motion.duration(motion.morph) : 0
   readonly property var buckets: buildBuckets()
   readonly property var bucketByKey: {
     var map = {}
@@ -450,8 +451,7 @@ Item {
 
       Behavior on opacity {
         OpacityAnimator {
-          duration: readout.shown ? (root.motion ? root.motion.duration(root.motion.popIn) : 180)
-            : (root.motion ? root.motion.duration(root.motion.popOut) : 120)
+          duration: !root.motion ? 0 : root.motion.duration(readout.shown ? root.motion.popIn : root.motion.popOut)
           easing.type: readout.shown ? Easing.OutCubic : Easing.InCubic
         }
       }

@@ -82,11 +82,15 @@ ShellRoot {
     login("broken", { status: "error", errorKind: "expired", windows: [] })
   ]
 
+  function stateOf(mode) {
+    return UsageLogic.accountState({ id: "claude", status: "ok", accounts: accounts }, { modes: JSON.stringify({ claude: mode }),
+      proxyMode: false, nowSeconds: now, recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 })
+  }
+
   Component.onCompleted: {
     motion = create("Motion.qml", { preference: "reduced" })
     list = create("AccountList.qml", { width: 420, providerId: "claude", accounts: accounts,
-      names: ["Work", "Personal", "Spare", "Broken"], mode: "single", counted: [0], order: [0, 1, 2, 3],
-      nowSeconds: now, motion: motion })
+      names: ["Work", "Personal", "Spare", "Broken"], accountState: stateOf("single"), nowSeconds: now, motion: motion })
     list.useRequested.connect(function(accountId) { root.used = root.used.concat([accountId]) })
     rising = create("LimitCard.qml", { width: 420, window: session(70, 0.01), nowSeconds: now, motion: motion })
     quiet = create("LimitCard.qml", { width: 420, window: session(31, 0), nowSeconds: now, motion: motion })
@@ -131,8 +135,8 @@ ShellRoot {
     // Together: least headroom first, by moves that keep each row's delegate.
     workRow = list.rowFor("work")
     check(list.view.itemAt(0) === workRow, "Work starts first")
-    list.mode = "together"
-    list.order = [2, 0, 1, 3]
+    check(JSON.stringify(stateOf("together").order) === "[2,0,1,3]", "together: least headroom first")
+    list.accountState = stateOf("together")
 
     // Limit cards: a dashed forecast where the pace runs out before the reset, none without a pace.
     check(rising.forecastSegment !== null && rising.meter.forecastActive, "a fast pace draws the forecast")

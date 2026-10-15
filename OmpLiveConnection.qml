@@ -3,9 +3,10 @@ import Quickshell.Io
 import "UsageLogic.js" as UsageLogic
 
 // One scripts/omp-live.py, shared by every panel that follows the same omp setup (UsageLogic.acquireOmpLive).
-// It keeps omp's credential map, so each request names the account that served it, and restarts the
-// helper after a pause that grows with each failure when it exits, sends a malformed line, or misses its
-// heartbeats. Output is bounded: a line past 64 KiB, or 1 MiB without a newline, restarts it.
+// It keeps omp's credential map, so each request names the account that served it, the accounts used in
+// the last hour, and a bounded log of recent requests for Costs; it restarts the helper after a pause that
+// grows with each failure when it exits, sends a malformed line, or misses its heartbeats. Output is
+// bounded: a line past 64 KiB, or 1 MiB without a newline, restarts it.
 Item {
   id: root
   visible: false
@@ -20,11 +21,11 @@ Item {
   property string remoteState: ""
   property string remoteMessage: ""
   property var accountMap: ({})
-  property real lastRequestAt: 0
-  property real lastActivityAt: 0
   property var recentByAccount: ({})
-  // [at, costUsd, provider] per priced request, for the spend since each panel's last cost scan.
-  property var spend: []
+  // [at, provider, costUsd | null, tokens, source] per request (UsageLogic.noteOmpLog), changed in place;
+  // `requestRevision` counts the changes.
+  property var requestLog: []
+  property int requestRevision: 0
   // Failures in a row; a helper that ran for a minute before failing starts the count again.
   property int failures: 0
   property double startedAt: 0
@@ -66,20 +67,24 @@ Item {
     if (process.running) process.running = false
     else if (!stopped) retry()
   }
+  // Splits complete lines off the buffer with one scan and one slice per chunk, however many lines it holds.
   function receive(data) {
     if (stopped) return
-    process.body += data
-    if (process.body.length > 1048576) { fail(); return }
+    var body = process.body + data
+    if (body.length > 1048576) { fail(); return }
+    var start = 0
     var newline
-    while ((newline = process.body.indexOf("\n")) >= 0) {
-      var line = process.body.slice(0, newline)
-      process.body = process.body.slice(newline + 1)
+    while ((newline = body.indexOf("\n", start)) >= 0) {
+      var line = body.slice(start, newline)
+      start = newline + 1
       if (line.trim() === "") continue
       var parsed = UsageLogic.parseOmpLiveLine(line)
       if (!parsed) { fail(); return }
       watchdog.restart()
       handle(parsed)
+      if (stopped) return
     }
+    process.body = start > 0 ? body.slice(start) : body
   }
   function handle(line) {
     if (line.type === "state") {
@@ -93,12 +98,13 @@ Item {
       accountMap = line.map
     } else if (line.type === "request") {
       var event = UsageLogic.resolveOmpRequest(line, accountMap)
-      lastRequestAt = Math.max(lastRequestAt, Math.min(line.at, now))
-      recentByAccount = UsageLogic.noteOmpRequest(recentByAccount, event, now)
-      spend = UsageLogic.noteOmpSpend(spend, event, now)
+      // The map is a new object only when an account's time changed.
+      var recent = UsageLogic.noteOmpRequest(recentByAccount, event, now)
+      if (recent !== recentByAccount) recentByAccount = recent
+      UsageLogic.noteOmpLog(requestLog, event, now)
+      requestRevision++
       request(event)
     } else if (line.type === "activity") {
-      lastActivityAt = now
       remoteActivity()
     }
   }

@@ -16,6 +16,8 @@ Item {
   property string periodLabel: ""
   property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
+  // Panel's Motion; without one the bars move at once, as with reduced motion.
+  property var motion: null
 
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property var rows: UsageLogic.listOrEmpty(models)
@@ -101,7 +103,7 @@ Item {
             color: root.alpha(root.foreground, 0.10)
 
             Behavior on width {
-              NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+              NumberAnimation { duration: root.motion ? root.motion.duration(root.motion.row) : 0; easing.type: Easing.OutCubic }
             }
           }
 

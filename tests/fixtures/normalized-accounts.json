@@ -114,6 +114,8 @@
      "account": "personal@example.invalid",
      "source": "Claude OAuth usage API",
      "origin": "omarchy",
+     "origins": ["omarchy", "omp"],
+     "ompAccountId": "omp-0123456789ab",
      "accountId": "personal",
      "label": "Personal",
      "active": false,

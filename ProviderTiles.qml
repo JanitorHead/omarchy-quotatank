@@ -6,11 +6,14 @@ import QtQuick.Shapes
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui as Ui
+import "UsageLogic.js" as UsageLogic
 
 // Provider overview in Limits: one tile per provider with its logo, name, most pressing
 // figure, and a mini meter. Every provider's state is visible at once; a click selects it.
 // Options: { value, label, name, iconUrl, mark, figure, unit, fill, alert, failed, dots }.
-// `dots` ({dots: [{counted, severity}], more}) marks a provider with several accounts, like its chip.
+// `dots` ({dots: [{state, counted}], extra}, from UsageLogic.accountState) marks a provider with several
+// accounts, like its chip. Tiles live in a ListModel keyed by provider id: new figures every second keep
+// each tile, its focus and its hover; only a provider added, removed or moved changes the tiles.
 Flow {
   id: root
 
@@ -20,6 +23,13 @@ Flow {
   property color urgent: Commons.Color.urgent
   property string fontFamily: Style.font.family
   property real cardRadius: 0
+  property var motion: null
+  readonly property var optionById: {
+    var map = {}
+    for (var i = 0; i < options.length; i++) map[String(options[i].value)] = options[i]
+    return map
+  }
+  readonly property alias tileModel: tiles
   // Past six providers the tiles get smaller figures and padding, so more fit in each row and the
   // overview does not push the limits far down.
   readonly property bool dense: options.length > 6
@@ -35,7 +45,7 @@ Flow {
       var dots = option.dots ? option.dots.dots.length : 0
       if (dots > 0)
         label += Style.spacing.sm + dots * Style.space(5) + (dots - 1) * Style.space(3)
-          + (Number(option.dots.more) > 0 ? Style.space(3) + labelMetrics.advanceWidth("+" + option.dots.more) : 0)
+          + (Number(option.dots.extra) > 0 ? Style.space(3) + labelMetrics.advanceWidth("+" + option.dots.extra) : 0)
       var figure = option.failed ? labelMetrics.advanceWidth(String(option.figure || "")) : figureMetrics.advanceWidth(String(option.figure || ""))
       widest = Math.max(widest, label, figure)
     }
@@ -63,19 +73,38 @@ Flow {
 
   function alpha(color, opacity) { return Qt.rgba(color.r, color.g, color.b, opacity) }
 
+  // Brings the tiles to the options' order by moves and inserts (UsageLogic.syncKeyedOrder).
+  function sync() {
+    var keys = []
+    for (var i = 0; i < options.length; i++) keys.push(String(options[i].value))
+    UsageLogic.syncKeyedOrder({
+      count: function() { return tiles.count },
+      keyAt: function(index) { return tiles.get(index).tileKey },
+      move: function(from, to) { tiles.move(from, to, 1) },
+      insert: function(index, key) { tiles.insert(index, { tileKey: key }) }
+    }, keys)
+    while (tiles.count > keys.length) tiles.remove(tiles.count - 1)
+  }
+
+  onOptionsChanged: sync()
+  Component.onCompleted: sync()
+
   spacing: Style.spacing.md
 
+  ListModel { id: tiles }
+
   Repeater {
-    model: root.options
+    model: tiles
 
     Ui.BorderSurface {
       id: tile
-      required property var modelData
-      required property int index
-      readonly property bool selected: modelData.value === root.value
+      required property string tileKey
+      readonly property var modelData: root.optionById[tileKey]
+        || ({ value: tileKey, label: "", name: tileKey, iconUrl: "", mark: "", figure: "", unit: "", fill: 0, alert: false, failed: false, dots: null })
+      readonly property bool selected: tileKey === root.value
       readonly property color figureColor: modelData.alert ? root.urgent : root.foreground
 
-      objectName: "providerTile-" + modelData.value
+      objectName: "providerTile-" + tileKey
       width: root.tileWidth
       implicitHeight: tileContent.implicitHeight + contentTopInset + contentBottomInset
       radius: root.cardRadius
@@ -88,12 +117,12 @@ Flow {
 
       Accessible.role: Accessible.PageTab
       Accessible.name: modelData.name + ", " + (modelData.failed ? modelData.figure : modelData.figure + " " + modelData.unit)
-        + (modelData.dots ? ", " + (modelData.dots.dots.length + modelData.dots.more) + " accounts" : "")
+        + (modelData.dots ? ", " + (modelData.dots.dots.length + modelData.dots.extra) + " accounts" : "")
         + (modelData.alert ? ", needs attention" : "")
       Accessible.selected: selected
       activeFocusOnTab: true
-      Keys.onReturnPressed: root.changed(modelData.value)
-      Keys.onSpacePressed: root.changed(modelData.value)
+      Keys.onReturnPressed: root.changed(tileKey)
+      Keys.onSpacePressed: root.changed(tileKey)
 
       Column {
         id: tileContent
@@ -158,26 +187,31 @@ Flow {
           }
 
           // One dot per account: filled for the ones the chip counts, a ring in the account's state
-          // colour for the others (dashed when its reading failed).
+          // colour for the others (dashed when its reading failed). The dots are drawn by count, so a
+          // new reading recolours them instead of rebuilding them.
           Row {
             id: accountDots
-            objectName: "tileDots-" + tile.modelData.value
+            objectName: "tileDots-" + tile.tileKey
             readonly property var dotList: tile.modelData.dots ? tile.modelData.dots.dots : []
-            readonly property int more: tile.modelData.dots ? Number(tile.modelData.dots.more) || 0 : 0
+            readonly property int extra: tile.modelData.dots ? Number(tile.modelData.dots.extra) || 0 : 0
             visible: dotList.length > 0
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(3)
 
             Repeater {
-              model: accountDots.dotList
+              model: accountDots.dotList.length
 
               Item {
                 id: dot
-                required property var modelData
-                readonly property bool dashed: modelData.severity === "error"
-                readonly property color ring: modelData.severity === "critical" ? root.urgent
-                  : modelData.severity === "warning" ? root.alpha(root.urgent, 0.7)
-                  : dashed ? Qt.darker(root.foreground, 1.55) : root.alpha(root.foreground, 0.55)
+                required property int index
+                readonly property var info: accountDots.dotList[index] || ({ state: "unknown", counted: false })
+                readonly property bool counted: !!info.counted
+                readonly property bool dashed: info.state === "error"
+                readonly property color ring: info.state === "critical" ? root.urgent
+                  : info.state === "warning" ? root.alpha(root.urgent, 0.7)
+                  : dashed ? Qt.darker(root.foreground, 1.55)
+                  : info.state === "unknown" ? root.alpha(root.foreground, 0.3) : root.alpha(root.foreground, 0.55)
+                objectName: "tileDot-" + index
                 width: Style.space(5)
                 height: width
 
@@ -185,8 +219,8 @@ Flow {
                   anchors.fill: parent
                   visible: !dot.dashed
                   radius: width / 2
-                  color: dot.modelData.counted ? tile.figureColor : "transparent"
-                  border.width: dot.modelData.counted ? 0 : Style.spacing.hairline
+                  color: dot.counted ? tile.figureColor : "transparent"
+                  border.width: dot.counted ? 0 : Style.spacing.hairline
                   border.color: dot.ring
                 }
 
@@ -215,9 +249,9 @@ Flow {
             }
 
             Text {
-              visible: accountDots.more > 0
+              visible: accountDots.extra > 0
               anchors.verticalCenter: parent.verticalCenter
-              text: "+" + accountDots.more
+              text: "+" + accountDots.extra
               color: Qt.darker(root.foreground, 1.55)
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -275,6 +309,10 @@ Flow {
             width: Math.round(parent.width * Math.max(0, Math.min(1, tile.modelData.fill)))
             height: parent.height
             color: tile.figureColor
+
+            Behavior on width {
+              NumberAnimation { duration: root.motion ? root.motion.duration(root.motion.row) : 0; easing.type: Easing.OutCubic }
+            }
           }
         }
       }
@@ -284,7 +322,7 @@ Flow {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.changed(tile.modelData.value)
+        onClicked: root.changed(tile.tileKey)
       }
     }
   }
