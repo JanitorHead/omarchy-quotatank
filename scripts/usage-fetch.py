@@ -185,6 +185,7 @@ SEVEN_DAYS = 7 * 24 * 60 * 60
 THIRTY_DAYS = 30 * 24 * 60 * 60
 HISTORY_RETENTION_SECONDS = SEVEN_DAYS
 HISTORY_MAX_SAMPLES = 10_080  # One sample/minute/provider for seven days.
+HISTORY_MAX_ACCOUNT_SERIES = 64  # per provider: accounts listed now first, then the most recently read ones.
 HISTORY_SCHEMA_VERSION = 2  # v1 kept one provider-wide series with no window identity; it is discarded.
 WINDOW_HEARTBEAT_SECONDS = 30 * 60  # an unchanged window is re-recorded this often, so flat use is not stale.
 MAX_LOCAL_JSON_BYTES = 2 * 1024 * 1024
@@ -7335,7 +7336,7 @@ def parse_antigravity_usage(payload: Any, *, untouched_is_unknown: bool = True) 
 def cliproxy_account_record(provider_id: str, entry: dict[str, Any]) -> dict[str, Any]:
     result = base_provider(provider_id)
     identity = str(entry.get("id") or entry.get("name") or entry.get("auth_index") or entry.get("authIndex") or "")
-    result.update(source="CLIProxyAPI management API", authCommand="",
+    result.update(source="CLIProxyAPI management API", authCommand="", origin="proxy",
                   accountId=hashlib.sha256((provider_id + ":" + identity).encode()).hexdigest()[:16],
                   account=clean_message(entry.get("email") or entry.get("label") or entry.get("account") or "Managed account"))
     result.update(proxyImplementation="rust" if entry.get("_rust") is True else "go",
@@ -7540,6 +7541,8 @@ def collect_cliproxy(provider_ids: list[str], timeout: float, address: str, key_
 
 
 # --------------------------------------------------------------- History
+# A provider keeps its binding series under its id in `providers` and one series per window under its id in
+# `windows`. Each account listed under a provider keeps the same two series under `<providerId>@<accountId>`.
 
 
 def history_path(state_dir: Path | None = None) -> Path:
@@ -7572,6 +7575,12 @@ def read_series(rows: Any) -> list[list[float]]:
     return valid[-HISTORY_MAX_SAMPLES:]
 
 
+def account_series_provider(key: str) -> str | None:
+    """The provider of an account's history key, or None for a provider's own key."""
+    provider_id, separator, _account_id = key.partition("@")
+    return provider_id if separator else None
+
+
 def load_history(path: Path) -> dict[str, Any]:
     try:
         raw = read_json(path)
@@ -7585,8 +7594,12 @@ def load_history(path: Path) -> dict[str, Any]:
     ):
         return empty_history()
     result = empty_history()
-    for provider_id in list(dict.fromkeys([*PROVIDER_ORDER, *raw["providers"]]))[:len(PROVIDER_ORDER) + MAX_CLIPROXY_PROVIDERS]:
+    provider_ids = [key for key in raw["providers"] if account_series_provider(key) is None]
+    for provider_id in list(dict.fromkeys([*PROVIDER_ORDER, *provider_ids]))[:len(PROVIDER_ORDER) + MAX_CLIPROXY_PROVIDERS]:
         result["providers"][provider_id] = read_series(raw["providers"].get(provider_id))
+    for key, rows in raw["providers"].items():
+        if account_series_provider(key) is not None and (series := read_series(rows)):
+            result["providers"][key] = series
     for provider_id, windows in raw["windows"].items():
         if not isinstance(windows, dict):
             continue
@@ -7653,21 +7666,45 @@ def trim_series(series: list[list[float]], cutoff: int, stamp: int) -> list[list
     return [row for row in series if cutoff <= row[0] <= stamp + 300][-HISTORY_MAX_SAMPLES:]
 
 
-def update_and_attach_history(
-    providers: list[dict[str, Any]], state_dir: Path | None = None, now: int | None = None
-) -> None:
-    stamp = int(time.time()) if now is None else int(now)
-    path = history_path(state_dir)
-    history = load_history(path)
+def window_sample(window: Any) -> tuple[str, float] | None:
+    """A window's id and the used figure its series records, or None when it has no id or no figure."""
+    if not isinstance(window, dict):
+        return None
+    window_id = window.get("id")
+    used = number(window.get("used"))
+    if not isinstance(window_id, str) or not window_id or used is None:
+        return None
+    return window_id, round(clamp(used, 0, 100), 2)
+
+
+def series_readings(providers: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """The readings that keep series, by history key: each provider under its id, then the first
+    HISTORY_MAX_ACCOUNT_SERIES of its accounts that have an `accountId`, under `<providerId>@<accountId>`."""
+    readings = {provider["id"]: provider for provider in providers}
+    for provider in providers:
+        accounts = provider.get("accounts")
+        tracked = 0
+        for account in accounts if isinstance(accounts, list) else []:
+            if tracked == HISTORY_MAX_ACCOUNT_SERIES:
+                break
+            account_id = account.get("accountId") if isinstance(account, dict) else None
+            key = f"{provider['id']}@{account_id}"
+            if isinstance(account_id, str) and account_id and key not in readings:
+                readings[key] = account
+                tracked += 1
+    return readings
+
+
+def record_history(history: dict[str, Any], readings: dict[str, dict[str, Any]], stamp: int) -> bool:
+    """Trim every series to the retention period and add this refresh's samples. True when the file must be saved."""
     cutoff = stamp - HISTORY_RETENTION_SECONDS
     changed = False
-    by_id = {provider["id"]: provider for provider in providers}
-    for provider_id in dict.fromkeys([*history["providers"], *by_id]):
-        samples = [row for row in history["providers"].get(provider_id, []) if cutoff <= row[0] <= stamp + 300]
-        provider = by_id.get(provider_id)
-        used = dynamic_window_used(provider) if provider else None
-        observation = int(provider.get("quotaUpdatedAt", stamp)) if provider else stamp
-        if provider and provider.get("proxyImplementation") == "rust" and (provider.get("stale") or (samples and observation <= samples[-1][0])):
+    for key in dict.fromkeys([*history["providers"], *readings]):
+        samples = [row for row in history["providers"].get(key, []) if cutoff <= row[0] <= stamp + 300]
+        reading = readings.get(key)
+        used = dynamic_window_used(reading) if reading else None
+        observation = int(reading.get("quotaUpdatedAt", stamp)) if reading else stamp
+        if reading and reading.get("proxyImplementation") == "rust" and (reading.get("stale") or (samples and observation <= samples[-1][0])):
             used = None
         if used is not None:
             if samples and observation - samples[-1][0] < 60:
@@ -7675,45 +7712,140 @@ def update_and_attach_history(
             else:
                 samples.append([observation, round(used, 2)])
             changed = True
-        samples = samples[-HISTORY_MAX_SAMPLES:]
-        history["providers"][provider_id] = samples
-        if provider is not None:
-            provider["history"] = {
-                "h24": bucket_history(samples, stamp, 24, 24 * 60 * 60),
-                "d7": bucket_history(samples, stamp, 7, SEVEN_DAYS),
-            }
-    for provider_id in list(history["windows"]):
+        history["providers"][key] = samples[-HISTORY_MAX_SAMPLES:]
+    for key in list(history["windows"]):
         kept = {}
-        for window_id, series in history["windows"][provider_id].items():
+        for window_id, series in history["windows"][key].items():
             trimmed = trim_series(series, cutoff, stamp)
             if trimmed != series:
                 changed = True
             if trimmed:
                 kept[window_id] = trimmed
         if kept:
-            history["windows"][provider_id] = kept
+            history["windows"][key] = kept
         else:
-            del history["windows"][provider_id]
+            del history["windows"][key]
             changed = True
     # Each window keeps its own series: pacing never mixes a window with its siblings.
-    for provider_id, provider in by_id.items():
-        windows = provider.get("windows")
-        if provider.get("status") != "ok" or not isinstance(windows, list):
+    for key, reading in readings.items():
+        windows = reading.get("windows")
+        if reading.get("status") != "ok" or not isinstance(windows, list):
             continue
-        series_by_window = history["windows"].setdefault(provider_id, {})
         for window in windows:
-            if not isinstance(window, dict):
+            sample = window_sample(window)
+            if sample is None:
                 continue
-            window_id = window.get("id")
-            used = number(window.get("used"))
-            if not isinstance(window_id, str) or not window_id or used is None:
-                continue
-            series = series_by_window.setdefault(window_id, [])
-            if record_window_sample(series, stamp, round(clamp(used, 0, 100), 2)):
+            series = history["windows"].setdefault(key, {}).setdefault(sample[0], [])
+            if record_window_sample(series, stamp, sample[1]):
                 changed = True
-            window["samples"] = series
-        if not series_by_window:
-            history["windows"].pop(provider_id, None)
+    return changed
+
+
+def newest_sample_at(history: dict[str, Any], key: str) -> int | None:
+    series = [history["providers"].get(key), *history["windows"].get(key, {}).values()]
+    return max((rows[-1][0] for rows in series if rows), default=None)
+
+
+def encoded_size(value: Any) -> int:
+    """The length of `value` as `atomic_write_json` writes it; the text is ASCII, so this is also its size in bytes."""
+    return len(json.dumps(value, separators=(",", ":")))
+
+
+def drop_series(history: dict[str, Any], key: str) -> int:
+    """Remove every series under `key`. Returns at most the number of bytes this takes off the saved file."""
+    saved = 0
+    for section in (history["providers"], history["windows"]):
+        if key in section:
+            saved += encoded_size({key: section.pop(key)}) - 2
+    return saved
+
+
+def prune_account_series(history: dict[str, Any], readings: dict[str, dict[str, Any]]) -> bool:
+    """Drop account series that hold no sample any more (the account was not read for the retention period), keep
+    at most HISTORY_MAX_ACCOUNT_SERIES per provider, and keep the saved file within what `load_history` reads back.
+    Accounts listed in this refresh rank first, then by their newest sample, then in payload order. True when
+    series that still held samples were dropped."""
+    keys = [key for key in dict.fromkeys([*history["providers"], *history["windows"]])
+            if account_series_provider(key) is not None]
+    newest = {key: newest_sample_at(history, key) for key in keys}
+    position = {key: index for index, key in enumerate(readings)}
+    ranked = sorted((key for key in keys if newest[key] is not None),
+                    key=lambda key: (key in position, newest[key], -position.get(key, 0)), reverse=True)
+    kept: list[str] = []
+    per_provider: dict[str, int] = {}
+    for key in ranked:
+        provider_id = account_series_provider(key)
+        per_provider[provider_id] = per_provider.get(provider_id, 0) + 1
+        if per_provider[provider_id] <= HISTORY_MAX_ACCOUNT_SERIES:
+            kept.append(key)
+    for key in set(keys).difference(kept):
+        drop_series(history, key)
+    if kept:
+        # A file over the read ceiling would be discarded whole, provider series included. The +1 is the final newline.
+        excess = encoded_size(history) + 1 - MAX_LOCAL_JSON_BYTES
+        while excess > 0 and kept:
+            excess -= drop_series(history, kept.pop())
+    return len(kept) < len(ranked)
+
+
+def last_rise(series: list[list[float]]) -> tuple[int, float] | None:
+    """When a window's series last rose, and by how many points. A fall is a reset, not use."""
+    for index in range(len(series) - 1, 0, -1):
+        rise = series[index][1] - series[index - 1][1]
+        if rise > 0:
+            return series[index][0], round(rise, 2)
+    return None
+
+
+def series_activity(history: dict[str, Any], keys: list[str]) -> dict[str, Any]:
+    """When any window under these keys last rose (the largest rise when several rose in that refresh), and when the
+    newest successful reading was taken."""
+    rises = [rise for key in keys for series in history["windows"].get(key, {}).values() if (rise := last_rise(series))]
+    read_at = [history["providers"][key][-1][0] for key in keys if history["providers"].get(key)]
+    rise_at, delta = max(rises, default=(None, None))
+    return {"lastIncreaseAt": rise_at, "lastDelta": delta, "lastReadingAt": max(read_at, default=None)}
+
+
+def attach_history(history: dict[str, Any], key: str, reading: dict[str, Any], stamp: int) -> None:
+    """Give a reading its chart buckets and, when it succeeded, each of its windows its own series."""
+    samples = history["providers"].get(key, [])
+    reading["history"] = {
+        "h24": bucket_history(samples, stamp, 24, 24 * 60 * 60),
+        "d7": bucket_history(samples, stamp, 7, SEVEN_DAYS),
+    }
+    windows = reading.get("windows")
+    if reading.get("status") != "ok" or not isinstance(windows, list):
+        return
+    series_by_window = history["windows"].get(key, {})
+    attached = []
+    for window in windows:
+        sample = window_sample(window)
+        series = series_by_window.get(sample[0]) if sample else None
+        # Copied, not changed in place: a provider's summary can share window objects with one of its accounts.
+        attached.append(window if series is None else dict(window, samples=series))
+    reading["windows"] = attached
+
+
+def update_and_attach_history(
+    providers: list[dict[str, Any]], state_dir: Path | None = None, now: int | None = None
+) -> None:
+    stamp = int(time.time()) if now is None else int(now)
+    path = history_path(state_dir)
+    history = load_history(path)
+    readings = series_readings(providers)
+    changed = record_history(history, readings, stamp)
+    if prune_account_series(history, readings):
+        changed = True
+    accounts_of: dict[str, list[str]] = {}
+    for key in readings:
+        provider_id = account_series_provider(key)
+        if provider_id is not None:
+            accounts_of.setdefault(provider_id, []).append(key)
+    for key, reading in readings.items():
+        attach_history(history, key, reading, stamp)
+        # A provider's summary moves between its accounts (the active login, the pool's best account), and such a
+        # move is not use: a provider with accounts reports the activity of its accounts.
+        reading["activity"] = series_activity(history, accounts_of.get(key, [key]))
     if changed:
         try:
             atomic_write_json(path, history)
@@ -7772,15 +7904,29 @@ def registry_account(provider_id: str, entry: object) -> dict[str, Any] | None:
     return {"id": account_id, "label": label or account_id, "home": home, "primary": primary}
 
 
-def omarchy_accounts(provider_id: str) -> list[dict[str, Any]]:
-    """Every login in Omarchy's registry for this provider, with the active one marked. A missing or unreadable
-    registry means the primary login alone, exactly as before accounts existed."""
+def read_registry(provider_id: str) -> dict[str, Any]:
+    """Omarchy's registry for this provider, or an empty one when it is missing or unreadable."""
     try:
         data = read_json(accounts_root() / f"{provider_id}.json")
     except (OSError, ValueError, RecursionError):
         data = None
-    if not isinstance(data, dict):
-        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def registry_switch(data: dict[str, Any]) -> dict[str, Any]:
+    """How Omarchy moves new sessions between logins: `auto` switches at the threshold, `manual` only notifies.
+    Omarchy's own defaults and bounds apply to a missing or odd value."""
+    mode = data.get("switch") if data.get("switch") in ("manual", "auto") else "manual"
+    threshold = number(data.get("threshold"))
+    threshold = 95 if threshold is None else int(clamp(threshold, 50, 100))
+    return {"mode": mode, "threshold": threshold}
+
+
+def omarchy_accounts(provider_id: str, data: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Every login in Omarchy's registry for this provider, with the active one marked. A missing or unreadable
+    registry means the primary login alone, exactly as before accounts existed."""
+    if data is None:
+        data = read_registry(provider_id)
     entries = data.get("accounts")
     accounts: list[dict[str, Any]] = []
     for entry in (entries if isinstance(entries, list) else []):
@@ -7836,14 +7982,17 @@ def summarize_accounts(entries: list[dict[str, Any]], index: int) -> dict[str, A
 def omarchy_account_result(provider_id: str, fetch: Callable[..., dict[str, Any]], timeout: float) -> dict[str, Any]:
     """The active login's reading. With two or more Omarchy logins, each login is read and listed under `accounts`;
     with one, the reading is exactly what `fetch` gives on its own, as before accounts existed."""
-    accounts = omarchy_accounts(provider_id)
+    registry = read_registry(provider_id)
+    accounts = omarchy_accounts(provider_id, registry)
     if len(accounts) < 2:
         return fetch(timeout)
     reads = [functools.partial(fetch, home=account["home"]) for account in accounts]
     readings = read_concurrently(provider_id, reads, timeout)
     entries = [dict(reading, accountId=account["id"], label=account["label"], primary=account["primary"],
-                    active=account["active"]) for account, reading in zip(accounts, readings)]
-    return summarize_accounts(entries, [account["active"] for account in accounts].index(True))
+                    active=account["active"], origin="omarchy") for account, reading in zip(accounts, readings)]
+    summary = summarize_accounts(entries, [account["active"] for account in accounts].index(True))
+    summary["accountSwitch"] = registry_switch(registry)
+    return summary
 
 
 def key_account_result(provider_id: str, primary: Callable[[float], dict[str, Any]],
@@ -7860,7 +8009,7 @@ def key_account_result(provider_id: str, primary: Callable[[float], dict[str, An
         logins = logins[1:]
         readable = [position for position, (_key_id, _primary, reading) in enumerate(logins) if reading.get("status") == "ok"]
         index = readable[0] if readable else 0
-    entries = [dict(reading, accountId=key_id, primary=is_primary, active=position == index)
+    entries = [dict(reading, accountId=key_id, primary=is_primary, active=position == index, origin="key")
                for position, (key_id, is_primary, reading) in enumerate(logins)]
     return summarize_accounts(entries, index)
 
