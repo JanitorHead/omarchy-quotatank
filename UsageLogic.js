@@ -1091,16 +1091,19 @@ var PROVIDER_SETUP = {
   amp: { login: "amp login", mise: "npm:@sourcegraph/amp", installUrl: "https://ampcode.com" },
   kilo: { login: "kilo auth login", mise: "npm:@kilocode/cli", installUrl: "https://kilo.ai/cli" },
   codebuff: { login: "codebuff login", mise: "npm:codebuff", installUrl: "https://www.codebuff.com" },
-  huggingface: { login: "hf auth login", installUrl: "https://huggingface.co/docs/huggingface_hub/installation" }
+  huggingface: { login: "hf auth login", installUrl: "https://huggingface.co/docs/huggingface_hub/installation" },
+  nous: { login: "hermes portal", installUrl: "https://github.com/NousResearch/hermes-agent" },
+  muse: { login: "muse login", installUrl: "https://developer.meta.ai/docs/muse-code" }
 }
 
 // Providers the widget reads on this computer, in scripts/usage-fetch.py's PROVIDER_ORDER, which is
 // also their default order everywhere. `short` is the tile and chip name. `auth` says how one is set
 // up: "signin" (a CLI, app, or IDE sign-in the provider owns), "key" (an API key saved here or set in
 // `keyEnv`, the first environment variable the backend reads), or "both". `keysUrl` is where a key is
-// created; `signIn` is the one-line hint shown while a provider is not set up. `money` marks providers
-// that lead with a prepaid balance rather than percentages; `lightIcon` marks dark marks that ship an
-// `assets/<id>-light.svg` for light surfaces.
+// created, `keysLinkText` the link to it, `keyLabel` what the saved secret is called (TypeSafe's is a
+// console Cookie header, not an API key), and `keyHelp` how to get it; `signIn` is the one-line hint
+// shown while a provider is not set up. `money` marks providers that lead with a prepaid balance rather
+// than percentages; `lightIcon` marks dark marks that ship an `assets/<id>-light.svg` for light surfaces.
 var LOCAL_PROVIDERS = [
   { id: "claude", name: "Claude Code", short: "Claude", auth: "signin", signIn: "Run claude auth login" },
   { id: "codex", name: "OpenAI Codex", short: "Codex", auth: "signin", signIn: "Run codex login", lightIcon: true },
@@ -1113,6 +1116,8 @@ var LOCAL_PROVIDERS = [
   { id: "grok", name: "Grok CLI", short: "Grok", auth: "signin", signIn: "Run grok login", lightIcon: true },
   { id: "kiro", name: "Kiro", short: "Kiro", auth: "signin", signIn: "Run kiro-cli login" },
   { id: "jetbrains", name: "JetBrains AI", short: "JetBrains", auth: "signin", signIn: "Use AI Assistant in a JetBrains IDE", lightIcon: true },
+  { id: "nous", name: "Nous Portal", short: "Nous", auth: "signin", signIn: "Run hermes portal and sign in", lightIcon: true },
+  { id: "muse", name: "Muse Code", short: "Muse", auth: "signin", signIn: "Run muse login and sign in" },
   { id: "factory", name: "Droid", short: "Droid", auth: "both", keyEnv: "FACTORY_API_KEY", keysUrl: "https://app.factory.ai/settings/api-keys", signIn: "Save a Factory API key", lightIcon: true },
   { id: "amp", name: "Amp", short: "Amp", auth: "both", keyEnv: "AMP_API_KEY", keysUrl: "https://ampcode.com/settings", signIn: "Run amp login, or save a key" },
   { id: "kilo", name: "Kilo Code", short: "Kilo", auth: "both", keyEnv: "KILO_API_KEY", keysUrl: "https://app.kilo.ai/profile", signIn: "Run kilo auth login, or save a key", lightIcon: true },
@@ -1126,16 +1131,33 @@ var LOCAL_PROVIDERS = [
   { id: "warp", name: "Warp", short: "Warp", auth: "key", keyEnv: "WARP_API_KEY", keysUrl: "https://oz.warp.dev/settings", signIn: "Save a personal Warp API key (Warp → Settings → Cloud platform → API keys)" },
   { id: "zenmux", name: "ZenMux", short: "ZenMux", auth: "key", keyEnv: "ZENMUX_MANAGEMENT_API_KEY", keysUrl: "https://zenmux.ai/platform/management", signIn: "Save a ZenMux management key", lightIcon: true },
   { id: "clinepass", name: "Cline", short: "Cline", auth: "key", keyEnv: "CLINE_API_KEY", keysUrl: "https://app.cline.bot/dashboard/account?tab=api-keys", signIn: "Save a Cline API key", lightIcon: true },
+  { id: "alibaba", name: "Alibaba Coding Plan", short: "Alibaba", auth: "key", keyEnv: "ALIBABA_CODING_PLAN_API_KEY", keysUrl: "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=coding-plan#/efm/coding_plan", signIn: "Save an Alibaba Coding Plan API key" },
+  { id: "commandcode", name: "Command Code", short: "Command Code", auth: "key", keyEnv: "COMMAND_CODE_API_KEY", keysUrl: "https://commandcode.ai/studio", signIn: "Save a Command Code API key", lightIcon: true },
+  { id: "devpass", name: "DevPass", short: "DevPass", auth: "key", keyEnv: "DEVPASS_API_KEY", signIn: "Save a DevPass API key", lightIcon: true },
+  { id: "xkiro", name: "xKiro", short: "xKiro", auth: "key", keyEnv: "XKIRO_API_KEY", signIn: "Save an xKiro API key" },
+  { id: "ibmbob", name: "IBM Bob", short: "IBM Bob", auth: "key", keyEnv: "BOBSHELL_API_KEY", keysUrl: "https://bob.ibm.com", signIn: "Save an IBM Bob API key" },
+  { id: "umans", name: "Umans", short: "Umans", auth: "key", keyEnv: "UMANS_AI_CODING_PLAN_API_KEY", keysUrl: "https://app.umans.ai/billing", signIn: "Save an Umans API key", lightIcon: true },
+  { id: "neuralwatt", name: "Neuralwatt", short: "Neuralwatt", auth: "key", keyEnv: "NEURALWATT_API_KEY", signIn: "Save a Neuralwatt API key" },
+  { id: "aixy", name: "Aixy", short: "Aixy", auth: "key", keyEnv: "AIXY_API_KEY", signIn: "Save an Aixy API key", lightIcon: true },
+  { id: "clawrouter", name: "ClawRouter", short: "ClawRouter", auth: "key", keyEnv: "CLAWROUTER_API_KEY", signIn: "Save a ClawRouter API key" },
   { id: "openrouter", name: "OpenRouter", short: "OpenRouter", auth: "key", money: true, keyEnv: "OPENROUTER_API_KEY", keysUrl: "https://openrouter.ai/settings/keys", signIn: "Save an OpenRouter key" },
   { id: "deepseek", name: "DeepSeek", short: "DeepSeek", auth: "key", money: true, keyEnv: "DEEPSEEK_API_KEY", keysUrl: "https://platform.deepseek.com/api_keys", signIn: "Save a DeepSeek key" },
   { id: "moonshot", name: "Moonshot", short: "Moonshot", auth: "key", money: true, keyEnv: "MOONSHOT_API_KEY", keysUrl: "https://platform.kimi.ai/console/api-keys", signIn: "Save a Moonshot key", lightIcon: true },
   { id: "venice", name: "Venice", short: "Venice", auth: "key", money: true, keyEnv: "VENICE_API_KEY", keysUrl: "https://venice.ai/settings/api", signIn: "Save a Venice Admin API key (inference keys cannot read the balance)", lightIcon: true },
   { id: "deepinfra", name: "DeepInfra", short: "DeepInfra", auth: "key", money: true, keyEnv: "DEEPINFRA_API_KEY", keysUrl: "https://deepinfra.com/dash/api_keys", signIn: "Save a DeepInfra key", lightIcon: true },
   { id: "vercel", name: "Vercel AI Gateway", short: "Vercel", auth: "key", money: true, keyEnv: "AI_GATEWAY_API_KEY", keysUrl: "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai-gateway%2Fapi-keys&title=AI+Gateway+API+Keys", signIn: "Save an AI Gateway key", lightIcon: true },
-  { id: "poe", name: "Poe", short: "Poe", auth: "key", money: true, keyEnv: "POE_API_KEY", keysUrl: "https://poe.com/api/keys", signIn: "Save a Poe API key" }
+  { id: "poe", name: "Poe", short: "Poe", auth: "key", money: true, keyEnv: "POE_API_KEY", keysUrl: "https://poe.com/api/keys", signIn: "Save a Poe API key" },
+  { id: "atlascloud", name: "Atlas Cloud", short: "Atlas", auth: "key", money: true, keyEnv: "ATLASCLOUD_API_KEY", keysUrl: "https://www.atlascloud.ai/console", signIn: "Save an Atlas Cloud API key with balance access", lightIcon: true },
+  { id: "hyper", name: "Charm Hyper", short: "Hyper", auth: "key", money: true, keyEnv: "HYPER_API_KEY", keysUrl: "https://hyper.charm.land", signIn: "Save a Hyper API key" },
+  { id: "sailresearch", name: "Sail Research", short: "Sail", auth: "key", money: true, keyEnv: "SAIL_API_KEY", keysUrl: "https://app.sailresearch.com", signIn: "Save a Sail Research API key", lightIcon: true },
+  { id: "sofya", name: "Sofya", short: "Sofya", auth: "key", money: true, keyEnv: "SOFYA_API_KEY", keysUrl: "https://sofya.co/dashboard", signIn: "Save a Sofya API key" },
+  { id: "v0", name: "v0", short: "v0", auth: "key", money: true, keyEnv: "V0_API_KEY", keysUrl: "https://v0.app/settings/keys", signIn: "Save a v0 API key", lightIcon: true },
+  { id: "manus", name: "Manus", short: "Manus", auth: "key", money: true, keyEnv: "MANUS_API_KEY", keysUrl: "https://manus.im/app#settings/developers", signIn: "Save a Manus API key", lightIcon: true },
+  { id: "typesafe", name: "TypeSafe", short: "TypeSafe", auth: "key", money: true, keyEnv: "TYPESAFE_COOKIE", keysUrl: "https://console.typesafe.ai/settings/billing", keyLabel: "Cookie header", keysLinkText: "Open billing ↗", keyHelp: "Open billing signed in, then copy the request's Cookie header from the browser's developer tools (Network). It lasts as long as that console session.", signIn: "Paste the Cookie header from console.typesafe.ai/settings/billing (an inference API key cannot replace it)", lightIcon: true }
 ].map(function (entry) {
   // Every entry carries every field, so QML bindings never read `undefined` as text.
-  return Object.assign({ money: false, keyEnv: "", keysUrl: "", lightIcon: false, login: "", mise: "", installUrl: "" },
+  return Object.assign({ money: false, keyEnv: "", keysUrl: "", keyLabel: "API key", keysLinkText: "Get a key ↗", keyHelp: "",
+    lightIcon: false, login: "", mise: "", installUrl: "" },
     entry, PROVIDER_SETUP[entry.id] || {})
 })
 var LOCAL_PROVIDER_IDS = LOCAL_PROVIDERS.map(function (entry) { return entry.id })
@@ -1241,7 +1263,25 @@ var PROVIDER_COLORS = {
   venice: "#e5322d",
   deepinfra: "#3692a1",
   vercel: "#787878",
-  poe: "#c026d3"
+  poe: "#c026d3",
+  nous: "#c99a52",
+  muse: "#3b82f6",
+  alibaba: "#ff6a00",
+  commandcode: "#8c4edd",
+  devpass: "#2563eb",
+  xkiro: "#22c55e",
+  ibmbob: "#5b6cf0",
+  umans: "#f472b6",
+  neuralwatt: "#d55934",
+  aixy: "#ec744a",
+  clawrouter: "#e0622b",
+  atlascloud: "#5975f5",
+  hyper: "#9cb83a",
+  sailresearch: "#4a6fb5",
+  sofya: "#a3ab1e",
+  v0: "#8b8b9e",
+  manus: "#7b6ff0",
+  typesafe: "#0ea5a4"
 }
 
 // ---- Settings → Providers (local mode)
@@ -1346,7 +1386,8 @@ function providerStatus(entry, reading, hasKey, checking, withButton) {
 // What the key editor says: the environment always wins, and for a provider with a sign-in of its
 // own a saved key replaces that sign-in.
 function keyHint(entry) {
-  return (entry.auth === "both" ? "Optional: used instead of the sign-in. " : "")
+  return (entry.keyHelp ? entry.keyHelp + " " : "")
+    + (entry.auth === "both" ? "Optional: used instead of the sign-in. " : "")
     + (entry.keyEnv ? entry.keyEnv + " in the environment takes precedence." : "")
 }
 

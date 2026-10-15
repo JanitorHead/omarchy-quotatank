@@ -42,11 +42,13 @@ SCHEMA_VERSION = 1
 # Every provider the collector can read, in the order the widget lists them by default. Plan
 # limits read from a CLI or IDE sign-in come first, then API-key plans and balances.
 PROVIDER_ORDER = (
-    "claude", "codex", "kimi", "opencode",
-    "antigravity", "gemini", "copilot", "cursor", "grok", "kiro", "jetbrains",
+    "claude", "codex", "kimi", "opencode", "antigravity", "gemini", "copilot", "cursor", "grok",
+    "kiro", "jetbrains", "nous", "muse",
     "factory", "amp", "kilo", "codebuff", "huggingface",
-    "zai", "minimax", "synthetic", "chutes", "ollama", "warp", "zenmux", "clinepass",
-    "openrouter", "deepseek", "moonshot", "venice", "deepinfra", "vercel", "poe",
+    "zai", "minimax", "synthetic", "chutes", "ollama", "warp", "zenmux", "clinepass", "alibaba",
+    "commandcode", "devpass", "xkiro", "ibmbob", "umans", "neuralwatt", "aixy", "clawrouter",
+    "openrouter", "deepseek", "moonshot", "venice", "deepinfra", "vercel", "poe", "atlascloud",
+    "hyper", "sailresearch", "sofya", "v0", "manus", "typesafe",
 )
 PROVIDER_NAMES = {
     "claude": "Claude Code",
@@ -80,6 +82,24 @@ PROVIDER_NAMES = {
     "deepinfra": "DeepInfra",
     "vercel": "Vercel AI Gateway",
     "poe": "Poe",
+    "nous": "Nous Portal",
+    "muse": "Muse Code",
+    "alibaba": "Alibaba Coding Plan",
+    "commandcode": "Command Code",
+    "devpass": "DevPass",
+    "xkiro": "xKiro",
+    "ibmbob": "IBM Bob",
+    "umans": "Umans",
+    "neuralwatt": "Neuralwatt",
+    "aixy": "Aixy",
+    "clawrouter": "ClawRouter",
+    "atlascloud": "Atlas Cloud",
+    "hyper": "Charm Hyper",
+    "sailresearch": "Sail Research",
+    "sofya": "Sofya",
+    "v0": "v0",
+    "manus": "Manus",
+    "typesafe": "TypeSafe",
     # Names CLIProxyAPI reports for accounts it manages.
     "gemini-cli": "Gemini CLI",
     "qwen": "Qwen",
@@ -103,6 +123,8 @@ AUTH_COMMANDS = {
     "kilo": "kilo auth login",
     "codebuff": "codebuff login",
     "huggingface": "hf auth login",
+    "nous": "hermes portal",
+    "muse": "muse login",
 }
 
 # The executable whose presence means a provider's CLI is installed (see installed_providers).
@@ -111,6 +133,7 @@ PROVIDER_CLI: dict[str, str] = {
     "antigravity": "agy", "gemini": "gemini", "copilot": "gh", "cursor": "cursor-agent",
     "grok": "grok", "kiro": "kiro-cli", "factory": "droid", "amp": "amp", "kilo": "kilo",
     "codebuff": "codebuff", "huggingface": "hf",
+    "nous": "hermes", "muse": "muse",
 }
 
 # Environment variables that carry a provider's API key, in precedence order. They win over the
@@ -136,6 +159,22 @@ PROVIDER_KEY_ENV: dict[str, tuple[str, ...]] = {
     "deepinfra": ("DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN"),
     "vercel": ("AI_GATEWAY_API_KEY",),
     "poe": ("POE_API_KEY",),
+    "alibaba": ("ALIBABA_CODING_PLAN_API_KEY", "ALIBABA_QWEN_API_KEY", "DASHSCOPE_API_KEY",),
+    "commandcode": ("COMMAND_CODE_API_KEY",),
+    "devpass": ("DEVPASS_API_KEY",),
+    "xkiro": ("XKIRO_API_KEY",),
+    "ibmbob": ("BOBSHELL_API_KEY",),
+    "umans": ("UMANS_AI_CODING_PLAN_API_KEY",),
+    "neuralwatt": ("NEURALWATT_API_KEY",),
+    "aixy": ("AIXY_API_KEY",),
+    "clawrouter": ("CLAWROUTER_API_KEY",),
+    "atlascloud": ("ATLASCLOUD_API_KEY",),
+    "hyper": ("HYPER_API_KEY",),
+    "sailresearch": ("SAIL_API_KEY",),
+    "sofya": ("SOFYA_API_KEY",),
+    "v0": ("V0_API_KEY",),
+    "manus": ("MANUS_API_KEY",),
+    "typesafe": ("TYPESAFE_COOKIE",),
 }
 
 ONE_DAY = 24 * 60 * 60
@@ -535,6 +574,18 @@ def renew_claude_login(timeout: float) -> None:
             pass
 
 
+def request_claude_usage(login: dict[str, Any], timeout: float) -> Any:
+    return http_json(
+        "https://api.anthropic.com/api/oauth/usage",
+        {
+            "Authorization": "Bearer " + login["accessToken"],
+            "anthropic-beta": "oauth-2025-04-20",
+            "Accept": "application/json",
+        },
+        timeout,
+    )
+
+
 @provider_fetcher("claude")
 def fetch_claude(timeout: float) -> dict[str, Any]:
     provider_id = "claude"
@@ -549,20 +600,25 @@ def fetch_claude(timeout: float) -> dict[str, Any]:
             login = read_claude_login(credentials_path)
     except (OSError, ValueError, json.JSONDecodeError):
         return error_provider(provider_id, "no_credentials", "Claude Code credentials could not be read.")
-    # A token Claude Code could not renew is still sent: when renewal failed for want of a network,
-    # as at the first check after login, that reads as a connection error rather than a sign-in
-    # prompt, and a sign-in that is really gone comes back as 401 (expired).
 
+    # A token Claude Code could not renew is still sent: offline, that reads as a connection error
+    # rather than a sign-in prompt. If it comes back rejected, the network is up by now, which at the
+    # first check after login it often was not when Claude Code tried; so Claude Code gets one more
+    # try, and only a sign-in it still cannot renew asks to sign in again.
     try:
-        payload = http_json(
-            "https://api.anthropic.com/api/oauth/usage",
-            {
-                "Authorization": "Bearer " + login["accessToken"],
-                "anthropic-beta": "oauth-2025-04-20",
-                "Accept": "application/json",
-            },
-            timeout,
-        )
+        try:
+            payload = request_claude_usage(login, timeout)
+        except ProviderFailure as exc:
+            if exc.kind != "expired" or not claude_login_expired(login):
+                raise
+            renew_claude_login(timeout)
+            try:
+                login = read_claude_login(credentials_path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                raise exc from None
+            if claude_login_expired(login):
+                raise
+            payload = request_claude_usage(login, timeout)
         windows, credits = parse_claude_usage(payload)
     except ProviderFailure as exc:
         return error_provider(provider_id, exc.kind, exc.message)
@@ -4721,6 +4777,2240 @@ def fetch_poe(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
         return keyed_error(provider_id, exc, "Poe")
     result = base_provider(provider_id)
     result.update(plan="API key", source="Poe API", credits=credits)
+    return result
+
+
+# --------------------------------------------------------------- Nous Portal
+#
+# Nous Portal account, read with the access token that Hermes Agent keeps for its Nous login
+# (`hermes portal` signs in). Quotatank only reads that token. It never refreshes or writes
+# it, because Hermes Agent owns the login.
+# Source: CodexBar's nous.ts, NousSettingsReader.swift and NousUsageError.swift.
+
+NOUS_ACCOUNT_PATH = "/api/oauth/account"
+NOUS_DEFAULT_PORTAL = "https://portal.nousresearch.com"
+NOUS_TRUSTED_DOMAIN = "nousresearch.com"
+NOUS_TOKEN_ENV = "NOUS_PORTAL_ACCESS_TOKEN"
+NOUS_PORTAL_ENVS = ("NOUS_PORTAL_BASE_URL", "HERMES_PORTAL_BASE_URL")
+# A token this close to expiry counts as expired, so a request never races the portal's clock.
+NOUS_EXPIRY_MARGIN_SECONDS = 60
+NOUS_DECIMAL = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def json_number(value: Any) -> float | None:
+    """`number` for a JSON number. Booleans, text and integers too large for a float give None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        return number(value)
+    except OverflowError:
+        return None
+
+
+def reset_epoch(seconds: float | None) -> int | None:
+    """Epoch seconds usable as a reset time, or None. Larger values are dropped, since `epoch_seconds`
+    reads numbers above 1e10 as milliseconds. The Muse Code section uses this too."""
+    if seconds is None or not 0 < seconds <= 10_000_000_000:
+        return None
+    return int(seconds)
+
+
+def unquoted(raw: str | None) -> str:
+    """Trimmed text with one matching pair of quotes removed, as Hermes writes them."""
+    text = (raw or "").strip()
+    if text[:1] in ("'", '"') and text[-1:] == text[:1]:
+        text = text[1:-1].strip()
+    return text
+
+
+def hermes_home() -> Path:
+    override = os.environ.get("HERMES_HOME", "").strip()
+    return Path(override).expanduser() if override else Path.home() / ".hermes"
+
+
+def nous_auth_files() -> list[Path]:
+    """Hermes Agent's auth file for this home, then the copy it shares across profiles."""
+    home = hermes_home()
+    return [home / "auth.json", home / "shared" / "nous_auth.json"]
+
+
+def nous_origin(raw: str) -> str:
+    """`raw` as an https origin with no trailing slash, or "" for anything else: credentials, a path,
+    a query, a fragment, or a scheme other than https."""
+    text = raw.strip().rstrip("/")
+    try:
+        parts = urllib.parse.urlsplit(text)
+        _ = parts.port  # Raises ValueError for a malformed or out-of-range port.
+    except ValueError:
+        return ""
+    if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
+        return ""
+    if parts.path or parts.query or parts.fragment:
+        return ""
+    return f"https://{parts.netloc}"
+
+
+def nous_portal(stored: str | None) -> tuple[str, str]:
+    """The origin to send the token to, and the stored host the trusted-domain rule refused (or "").
+    An https environment override wins; then the stored portal when it sits on nousresearch.com."""
+    for name in NOUS_PORTAL_ENVS:
+        origin = nous_origin(os.environ.get(name, ""))
+        if origin:
+            return origin, ""
+    origin = nous_origin(stored) if isinstance(stored, str) else ""
+    if not origin:
+        return NOUS_DEFAULT_PORTAL, ""
+    host = urllib.parse.urlsplit(origin).hostname or ""
+    if host == NOUS_TRUSTED_DOMAIN or host.endswith("." + NOUS_TRUSTED_DOMAIN):
+        return origin, ""
+    return NOUS_DEFAULT_PORTAL, host
+
+
+def nous_time(value: Any) -> int | None:
+    """Epoch seconds from an ISO-8601 string in a Hermes file; anything else is unknown."""
+    return utc_timestamp(value) if isinstance(value, str) else None
+
+
+def nous_jwt_expiry(token: str) -> int | None:
+    """The `exp` claim of a JWT access token, read without checking its signature."""
+    exp = json_number(jwt_claims(token).get("exp"))
+    return None if exp is None else int(exp)
+
+
+def nous_stored(state: Any) -> dict[str, Any] | None:
+    """The token and its metadata from one Hermes state object; None when it holds no token."""
+    if not isinstance(state, dict) or not isinstance(state.get("access_token"), str):
+        return None
+    token = state["access_token"].strip()
+    if not token:
+        return None
+    portal = state.get("portal_base_url")
+    expires = nous_time(state.get("expires_at"))
+    return {
+        "token": token,
+        "portal": portal if isinstance(portal, str) else None,
+        "expires": expires if expires is not None else nous_jwt_expiry(token),
+    }
+
+
+def nous_file_credential(path: Path) -> dict[str, Any] | None:
+    """The Nous token in one Hermes auth file. Hermes writes three shapes, and the first that holds a
+    token wins: `providers.nous`; then the `credential_pool.nous` entry Hermes uses (latest agent-key
+    expiry, then latest access expiry, then lowest priority number); then the root object itself."""
+    root = read_json(path)
+    if not isinstance(root, dict):
+        return None
+    providers = root.get("providers")
+    stored = nous_stored(providers.get("nous")) if isinstance(providers, dict) else None
+    if stored:
+        return stored
+    pool = root.get("credential_pool")
+    entries = pool.get("nous") if isinstance(pool, dict) else None
+    ranked = []
+    for entry in entries if isinstance(entries, list) else []:
+        stored = nous_stored(entry)
+        if stored:
+            priority = json_number(entry.get("priority")) or 0.0
+            key = (nous_time(entry.get("agent_key_expires_at")) or 0, stored["expires"] or 0, -priority)
+            ranked.append((key, stored))
+    if ranked:
+        return max(ranked, key=lambda item: item[0])[1]
+    return nous_stored(root)
+
+
+@provider_detector("nous")
+def detect_nous() -> bool:
+    if unquoted(os.environ.get(NOUS_TOKEN_ENV)):
+        return True
+    for path in nous_auth_files():
+        try:
+            if path.is_file() and nous_file_credential(path):
+                return True
+        except (OSError, ValueError, RecursionError):
+            continue
+    return False
+
+
+def resolve_nous_token(now: float) -> dict[str, Any]:
+    """The token to send, with the portal recorded beside it. The environment wins; otherwise the first
+    Hermes auth file holding a live token. An expired token is refused here, before any request."""
+    token = unquoted(os.environ.get(NOUS_TOKEN_ENV))
+    if token:
+        expires = nous_jwt_expiry(token)
+        if expires is not None and expires - NOUS_EXPIRY_MARGIN_SECONDS <= now:
+            raise ProviderFailure(
+                "expired",
+                f"{NOUS_TOKEN_ENV} has expired. Export a fresh token or unset it to use the Hermes Agent login.",
+            )
+        return {"token": token, "portal": None, "expires": expires}
+    files = nous_auth_files()
+    found_file = False
+    expired_path: Path | None = None
+    for path in files:
+        if not path.is_file():
+            continue
+        found_file = True
+        try:
+            stored = nous_file_credential(path)
+        except (OSError, ValueError, RecursionError):
+            continue
+        if stored is None:
+            continue
+        if stored["expires"] is not None and stored["expires"] - NOUS_EXPIRY_MARGIN_SECONDS <= now:
+            expired_path = expired_path or path
+            continue
+        return stored
+    if expired_path is not None:
+        raise ProviderFailure(
+            "expired",
+            f"Nous Portal access token in {expired_path} has expired. Run `hermes` so Hermes Agent refreshes it.",
+        )
+    if found_file:
+        raise ProviderFailure(
+            "no_credentials",
+            f"Hermes auth file at {files[0]} has no Nous Portal access token. Run `hermes portal` to sign in.",
+        )
+    raise ProviderFailure(
+        "no_credentials",
+        "Nous Portal login not found. Run `hermes portal` to sign in, or set NOUS_PORTAL_ACCESS_TOKEN.",
+    )
+
+
+@provider_fetcher("nous")
+def fetch_nous(timeout: float) -> dict[str, Any]:
+    provider_id = "nous"
+    try:
+        credential = resolve_nous_token(time.time())
+    except ProviderFailure as exc:
+        return error_provider(provider_id, exc.kind, exc.message)
+    origin, rejected_host = nous_portal(credential["portal"])
+    headers = {**bearer_headers(credential["token"]), "User-Agent": SIGNIN_USER_AGENT}
+    try:
+        parsed = parse_nous_account(http_json(origin + NOUS_ACCOUNT_PATH, headers, timeout))
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            return error_provider(
+                provider_id,
+                "expired",
+                "Nous Portal rejected the access token. Run `hermes portal` to sign in again.",
+            )
+        return error_provider(provider_id, exc.kind, exc.message)
+    result = base_provider(provider_id)
+    result.update(parsed, source="Nous Portal account API")
+    if rejected_host:
+        note = f"Ignored the stored Nous Portal address on {rejected_host}; using {NOUS_DEFAULT_PORTAL}."
+        result["notice"] = f"{note} {result['notice']}".strip()
+    return result
+
+
+def nous_object(value: Any, field: str) -> dict[str, Any]:
+    """A JSON object field: null is an empty object; any other type is a malformed response."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ProviderFailure("malformed", f"Invalid Nous Portal account response: {field}")
+    return value
+
+
+def nous_amount(value: Any, field: str) -> float | None:
+    """A credit amount: a JSON number or a decimal string. Null or absent is unknown."""
+    if value is None:
+        return None
+    if isinstance(value, str) and NOUS_DECIMAL.fullmatch(value.strip()):
+        amount = number(float(value.strip()))
+    else:
+        amount = json_number(value)
+    if amount is None:
+        raise ProviderFailure("malformed", f"Invalid Nous Portal account response: {field}")
+    return amount
+
+
+def nous_text(value: Any) -> str:
+    """Trimmed display text; anything that is not text reads as empty."""
+    return clean_message(value).strip() if isinstance(value, str) else ""
+
+
+def parse_nous_account(root: Any) -> dict[str, Any]:
+    """Plan, account, the monthly-credits window and the balance from the Nous Portal account response."""
+    root = nous_object(root, "expected an object")
+    if root.get("error"):
+        raise ProviderFailure("http", "Nous Portal account endpoint reported an error.")
+    subscription = nous_object(root.get("subscription"), "subscription")
+    access = nous_object(root.get("paid_service_access"), "paid_service_access")
+    user = nous_object(root.get("user"), "user")
+    monthly = nous_amount(subscription.get("monthly_credits"), "monthly_credits")
+    if monthly is not None and monthly < 0:
+        raise ProviderFailure("malformed", "Invalid Nous Portal account response: monthly_credits")
+    remaining = nous_amount(subscription.get("credits_remaining"), "credits_remaining")
+    if remaining is None:
+        remaining = nous_amount(access.get("subscription_credits_remaining"), "subscription_credits_remaining")
+    rollover = nous_amount(subscription.get("rollover_credits"), "rollover_credits")
+    purchased = nous_amount(root.get("purchased_credits_remaining"), "purchased_credits_remaining")
+    if purchased is None:
+        purchased = nous_amount(access.get("purchased_credits_remaining"), "purchased_credits_remaining")
+    total = nous_amount(access.get("total_usable_credits"), "total_usable_credits")
+    if all(amount is None for amount in (monthly, remaining, rollover, purchased, total)):
+        raise ProviderFailure("malformed", "Invalid Nous Portal account response: no credit amounts")
+    ends = subscription.get("current_period_end")
+    reset = None
+    if ends is not None:
+        ends_at = utc_timestamp(ends) if isinstance(ends, str) else None
+        if ends_at is None:
+            raise ProviderFailure("malformed", "Invalid Nous Portal account response: current_period_end")
+        reset = reset_epoch(ends_at)
+    windows = []
+    if monthly is not None and monthly > 0 and remaining is not None:
+        left = max(0.0, remaining)
+        used = max(0.0, monthly - left) / monthly * 100
+        detail = f"${left:,.2f} of ${monthly:,.2f} left"
+        if rollover is not None and rollover > 0:
+            detail += f", ${rollover:,.2f} rollover"
+        windows.append(make_window("monthly", "Monthly credits", used, reset, None, detail))
+    balance = total if total is not None else purchased
+    credits = None
+    if balance is not None:
+        amount = round(max(0.0, balance), 2)
+        label = "Total usable credits" if total is not None else "Top-up credits"
+        credits = balance_credits(label, "USD", amount, None if windows else amount)
+    plan = nous_text(subscription.get("plan"))
+    if not plan and access.get("has_active_subscription") is True:
+        plan = "Subscription"
+    notice = "" if windows or credits else "Nous Portal reports no credits to show on this login."
+    return {
+        "plan": plan,
+        "account": nous_text(user.get("email")),
+        "windows": windows,
+        "credits": credits,
+        "notice": notice,
+    }
+
+# --------------------------------------------------------------- Muse Code
+#
+# Muse Code subscription quota, read with the device-code login that `muse login` saves in
+# ~/.config/muse/auth.json. Quotatank only reads that token; it never signs in or refreshes it.
+# Source: CodexBar's muse.ts, MuseCredentials.swift and MuseUsageError.swift. CodexBar also reads a
+# macOS Keychain copy of the login; Linux has no such store, so only the file is read.
+
+MUSE_KEY_URL = "https://api.meta.ai/muse-code/key"
+MUSE_API_VERSION = "1.0.0"
+# Device-code logins. Any other token is refused as needing a new login, as CodexBar does.
+MUSE_DEVICE_TOKEN_PREFIX = "dca:"
+MUSE_WEEK_MINUTES = 10080
+MUSE_MAX_SAFE_INTEGER = 9_007_199_254_740_991
+
+
+def muse_auth_path() -> Path:
+    """Muse Code 1.4's config root is `$XDG_CONFIG_HOME/muse`, else `~/.config/muse` (from the CLI's
+    own help text); `MUSE_AUTH_PATH` names the file directly."""
+    override = os.environ.get("MUSE_AUTH_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
+    config = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    return (Path(config).expanduser() if config else Path.home() / ".config") / "muse" / "auth.json"
+
+
+def muse_login(path: Path) -> tuple[str, bool]:
+    """The inline access token and whether the login uses OAuth, read from Muse Code's auth file."""
+    root = read_json(path)
+    providers = root.get("providers") if isinstance(root, dict) else None
+    meta = providers.get("meta") if isinstance(providers, dict) else None
+    if not isinstance(meta, dict):
+        return "", False
+    token = meta.get("access_token")
+    mechanism = meta.get("mechanism")
+    oauth = isinstance(mechanism, str) and mechanism.lower() == "oauth"
+    return (token.strip() if isinstance(token, str) else ""), oauth
+
+
+@provider_detector("muse")
+def detect_muse() -> bool:
+    try:
+        token, oauth = muse_login(muse_auth_path())
+    except (OSError, ValueError, RecursionError):
+        return False
+    return bool(token or oauth)
+
+
+def muse_object(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ProviderFailure("malformed", f"Invalid Muse Code subscription response: {field}")
+    return value
+
+
+def muse_text(value: Any, field: str) -> str:
+    """Trimmed text; null or absent is "", and any other type is a malformed response."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ProviderFailure("malformed", f"Invalid Muse Code subscription response: {field}")
+    return clean_message(value).strip()
+
+
+def muse_number(value: Any, field: str) -> float:
+    """A finite JSON number; text and booleans are malformed."""
+    amount = json_number(value)
+    if amount is None:
+        raise ProviderFailure("malformed", f"Invalid Muse Code subscription response: {field}")
+    return amount
+
+
+def muse_reset(value: Any) -> int | None:
+    return None if value is None else reset_epoch(muse_number(value, "resets_at"))
+
+
+def parse_muse_key(root: Any) -> dict[str, Any]:
+    """Plan, account and the primary and weekly windows from the Muse Code key response. A login with
+    no quota figures is kept with a notice. Payment and subscription problems are config failures: the
+    login works, but the account needs setting up."""
+    root = muse_object(root, "expected a response object")
+    for key in ("require_payment", "is_subs_active"):
+        if root.get(key) is not None and not isinstance(root[key], bool):
+            raise ProviderFailure("malformed", f"Invalid Muse Code subscription response: {key}")
+    if root.get("require_payment") is True:
+        raise ProviderFailure(
+            "config", "Muse Code requires a payment method. Finish billing at https://dev.meta.ai"
+        )
+    if root.get("is_subs_active") is not True:
+        raise ProviderFailure("config", "No Muse Code subscription is active on this login.")
+    plan = muse_text(root.get("subs_tier_name"), "subs_tier_name")
+    account = muse_text(root.get("user_email"), "user_email")
+    if root.get("subs_usage") is None:
+        return {
+            "plan": plan,
+            "account": account,
+            "windows": [],
+            "notice": "Muse Code's login response has no quota figures; browser quota is not read here.",
+        }
+    usage = muse_object(root["subs_usage"], "subs_usage")
+    window = muse_object(usage.get("window"), "missing subscription window")
+    # Muse's plan page lists a weekly limit only for some tiers, and oh-my-pi reads it as optional.
+    weekly = None if usage.get("weekly") is None else muse_object(usage["weekly"], "weekly window")
+    # Rounded half up, as CodexBar's Math.round does; only a positive whole length is a window.
+    minutes = int(muse_number(window.get("window_duration_mins"), "window_duration_mins") + 0.5)
+    if not 0 < minutes <= MUSE_MAX_SAFE_INTEGER:
+        raise ProviderFailure("malformed", "Invalid Muse Code subscription response: window_duration_mins")
+    primary_id, primary_label, primary_seconds = period_identity(minutes)
+    weekly_id, weekly_label, weekly_seconds = period_identity(MUSE_WEEK_MINUTES)
+    windows = [
+        make_window(
+            primary_id,
+            primary_label,
+            muse_number(window.get("used_percent"), "window.used_percent"),
+            muse_reset(window.get("resets_at")),
+            primary_seconds,
+        ),
+    ]
+    if weekly is not None:
+        windows.append(make_window(
+            weekly_id,
+            weekly_label,
+            muse_number(weekly.get("used_percent"), "weekly.used_percent"),
+            muse_reset(weekly.get("resets_at")),
+            weekly_seconds,
+        ))
+    return {"plan": plan, "account": account, "windows": windows, "notice": ""}
+
+
+@provider_fetcher("muse")
+def fetch_muse(timeout: float) -> dict[str, Any]:
+    provider_id = "muse"
+    try:
+        token, oauth = muse_login(muse_auth_path())
+    except FileNotFoundError:
+        return error_provider(provider_id, "no_credentials", "Muse Code login not found. Run `muse login`.")
+    except (OSError, ValueError, RecursionError):
+        return error_provider(
+            provider_id, "no_credentials", "The Muse Code login file could not be read. Run `muse login` again."
+        )
+    if not token:
+        message = (
+            "Muse Code's login has no token in the auth file Quotatank reads. Run `muse login` again."
+            if oauth
+            else "Muse Code login not found. Run `muse login`."
+        )
+        return error_provider(provider_id, "no_credentials", message)
+    if not token.startswith(MUSE_DEVICE_TOKEN_PREFIX):
+        return error_provider(provider_id, "expired", "Muse Code requires a device-code login. Run `muse login` again.")
+    headers = {**bearer_headers(token), "x-api-version": MUSE_API_VERSION, "User-Agent": SIGNIN_USER_AGENT}
+    try:
+        parsed = parse_muse_key(http_json(MUSE_KEY_URL, headers, timeout, body={}))
+    except ProviderFailure as exc:
+        if exc.kind == "expired":
+            return error_provider(provider_id, "expired", "Muse Code login was rejected. Run `muse login` again.")
+        return error_provider(provider_id, exc.kind, exc.message)
+    result = base_provider(provider_id)
+    result.update(parsed, source="Muse Code API")
+    return result
+
+# --------------------------------------------------------------- Alibaba Coding Plan
+#
+# Coding Plan quota from the instance query CodexBar sends with an API key (Sources/CodexBarCore/Providers/
+# Alibaba/AlibabaCodingPlanUsageFetcher.swift, AlibabaCodingPlanAPIRegion.swift). The international gateway is
+# asked first; the China gateway only when the first rejects the key. CodexBar's console-cookie path is not ported.
+
+ALIBABA_ACTION = "zeldaEasy.broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2"
+# gateway: (currentRegionId, commodityCode, dashboard referer, source label)
+ALIBABA_GATEWAYS = {
+    "https://modelstudio.console.alibabacloud.com": (
+        "ap-southeast-1",
+        "sfm_codingplan_public_intl",
+        "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=coding-plan#/efm/coding_plan",
+        "Model Studio API",
+    ),
+    "https://bailian.console.aliyun.com": (
+        "cn-beijing",
+        "sfm_codingplan_public_cn",
+        "https://bailian.console.aliyun.com/cn-beijing/?tab=model#/efm/coding_plan",
+        "Bailian China API",
+    ),
+}
+# CodexBar's browser-like agent for these console calls.
+ALIBABA_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/143.0.0.0 Safari/537.36"
+)
+ALIBABA_FIVE_HOURS = 5 * 60 * 60
+ALIBABA_INSTANCE_KEYS = ("codingPlanInstanceInfos", "coding_plan_instance_infos")
+ALIBABA_QUOTA_KEYS = ("codingPlanQuotaInfo", "coding_plan_quota_info")
+ALIBABA_PLAN_KEYS = ("planName", "plan_name", "instanceName", "instance_name", "packageName", "package_name")
+ALIBABA_ACTIVE_STATUSES = ("VALID", "ACTIVE")
+ALIBABA_DEAD_STATUSES = ("EXPIRED", "INVALID", "INACTIVE", "DISABLED", "TERMINATED", "STOPPED")
+# (window id, label, seconds, used keys, total keys, next-refresh keys) inside codingPlanQuotaInfo.
+ALIBABA_QUOTA_WINDOWS = (
+    (
+        "session",
+        "5-hour limit",
+        ALIBABA_FIVE_HOURS,
+        ("per5HourUsedQuota", "perFiveHourUsedQuota"),
+        ("per5HourTotalQuota", "perFiveHourTotalQuota"),
+        ("per5HourQuotaNextRefreshTime", "perFiveHourQuotaNextRefreshTime"),
+    ),
+    (
+        "weekly",
+        "Weekly limit",
+        7 * 24 * 60 * 60,
+        ("perWeekUsedQuota",),
+        ("perWeekTotalQuota",),
+        ("perWeekQuotaNextRefreshTime",),
+    ),
+    (
+        "monthly",
+        "Monthly limit",
+        30 * 24 * 60 * 60,
+        ("perBillMonthUsedQuota", "perMonthUsedQuota"),
+        ("perBillMonthTotalQuota", "perMonthTotalQuota"),
+        ("perBillMonthQuotaNextRefreshTime", "perMonthQuotaNextRefreshTime"),
+    ),
+)
+ALIBABA_WINDOW_KEYS = tuple(key for window in ALIBABA_QUOTA_WINDOWS for key in window[3] + window[4])
+
+
+def alibaba_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
+
+def alibaba_int(value: Any) -> int | None:
+    numeric = number(value)
+    return None if numeric is None else int(numeric)
+
+
+def alibaba_flag(value: Any) -> bool | None:
+    text = alibaba_text(value)
+    if text is None:
+        return value if isinstance(value, bool) else None
+    return {"true": True, "false": False}.get(text.lower())
+
+
+def alibaba_dict(value: Any) -> dict[str, Any] | None:
+    return value if isinstance(value, dict) else None
+
+
+def alibaba_list(value: Any) -> list[Any] | None:
+    return value if isinstance(value, list) else None
+
+
+def alibaba_expand(value: Any) -> Any:
+    """Decode JSON the API wrapped in a string, at any depth."""
+    if isinstance(value, str) and value.strip().startswith(("{", "[")):
+        try:
+            return alibaba_expand(json.loads(value))
+        except (ValueError, RecursionError):
+            return value
+    if isinstance(value, dict):
+        return {key: alibaba_expand(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [alibaba_expand(item) for item in value]
+    return value
+
+
+def alibaba_direct(keys: tuple[str, ...], node: dict[str, Any], transform: Callable[[Any], Any]) -> Any:
+    """The first of `keys` on this object whose value `transform` accepts."""
+    for key in keys:
+        found = transform(node.get(key))
+        if found is not None:
+            return found
+    return None
+
+
+def alibaba_find_dict(
+    value: Any, accept: Callable[[dict[str, Any]], bool], arrays: bool = True
+) -> dict[str, Any] | None:
+    """The outermost object, depth first, that `accept` takes; arrays are searched only when `arrays`."""
+    if isinstance(value, dict):
+        if accept(value):
+            return value
+        children: list[Any] = list(value.values())
+    elif arrays and isinstance(value, list):
+        children = value
+    else:
+        return None
+    for child in children:
+        found = alibaba_find_dict(child, accept, arrays)
+        if found is not None:
+            return found
+    return None
+
+
+def alibaba_nested(keys: tuple[str, ...], value: Any, transform: Callable[[Any], Any], arrays: bool = True) -> Any:
+    """`alibaba_direct` on the first object, depth first, that has a usable value under `keys`."""
+    hits: list[Any] = []
+
+    def accept(node: dict[str, Any]) -> bool:
+        found = alibaba_direct(keys, node, transform)
+        if found is not None:
+            hits.append(found)
+        return found is not None
+
+    alibaba_find_dict(value, accept, arrays)
+    return hits[0] if hits else None
+
+
+def alibaba_check_status(data: dict[str, Any]) -> None:
+    code = alibaba_nested(("statusCode", "status_code", "code"), data, alibaba_int)
+    if code in (None, 0, 200):
+        return
+    message = (alibaba_nested(("statusMessage", "status_msg", "message", "msg"), data, alibaba_text) or "").lower()
+    if code in (401, 403) or "api key" in message or "unauthorized" in message:
+        raise ProviderFailure("expired", "Alibaba Coding Plan rejected the key.")
+    raise ProviderFailure("http", f"Alibaba Coding Plan reported status {code}.")
+
+
+def alibaba_login_required(data: dict[str, Any]) -> bool:
+    """CodexBar's 'login required' answer, given to a Coding Plan key that cannot read quota here."""
+    code = (alibaba_nested(("code", "status"), data, alibaba_text) or "").lower()
+    message = (alibaba_nested(("message", "msg", "statusMessage"), data, alibaba_text) or "").lower()
+    return (
+        "login" in code
+        or "log in" in message
+        or "login" in message
+        or "console session" in message
+        or "api key mode may be unavailable" in message
+    )
+
+
+def alibaba_active_signal(node: dict[str, Any], now: float) -> int:
+    """How strongly an instance shows it is live: 3 active, -1 dead, 1 end time still ahead, 0 no evidence."""
+    status = alibaba_direct(("status", "instanceStatus"), node, alibaba_text)
+    if status is not None:
+        status = status.upper()
+        if status in ALIBABA_ACTIVE_STATUSES:
+            return 3
+        if status in ALIBABA_DEAD_STATUSES:
+            return -1
+    active = alibaba_direct(("isActive", "active"), node, alibaba_flag)
+    if active is not None:
+        return 3 if active else -1
+    end = alibaba_direct(("endTime", "periodEndTime", "expireTime", "expirationTime"), node, epoch_seconds)
+    return 1 if end is not None and end > now else 0
+
+
+def alibaba_active_instance(instances: list[dict[str, Any]], now: float) -> dict[str, Any] | None:
+    """The instance with the strongest live signal; the first one when none shows a live signal."""
+    if not instances:
+        return None
+    best = max(instances, key=lambda info: alibaba_active_signal(info, now))
+    return best if alibaba_active_signal(best, now) > 0 else instances[0]
+
+
+def alibaba_plan(instance: dict[str, Any] | None, data: dict[str, Any]) -> str:
+    if instance is not None:
+        plan = alibaba_direct(ALIBABA_PLAN_KEYS, instance, alibaba_text)
+    else:
+        plan = alibaba_nested(ALIBABA_PLAN_KEYS, data, alibaba_text)
+    return plan or ""
+
+
+def alibaba_quota_in(node: Any) -> dict[str, Any] | None:
+    """`codingPlanQuotaInfo` as a named object (not through arrays), else the first object carrying window figures."""
+    named = alibaba_nested(ALIBABA_QUOTA_KEYS, node, alibaba_dict, arrays=False)
+    if named is not None:
+        return named
+    return alibaba_find_dict(node, lambda item: any(key in item for key in ALIBABA_WINDOW_KEYS))
+
+
+def alibaba_session_reset(raw: int | None, now: float) -> int | None:
+    """CodexBar's 5-hour reset rule: a stale time moves forward one period, else is set five hours out."""
+    if raw is None:
+        return None
+    if raw - now >= 60:
+        return raw
+    if raw + ALIBABA_FIVE_HOURS - now >= 60:
+        return raw + ALIBABA_FIVE_HOURS
+    return int(now) + ALIBABA_FIVE_HOURS
+
+
+def alibaba_windows(quota: dict[str, Any], now: float) -> tuple[list[dict[str, Any]], bool]:
+    """The windows with a usable limit, and whether the quota carried any limit figure at all."""
+    windows: list[dict[str, Any]] = []
+    figures = False
+    for window_id, label, seconds, used_keys, total_keys, reset_keys in ALIBABA_QUOTA_WINDOWS:
+        used = alibaba_direct(used_keys, quota, alibaba_int)
+        total = alibaba_direct(total_keys, quota, alibaba_int)
+        figures = figures or total is not None
+        if used is None or total is None or total <= 0:
+            continue
+        reset = alibaba_direct(reset_keys, quota, epoch_seconds)
+        if window_id == "session":
+            reset = alibaba_session_reset(reset, now)
+        windows.append(
+            make_window(window_id, label, used / total * 100.0, reset, seconds, f"{used} / {total} used")
+        )
+    return windows, figures
+
+
+def parse_alibaba(payload: Any, now: float) -> tuple[list[dict[str, Any]], str, str]:
+    """Windows, plan and a notice from the instance query. A rejected key raises `expired`."""
+    data = alibaba_expand(payload)
+    if not isinstance(data, dict):
+        raise ProviderFailure("malformed", "Alibaba Coding Plan returned unreadable quota data.")
+    alibaba_check_status(data)
+    instances = dict_list(alibaba_nested(ALIBABA_INSTANCE_KEYS, data, alibaba_list))
+    instance = alibaba_active_instance(instances, now)
+    # With several instances, a live one owns the quota; another instance's numbers are never borrowed.
+    scoped = len(instances) > 1 and instance is not None and alibaba_active_signal(instance, now) > 0
+    quota = alibaba_quota_in(instance) if instance is not None else None
+    if quota is None and not scoped:
+        quota = alibaba_quota_in(data)
+    plan = alibaba_plan(instance, data)
+    windows, figures = alibaba_windows(quota, now) if quota is not None else ([], False)
+    if figures:
+        notice = "" if windows else "Alibaba Coding Plan reported no usable quota for this key."
+        return windows, plan, notice
+    if alibaba_login_required(data):
+        raise ProviderFailure(
+            "unsupported",
+            "This Coding Plan key cannot read quota in this region. Alibaba does not return quota for "
+            "Coding Plan API keys on this account or region; the widget does not use a console session.",
+        )
+    live = instance if instance is not None else data
+    if alibaba_active_signal(live, now) > 0:
+        return [], plan, "Alibaba Coding Plan reports an active plan but no quota figures for this key."
+    raise ProviderFailure("malformed", "Alibaba Coding Plan returned no quota data.")
+
+
+def alibaba_headers(token: str, gateway: str) -> dict[str, str]:
+    # CodexBar sends the key in all three headers.
+    return {
+        "Authorization": "Bearer " + token,
+        "x-api-key": token,
+        "X-DashScope-API-Key": token,
+        "Accept": "application/json",
+        "Origin": gateway,
+        "Referer": ALIBABA_GATEWAYS[gateway][2],
+        "User-Agent": ALIBABA_USER_AGENT,
+    }
+
+
+def alibaba_quota_url(gateway: str) -> str:
+    query = urllib.parse.urlencode(
+        {
+            "action": ALIBABA_ACTION,
+            "product": "broadscope-bailian",
+            "api": "queryCodingPlanInstanceInfoV2",
+            "currentRegionId": ALIBABA_GATEWAYS[gateway][0],
+        }
+    )
+    return f"{gateway}/data/api.json?{query}"
+
+
+@provider_fetcher("alibaba", keyed=True)
+def fetch_alibaba(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "alibaba"
+    token, missing = key_or_error(provider_id, key_file, "Alibaba Coding Plan")
+    if missing:
+        return missing
+    now = time.time()
+
+    def read(gateway: str) -> tuple[list[dict[str, Any]], str, str]:
+        body = {"queryCodingPlanInstanceInfoRequest": {"commodityCode": ALIBABA_GATEWAYS[gateway][1]}}
+        payload = http_json(alibaba_quota_url(gateway), alibaba_headers(token, gateway), timeout, body)
+        return parse_alibaba(payload, now)
+
+    try:
+        gateway, (windows, plan, notice) = first_accepting_host(tuple(ALIBABA_GATEWAYS), read)
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Alibaba Coding Plan")
+    result = base_provider(provider_id)
+    result.update(plan=plan, source=ALIBABA_GATEWAYS[gateway][3], windows=windows)
+    if notice:
+        result["notice"] = notice
+    return result
+
+# --------------------------------------------------------------- Command Code
+#
+# CodexBar's CommandCodeUsageFetcher.swift, CommandCodePlanCatalog.swift and docs/command-code.md
+# (plan allowances from https://commandcode.ai/pricing). The API key first reads /alpha/whoami for the
+# organisation a team key belongs to. /alpha/billing/credits then gives the monthly USD grant still
+# unspent, the purchased balance and the 5-hour and weekly limits, scoped with ?orgId= for a team.
+# /alpha/billing/subscriptions only adds the plan name and billing-period end; its failure leaves the
+# credits reading intact. A whoami failure is not swallowed: the wrong credit pool would be shown.
+
+COMMANDCODE_BILLING_URL = "https://api.commandcode.ai/alpha/billing"
+COMMANDCODE_WHOAMI_URL = "https://api.commandcode.ai/alpha/whoami"
+# CodexBar's plan catalog: display name and monthly USD grant, keyed by subscription planId.
+COMMANDCODE_PLANS = {
+    "individual-go": ("Go", 10.0),
+    "individual-go-v1": ("Go", 10.0),
+    "individual-goat": ("GOAT", 70.0),
+    "individual-pro": ("Pro", 30.0),
+    "individual-pro-v1": ("Pro", 80.0),
+    "individual-max": ("Max", 150.0),
+    "individual-ultra": ("Ultra", 300.0),
+}
+COMMANDCODE_WINDOWS = (
+    ("fiveHour", "session", "5-hour limit", FIVE_HOURS),
+    ("weekly", "weekly", "Weekly limit", SEVEN_DAYS),
+)
+
+
+def commandcode_window(limits: Any, key: str, window_id: str, label: str, seconds: int) -> dict[str, Any] | None:
+    """A rolling limit as a share of its cap; a missing or zero cap means the limit does not apply."""
+    row = limits.get(key) if isinstance(limits, dict) else None
+    cap = number(row.get("cap")) if isinstance(row, dict) else None
+    if cap is None or cap <= 0:
+        return None
+    used = number(row.get("used")) or 0.0
+    return make_window(window_id, label, used / cap * 100.0, epoch_seconds(row.get("resetAt")), seconds)
+
+
+def parse_commandcode_credits(payload: Any) -> tuple[list[dict[str, Any]], float, float | None, float | None]:
+    """The rolling windows, the monthly credits left, the monthly grant size, and the purchased balance."""
+    credits = payload.get("credits") if isinstance(payload, dict) else None
+    remaining = number(credits.get("monthlyCredits")) if isinstance(credits, dict) else None
+    if remaining is None:
+        raise ProviderFailure("malformed", "Command Code returned unreadable credits data.")
+    limits = payload.get("windowLimits")
+    if not isinstance(limits, dict):
+        limits = credits.get("windowLimits")
+    windows = [window for window in (commandcode_window(limits, key, window_id, label, seconds)
+                                     for key, window_id, label, seconds in COMMANDCODE_WINDOWS) if window]
+    return windows, remaining, number(credits.get("monthlyCreditsGranted")), number(credits.get("purchasedCredits"))
+
+
+def parse_commandcode_subscription(payload: Any) -> tuple[str, float | None, int | None]:
+    """The plan name, its catalog grant, and the billing-period end. The free tier has no plan or grant."""
+    if not isinstance(payload, dict) or payload.get("success") is not True:
+        raise ProviderFailure("malformed", "Command Code returned an unreadable subscription.")
+    data = payload.get("data")
+    if data is None:
+        return "Free tier", None, None
+    plan_id = data.get("planId") if isinstance(data, dict) else None
+    if not isinstance(plan_id, str) or not plan_id.strip():
+        raise ProviderFailure("malformed", "Command Code returned a subscription without a plan.")
+    plan_id = plan_id.strip().lower()
+    name, total = COMMANDCODE_PLANS.get(plan_id, (plan_id, None))
+    return name, total, epoch_seconds(data.get("currentPeriodEnd"))
+
+
+def parse_commandcode(credits_payload: Any, subscription: tuple[str, float | None, int | None],
+                      now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
+    """Rolling windows, the monthly grant as a money window, the purchased balance, and a notice."""
+    windows, remaining, granted, purchased = parse_commandcode_credits(credits_payload)
+    _, catalog_total, period_end = subscription
+    total = granted if granted is not None and granted > 0 else catalog_total
+    notice = ""
+    if total is not None:
+        spent = clamp(total - remaining, 0.0, total)
+        monthly = money_window("monthly", "Monthly limit", spent, total, None, period_end, now)
+        monthly["windowSeconds"] = THIRTY_DAYS  # The billing month is about 30 days; the API gives only its end.
+        windows.append(monthly)
+    else:
+        notice = f"${remaining:.2f} of monthly credits left. The grant size is unknown, so no monthly limit is shown."
+    credits = balance_credits("Purchased credits", "USD", max(0.0, purchased), None) if purchased is not None else None
+    return windows, credits, notice
+
+
+def parse_commandcode_org(payload: Any) -> str | None:
+    """The organisation id a team key belongs to, or None for a personal key (no org, or org null)."""
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "Command Code returned unreadable account data.")
+    org = payload.get("org")
+    if org is None:
+        return None
+    org_id = org.get("id") if isinstance(org, dict) else None
+    if not isinstance(org_id, str) or not org_id.strip():
+        raise ProviderFailure("malformed", "Command Code returned an unreadable organisation.")
+    return org_id.strip()
+
+
+@provider_fetcher("commandcode", keyed=True)
+def fetch_commandcode(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "commandcode"
+    token, missing = key_or_error(provider_id, key_file, "Command Code")
+    if missing:
+        return missing
+    headers = bearer_headers(token)
+    try:
+        org_id = parse_commandcode_org(http_json(COMMANDCODE_WHOAMI_URL, headers, timeout))
+        credits_url = COMMANDCODE_BILLING_URL + "/credits"
+        if org_id:
+            credits_url += "?orgId=" + urllib.parse.quote(org_id, safe="")
+        credits_payload = http_json(credits_url, headers, timeout)
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Command Code")
+    try:
+        subscription = parse_commandcode_subscription(http_json(COMMANDCODE_BILLING_URL + "/subscriptions", headers, timeout))
+    except ProviderFailure:
+        subscription = ("", None, None)  # The plan name is optional; the credits reading stands without it.
+    try:
+        windows, credits, notice = parse_commandcode(credits_payload, subscription, time.time())
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Command Code")
+    result = base_provider(provider_id)
+    result.update(plan=subscription[0], source="Command Code API", windows=windows, credits=credits, notice=notice)
+    return result
+
+# --------------------------------------------------------------- DevPass
+#
+# CodexBar's devpass.ts and https://docs.llmgateway.io/developers/devpass-usage: GET /v1/key with the
+# LLM Gateway API key. Money fields are decimal USD strings; an unreadable amount is malformed, not zero.
+# The plan's credit cycle has no reset time in the response, so none is shown.
+
+DEVPASS_KEY_URL = "https://api.llmgateway.io/v1/key"
+DEVPASS_PLANS = {"lite": "DevPass Lite", "pro": "DevPass Pro", "max": "DevPass Max"}
+DEVPASS_AMOUNT = re.compile(r"^\d+(?:\.\d+)?$")
+
+
+def devpass_amount(value: Any) -> float | None:
+    """A decimal USD string as a number; null or absent is None, anything else is malformed."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not DEVPASS_AMOUNT.match(value):
+        raise ProviderFailure("malformed", "DevPass returned an unreadable amount.")
+    return float(value)
+
+
+def parse_devpass(payload: Any, now: float) -> tuple[str, list[dict[str, Any]], str]:
+    """The plan label, the plan's credit cycle and premium weekly window, and a notice."""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    plan_id = data.get("devPlan") if isinstance(data, dict) else None
+    if plan_id not in ("none", "lite", "pro", "max"):
+        raise ProviderFailure("malformed", "DevPass returned an unknown plan.")
+    spent_key = devpass_amount(data.get("usage"))
+    key_limit = devpass_amount(data.get("limit"))
+    if spent_key is None:
+        raise ProviderFailure("malformed", "DevPass did not report key usage.")
+    key_text = f"All-time key spend: ${spent_key:.2f}" + (f" of a ${key_limit:.2f} key limit" if key_limit is not None else "")
+    if plan_id == "none":
+        return "Pay as you go", [], key_text
+    cycle_used, cycle_limit, cycle_left = (devpass_amount(data.get(key))
+                                           for key in ("devPlanCreditsUsed", "devPlanCreditsLimit", "devPlanCreditsRemaining"))
+    if cycle_used is None or cycle_limit is None or cycle_left is None:
+        raise ProviderFailure("malformed", "DevPass did not report its plan credits.")
+    weekly_used = devpass_amount(data.get("devPlanPremiumCreditsUsed"))
+    weekly_limit = devpass_amount(data.get("devPlanPremiumWeeklyLimit"))
+    reset_raw = data.get("devPlanPremiumWeekResetsAt")
+    weekly_reset = epoch_seconds(reset_raw)
+    if reset_raw is not None and weekly_reset is None:
+        raise ProviderFailure("malformed", "DevPass returned an unreadable premium reset time.")
+    windows: list[dict[str, Any]] = []
+    if cycle_limit > 0:
+        windows.append(money_window("cycle", "Plan credits", cycle_used, cycle_limit, None, None, now))
+    if weekly_limit is not None and weekly_limit > 0:
+        weekly = money_window("weekly", "Premium weekly limit", weekly_used or 0.0, weekly_limit, None, weekly_reset, now)
+        weekly["windowSeconds"] = SEVEN_DAYS
+        windows.append(weekly)
+    return DEVPASS_PLANS[plan_id], windows, f"Plan credits left: ${cycle_left:.2f}. {key_text}."
+
+
+@provider_fetcher("devpass", keyed=True)
+def fetch_devpass(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "devpass"
+    token, missing = key_or_error(provider_id, key_file, "DevPass")
+    if missing:
+        return missing
+    try:
+        plan, windows, notice = parse_devpass(http_json(DEVPASS_KEY_URL, bearer_headers(token), timeout), time.time())
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "DevPass")
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="DevPass API", windows=windows, notice=notice)
+    return result
+
+# --------------------------------------------------------------- xKiro
+#
+# https://docs.xkiro.com/api/usage/: GET /v1/usage with the xKiro API key. It documents three things:
+# the plan's spend windows (windows[]: USD spent and cap, seconds until reset), today's free-token
+# allowance (free_tokens, which resets at 00:00 UTC), and the wallet balance in USD (wallet, null until
+# the first top-up). Windows show as limits; the wallet is a side balance with no spendable amount, as
+# the plan's spend windows are the limit that holds back paid requests. A null daily cap means none is reported.
+
+XKIRO_USAGE_URL = "https://api.xkiro.com/v1/usage"
+
+
+def xkiro_count(value: Any) -> int | None:
+    """A non-negative whole number of tokens, or None when the field is null or absent."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ProviderFailure("malformed", "xKiro returned an unreadable token count.")
+    return value
+
+
+def xkiro_usd(value: Any) -> float | None:
+    """A non-negative USD amount from the six-decimal string the API sends ("200.000000"), else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    if isinstance(value, str) and not re.fullmatch(r"\s*\d+(\.\d+)?\s*", value):
+        return None
+    amount = number(value)
+    return amount if amount is not None and amount >= 0 else None
+
+
+def xkiro_spend_windows(raw: Any, now: float) -> list[dict[str, Any]]:
+    """The plan's spend windows as USD limits. A window with no readable cap or spend is skipped."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not all(isinstance(entry, dict) for entry in raw):
+        raise ProviderFailure("malformed", "xKiro returned unreadable spend windows.")
+    windows: list[dict[str, Any]] = []
+    for entry in raw:
+        seconds = xkiro_count(entry.get("window_sec"))
+        spent, cap = xkiro_usd(entry.get("spent_usd")), xkiro_usd(entry.get("cap_usd"))
+        if not seconds or spent is None or cap is None or cap <= 0:
+            continue
+        window_id, label, _ = period_identity(seconds // 60) if seconds % 60 == 0 else ("limit", "Usage limit", None)
+        resets_in = number(entry.get("resets_in_sec"))
+        resets_at = int(now) + int(resets_in) if resets_in is not None and resets_in >= 0 else None
+        window = money_window(window_id, label, spent, cap, None, resets_at, now)
+        window["windowSeconds"] = seconds
+        windows.append(window)
+    return windows
+
+
+def parse_xkiro(payload: Any, now: float) -> tuple[str, str, list[dict[str, Any]], dict[str, Any] | None, str]:
+    """The plan label, the account email, the limit windows, the wallet balance, and a notice."""
+    if not isinstance(payload, dict) or payload.get("object") != "usage":
+        raise ProviderFailure("malformed", "xKiro returned unreadable usage data.")
+    free = payload.get("free_tokens")
+    if not isinstance(free, dict):
+        raise ProviderFailure("malformed", "xKiro returned unreadable usage data.")
+    used = xkiro_count(free.get("used_today"))
+    limit = xkiro_count(free.get("limit_per_day"))
+    left = xkiro_count(free.get("remaining"))
+    if used is None and limit is None and left is None and "limit_per_day" not in free:
+        raise ProviderFailure("malformed", "xKiro did not report token counts.")
+    windows = xkiro_spend_windows(payload.get("windows"), now)
+    daily = None
+    if used is not None and limit is not None:
+        percent = 100.0 if limit == 0 else used / limit * 100.0
+        daily = make_window("daily", "Daily limit", percent, next_utc_reset("daily", now), ONE_DAY,
+                            f"{used:,} of {limit:,} tokens")
+        windows.append(daily)
+    if daily is not None:
+        notice = ""
+    elif used is not None:
+        notice = f"{used:,} tokens used today. No daily cap is reported."
+    elif limit is not None:
+        notice = "Tokens used today are not reported."
+    else:
+        notice = "No daily cap is reported."
+    wallet = payload.get("wallet")
+    if wallet is not None and not isinstance(wallet, dict):
+        raise ProviderFailure("malformed", "xKiro returned an unreadable wallet.")
+    balance = xkiro_usd(wallet.get("balance_usd")) if isinstance(wallet, dict) else None
+    credits = balance_credits("Wallet", "USD", balance, None) if balance is not None else None
+    plan = payload.get("plan", "")
+    plan_label = "Pay as you go" if plan is None else (plan.strip() if isinstance(plan, str) else "")
+    user = payload.get("user")
+    email = user.get("email") if isinstance(user, dict) else None
+    return plan_label, email.strip() if isinstance(email, str) else "", windows, credits, notice
+
+
+@provider_fetcher("xkiro", keyed=True)
+def fetch_xkiro(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "xkiro"
+    token, missing = key_or_error(provider_id, key_file, "xKiro")
+    if missing:
+        return missing
+    try:
+        plan, account, windows, credits, notice = parse_xkiro(
+            http_json(XKIRO_USAGE_URL, bearer_headers(token), timeout), time.time())
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "xKiro")
+    result = base_provider(provider_id)
+    result.update(plan=plan, account=account, source="xKiro API", windows=windows, credits=credits, notice=notice)
+    return result
+
+# --------------------------------------------------------------- IBM Bob
+#
+# IBM Bob's admin API (bob.ibm.com; no public API docs). Shape read from CodexBar's
+# IBMBobUsageFetcher.swift: GET admin/v1/profile lists the instances and teams the key can see;
+# then each team user record, on that instance's regional host (always under bob.ibm.com), gives
+# that user's Bobcoin usage and budget. Bobcoins are a credit unit, not money: the monthly limit is
+# a window and the amounts a credits row in BOBCOINS. Usage sums across teams; the limit only when
+# every team has one.
+
+IBMBOB_API_BASE = "https://api.us-east.bob.ibm.com"
+IBMBOB_PROFILE_URL = IBMBOB_API_BASE + "/admin/v1/profile"
+IBMBOB_TEAM_REQUEST_LIMIT = 8
+IBMBOB_HOST_PATTERN = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*")
+
+
+def ibmbob_unquote(token: str) -> str:
+    """The key without the quotes an env file may wrap around it."""
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+        token = token[1:-1]
+    return token.strip()
+
+
+def ibmbob_is_jwt(token: str) -> bool:
+    """Three dot-separated parts whose middle part is a base64url JSON object."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False
+    segment = parts[1].replace("-", "+").replace("_", "/")
+    segment += "=" * (-len(segment) % 4)
+    try:
+        claims = json.loads(base64.b64decode(segment, validate=True))
+    except (ValueError, RecursionError):
+        return False
+    return isinstance(claims, dict)
+
+
+def ibmbob_headers(token: str, instance_id: str | None = None, team_id: str | None = None) -> dict[str, str]:
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": SIGNIN_USER_AGENT,
+        "Authorization": ("Bearer " if ibmbob_is_jwt(token) else "Apikey ") + token,
+    }
+    if instance_id is not None:
+        headers["x-instance-id"] = instance_id
+    if team_id is not None:
+        headers["x-team-id"] = team_id
+    return headers
+
+
+def ibmbob_regional_base(region_domain: Any) -> str:
+    """The api. host for an instance's region. The key is only sent to https hosts under bob.ibm.com."""
+    domain = region_domain.strip().lower() if isinstance(region_domain, str) else ""
+    if not domain:
+        return IBMBOB_API_BASE
+    host = domain if domain.startswith("api.") else "api." + domain
+    if not IBMBOB_HOST_PATTERN.fullmatch(host) or not (host == "bob.ibm.com" or host.endswith(".bob.ibm.com")):
+        raise ProviderFailure("malformed", f"IBM Bob returned an untrusted regional API host: {host}.")
+    return "https://" + host
+
+
+def ibmbob_id(value: Any) -> str:
+    """An instance or team id that is safe in an HTTP header."""
+    text = value.strip() if isinstance(value, str) else ""
+    if not text or len(text) > 200 or not all(33 <= ord(char) <= 126 for char in text):
+        raise ProviderFailure("malformed", "IBM Bob returned an unreadable identifier.")
+    return text
+
+
+def ibmbob_amount(value: Any) -> float | None:
+    """A Bobcoin amount: None when absent, malformed when present but not a number."""
+    if value is None:
+        return None
+    amount = number(value)
+    if amount is None:
+        raise ProviderFailure("malformed", "IBM Bob returned an unreadable Bobcoin amount.")
+    return amount
+
+
+def parse_ibmbob_profile(payload: Any) -> list[dict[str, Any]]:
+    """One target per instance that has a user: regional base URL, plan, reset time and teams."""
+    instances = payload.get("instances") if isinstance(payload, dict) else None
+    if not isinstance(instances, list):
+        raise ProviderFailure("malformed", "IBM Bob returned unreadable profile data.")
+    targets: list[dict[str, Any]] = []
+    for instance in instances:
+        if not isinstance(instance, dict) or not isinstance(instance.get("teams"), list):
+            raise ProviderFailure("malformed", "IBM Bob returned unreadable profile data.")
+        instance_id = ibmbob_id(instance.get("instance_id"))
+        user_id = instance.get("user_id")
+        if not isinstance(user_id, str) or not user_id.strip():
+            continue
+        base = ibmbob_regional_base(instance.get("region_domain"))
+        teams = []
+        for team in instance["teams"]:
+            if not isinstance(team, dict) or not isinstance(team.get("id"), str):
+                raise ProviderFailure("malformed", "IBM Bob returned unreadable team data.")
+            if not team["id"].strip():
+                continue
+            teams.append({"id": ibmbob_id(team["id"]), "budgetLimit": ibmbob_amount(team.get("budget_limit"))})
+        plan = instance.get("plan_name")
+        targets.append({
+            "instanceId": instance_id,
+            "userId": user_id.strip(),
+            "base": base,
+            "plan": plan.strip() if isinstance(plan, str) else "",
+            "resetsAt": epoch_seconds(instance.get("refresh_at")),
+            "teams": teams,
+        })
+    return targets
+
+
+def parse_ibmbob_budget(payload: Any, profile_limit: float | None) -> tuple[float, float | None]:
+    """A team user's usage and budget in Bobcoins. A negative budget means no limit."""
+    usage = number(payload.get("usage")) if isinstance(payload, dict) else None
+    if usage is None:
+        raise ProviderFailure("malformed", "IBM Bob returned unreadable budget data.")
+    limit = ibmbob_amount(payload.get("budget_limit"))
+    if limit is None:
+        limit = profile_limit
+    return max(0.0, usage), (limit if limit is not None and limit >= 0 else None)
+
+
+def summarize_ibmbob(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any], str]:
+    """The monthly Bobcoin window, the credits row and the plan names across the teams read."""
+    if not rows:
+        raise ProviderFailure("unsupported", "IBM Bob returned no subscription instances or teams for this API key.")
+    used = sum(row["used"] for row in rows)
+    limits = [row["limit"] for row in rows]
+    limit = sum(limits) if all(value is not None for value in limits) else None
+    resets = [row["resetsAt"] for row in rows if row["resetsAt"]]
+    plans = sorted({row["plan"] for row in rows if row["plan"]})
+    plan = ", ".join(plans) or "API key"
+    windows: list[dict[str, Any]] = []
+    if limit is not None and limit > 0:
+        windows.append(make_window(
+            "monthly", "Monthly limit", used / limit * 100.0, min(resets) if resets else None,
+            THIRTY_DAYS, f"{amount_text(used)} of {amount_text(limit)} Bobcoins",
+        ))
+    remaining = None if limit is None else round(max(0.0, limit - used), 2)
+    credits = balance_credits(
+        "Bobcoins", "BOBCOINS", remaining, None,
+        used=round(used, 2), limit=None if limit is None else round(limit, 2),
+    )
+    return windows, credits, plan
+
+
+@provider_fetcher("ibmbob", keyed=True)
+def fetch_ibmbob(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "ibmbob"
+    token, missing = key_or_error(provider_id, key_file, "IBM Bob")
+    if missing:
+        return missing
+    token = ibmbob_unquote(token)
+    if not token:
+        return error_provider(provider_id, "no_credentials", "IBM Bob key is empty. Enter it again under Settings → Providers.")
+    try:
+        targets = parse_ibmbob_profile(http_json(IBMBOB_PROFILE_URL, ibmbob_headers(token), timeout))
+        pairs = [(target, team) for target in targets for team in target["teams"]]
+        truncated = len(pairs) > IBMBOB_TEAM_REQUEST_LIMIT
+        rows = []
+        for target, team in pairs[:IBMBOB_TEAM_REQUEST_LIMIT]:
+            user = urllib.parse.quote(target["userId"], safe="")
+            url = f"{target['base']}/admin/v1/teams/{urllib.parse.quote(team['id'], safe='')}/users/{user}"
+            budget = http_json(url, ibmbob_headers(token, target["instanceId"], team["id"]), timeout)
+            used, limit = parse_ibmbob_budget(budget, team["budgetLimit"])
+            rows.append({"used": used, "limit": limit, "plan": target["plan"], "resetsAt": target["resetsAt"]})
+        windows, credits, plan = summarize_ibmbob(rows)
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "IBM Bob")
+    notice = (
+        f"Only the first {IBMBOB_TEAM_REQUEST_LIMIT} teams were read, so the totals cover those teams."
+        if truncated else ""
+    )
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="IBM Bob API", windows=windows, credits=credits, notice=notice)
+    return result
+
+# ---------------------------------------------------------------- Umans
+# Source: oh-my-pi packages/ai/src/usage/umans.ts (can1357/oh-my-pi, MIT). Endpoint GET
+# https://api.code.umans.ai/v1/usage with a Bearer key. The soft cap reads the model-weighted
+# counter against limits.requests.limit; the burst ceiling reads the raw counter against
+# limits.requests.hard_cap. Concurrency and priority are instantaneous, so they are notes,
+# not windows. Live behaviour is not verified here.
+
+UMANS_USAGE_URL = "https://api.code.umans.ai/v1/usage"
+
+
+def umans_count(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ProviderFailure("malformed", "Umans returned an unreadable count.")
+    count = float(value)
+    if not (0.0 <= count < 1e300):
+        raise ProviderFailure("malformed", "Umans returned an unreadable count.")
+    return count
+
+
+def umans_section(source: dict[str, Any], key: str) -> dict[str, Any]:
+    value = source.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ProviderFailure("malformed", "Umans returned unreadable usage data.")
+    return value
+
+
+def umans_share(used: float | None, cap: float | None) -> float | None:
+    if used is None or cap is None:
+        return None
+    return 100.0 if cap == 0 else used / cap * 100.0
+
+
+def parse_umans(payload: Any, now: float) -> tuple[str, list[dict[str, Any]], str]:
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "Umans returned unreadable usage data.")
+    plan = umans_section(payload, "plan")
+    limits = umans_section(payload, "limits")
+    requests_limit = umans_section(limits, "requests")
+    concurrency = umans_section(limits, "concurrency")
+    window = umans_section(payload, "window")
+    usage_block = umans_section(payload, "usage")
+    priority = umans_section(usage_block, "priority")
+
+    plan_name = plan.get("display_name")
+    plan_name = plan_name.strip() if isinstance(plan_name, str) else ""
+
+    limit = umans_count(requests_limit.get("limit"))
+    hard_cap = umans_count(requests_limit.get("hard_cap"))
+    window_seconds = int(umans_count(requests_limit.get("window_seconds")) or FIVE_HOURS)
+    raw_used = umans_count(usage_block.get("requests_in_window"))
+    weighted_used = umans_count(usage_block.get("weighted_in_window"))
+    concurrent = umans_count(usage_block.get("concurrent_sessions"))
+    concurrency_limit = umans_count(concurrency.get("limit"))
+    if limit is None and raw_used is None and weighted_used is None:
+        raise ProviderFailure("malformed", "Umans did not report any request counts.")
+
+    if window_seconds % 60 == 0:
+        window_id, label, _ = period_identity(window_seconds // 60)
+    else:
+        window_id, label = "limit", "Usage limit"
+    resets_at = epoch_seconds(window.get("resets_at"))
+
+    def request_window(id_: str, title: str, used: float | None, cap: float | None, unit: str) -> dict[str, Any] | None:
+        percent = umans_share(used, cap)
+        if percent is None:
+            return None
+        detail = f"{amount_text(used)} of {amount_text(cap)} {unit}"
+        return make_window(id_, title, percent, resets_at, window_seconds, detail)
+
+    windows: list[dict[str, Any]] = []
+    notes: list[str] = []
+    if weighted_used is not None and hard_cap is not None:
+        soft = request_window(window_id, label, weighted_used, limit, "effective requests")
+        if soft is not None:
+            windows.append(soft)
+        if raw_used is not None:
+            burst = request_window("burst", "Burst ceiling", raw_used, hard_cap, "requests")
+            if burst is not None:
+                windows.append(burst)
+    else:
+        used = weighted_used if weighted_used is not None else raw_used
+        unit = "effective requests" if weighted_used is not None else "requests"
+        single = request_window(window_id, label, used, limit, unit)
+        if single is not None:
+            windows.append(single)
+        elif used is not None:
+            notes.append(f"{amount_text(used)} requests used in the window. No request limit is reported.")
+
+    if concurrent is not None:
+        if concurrency_limit is not None:
+            notes.append(f"Concurrent sessions: {amount_text(concurrent)} of {amount_text(concurrency_limit)}.")
+        else:
+            notes.append(f"Concurrent sessions: {amount_text(concurrent)}.")
+    if priority.get("low") is True:
+        notes.append("Requests deprioritized after a rate-limit burst.")
+    return plan_name, windows, " ".join(notes)
+
+
+@provider_fetcher("umans", keyed=True)
+def fetch_umans(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "umans"
+    token, missing = key_or_error(provider_id, key_file, "Umans")
+    if missing:
+        return missing
+    try:
+        payload = http_json(UMANS_USAGE_URL, bearer_headers(token), timeout)
+        plan, windows, notice = parse_umans(payload, time.time())
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Umans")
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="Umans API", windows=windows, notice=notice)
+    return result
+
+# --------------------------------------------------------------- NeuralWatt
+#
+# NeuralWatt's GET /v1/quota (docs.neuralwatt.com/api/quota; CodexBar's neuralwatt.js). The
+# subscription's kWh allowance is the primary window, resetting at the period end; the prepaid USD
+# balance is the credits side with this month's spend; a per-key USD allowance is a window.
+
+NEURALWATT_QUOTA_URL = "https://api.neuralwatt.com/v1/quota"
+
+
+def neuralwatt_nonnegative(value: Any) -> float | None:
+    amount = number(value)
+    return amount if amount is not None and amount >= 0 else None
+
+
+def neuralwatt_positive(value: Any) -> float | None:
+    amount = number(value)
+    return amount if amount is not None and amount > 0 else None
+
+
+def parse_neuralwatt(payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
+    """The kWh window, the prepaid balance, the key allowance, and the plan name."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("balance"), dict):
+        raise ProviderFailure("malformed", "Neuralwatt returned unreadable quota data.")
+    balance = payload["balance"]
+    subscription = payload.get("subscription") if isinstance(payload.get("subscription"), dict) else {}
+    key = payload.get("key") if isinstance(payload.get("key"), dict) else {}
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    month = usage.get("current_month") if isinstance(usage.get("current_month"), dict) else {}
+
+    total = neuralwatt_positive(balance.get("total_credits_usd"))
+    used = neuralwatt_nonnegative(balance.get("credits_used_usd"))
+    left = neuralwatt_nonnegative(balance.get("credits_remaining_usd"))
+    if left is None and total is not None and used is not None:
+        left = max(0.0, total - used)
+    if used is None and total is not None and left is not None:
+        used = max(0.0, total - left)
+    if left is None and used is None and total is None:
+        raise ProviderFailure("malformed", "Neuralwatt returned no credit balance.")
+    cost = neuralwatt_nonnegative(month.get("cost_usd"))
+    credits = None
+    if left is not None:
+        credits = balance_credits("Prepaid balance", "USD", round(left, 2), None,
+                                  spend={"monthly": round(cost, 2)} if cost is not None else {})
+
+    windows: list[dict[str, Any]] = []
+    included = neuralwatt_positive(subscription.get("kwh_included"))
+    kwh_used = neuralwatt_nonnegative(subscription.get("kwh_used"))
+    kwh_left = neuralwatt_nonnegative(subscription.get("kwh_remaining"))
+    if included is None and kwh_used is not None and kwh_left is not None and kwh_used + kwh_left > 0:
+        included = kwh_used + kwh_left
+    consumed = kwh_used
+    if consumed is None and included is not None and kwh_left is not None:
+        consumed = max(0.0, included - kwh_left)
+    if included is not None and consumed is not None:
+        start = epoch_seconds(subscription.get("current_period_start"))
+        end = epoch_seconds(subscription.get("current_period_end"))
+        seconds = end - start if start is not None and end is not None and end > start else None
+        windows.append(make_window("kwh", "Energy allowance", consumed / included * 100.0, end, seconds,
+                                   f"{amount_text(consumed)} / {amount_text(included)} kWh"))
+
+    plan_name = subscription.get("plan")
+    accounting = balance.get("accounting_method")
+    if isinstance(plan_name, str) and plan_name.strip():
+        plan = plan_name.strip().replace("_", " ").title() + " plan"
+    elif isinstance(accounting, str) and accounting.strip():
+        plan = accounting.strip().replace("_", " ").title()
+    else:
+        plan = "API key"
+
+    allowance = key.get("allowance") if isinstance(key.get("allowance"), dict) else {}
+    period = allowance.get("period")
+    name = f"Key {period.strip().title()} allowance" if isinstance(period, str) and period.strip() else "Key allowance"
+    if allowance.get("blocked") is True:
+        windows.append(make_window("key-allowance", name, 100.0, None, None, "Blocked for this key"))
+    else:
+        limit = neuralwatt_positive(allowance.get("limit_usd"))
+        spent = neuralwatt_nonnegative(allowance.get("spent_usd"))
+        if limit is not None and spent is not None:
+            windows.append(money_window("key-allowance", name, spent, limit, None, None, now))
+    return windows, credits, plan
+
+
+@provider_fetcher("neuralwatt", keyed=True)
+def fetch_neuralwatt(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "neuralwatt"
+    token, missing = key_or_error(provider_id, key_file, "Neuralwatt")
+    if missing:
+        return missing
+    try:
+        windows, credits, plan = parse_neuralwatt(http_json(NEURALWATT_QUOTA_URL, bearer_headers(token), timeout),
+                                                  time.time())
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Neuralwatt")
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="Neuralwatt API", windows=windows, credits=credits)
+    return result
+
+# --------------------------------------------------------------- Aixy
+#
+# Aixy's GET /v1/usage (docs.aixy-gateway.com/observe/usage; CodexBar's aixy.ts). Each budget that
+# applies to this key is a USD window. Hard budgets count settled spend plus reservations; monitor
+# budgets count recorded spend. A budget whose balance Aixy does not report is left out and counted
+# in the notice, never shown as zero.
+
+AIXY_USAGE_URL = "https://api.aixy-gateway.com/v1/usage"
+AIXY_SCOPES = {"organization": "Organization", "project": "Project", "team": "Team", "user": "User",
+               "api_key": "API key"}
+AIXY_INTERVALS = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly", "lifetime": "Lifetime"}
+AIXY_MAX_BUDGETS = 64
+
+
+def aixy_text(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def parse_aixy(payload: Any, now: float) -> tuple[list[dict[str, Any]], str]:
+    """One USD window per budget that reports its balance, and a notice about the rest."""
+    if not isinstance(payload, dict) or payload.get("object") != "key.usage" or payload.get("currency") != "USD":
+        raise ProviderFailure("malformed", "Aixy returned an unexpected usage contract.")
+    key = payload.get("key") if isinstance(payload.get("key"), dict) else {}
+    key_id = aixy_text(key.get("id"))
+    budgets = payload.get("budgets")
+    if key_id is None or not isinstance(budgets, list) or len(budgets) > AIXY_MAX_BUDGETS:
+        raise ProviderFailure("malformed", "Aixy returned unreadable budgets.")
+
+    rows: list[tuple[bool, dict[str, Any]]] = []
+    unknown = 0
+    seen: set[str] = set()
+    for raw in budgets:
+        budget = raw if isinstance(raw, dict) else {}
+        budget_id = aixy_text(budget.get("id"))
+        if budget_id is None or budget_id in seen:
+            raise ProviderFailure("malformed", "Aixy returned an unreadable budget.")
+        seen.add(budget_id)
+        scope, interval, enforcement = budget.get("scope"), budget.get("interval"), budget.get("enforcement")
+        limit = number(budget.get("limit_usd"))
+        applies = budget.get("applies_to")
+        if scope not in AIXY_SCOPES or interval not in AIXY_INTERVALS or enforcement not in ("hard", "monitor") \
+                or not isinstance(budget.get("shared"), bool) or limit is None or limit <= 0 \
+                or not isinstance(applies, list) or not applies:
+            raise ProviderFailure("malformed", "Aixy returned an unreadable budget.")
+        for item in applies:
+            if not isinstance(item, dict) or item.get("api_key_id") != key_id \
+                    or item.get("project_id") != key.get("project_id"):
+                raise ProviderFailure("malformed", "Aixy returned a budget that does not apply to this key.")
+        starts, resets = epoch_seconds(budget.get("starts_at")), epoch_seconds(budget.get("resets_at"))
+        if starts is not None and resets is not None and resets <= starts:
+            raise ProviderFailure("malformed", "Aixy returned an impossible budget period.")
+        seconds = resets - starts if starts is not None and resets is not None else None
+
+        hard = enforcement == "hard"
+        if hard:
+            state = budget.get("availability") if isinstance(budget.get("availability"), dict) else {}
+            known = state.get("status") == "available"
+            spent, reserved = number(state.get("spent_usd")), number(state.get("reserved_usd"))
+            used = spent + reserved if known and spent is not None and reserved is not None else None
+        else:
+            known = budget.get("spend_status") == "available"
+            used = number(budget.get("spend_usd")) if known else None
+        if not known:
+            unknown += 1
+            continue
+        if used is None:
+            raise ProviderFailure("malformed", "Aixy returned an incomplete budget balance.")
+        title = (f"{AIXY_SCOPES[scope]} · {AIXY_INTERVALS[interval]} · "
+                 f"{'Shared' if budget['shared'] else 'Personal'} · {'Hard' if hard else 'Monitor'}")
+        window = money_window("aixy-" + budget_id, title, used, limit, None, resets, now)
+        window["windowSeconds"] = seconds
+        rows.append((hard, window))
+
+    # Hard budgets first, then the most used, so the primary and secondary meters are the binding ones.
+    rows.sort(key=lambda row: (not row[0], -row[1]["used"], row[1]["id"]))
+    notice = ""
+    if not budgets:
+        notice = "No Aixy budgets apply to this key."
+    elif unknown:
+        notice = f"Aixy reports no balance for {unknown} budget{'s' if unknown != 1 else ''} on this key."
+    return [window for _, window in rows], notice
+
+
+@provider_fetcher("aixy", keyed=True)
+def fetch_aixy(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "aixy"
+    token, missing = key_or_error(provider_id, key_file, "Aixy")
+    if missing:
+        return missing
+    try:
+        windows, notice = parse_aixy(http_json(AIXY_USAGE_URL, bearer_headers(token), timeout), time.time())
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Aixy")
+    result = base_provider(provider_id)
+    result.update(plan="API key", source="Aixy API", windows=windows, notice=notice)
+    return result
+
+# --------------------------------------------------------------- ClawRouter
+#
+# ClawRouter's GET /v1/usage (CodexBar's clawrouter.js; the hosted service's own API docs were not
+# checked). The key's monthly budget is a USD window that resets at the start of the next UTC month,
+# and this month's spend is the credits side. Micro-dollar amounts are converted to dollars.
+
+CLAWROUTER_USAGE_URL = "https://clawrouter.openclaw.ai/v1/usage"
+
+
+def clawrouter_micros(value: Any, field: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not float(value).is_integer():
+        raise ProviderFailure("malformed", f"ClawRouter returned an invalid {field}.")
+    return int(value) / 1_000_000
+
+
+def clawrouter_month(window_key: Any) -> tuple[int | None, int | None]:
+    """The start of the UTC month after a `YYYY-MM` ledger key, and the length of that month."""
+    match = re.fullmatch(r"(\d{4})-(\d{2})", window_key) if isinstance(window_key, str) else None
+    if match is None:
+        return None, None
+    year, month = int(match.group(1)), int(match.group(2))
+    if not 1 <= month <= 12:
+        return None, None
+    try:
+        start = datetime(year, month, 1, tzinfo=timezone.utc)
+        end = datetime(year + (month == 12), month % 12 + 1, 1, tzinfo=timezone.utc)
+    except ValueError:
+        return None, None
+    return int(end.timestamp()), int((end - start).total_seconds())
+
+
+def parse_clawrouter(payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
+    """The monthly budget window, this month's spend, and the plan name."""
+    budget = payload.get("budget") if isinstance(payload, dict) else None
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    summary = usage.get("summary") if isinstance(usage, dict) else None
+    providers = usage.get("providers") if isinstance(usage, dict) else None
+    if not isinstance(budget, dict) or not isinstance(summary, dict) or not isinstance(providers, list) \
+            or not isinstance(budget.get("configured"), bool) or not isinstance(budget.get("ledger"), str):
+        raise ProviderFailure("malformed", "ClawRouter returned unreadable usage data.")
+    limit = clawrouter_micros(budget.get("limitMicros"), "budget limit")
+    spent = clawrouter_micros(budget.get("spentMicros"), "budget spend")
+    cost = clawrouter_micros(summary.get("actualCostMicros"), "usage cost")
+    if cost is None:
+        raise ProviderFailure("malformed", "ClawRouter returned no usage cost.")
+    resets, seconds = clawrouter_month(budget.get("windowKey"))
+    windows: list[dict[str, Any]] = []
+    if limit is not None and limit > 0 and spent is not None:
+        window = money_window("monthly", "Monthly limit", spent, limit, None, resets, now)
+        window["windowSeconds"] = seconds
+        windows.append(window)
+    credits = balance_credits("Spend", "USD", None, None, spend={"monthly": round(cost, 2)})
+    plan = "Managed monthly budget" if budget["configured"] else "Unmetered"
+    return windows, credits, plan
+
+
+@provider_fetcher("clawrouter", keyed=True)
+def fetch_clawrouter(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "clawrouter"
+    token, missing = key_or_error(provider_id, key_file, "ClawRouter")
+    if missing:
+        return missing
+    try:
+        windows, credits, plan = parse_clawrouter(http_json(CLAWROUTER_USAGE_URL, bearer_headers(token), timeout),
+                                                  time.time())
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "ClawRouter")
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="ClawRouter API", windows=windows, credits=credits)
+    return result
+
+# --------------------------------------------------------------- Atlas Cloud
+#
+# Atlas Cloud public billing API: the account-wide available USD balance (CodexBar's atlascloud.js).
+# Source: https://www.atlascloud.ai/docs/public-api/balance
+
+ATLASCLOUD_BALANCE_URL = "https://api.atlascloud.ai/public/v1/balance"
+ATLASCLOUD_AMOUNT = re.compile(r"-?\d+(\.\d+)?")
+
+
+def parse_atlascloud(payload: Any) -> dict[str, Any]:
+    available = payload.get("available") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict) or payload.get("object") != "balance" or payload.get("scope") != "account" \
+            or not isinstance(available, dict) or available.get("currency") != "usd" \
+            or not isinstance(available.get("value"), str) or not ATLASCLOUD_AMOUNT.fullmatch(available["value"]):
+        raise ProviderFailure("malformed", "Atlas Cloud returned unreadable balance data.")
+    balance = number(available["value"])
+    if balance is None:
+        raise ProviderFailure("malformed", "Atlas Cloud returned unreadable balance data.")
+    # Zero and negative balances are real account states, so they stay visible.
+    return balance_credits("Available balance", "USD", balance, max(0.0, balance))
+
+
+@provider_fetcher("atlascloud", keyed=True)
+def fetch_atlascloud(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "atlascloud"
+    token, missing = key_or_error(provider_id, key_file, "Atlas Cloud")
+    if missing:
+        return missing
+    try:
+        credits = parse_atlascloud(http_json(ATLASCLOUD_BALANCE_URL, bearer_headers(token), timeout))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Atlas Cloud",
+                           "Balance reads need an account owner, Account Admin, or Finance key; a public ak_ key ID cannot sign in.")
+    result = base_provider(provider_id)
+    result.update(plan="API key", source="Atlas Cloud API", credits=credits)
+    return result
+
+# --------------------------------------------------------------- Charm Hyper
+#
+# Charm Hyper credits API: the team's Hypercredit balance (https://hyper.charm.land/docs/api/credits.html).
+# Only the API key is read here; CodexBar's browser-session path is not used.
+
+HYPER_CREDITS_URL = "https://hyper.charm.land/v1/credits"
+
+
+def parse_hyper(payload: Any) -> dict[str, Any]:
+    raw = payload.get("balance") if isinstance(payload, dict) else None
+    balance = number(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else None
+    if balance is None or balance < 0:
+        raise ProviderFailure("malformed", "Charm Hyper returned unreadable balance data.")
+    return balance_credits("Hypercredits", "HYPERCREDITS", balance, balance)
+
+
+@provider_fetcher("hyper", keyed=True)
+def fetch_hyper(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "hyper"
+    token, missing = key_or_error(provider_id, key_file, "Charm Hyper")
+    if missing:
+        return missing
+    try:
+        credits = parse_hyper(http_json(HYPER_CREDITS_URL, bearer_headers(token), timeout))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Charm Hyper")
+    result = base_provider(provider_id)
+    result.update(plan="API key", source="Charm Hyper API", credits=credits)
+    return result
+
+# --------------------------------------------------------------- Sail Research
+#
+# Sail Research Usage API, billing summary: the organization's net credit balance and period spend
+# (https://docs.sailresearch.com/usage-endpoints). Both money fields are fractional USD cents.
+
+SAIL_SUMMARY_URL = "https://api.sailresearch.com/v2/usage/summary?range=30d"
+SAIL_RANGES = {
+    "1h": "the last hour", "6h": "the last 6 hours", "24h": "the last 24 hours",
+    "7d": "the last 7 days", "30d": "the last 30 days", "period": "the billing period",
+}
+
+
+def sail_dollars(cents: Any) -> float | None:
+    value = number(cents) if isinstance(cents, (int, float)) and not isinstance(cents, bool) else None
+    return None if value is None else value / 100.0
+
+
+def parse_sailresearch(payload: Any) -> tuple[dict[str, Any], str]:
+    if not isinstance(payload, dict) or payload.get("object") != "usage.summary" \
+            or not isinstance(payload.get("available"), bool) \
+            or not isinstance(payload.get("has_metronome_customer"), bool) \
+            or not isinstance(payload.get("balance_unavailable"), bool) \
+            or not isinstance(payload.get("effective_range"), str) or payload["effective_range"] not in SAIL_RANGES:
+        raise ProviderFailure("malformed", "Sail Research returned unreadable usage data.")
+    if not payload["available"]:
+        raise ProviderFailure("http", "Sail Research's usage summary is unavailable right now.")
+    if not payload["has_metronome_customer"]:
+        raise ProviderFailure("unsupported", "This Sail Research organization has no billing account yet.")
+    spend = sail_dollars(payload.get("period_spend"))
+    if spend is None or spend < 0:
+        raise ProviderFailure("malformed", "Sail Research returned unreadable spend data.")
+    notes: list[str] = []
+    balance = None
+    if payload["balance_unavailable"]:
+        notes.append("Sail Research's credit balance is unavailable; spend is still shown.")
+    else:
+        balance = sail_dollars(payload.get("balance"))
+        if balance is None:
+            raise ProviderFailure("malformed", "Sail Research returned unreadable balance data.")
+    # Only a billing-period total is a monthly figure; a rolling range is named in the notice instead.
+    range_name = payload["effective_range"]
+    spend_map = {"monthly": round(spend, 2)} if range_name == "period" else {}
+    if range_name != "period":
+        notes.append(f"Spent ${spend:,.2f} in {SAIL_RANGES[range_name]}.")
+    # A negative balance is preserved; only the spendable part is floored at zero.
+    credits = balance_credits("Credit balance", "USD", balance,
+                              None if balance is None else max(0.0, balance), spend=spend_map)
+    return credits, " ".join(notes)
+
+
+@provider_fetcher("sailresearch", keyed=True)
+def fetch_sailresearch(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "sailresearch"
+    token, missing = key_or_error(provider_id, key_file, "Sail Research")
+    if missing:
+        return missing
+    try:
+        credits, notice = parse_sailresearch(http_json(SAIL_SUMMARY_URL, bearer_headers(token), timeout))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Sail Research")
+    result = base_provider(provider_id)
+    result.update(plan="API key", source="Sail Research API", credits=credits, notice=notice)
+    return result
+
+# --------------------------------------------------------------- Sofya
+#
+# Sofya account API: available, plan and purchased credits, and the free-tier reset
+# (https://sofya.co/docs; CodexBar's sofya.ts). Credits are Sofya's own unit, not dollars.
+
+SOFYA_ME_URL = "https://sofya.co/v1/auth/me"
+SOFYA_POOLS = ("credits", "plan_credits", "purchased_credits")
+
+
+def sofya_reset_text(value: Any) -> str:
+    """`2026-11-04 12:00 UTC` for an ISO timestamp with an offset; "" when the reset is null."""
+    if value is None:
+        return ""
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else None
+    except ValueError:
+        moment = None
+    if moment is None or moment.tzinfo is None:
+        raise ProviderFailure("malformed", "Sofya returned an unreadable credit reset time.")
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def parse_sofya(payload: Any) -> tuple[dict[str, Any], str, str]:
+    if not isinstance(payload, dict):
+        raise ProviderFailure("malformed", "Sofya returned unreadable account data.")
+    free = payload.get("is_free_tier")
+    pools: dict[str, float | None] = {}
+    for key in SOFYA_POOLS:
+        raw = payload.get(key)
+        if raw is None:
+            pools[key] = None  # Null is unknown, not zero.
+            continue
+        value = number(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else None
+        if value is None or value < 0:
+            raise ProviderFailure("malformed", "Sofya returned unreadable credit data.")
+        pools[key] = value
+    if all(value is None for value in pools.values()) or (free is not None and not isinstance(free, bool)):
+        raise ProviderFailure("malformed", "Sofya returned unreadable credit data.")
+    reset = sofya_reset_text(payload.get("credits_reset_at"))
+    plan = "Free tier" if free is True else "Pay as you go" if free is False else "API key"
+    notice = f"Free credits reset {reset}; purchased credits never reset." if free is True and reset else ""
+    credits = balance_credits("Available credits", "CREDITS", pools["credits"], pools["credits"],
+                              granted=pools["plan_credits"], toppedUp=pools["purchased_credits"])
+    return credits, plan, notice
+
+
+@provider_fetcher("sofya", keyed=True)
+def fetch_sofya(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "sofya"
+    token, missing = key_or_error(provider_id, key_file, "Sofya")
+    if missing:
+        return missing
+    try:
+        credits, plan, notice = parse_sofya(http_json(SOFYA_ME_URL, bearer_headers(token), timeout))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Sofya")
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="Sofya API", credits=credits, notice=notice)
+    return result
+
+# --------------------------------------------------------------- v0
+#
+# v0's billing endpoint (https://v0.app/docs/api/v1/reference/user/get-billing): the documented
+# allowance (`limit`, optional `remaining` and `reset`) becomes a credit window. CodexBar's v0.js
+# also reads a token balance (`balance.total`, `balance.remaining`, `billingCycle.end`,
+# `onDemand.balance`) that the reference does not describe; it becomes spendable credits, with the
+# cycle end and on-demand balance as the notice. CodexBar's /rate-limits call is undocumented and
+# is not made.
+
+V0_BILLING_URL = "https://api.v0.dev/v1/user/billing"
+
+
+def parse_v0(payload: Any) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
+    """(windows, credits, notice) from v0's billing response."""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        raise ProviderFailure("malformed", "v0 returned unreadable billing data.")
+    kind = payload.get("billingType", "legacy")
+    if kind == "token":
+        return parse_v0_token(data)
+    if kind == "legacy":
+        return parse_v0_legacy(data), None, ""
+    raise ProviderFailure("malformed", "v0 returned an unknown billing type.")
+
+
+def v0_number(data: dict[str, Any], key: str) -> float | None:
+    """A numeric field that may be absent; present but unreadable is malformed, not absent."""
+    if data.get(key) is None:
+        return None
+    parsed = number(data[key])
+    if parsed is None:
+        raise ProviderFailure("malformed", f"v0 returned an unreadable {key} value.")
+    return parsed
+
+
+def parse_v0_legacy(data: dict[str, Any]) -> list[dict[str, Any]]:
+    limit = v0_number(data, "limit")
+    if limit is None or limit < 0:
+        raise ProviderFailure("malformed", "v0 returned no readable credit limit.")
+    remaining = v0_number(data, "remaining")
+    if limit == 0 or remaining is None:
+        return []
+    left = clamp(remaining, 0.0, limit)
+    used = (limit - left) / limit * 100
+    detail = f"{amount_text(left)} of {amount_text(limit)} credits left"
+    return [make_window("credits", "Credit limit", used, data.get("reset"), detail=detail)]
+
+
+def parse_v0_token(data: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any], str]:
+    balance = data.get("balance")
+    total = number(balance.get("total")) if isinstance(balance, dict) else None
+    remaining = number(balance.get("remaining")) if isinstance(balance, dict) else None
+    if total is None or remaining is None:
+        raise ProviderFailure("malformed", "v0 returned unreadable balance data.")
+    notes = []
+    cycle = data.get("billingCycle")
+    ends = epoch_seconds(cycle.get("end")) if isinstance(cycle, dict) else None
+    if ends:
+        notes.append("Billing cycle ends " + datetime.fromtimestamp(ends, timezone.utc).strftime("%b %d, %Y %H:%M UTC") + ".")
+    on_demand = data.get("onDemand")
+    on_demand_balance = number(on_demand.get("balance")) if isinstance(on_demand, dict) else None
+    if on_demand_balance is not None:
+        notes.append(f"On-demand balance {amount_text(on_demand_balance)} credits.")
+    credits = balance_credits("Balance", "CREDITS", remaining, max(0.0, remaining), total=total)
+    return [], credits, " ".join(notes)
+
+
+@provider_fetcher("v0", keyed=True)
+def fetch_v0(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "v0"
+    token, missing = key_or_error(provider_id, key_file, "v0")
+    if missing:
+        return missing
+    try:
+        windows, credits, notice = parse_v0(http_json(V0_BILLING_URL, bearer_headers(token), timeout))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "v0")
+    result = base_provider(provider_id)
+    result.update(plan="API key", source="v0 API", windows=windows, credits=credits, notice=notice)
+    return result
+
+# --------------------------------------------------------------- Manus
+#
+# Manus's documented v2 API (https://open.manus.ai/docs/v2/usage.availableCredits): the key is sent
+# in `x-manus-api-key`. `total_credits` is the spendable balance the reference names as
+# authoritative. The next automatic refresh is shown as the notice. CodexBar's cookie-based web RPC
+# is not used.
+
+MANUS_CREDITS_URL = "https://api.manus.ai/v2/usage.availableCredits"
+
+
+def parse_manus(payload: Any) -> tuple[dict[str, Any], str]:
+    """(credits, notice) from Manus's available-credits response."""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or payload.get("ok") is False:
+        raise ProviderFailure("malformed", "Manus returned unreadable credit data.")
+    total = number(data.get("total_credits"))
+    if total is None:
+        raise ProviderFailure("malformed", "Manus returned no readable credit total.")
+    notice = ""
+    refresh = epoch_seconds(data.get("next_refresh_time"))
+    if refresh:
+        interval = data.get("refresh_interval")
+        cadence = f" ({interval})" if interval in ("daily", "weekly") else ""
+        notice = "Next refresh " + datetime.fromtimestamp(refresh, timezone.utc).strftime("%b %d, %Y %H:%M UTC") + cadence + "."
+    return balance_credits("Credits", "CREDITS", total, max(0.0, total)), notice
+
+
+@provider_fetcher("manus", keyed=True)
+def fetch_manus(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "manus"
+    token, missing = key_or_error(provider_id, key_file, "Manus")
+    if missing:
+        return missing
+    headers = {"x-manus-api-key": token, "Accept": "application/json"}
+    try:
+        credits, notice = parse_manus(http_json(MANUS_CREDITS_URL, headers, timeout))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Manus")
+    result = base_provider(provider_id)
+    result.update(plan="API key", source="Manus API", credits=credits, notice=notice)
+    return result
+
+# --------------------------------------------------------------- TypeSafe
+#
+# Ported from CodexBar's Resources/Plugins/typesafe.ts and docs/typesafe.md. The prepaid balance
+# comes from the billing page's Next.js server action, so the pasted Cookie header is the credential.
+TYPESAFE_ORIGIN = "https://console.typesafe.ai"
+TYPESAFE_BILLING_URL = TYPESAFE_ORIGIN + "/settings/billing"
+TYPESAFE_ACTION_TTL_SECONDS = 12 * 60 * 60
+TYPESAFE_MAX_CHUNKS = 60
+TYPESAFE_NOTICE_LOTS = 3
+TYPESAFE_PAGE_CAP_SECONDS = 6.0
+TYPESAFE_CHUNK_CAP_SECONDS = 2.0
+TYPESAFE_ACTION_CAP_SECONDS = 6.0
+TYPESAFE_SESSION_EXPIRED = "TypeSafe session expired."
+TYPESAFE_LOGIN_RE = re.compile(r'\\?"\(auth\)\\?",\{\\?"children\\?":\[\\?"login\\?"')
+TYPESAFE_SCRIPT_RE = re.compile(r"""<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>""", re.IGNORECASE)
+TYPESAFE_CHUNK_RE = re.compile(r"\.js(?:$|\?)", re.IGNORECASE)
+TYPESAFE_ACTION_RE = re.compile(r'"([0-9a-f]{40,})"[^)]{0,150}"getBillingOverviewResult"', re.IGNORECASE)
+TYPESAFE_ACTION_ID_RE = re.compile(r"[0-9a-fA-F]{40,}")
+TYPESAFE_COOKIE_PATTERNS = (
+    re.compile(r"-H\s*'Cookie:\s*([^']+)'", re.IGNORECASE),
+    re.compile(r'-H\s*"Cookie:\s*([^"]+)"', re.IGNORECASE),
+    re.compile(r"\bcookie:\s*'([^']+)'", re.IGNORECASE),
+    re.compile(r'\bcookie:\s*"([^"]+)"', re.IGNORECASE),
+    re.compile(r"\bcookie:\s*([^\r\n]+)", re.IGNORECASE),
+    re.compile(r"(?:^|\s)(?:--cookie|-b)\s*'([^']+)'", re.IGNORECASE),
+    re.compile(r'(?:^|\s)(?:--cookie|-b)\s*"([^"]+)"', re.IGNORECASE),
+    re.compile(r"(?:^|\s)-b([^\s=]+=[^\s]+)", re.IGNORECASE),
+    re.compile(r"(?:^|\s)(?:--cookie|-b)\s+([^\s]+)", re.IGNORECASE),
+)
+
+
+def typesafe_cookie(token: str) -> str:
+    """The Cookie header from a paste. curl commands, a `Cookie:` prefix, and wrapping quotes are accepted."""
+    value = token.strip()
+    for pattern in TYPESAFE_COOKIE_PATTERNS:
+        match = pattern.search(value)
+        if match and match.group(1).strip():
+            value = match.group(1).strip()
+            break
+    if value[:7].lower() == "cookie:":
+        value = value[7:].strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1]
+    value = value.strip()
+    if not value or any(ch < " " or ch > "~" for ch in value):
+        raise ProviderFailure(
+            "no_credentials", "TypeSafe needs a nonempty single-line Cookie header from the billing page."
+        )
+    return value
+
+
+def typesafe_request(
+    method: str, url: str, headers: dict[str, str], timeout: float, body: bytes | None = None
+) -> tuple[int, dict[str, str], str]:
+    """One request with redirects refused. Error statuses are returned, so callers can classify them."""
+    request = urllib.request.Request(url, data=body, headers=headers, method=method)
+    response: Any = None
+    try:
+        try:
+            response = urllib.request.build_opener(NoRedirects()).open(request, timeout=timeout)
+            status = response.status
+        except urllib.error.HTTPError as exc:
+            response, status = exc, exc.code
+        raw = response.read(MAX_HTTP_RESPONSE_BYTES + 1)
+        reply_headers = {name.lower(): value for name, value in response.headers.items()}
+    except (TimeoutError, urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
+            raise ProviderFailure("timeout", "The usage request timed out.") from None
+        raise ProviderFailure(
+            "network", "Could not reach the usage endpoint. Check the connection and TLS certificate."
+        ) from None
+    finally:
+        if response is not None:
+            response.close()
+    if len(raw) > MAX_HTTP_RESPONSE_BYTES:
+        raise ProviderFailure("malformed", "The provider returned unexpectedly large usage data.")
+    return status, reply_headers, raw.decode("utf-8", errors="replace")
+
+
+def typesafe_check(status: int, text: str) -> None:
+    """Classify a billing or discovery reply. A sign-in page served with HTTP 200 counts as an expired session."""
+    if status in (401, 403) or 300 <= status < 400:
+        raise ProviderFailure("expired", TYPESAFE_SESSION_EXPIRED)
+    if status == 429:
+        raise ProviderFailure("rate_limited", "TypeSafe rate limit reached.")
+    if status == 408 or status >= 500:
+        raise ProviderFailure("http", "TypeSafe billing is unavailable.")
+    if not 200 <= status < 300:
+        raise ProviderFailure("http", f"TypeSafe returned HTTP {status}.")
+    if TYPESAFE_LOGIN_RE.search(text):
+        raise ProviderFailure("expired", TYPESAFE_SESSION_EXPIRED)
+
+
+def discover_typesafe_action(cookie: str, deadline: float) -> str:
+    """The billing server action id, found in the script chunks the billing page loads."""
+    status, _, page = typesafe_request(
+        "GET", TYPESAFE_BILLING_URL,
+        {"Cookie": cookie, "Accept": "text/html", "User-Agent": SIGNIN_USER_AGENT},
+        min(TYPESAFE_PAGE_CAP_SECONDS, time_left(deadline)),
+    )
+    typesafe_check(status, page)
+    chunks: list[str] = []
+    for source in TYPESAFE_SCRIPT_RE.findall(page):
+        if source.startswith("/"):
+            source = TYPESAFE_ORIGIN + source
+        if source.startswith(TYPESAFE_ORIGIN + "/") and TYPESAFE_CHUNK_RE.search(source):
+            chunks.append(source)
+    failure: ProviderFailure | None = None
+    for url in list(dict.fromkeys(chunks))[:TYPESAFE_MAX_CHUNKS]:
+        try:
+            status, _, chunk = typesafe_request(
+                "GET", url, {"Accept": "*/*", "User-Agent": SIGNIN_USER_AGENT},
+                min(TYPESAFE_CHUNK_CAP_SECONDS, time_left(deadline)),
+            )
+            if status in (408, 429) or status >= 500:
+                typesafe_check(status, chunk)
+        except ProviderFailure as exc:
+            if failure is None:
+                failure = exc
+            continue
+        match = TYPESAFE_ACTION_RE.search(chunk) if 200 <= status < 300 else None
+        if match:
+            return match.group(1)
+    if failure is not None:
+        raise failure
+    raise ProviderFailure("malformed", "TypeSafe billing page format changed: action id not found.")
+
+
+def typesafe_cache_path() -> Path:
+    return history_path().parent / "typesafe-action.json"
+
+
+def cached_typesafe_action(now: float) -> str:
+    """The cached action id while it is fresh. Only the id is ever stored, never the cookie."""
+    try:
+        cached = read_json(typesafe_cache_path(), 4096)
+    except (OSError, ValueError, RecursionError):
+        return ""
+    if not isinstance(cached, dict):
+        return ""
+    action, expires = cached.get("actionId"), number(cached.get("expiresAt"))
+    if isinstance(action, str) and TYPESAFE_ACTION_ID_RE.fullmatch(action) and expires is not None and expires > now:
+        return action
+    return ""
+
+
+def remember_typesafe_action(action: str, now: float) -> None:
+    try:
+        atomic_write_json(typesafe_cache_path(),
+                          {"actionId": action, "expiresAt": int(now) + TYPESAFE_ACTION_TTL_SECONDS})
+    except OSError:
+        pass  # Losing the cache only means rediscovering the id on the next refresh.
+
+
+def forget_typesafe_action() -> None:
+    try:
+        typesafe_cache_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def post_typesafe_billing(cookie: str, action: str, deadline: float) -> tuple[int, dict[str, str], str]:
+    return typesafe_request(
+        "POST", TYPESAFE_BILLING_URL,
+        {
+            "Cookie": cookie,
+            "Origin": TYPESAFE_ORIGIN,
+            "Next-Action": action,
+            "Accept": "text/x-component",
+            "Content-Type": "application/json",
+            "User-Agent": SIGNIN_USER_AGENT,
+        },
+        min(TYPESAFE_ACTION_CAP_SECONDS, time_left(deadline)),
+        body=b"[]",
+    )
+
+
+def typesafe_billing_reply(cookie: str, deadline: float) -> str:
+    action = cached_typesafe_action(time.time())
+    if not action:
+        action = discover_typesafe_action(cookie, deadline)
+        remember_typesafe_action(action, time.time())
+    status, headers, text = post_typesafe_billing(cookie, action, deadline)
+    if status == 404 and headers.get("x-nextjs-action-not-found") == "1":
+        # The cached id went stale, so rediscover once and retry once.
+        forget_typesafe_action()
+        action = discover_typesafe_action(cookie, deadline)
+        remember_typesafe_action(action, time.time())
+        status, headers, text = post_typesafe_billing(cookie, action, deadline)
+    typesafe_check(status, text)
+    return text
+
+
+def typesafe_plan(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    plan = value.strip()
+    if plan == "free_plan":
+        return "Free"
+    return " ".join(part[:1].upper() + part[1:].lower() for part in re.split(r"[_-]+", plan) if part)
+
+
+def typesafe_lots(value: Any) -> list[tuple[float, float, datetime]]:
+    """Credit lots with a balance left and a readable expiry, as (amount, remaining, local expiry)."""
+    lots: list[tuple[float, float, datetime]] = []
+    items = value if isinstance(value, list) else []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        amount, remaining = number(item.get("amount")), number(item.get("remaining"))
+        expires = item.get("expiresAt")
+        stamp = utc_timestamp(expires) if isinstance(expires, str) else None
+        if amount is None or remaining is None or remaining <= 0 or stamp is None:
+            continue
+        try:
+            lots.append((amount, remaining, datetime.fromtimestamp(stamp)))
+        except (OverflowError, OSError, ValueError):
+            continue
+    return lots
+
+
+def typesafe_notice(lots: list[tuple[float, float, datetime]]) -> str:
+    parts = [
+        f"${remaining:,.2f} of ${amount:,.2f} expires {when:%b} {when.day}"
+        for amount, remaining, when in lots[:TYPESAFE_NOTICE_LOTS]
+    ]
+    if len(lots) > TYPESAFE_NOTICE_LOTS:
+        parts.append(f"and {len(lots) - TYPESAFE_NOTICE_LOTS} more")
+    return "; ".join(parts)
+
+
+def parse_typesafe_billing(text: str) -> dict[str, Any]:
+    """The billing numbers from the action's reply, which is a few `id:JSON` lines."""
+    reply: dict[str, Any] | None = None
+    for line in re.split(r"\r?\n", text):
+        separator = line.find(":")
+        if separator < 1:
+            continue
+        try:
+            candidate = json.loads(line[separator + 1:])
+        except (ValueError, RecursionError):
+            continue
+        if isinstance(candidate, dict) and "ok" in candidate:
+            reply = candidate
+            break
+    if reply is None:
+        raise ProviderFailure("malformed", "TypeSafe billing response format changed: missing result.")
+    if reply["ok"] is not True:
+        raise ProviderFailure("http", "TypeSafe billing request failed.")
+    data = reply.get("data")
+    billing = data.get("billing") if isinstance(data, dict) else None
+    if not isinstance(billing, dict):
+        raise ProviderFailure("malformed", "TypeSafe billing response format changed: missing billing.")
+    spent, balance = number(billing.get("spent")), number(billing.get("balance"))
+    if spent is None or balance is None:
+        raise ProviderFailure("malformed", "TypeSafe billing response format changed: missing billing numbers.")
+    return {
+        "plan": typesafe_plan(billing.get("plan")),
+        "credits": balance_credits("Balance", "USD", balance, max(0.0, balance), spend={"monthly": usd(spent)}),
+        "notice": typesafe_notice(typesafe_lots(billing.get("credits"))),
+    }
+
+
+@provider_fetcher("typesafe", keyed=True)
+def fetch_typesafe(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "typesafe"
+    token, missing = key_or_error(provider_id, key_file, "TypeSafe")
+    if missing:
+        if missing["errorKind"] == "no_credentials":
+            missing["message"] = ("No TypeSafe Cookie header was found. Paste the one from "
+                                  "console.typesafe.ai/settings/billing under Settings → Providers.")
+        return missing
+    deadline = time.monotonic() + timeout
+    try:
+        cookie = typesafe_cookie(token)
+        fields = parse_typesafe_billing(typesafe_billing_reply(cookie, deadline))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "TypeSafe",
+                           fix="Paste a fresh Cookie header under Settings → Providers.")
+    result = base_provider(provider_id)
+    result.update(source="TypeSafe billing page", **fields)
     return result
 
 

@@ -4,6 +4,21 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.7.4
+
+### Added
+
+- **18 more providers, 49 in all.** Sign-ins read on this computer: **Nous Portal** (Hermes Agent) and **Muse Code** (Meta). Coding plans with an API key: **Alibaba Coding Plan**, **Command Code**, **DevPass**, **xKiro**, **IBM Bob**, **Umans**, **Neuralwatt**, **Aixy**, and **ClawRouter**. Prepaid balances: **Atlas Cloud**, **Charm Hyper**, **Sail Research**, **Sofya**, **v0**, **Manus**, and **TypeSafe** (Jev). TypeSafe has no balance API for keys, so it reads the console's billing page with the Cookie header you paste from it; Settings calls that secret a Cookie header and links to the billing page. None of the new providers has been checked against a live account: they follow each provider's documentation and the readers in CodexBar and oh-my-pi, and the ones without public documentation (Alibaba Coding Plan, IBM Bob, ClawRouter, TypeSafe) can break when the provider changes its site.
+
+### Changed
+
+- **Settings → Providers** gives each monitored provider its own card, with the same fill, border, and corners as the cards in Limits, so its switches, key, and Customize read as one block. Every provider shows its mark next to its name, tinted like its tile (brand colour when provider colours are on), in the monitored cards, **Found on this computer**, **Waiting for a sign-in**, and **More providers**, where a hairline now separates the options. The grip, mark, and switches line up with the name even when a status line or a Sign in button follows it.
+- The README lists every supported provider near the top, in text and as an image with each provider's mark, grouped by sign-ins, coding plans with a key, prepaid balances, and proxies. The marketplace preview shows every provider's mark under the title.
+
+### Fixed
+
+- Claude no longer asks you to sign in right after turning the computer on. The first check runs while the network is still coming up, so Claude Code could not renew the expired sign-in, and by the time the usage request went out the network was up and rejected the stale token. A rejection of a token Claude Code could not renew now gives Claude Code one more try, and only a sign-in it still cannot renew asks you to sign in.
+
 ## 1.7.3
 
 ### Changed

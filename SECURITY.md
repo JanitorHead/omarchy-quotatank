@@ -82,6 +82,15 @@ stubs that fail. `claude doctor` runs only when the saved Claude Code access tok
 expired, so that Claude Code renews and saves its own sign-in; Quotatank never sends
 Claude's refresh token anywhere.
 
+Two readers go through account surfaces rather than a usage API, and are bounded the
+same way. Muse Code's usage comes from `POST /muse-code/key`, the call the `muse` CLI
+makes for its own key: the response carries that key, which is discarded unread and
+never stored or logged. TypeSafe has no balance API for keys, so its credential is the
+`Cookie` header of a signed-in console session, pasted by the user and saved like a
+key (a private `0600` file, never in widget settings or on a command line). It is sent
+only to `console.typesafe.ai`, with redirects refused; the billing page's script
+chunks are fetched without it, and only the discovered action id is cached on disk.
+
 **Sign in** and **Install and sign in** run only on a click, in a visible Omarchy
 terminal, with a fixed command from the plugin's own provider list (a sign-in
 command, optionally preceded by `mise use -g <package>`); no user input or backend

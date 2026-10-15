@@ -208,6 +208,40 @@ class FailureAndIsolationTests(unittest.TestCase):
             self.assertEqual(result["status"], "ok")
             self.assertEqual(captured["authorization"], "Bearer fresh")
 
+    def test_claude_renewal_is_retried_once_the_network_answers(self):
+        # At the first check after login Claude Code tries to renew before the network is up and
+        # fails; the usage endpoint then answers 401 for the stale token. That 401 proves the
+        # network is up, so Claude Code gets a second try instead of the user a sign-in prompt.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            claude_dir = root / "claude"
+            claude_dir.mkdir()
+            (claude_dir / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "stale", "expiresAt": 1}}))
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            fresh = json.dumps({"claudeAiOauth": {"accessToken": "fresh", "expiresAt": (int(time.time()) + 28_800) * 1000}})
+            marker = root / "online"
+            claude = bin_dir / "claude"
+            claude.write_text(f"#!/bin/sh\n[ \"$*\" = doctor ] || exit 1\n[ -e '{marker}' ] || exit 1\n"
+                              f"printf '%s' '{fresh}' > \"$CLAUDE_CONFIG_DIR/.credentials.json\"\n")
+            claude.chmod(0o755)
+            sent = []
+
+            def usage_response(url, headers, timeout):
+                sent.append(headers["Authorization"])
+                marker.touch()  # the network came up while the first renewal was failing
+                if headers["Authorization"] == "Bearer stale":
+                    raise usage.ProviderFailure("expired", "The saved sign-in is no longer accepted.")
+                return fixture("claude-usage.json")
+
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_dir)}), \
+                    mock.patch.object(usage, "runtime_environment", return_value={**os.environ, "PATH": str(bin_dir)}), \
+                    mock.patch.object(usage.Path, "home", return_value=root), \
+                    mock.patch.object(usage, "http_json", side_effect=usage_response):
+                result = usage.fetch_claude(5)
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(sent, ["Bearer stale", "Bearer fresh"])
+
     def test_opencode_key_resolution_and_request_headers(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
