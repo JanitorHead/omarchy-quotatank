@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.3
+
+### Security
+
+- Over plain HTTP, the omp gateway token now goes only to this computer, named by a loopback address or `localhost`, or to the computer the address names as tailscaled knows it, bound to Tailscale's own interface. 1.9.2 treated an address of its own in `100.64.0.0/10` as proof that Tailscale was connected, but other networks hand out that range as carrier-grade NAT space. Such a network could answer for the gateway's address while Tailscale was off, or for an address of no computer in the tailnet while it was on, and receive the token. Now Quotatank asks tailscaled's LocalAPI, within 2 seconds in all, whether it runs connected with its own TUN interface in this network namespace and which computer has the address (and, for a name, whether it is that computer's MagicDNS name; a computer shared from another tailnet needs its full name). It then binds the connection to that interface, so if Tailscale drops in between the connection fails instead of leaving another way. A name that resolves to loopback is refused, so a DNS server cannot pick a local program to receive the token. This guards the token against the networks the computer joins; SECURITY.md states what it does not cover. Reported in the marketplace review; an independent review found the shared-computer, loopback-name, namespace and TAP cases.
+
 ## 1.9.2
 
 ### Security

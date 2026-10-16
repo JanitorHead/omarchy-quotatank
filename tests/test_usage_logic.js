@@ -1160,7 +1160,7 @@ console.log("Provider setup: passed");
     message: "omp usage exited with status 1. Could not reach the omp gateway. Check its URL, the network and its TLS certificate." }),
   "talos · not answering", "the gateway's part of a combined message decides");
   const plainHttp = { gateway: "error", message: "The omp gateway token goes over plain HTTP only to this computer or over Tailscale. "
-    + "Use an https:// address, or check that Tailscale is connected." };
+    + "Use an https:// address, or check that Tailscale is connected and that the address is that computer's Tailscale name or address." };
   assert.equal(context.ompGatewaySummary(gateway, plainHttp), "talos · needs HTTPS or Tailscale");
   assert.ok(context.ompGatewayProblem(plainHttp.message, "http://talos:4000").text.indexOf("Tailscale is connected") > 0,
     "a refusal to send the token in the clear says what to do");

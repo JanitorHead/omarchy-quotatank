@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -11,7 +12,9 @@ import re
 import secrets
 import socket
 import stat
+import struct
 import threading
+import time
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -28,9 +31,19 @@ OMP_PROVIDERS = {
 PLAIN_HTTP_NETWORKS = tuple(ipaddress.ip_network(network) for network in (
     "127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7",
 ))
-# Tailscale's own ranges. Plain HTTP may carry a secret only to loopback or to these (plain_http_token_addresses):
-# a single-label name or a LAN address that is a trusted computer on one network is anyone's on the next.
+# Tailscale's own ranges. Plain HTTP may carry a secret only to loopback or to a computer of this tailnet
+# (plain_http_token_routes): a single-label name or a LAN address that is a trusted computer on one network is
+# anyone's on the next, and 100.64.0.0/10 is also the carrier-grade NAT space other networks hand out.
 TAILSCALE_NETWORKS = tuple(ipaddress.ip_network(network) for network in ("100.64.0.0/10", "fd7a:115c:a1e0::/48"))
+# tailscaled's LocalAPI: a Unix socket any local user may read status from, answering only this Host name.
+TAILSCALED_SOCKET = "/var/run/tailscale/tailscaled.sock"
+TAILSCALE_LOCAL_API_HOST = "local-tailscaled.sock"
+TAILSCALE_ANSWER_LIMIT = 1 << 20
+PROC_NET_UNIX = "/proc/net/unix"
+SO_ACCEPTCON = 0x10000  # A listening socket, in /proc/net/unix's flags.
+SYS_CLASS_NET = "/sys/class/net"
+IFF_TUN, IFF_TAP = 0x0001, 0x0002
+SIOCGIFADDR = 0x8915
 # A single-label name starts with a letter, so numeric IPv4 forms such as 2130706433 never pass as one.
 SINGLE_LABEL_HOST = re.compile(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
 TAILSCALE_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+ts\.net")
@@ -103,28 +116,198 @@ def tailscale_address(address: Any) -> bool:
     return any(address in network for network in TAILSCALE_NETWORKS)
 
 
-def reached_through_tailscale(address: Any) -> bool:
-    """Whether this computer sends to `address` from an address of its own in Tailscale's ranges, that is
-    through Tailscale, which is then connected. Connecting a UDP socket picks the route and sends nothing."""
-    family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+def tailscale_local_api(path: str, deadline: float) -> Any:
+    """What tailscaled's LocalAPI answers at `path`, parsed, or None when tailscaled is not running here, has
+    no answer (whois answers 404 for an address of no computer it knows), answers anything else, or does not
+    finish by `deadline` (a time.monotonic() value). An HTTP/1.0 request, so tailscaled closes the
+    connection after its answer, which is read whole within the deadline."""
+    request = f"GET {path} HTTP/1.0\r\nHost: {TAILSCALE_LOCAL_API_HOST}\r\n\r\n".encode("ascii")
+    raw = bytearray()
+
+    def remaining() -> float:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError
+        return left
+
     try:
-        with socket.socket(family, socket.SOCK_DGRAM) as probe:
-            probe.connect((str(address), 9))
-            source = ipaddress.ip_address(probe.getsockname()[0].split("%", 1)[0])
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(remaining())
+            sock.connect(TAILSCALED_SOCKET)
+            sock.settimeout(remaining())
+            sock.sendall(request)
+            while True:
+                sock.settimeout(remaining())
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                raw += chunk
+                if len(raw) > TAILSCALE_ANSWER_LIMIT:
+                    return None
+    except OSError:
+        return None
+    head, separator, body = bytes(raw).partition(b"\r\n\r\n")
+    status_line = head.split(b"\r\n", 1)[0].split()
+    if not separator or len(status_line) < 2 or status_line[1] != b"200":
+        return None
+    try:
+        return json.loads(body)
+    except (ValueError, RecursionError):
+        return None
+
+
+def tailscaled_in_this_network() -> bool:
+    """Whether tailscaled listens on its LocalAPI socket from this computer's network namespace. Its socket is
+    reached through the filesystem, so a program in another namespace would ask a tailscaled whose
+    interfaces and routes are not its own; /proc/net/unix lists only the reader's namespace's sockets, each
+    under the path it was bound with (`/var/run/…` and `/run/…` are one place)."""
+    wanted = os.path.realpath(TAILSCALED_SOCKET)
+    try:
+        with open(PROC_NET_UNIX, encoding="utf-8", errors="replace") as table:
+            next(table, None)
+            for line in table:
+                fields = line.rstrip("\n").split(None, 7)
+                if (len(fields) == 8 and int(fields[3], 16) & SO_ACCEPTCON and fields[7].startswith("/")
+                        and os.path.realpath(fields[7]) == wanted):
+                    return True
+    except (OSError, ValueError):
+        pass
+    return False
+
+
+def tun_interface(name: str) -> bool:
+    """Whether interface `name` is a TUN device: its tun_flags has IFF_TUN, not IFF_TAP (an Ethernet tap)."""
+    try:
+        flags = int(Path(SYS_CLASS_NET, name, "tun_flags").read_text(encoding="ascii").strip(), 16)
     except (OSError, ValueError):
         return False
-    return tailscale_address(source)
+    return bool(flags & IFF_TUN) and not flags & IFF_TAP
 
 
-def plain_http_token_addresses(addresses: list[Any]) -> list[Any] | None:
-    """The addresses plain HTTP may carry a token to, of a host with `addresses`, or None when the token
-    needs HTTPS: all of them, when every one is loopback or Tailscale's and each Tailscale one is reached
-    through Tailscale. The caller connects only to these, so a second lookup cannot send the token
-    elsewhere."""
+def network_interfaces() -> dict[str, tuple[bool, set[Any]]]:
+    """Each network interface by name: whether it is a TUN device, and its addresses (its primary IPv4 one,
+    which is Tailscale's only one, and every IPv6 one)."""
+    ipv6: dict[str, set[Any]] = {}
+    try:
+        with open("/proc/net/if_inet6", encoding="ascii") as table:
+            for line in table:
+                fields = line.split()
+                if len(fields) == 6:
+                    ipv6.setdefault(fields[5], set()).add(ipaddress.IPv6Address(bytes.fromhex(fields[0])))
+    except (OSError, ValueError):
+        pass
+    found: dict[str, tuple[bool, set[Any]]] = {}
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        for _index, name in socket.if_nameindex():
+            addresses = set(ipv6.get(name, ()))
+            try:
+                answer = fcntl.ioctl(probe.fileno(), SIOCGIFADDR, struct.pack("256s", name.encode()))
+                addresses.add(ipaddress.IPv4Address(answer[20:24]))
+            except OSError:
+                pass  # No IPv4 address.
+            found[name] = (tun_interface(name), addresses)
+    return found
+
+
+def tailscale_connection(deadline: float) -> tuple[str, str] | None:
+    """The interface a connection into the tailnet is bound to, the one TUN interface that holds an address
+    tailscaled gave this computer, and this tailnet's MagicDNS suffix. None unless tailscaled listens from this
+    network namespace and runs connected with an interface of its own (userspace mode carries no other
+    program's traffic), and exactly one such interface is here."""
+    if not tailscaled_in_this_network():
+        return None
+    status = tailscale_local_api("/localapi/v0/status?peers=false", deadline)
+    if not isinstance(status, dict) or status.get("BackendState") != "Running" or status.get("TUN") is not True:
+        return None
+    own = set()
+    for text in status.get("TailscaleIPs") if isinstance(status.get("TailscaleIPs"), list) else ():
+        try:
+            own.add(ipaddress.ip_address(text))
+        except (TypeError, ValueError):
+            pass
+    suffix = status.get("MagicDNSSuffix")
+    suffix = suffix.strip(".").lower() if isinstance(suffix, str) else ""
+    try:
+        names = [name for name, (tun, addresses) in network_interfaces().items() if tun and addresses & own]
+    except OSError:
+        return None
+    return (names[0], suffix) if len(names) == 1 else None
+
+
+def tailnet_computer(answer: Any, hostname: str, address: Any, suffix: str) -> bool:
+    """Whether tailscaled's whois `answer` is a computer that has `address` as its own and, unless `hostname` is
+    an address, is the computer `hostname` names. A name's addresses come from whichever DNS server this network
+    offers, so the name is checked against the computer's MagicDNS name: in full, or as its first label only
+    when that name is in this tailnet (`suffix`), as MagicDNS itself does. A computer shared from another
+    tailnet goes by its full name."""
+    node = answer.get("Node") if isinstance(answer, dict) else None
+    if not isinstance(node, dict) or not isinstance(node.get("Addresses"), list):
+        return False
+    own = set()
+    for prefix in node["Addresses"]:
+        try:
+            network = ipaddress.ip_network(prefix)
+        except (TypeError, ValueError):
+            continue
+        if network.num_addresses == 1:
+            own.add(network.network_address)
+    if address not in own:
+        return False
+    try:
+        ipaddress.ip_address(hostname)
+        return True
+    except ValueError:
+        pass
+    name = node.get("Name")
+    if not isinstance(name, str) or not name.rstrip("."):
+        return False
+    name, wanted = name.rstrip(".").lower(), hostname.rstrip(".").lower()
+    if "." in wanted:
+        return wanted == name
+    return bool(suffix) and name == f"{wanted}.{suffix}"
+
+
+def loopback_host(hostname: str) -> bool:
+    """Whether `hostname` names this computer by itself: a loopback address or `localhost`. Any other name
+    that resolves to loopback was answered by a DNS server, which must not choose where a token goes."""
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return hostname.rstrip(".").lower() == "localhost"
+    return ((address.ipv4_mapped or address) if address.version == 6 else address).is_loopback
+
+
+def plain_http_token_routes(hostname: str, addresses: list[Any], timeout: float) -> list[tuple[Any, str | None]] | None:
+    """Where plain HTTP may carry a token to `hostname`, which resolved to `addresses`: each address with the
+    interface its connection must be bound to (None for loopback), or None when the token needs HTTPS.
+
+    A host that names this computer by itself (loopback_host) must resolve only to loopback. Any other host
+    must resolve only to addresses of the computer it names, as tailscaled itself tells: an address in
+    Tailscale's ranges proves nothing. A connection to such an address is bound to Tailscale's interface, so
+    it reaches that computer through the tunnel or fails, even when Tailscale disconnects in between. The
+    caller connects only to these, so a second lookup cannot send the token elsewhere. tailscaled has
+    `timeout` seconds in all to answer."""
     unmapped = [(address.ipv4_mapped or address) if address.version == 6 else address for address in addresses]
-    carried = all(address.is_loopback or (tailscale_address(address) and reached_through_tailscale(address))
-                  for address in unmapped)
-    return unmapped if unmapped and carried else None
+    if not unmapped:
+        return None
+    if loopback_host(hostname):
+        return [(address, None) for address in unmapped] if all(address.is_loopback for address in unmapped) else None
+    if not all(tailscale_address(address) for address in unmapped):
+        return None
+    deadline = time.monotonic() + timeout
+    connection = tailscale_connection(deadline)
+    if connection is None:
+        return None
+    interface, suffix = connection
+    routes: list[tuple[Any, str | None]] = []
+    for address in unmapped:
+        # "address:0", which tailscaled 1.38 needs and later versions also take.
+        query = f"[{address}]:0" if address.version == 6 else f"{address}:0"
+        answer = tailscale_local_api("/localapi/v0/whois?addr=" + urllib.parse.quote(query, safe=""), deadline)
+        if not tailnet_computer(answer, hostname, address, suffix):
+            return None
+        routes.append((address, interface))
+    return routes
 
 
 def omp_account_id(provider: str, identity: str) -> str:

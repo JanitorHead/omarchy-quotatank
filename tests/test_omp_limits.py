@@ -9,12 +9,14 @@ import ipaddress
 import json
 import os
 import socket
+import socketserver
 import stat
 import sys
 import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
@@ -125,6 +127,87 @@ def resolving(answers: dict[str, list[str] | None]):
         yield lookups
 
 
+IP = ipaddress.ip_address
+# This computer's Tailscale addresses, and the computers tailscaled knows by MagicDNS name: this tailnet's, and
+# one shared from another tailnet whose first label matches a computer of this one.
+OWN = ("100.101.102.1", "fd7a:115c:a1e0::1")
+SUFFIX = "tail0000.ts.net"
+TAILNET = {
+    "talos.tail0000.ts.net.": OWN,
+    "omp-box.tail0000.ts.net.": ("100.101.102.103", "fd7a:115c:a1e0::5"),
+    "other-box.tail0000.ts.net.": ("100.101.102.110",),
+    "omp-box.other0000.ts.net.": ("100.101.102.120",),
+}
+
+
+def whois_address(text: str):
+    """The address of whois's `addr` in tailscaled 1.38's only form, "ip:port", or None."""
+    host, separator, port = text.rpartition(":")
+    if not separator or not port.isdigit() or (":" in host) != host.startswith("["):
+        return None
+    try:
+        return IP(host[1:-1] if host.startswith("[") and host.endswith("]") else host)
+    except ValueError:
+        return None
+
+
+@contextlib.contextmanager
+def tailnet(state: str | None = "Running", tun: bool = True, here: bool = True, interfaces: dict | None = None):
+    """A stand-in tailscaled on a Unix socket that, like tailscaled, answers only its own Host name: status says
+    `state` (None: tailscaled is not running) and `tun`, and whois knows TAILNET. It listens from this network
+    namespace when `here`. This computer's interfaces are `interfaces`, by default a TUN `tailscale0` holding
+    OWN and a `wlan0` with an address the network handed out from 100.64.0.0/10."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def reply(self, status: int, body: object) -> None:
+            data = (body + "\n" if isinstance(body, str) else json.dumps(body)).encode()
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            url = urllib.parse.urlsplit(self.path)
+            query = urllib.parse.parse_qs(url.query)
+            if self.headers.get("Host") != "local-tailscaled.sock":
+                return self.reply(403, "invalid localapi request")
+            if url.path == "/localapi/v0/status" and query.get("peers") == ["false"]:
+                return self.reply(200, {"BackendState": state, "TUN": tun, "TailscaleIPs": list(OWN),
+                                        "MagicDNSSuffix": SUFFIX})
+            if url.path == "/localapi/v0/whois":
+                wanted = whois_address(query.get("addr", [""])[0])
+                if wanted is None:
+                    return self.reply(400, "invalid 'addr' parameter")
+                for name, addresses in TAILNET.items():
+                    if wanted in map(IP, addresses):
+                        prefixes = [f"{address}/{128 if ':' in address else 32}" for address in addresses]
+                        return self.reply(200, {"Node": {"Name": name, "Addresses": prefixes}})
+                return self.reply(404, "no match for IP:port")
+            self.reply(404, "not found")
+
+    if interfaces is None:
+        interfaces = {"tailscale0": (True, set(map(IP, OWN))), "wlan0": (False, {IP("100.70.0.2")})}
+    with tempfile.TemporaryDirectory() as folder, \
+            mock.patch.object(common, "TAILSCALED_SOCKET", os.path.join(folder, "tailscaled.sock")), \
+            mock.patch.object(common, "tailscaled_in_this_network", return_value=here), \
+            mock.patch.object(common, "network_interfaces", return_value=interfaces):
+        if state is None:
+            yield
+            return
+        server = socketserver.ThreadingUnixStreamServer(common.TAILSCALED_SOCKET, Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+
 class UrlRuleTests(unittest.TestCase):
     def test_a_server_address_is_its_scheme_host_and_port(self):
         accepted = {
@@ -171,12 +254,18 @@ class UrlRuleTests(unittest.TestCase):
 
 
 class GatewayAddressTests(unittest.TestCase):
-    """The gateway token can spend model quota: over plain HTTP it goes only to this computer or through Tailscale."""
+    """The gateway token can spend model quota: over plain HTTP it goes only to this computer, or through
+    Tailscale to the computer the address names in this tailnet."""
 
-    def read(self, address: str, tailscale_up: bool = True):
-        with mock.patch.object(usage, "http_json", return_value={"reports": []}) as request, \
-                mock.patch.object(common, "reached_through_tailscale", return_value=tailscale_up):
+    def read(self, address: str):
+        with mock.patch.object(usage, "http_json", return_value={"reports": []}) as request:
             return usage.read_omp_gateway(address, None, 5), request
+
+    def assert_refused(self, address: str, answers: dict):
+        with resolving(answers):
+            result, request = self.read(address)
+        request.assert_not_called()
+        self.assertEqual(result, ("error", usage.OMP_GATEWAY_PLAIN_HTTP, None))
 
     def test_plain_http_to_other_networks_is_refused_before_any_request(self):
         cases = {
@@ -185,24 +274,29 @@ class GatewayAddressTests(unittest.TestCase):
             "http://omp-box.tail0000.ts.net:4000": {"omp-box.tail0000.ts.net": ["100.101.102.103", "192.168.1.20"]},
             "http://gateway.example.com:4000": {"gateway.example.com": ["203.0.113.7"]},
         }
-        for address, answers in cases.items():
-            with self.subTest(address=address), resolving(answers):
-                result, request = self.read(address)
-            request.assert_not_called()
-            self.assertEqual(result, ("error", usage.OMP_GATEWAY_PLAIN_HTTP, None))
+        with tailnet():
+            for address, answers in cases.items():
+                with self.subTest(address=address):
+                    self.assert_refused(address, answers)
 
-    def test_tailscale_addresses_take_plain_http_only_while_tailscale_carries_it(self):
-        with resolving({"omp-box": ["100.101.102.103"]}):
-            result, request = self.read("http://omp-box:4000", tailscale_up=False)
-        request.assert_not_called()
-        self.assertEqual(result, ("error", usage.OMP_GATEWAY_PLAIN_HTTP, None))
-        for address, answers in (("http://omp-box:4000", {"omp-box": ["100.101.102.103"]}),
-                                 ("http://omp-box.tail0000.ts.net:4000", {"omp-box.tail0000.ts.net": ["fd7a:115c:a1e0::5"]}),
-                                 ("http://100.101.102.103:4000", {}), ("http://[fd7a:115c:a1e0::1]:4000", {})):
-            with self.subTest(address=address), resolving(answers):
-                result, request = self.read(address)
-            self.assertEqual(result, ("ok", "", {"reports": []}))
-            self.assertEqual(request.call_args.args[0], address + "/v1/usage")
+    def test_a_computer_of_this_tailnet_takes_plain_http_bound_to_tailscales_interface(self):
+        cases = (("http://omp-box:4000", {"omp-box": ["100.101.102.103"]}),
+                 ("http://omp-box.tail0000.ts.net:4000", {"omp-box.tail0000.ts.net": ["fd7a:115c:a1e0::5"]}),
+                 ("http://omp-box.tail0000.ts.net.:4000", {"omp-box.tail0000.ts.net.": ["100.101.102.103"]}),
+                 ("http://omp-box.other0000.ts.net:4000", {"omp-box.other0000.ts.net": ["100.101.102.120"]}),
+                 ("http://100.101.102.103:4000", {}), ("http://[fd7a:115c:a1e0::5]:4000", {}),
+                 ("http://100.101.102.1:4000", {}))
+        with tailnet():
+            for address, answers in cases:
+                with self.subTest(address=address), resolving(answers):
+                    result, request = self.read(address)
+                self.assertEqual(result, ("ok", "", {"reports": []}))
+                self.assertEqual(request.call_args.args[0], address + "/v1/usage")
+                checked, = [handler for handler in request.call_args.kwargs["opener"].handlers
+                            if isinstance(handler, usage.CheckedAddresses)]
+                self.assertEqual({interface for _address, interface in checked.routes}, {"tailscale0"})
+            self.assertEqual(common.plain_http_token_routes("::ffff:100.101.102.103", [IP("::ffff:100.101.102.103")], 2),
+                             [(IP("100.101.102.103"), "tailscale0")])
 
     def test_https_reaches_any_host_and_a_name_that_does_not_resolve_is_unreachable(self):
         with resolving({"gateway.example.com": ["203.0.113.7"]}) as lookups:
@@ -214,18 +308,138 @@ class GatewayAddressTests(unittest.TestCase):
         request.assert_not_called()
         self.assertEqual(result, ("error", usage.OMP_GATEWAY_FAILURES["network"], None))
 
-    def test_addresses_plain_http_may_carry_a_token_to(self):
-        ip = ipaddress.ip_address
-        connected = ip("100.101.102.103")
-        with mock.patch.object(common, "reached_through_tailscale", side_effect=lambda address: address == connected):
-            self.assertEqual(common.plain_http_token_addresses([ip("::1"), ip("127.0.0.1")]), [ip("::1"), ip("127.0.0.1")])
-            self.assertEqual(common.plain_http_token_addresses([ip("::ffff:100.101.102.103")]), [connected])
-            for addresses in ([ip("100.101.102.104")], [ip("127.0.0.1"), ip("192.168.1.20")], [ip("10.0.0.1")],
-                              [ip("fd00::1")], [ip("0.0.0.0")], []):
-                with self.subTest(addresses=addresses):
-                    self.assertIsNone(common.plain_http_token_addresses(addresses))
-        # Loopback traffic leaves from a loopback address, never from a Tailscale one.
-        self.assertFalse(common.reached_through_tailscale(ip("127.0.0.1")))
+    def test_this_computer_takes_plain_http_only_when_the_address_names_it_by_itself(self):
+        with tailnet(state=None):
+            for hostname, addresses in (("localhost", [IP("::1"), IP("127.0.0.1")]), ("127.0.0.1", [IP("127.0.0.1")]),
+                                        ("::ffff:127.0.0.1", [IP("::ffff:127.0.0.1")])):
+                with self.subTest(hostname=hostname):
+                    routes = common.plain_http_token_routes(hostname, addresses, 2)
+                    self.assertEqual(routes, [((address.ipv4_mapped or address) if address.version == 6 else address, None)
+                                              for address in addresses])
+        # Any other name resolving to loopback was answered by a DNS server, and the token would reach whatever
+        # listens on that port here; a name may not mix loopback and the tailnet either.
+        with tailnet():
+            for address, answers in (("http://omp-box:4000", {"omp-box": ["127.0.0.1"]}),
+                                     ("http://omp-box.tail0000.ts.net:4000", {"omp-box.tail0000.ts.net": ["::1"]}),
+                                     ("http://omp-box:4000", {"omp-box": ["100.101.102.103", "127.0.0.1"]}),
+                                     ("http://localhost:4000", {"localhost": ["127.0.0.1", "100.101.102.103"]})):
+                with self.subTest(address=address, answers=answers):
+                    self.assert_refused(address, answers)
+
+    def test_an_address_in_tailscales_ranges_is_not_enough(self):
+        # A network can hand out 100.64.0.0/10 and answer for a tailnet address while Tailscale is off,
+        # stopped, signed out or in userspace mode, while tailscaled serves another network namespace, or while
+        # Tailscale's interface is not here or not alone.
+        for setup in ({"state": None}, {"state": "Stopped"}, {"state": "NeedsLogin"}, {"tun": False}, {"here": False},
+                      {"interfaces": {"wlan0": (False, {IP(OWN[0])})}},
+                      {"interfaces": {"tailscale0": (True, {IP(OWN[0])}), "tun1": (True, {IP(OWN[0])})}}):
+            with self.subTest(setup=setup), tailnet(**setup):
+                self.assert_refused("http://omp-box:4000", {"omp-box": ["100.101.102.103"]})
+        # With Tailscale connected: an address of no computer in the tailnet, which leaves through the network;
+        # the network's DNS naming another computer of the tailnet, or one shared from another tailnet that has
+        # the same first label (MagicDNS gives those only their full name); a name outside MagicDNS.
+        with tailnet():
+            for address, answers in (("http://100.101.102.104:4000", {}),
+                                     ("http://omp-box:4000", {"omp-box": ["100.101.102.103", "100.70.0.9"]}),
+                                     ("http://omp-box:4000", {"omp-box": ["100.101.102.110"]}),
+                                     ("http://omp-box:4000", {"omp-box": ["100.101.102.120"]}),
+                                     ("http://omp-box.tail0000.ts.net:4000", {"omp-box.tail0000.ts.net": ["100.101.102.110"]}),
+                                     ("http://omp-box.example.com:4000", {"omp-box.example.com": ["100.101.102.103"]})):
+                with self.subTest(address=address, answers=answers):
+                    self.assert_refused(address, answers)
+
+    def test_tailscales_interface_is_a_tun_device_not_a_tap(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(common, "SYS_CLASS_NET", folder):
+            for name, flags in (("tailscale0", "0x5001"), ("tap0", "0x1002"), ("odd0", "0x1003"), ("bad0", "tun")):
+                os.mkdir(os.path.join(folder, name))
+                Path(folder, name, "tun_flags").write_text(flags + "\n")
+            os.mkdir(os.path.join(folder, "wlan0"))
+            self.assertEqual([name for name in ("tailscale0", "tap0", "odd0", "bad0", "wlan0", "gone0")
+                              if common.tun_interface(name)], ["tailscale0"])
+
+    def test_tailscaled_counts_only_when_it_listens_from_this_network_namespace(self):
+        with tempfile.TemporaryDirectory() as folder:
+            os.mkdir(os.path.join(folder, "run"))
+            os.symlink(os.path.join(folder, "run"), os.path.join(folder, "var-run"))
+            # tailscaled binds the path it was given, /var/run/… unless told otherwise; /proc/net/unix keeps it.
+            through_link, canonical = (os.path.join(folder, part, "tailscaled.sock") for part in ("var-run", "run"))
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                listener.bind(through_link)
+                for listening in (False, True):
+                    if listening:
+                        listener.listen()
+                    for configured in (through_link, canonical, canonical + ".old"):
+                        with self.subTest(listening=listening, configured=configured), \
+                                mock.patch.object(common, "TAILSCALED_SOCKET", configured):
+                            self.assertIs(common.tailscaled_in_this_network(),
+                                          listening and not configured.endswith(".old"))
+            finally:
+                listener.close()
+            with mock.patch.object(common, "TAILSCALED_SOCKET", canonical):
+                self.assertFalse(common.tailscaled_in_this_network(), "a closed listener no longer counts")
+
+    def test_tailscaled_has_one_deadline_for_its_whole_answer(self):
+        class Dripping(socketserver.StreamRequestHandler):
+            def handle(self):
+                self.rfile.readline()
+                try:
+                    for byte in b"HTTP/1.0 200 OK\r\n\r\n{}":
+                        self.wfile.write(bytes([byte]))
+                        time.sleep(0.05)
+                except OSError:
+                    pass
+
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(common, "TAILSCALED_SOCKET", os.path.join(folder, "tailscaled.sock")):
+            server = socketserver.ThreadingUnixStreamServer(common.TAILSCALED_SOCKET, Dripping)
+            server.daemon_threads, server.block_on_close = True, False
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                started = time.monotonic()
+                answer = common.tailscale_local_api("/localapi/v0/status", started + 0.4)
+                elapsed = time.monotonic() - started
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join()
+        self.assertIsNone(answer, "every byte arrives in time, but not the whole answer")
+        self.assertLess(elapsed, 0.9)
+
+    def test_a_tailscale_route_connects_only_bound_to_tailscales_interface(self):
+        events = []
+
+        class Socket:
+            def __init__(self, family, kind):
+                events.append(("socket", family))
+
+            def settimeout(self, value):
+                pass
+
+            def setsockopt(self, level, option, value):
+                events.append(("bind", level, option, value))
+
+            def connect(self, address):
+                events.append(("connect", address))
+                if address[0] != "127.0.0.1":
+                    raise OSError("synthetic: Tailscale's interface is gone")
+
+            def close(self):
+                events.append(("close",))
+
+        with mock.patch.object(socket, "socket", Socket):
+            tailscale = usage.CheckedAddressConnection("omp-box", port=4000, timeout=5,
+                                                       routes=[(IP("fd7a:115c:a1e0::5"), "tailscale0")])
+            with self.assertRaises(OSError):
+                tailscale.connect()
+            self.assertEqual(events, [("socket", socket.AF_INET6),
+                                      ("bind", socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"tailscale0"),
+                                      ("connect", ("fd7a:115c:a1e0::5", 4000)), ("close",)],
+                             "a failed connection through Tailscale is never retried another way")
+            events.clear()
+            usage.CheckedAddressConnection("localhost", port=4000, timeout=5, routes=[(IP("127.0.0.1"), None)]).connect()
+            self.assertEqual(events, [("socket", socket.AF_INET), ("connect", ("127.0.0.1", 4000))])
 
 
 class ReportMappingTests(unittest.TestCase):
@@ -640,11 +854,11 @@ class GatewayTests(OmpTestCase):
     def test_a_name_is_looked_up_once_and_the_token_goes_to_the_address_checked(self):
         with gateway(body={"reports": []}, hosts=True) as (address, calls):
             port = address.rsplit(":", 1)[1]
-            with resolving({"omp-box": ["127.0.0.1"]}) as lookups:
-                result = usage.read_omp_gateway(f"http://omp-box:{port}", self.key, 5)
+            with resolving({"localhost": ["127.0.0.1"]}) as lookups:
+                result = usage.read_omp_gateway(f"http://localhost:{port}", self.key, 5)
         self.assertEqual(result, ("ok", "", {"reports": []}))
-        self.assertEqual(lookups, ["omp-box"], "a second lookup could answer with another computer")
-        self.assertEqual(calls, [("/v1/usage", "Bearer " + TOKEN, f"omp-box:{port}")])
+        self.assertEqual(lookups, ["localhost"], "a second lookup could answer with another computer")
+        self.assertEqual(calls, [("/v1/usage", "Bearer " + TOKEN, f"localhost:{port}")])
 
     def test_proxy_settings_are_ignored(self):
         with gateway(body={"reports": []}) as (address, calls), gateway(body={"reports": []}) as (proxy, proxied):

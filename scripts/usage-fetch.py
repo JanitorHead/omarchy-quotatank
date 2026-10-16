@@ -42,7 +42,7 @@ from typing import Any, Callable, Iterator
 from xml.etree import ElementTree
 
 from model_usage_common import (
-    OMP_PROVIDERS, atomic_write_json, clean_message, omp_account_id, open_private_directory, plain_http_token_addresses,
+    OMP_PROVIDERS, atomic_write_json, clean_message, omp_account_id, open_private_directory, plain_http_token_routes,
     resolve_host, split_server_url,
 )
 
@@ -8134,7 +8134,8 @@ OMP_NOT_SET_UP = "omp is installed but not set up on this computer."
 OMP_GATEWAY_URL_RULE = ("The omp gateway URL must be the gateway's address alone, https://host:port or plain HTTP to "
                         "this computer or a Tailscale address, without a path, user name, query or fragment.")
 OMP_GATEWAY_PLAIN_HTTP = ("The omp gateway token goes over plain HTTP only to this computer or over Tailscale. "
-                          "Use an https:// address, or check that Tailscale is connected.")
+                          "Use an https:// address, or check that Tailscale is connected and that the address is "
+                          "that computer's Tailscale name or address.")
 OMP_GATEWAY_FAILURES = {
     "expired": "The omp gateway refused the token.",
     "rate_limited": "The omp gateway is rate limiting usage checks.",
@@ -8225,38 +8226,55 @@ def read_omp_local(omp: str, state_dir: Path | None = None) -> OmpRead:
 
 
 class CheckedAddresses(urllib.request.HTTPHandler):
-    """Plain HTTP that connects only to `addresses`, which the caller checked, in order, instead of looking the
+    """Plain HTTP that connects only to `routes`, which the caller checked, in order, instead of looking the
     host up again: a second answer could name another computer. The Host header still names the host."""
 
-    def __init__(self, addresses: list[Any]):
+    def __init__(self, routes: list[tuple[Any, str | None]]):
         super().__init__()
-        self.addresses = addresses
+        self.routes = routes
 
     def http_open(self, req: urllib.request.Request) -> Any:
-        return self.do_open(functools.partial(CheckedAddressConnection, addresses=self.addresses), req)
+        return self.do_open(functools.partial(CheckedAddressConnection, routes=self.routes), req)
 
 
 class CheckedAddressConnection(http.client.HTTPConnection):
-    def __init__(self, host: str, *, addresses: list[Any], **kwargs: Any):
+    def __init__(self, host: str, *, routes: list[tuple[Any, str | None]], **kwargs: Any):
         super().__init__(host, **kwargs)
-        self.addresses = addresses
+        self.routes = routes
 
     def connect(self) -> None:
         failure: OSError = ConnectionRefusedError()
-        for address in self.addresses:
+        for address, interface in self.routes:
             try:
-                self.sock = socket.create_connection((str(address), self.port), self.timeout)
+                self.sock = open_tcp(address, self.port, self.timeout, interface)
                 return
             except OSError as exc:
                 failure = exc
         raise failure
 
 
+def open_tcp(address: Any, port: int, timeout: Any, interface: str | None) -> socket.socket:
+    """A TCP connection to `address`. With `interface`, the socket is bound to it first (SO_BINDTODEVICE), so
+    the connection goes out that interface or not at all."""
+    sock = socket.socket(socket.AF_INET6 if address.version == 6 else socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if isinstance(timeout, (int, float)):
+            sock.settimeout(timeout)
+        if interface is not None:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode())
+        sock.connect((str(address), port))
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
 def read_omp_gateway(address: str, key_file: Path | None, timeout: float) -> OmpRead:
     """("ok", "", document) from an omp gateway's `GET /v1/usage`, else ("error", message, None).
 
-    The token goes over HTTPS, or over plain HTTP only to this computer or through Tailscale
-    (plain_http_token_addresses), and then only to the addresses checked. Proxy settings are ignored."""
+    The token goes over HTTPS, or over plain HTTP only to this computer or through Tailscale to the computer
+    the address names (plain_http_token_routes), and then only along the routes checked. Proxy settings are
+    ignored."""
     try:
         parts = split_server_url(address)
     except ValueError:
@@ -8266,10 +8284,10 @@ def read_omp_gateway(address: str, key_file: Path | None, timeout: float) -> Omp
         addresses = resolve_host(parts.hostname, OMP_LOOKUP_TIMEOUT)
         if not addresses:
             return "error", OMP_GATEWAY_FAILURES["network"], None
-        checked = plain_http_token_addresses(addresses)
-        if checked is None:
+        routes = plain_http_token_routes(parts.hostname, addresses, OMP_LOOKUP_TIMEOUT)
+        if routes is None:
             return "error", OMP_GATEWAY_PLAIN_HTTP, None
-        handlers.append(CheckedAddresses(checked))
+        handlers.append(CheckedAddresses(routes))
     try:
         headers = {"Accept": "application/json"}
         if key_file is not None:
