@@ -164,7 +164,7 @@ Flow {
             }
 
             // A provider without a mark file keeps its letter instead of an empty slot.
-            Text {
+            PlainText {
               anchors.centerIn: parent
               visible: markImage.status !== Image.Ready
               text: String(tile.modelData.mark || "")
@@ -175,7 +175,7 @@ Flow {
             }
           }
 
-          Text {
+          PlainText {
             width: parent.width - mark.width - parent.spacing - (accountDots.visible ? accountDots.width + parent.spacing : 0)
             anchors.verticalCenter: parent.verticalCenter
             text: tile.modelData.label
@@ -248,7 +248,7 @@ Flow {
               }
             }
 
-            Text {
+            PlainText {
               visible: accountDots.extra > 0
               anchors.verticalCenter: parent.verticalCenter
               text: "+" + accountDots.extra
@@ -265,7 +265,7 @@ Flow {
           implicitHeight: figureMetrics.height
 
           // The figure shrinks to fit a narrow tile; the unit shows only when there is room beside it.
-          Text {
+          PlainText {
             id: figureText
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
@@ -280,7 +280,7 @@ Flow {
             elide: Text.ElideRight
           }
 
-          Text {
+          PlainText {
             id: unitText
             visible: !tile.modelData.failed && tile.modelData.unit !== ""
               && figureText.contentWidth + Style.spacing.sm + implicitWidth <= parent.width

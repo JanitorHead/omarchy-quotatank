@@ -993,7 +993,7 @@ def fetch_codex(timeout: float, home: Path | None = None) -> dict[str, Any]:
             credits=credits,
         )
         if reached:
-            result["notice"] = reached.replace("_", " ").capitalize() + "."
+            result["notice"] = clean_message(reached.replace("_", " ").capitalize() + ".")
         elif not windows and credits is None:
             result["notice"] = "Codex returned no subscription rate limits."
         return result
@@ -4560,7 +4560,7 @@ def parse_zenmux(payload: Any) -> tuple[list[dict[str, Any]], str, str]:
     status = data.get("account_status")
     notice = ""
     if isinstance(status, str) and status.strip() and status.strip().lower() != "healthy":
-        notice = f"ZenMux reports this account as {status.strip().lower()}."
+        notice = clean_message(f"ZenMux reports this account as {status.strip().lower()}.")
     return windows, plan, notice
 
 
@@ -4789,8 +4789,8 @@ def parse_deepinfra(checklist: Any, usage_payload: Any, now: float) -> tuple[lis
     notice = ""
     if suspended:
         reason = checklist.get("suspend_reason")
-        notice = "DeepInfra has suspended this account" + \
-            (f" ({reason.replace('-', ' ')})." if isinstance(reason, str) and reason else ".")
+        notice = clean_message("DeepInfra has suspended this account" +
+                               (f" ({reason.replace('-', ' ')})." if isinstance(reason, str) and reason else "."))
     elif available < 0:
         notice = f"DeepInfra shows ${-available:.2f} owed."
     return windows, credits, notice

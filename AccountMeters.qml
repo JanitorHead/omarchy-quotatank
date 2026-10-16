@@ -54,7 +54,7 @@ Column {
       width: root.width
       height: Math.max(tag.implicitHeight, figure.implicitHeight)
 
-      Text {
+      PlainText {
         id: tag
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
@@ -89,7 +89,7 @@ Column {
         }
       }
 
-      Text {
+      PlainText {
         id: figure
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter

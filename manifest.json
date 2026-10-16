@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "janitorhead.quotatank",
   "name": "Quotatank",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "author": "JanitorHead",
   "license": "MIT",
   "description": "Menu-bar AI usage tracker for coding agents: 49 providers, several accounts each. See how much of your Claude Code, Codex, Gemini CLI, Antigravity, GitHub Copilot, Cursor, Kimi, Grok, Kiro, Z.ai GLM, MiniMax, Qwen or OpenCode plan is left: 5-hour and weekly limits, resets, pace and run-out forecasts per account, with Omarchy account switching. Tracks prepaid balances: OpenRouter, DeepSeek and more. Reads omp (Oh My Pi) live. Costs charts LLM spend per model, project and subagent, like ccusage.",

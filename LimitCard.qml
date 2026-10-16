@@ -86,7 +86,7 @@ Ui.BorderSurface {
       width: parent.width
       implicitHeight: Math.max(limitLabel.implicitHeight, limitFigure.implicitHeight)
 
-      Text {
+      PlainText {
         id: limitLabel
         anchors.left: parent.left
         anchors.right: figureGroup.left
@@ -119,7 +119,7 @@ Ui.BorderSurface {
           motion: root.motion
         }
 
-        Text {
+        PlainText {
           id: limitUnit
           visible: root.known
           anchors.left: limitFigure.right
@@ -172,7 +172,7 @@ Ui.BorderSurface {
       implicitHeight: stacked ? resetText.implicitHeight + Style.spacing.xxs + verdictText.implicitHeight
         : Math.max(resetText.implicitHeight, verdictText.visible ? verdictText.implicitHeight : 0)
 
-      Text {
+      PlainText {
         id: resetText
         x: 0
         y: footer.stacked ? 0 : Math.round((footer.height - height) / 2)
@@ -186,7 +186,7 @@ Ui.BorderSurface {
       }
 
       // Where this pace takes the limit: "runs out 17:50 · pace 52%" or "lasts until reset".
-      Text {
+      PlainText {
         id: verdictText
         objectName: "limitVerdict"
         visible: text !== ""
@@ -204,7 +204,7 @@ Ui.BorderSurface {
       }
     }
 
-    Text {
+    PlainText {
       visible: text !== ""
       width: parent.width
       text: root.window ? String(root.window.detail || "") : ""
@@ -236,7 +236,7 @@ Ui.BorderSurface {
     topPadding: Style.spacing.xxs
     bottomPadding: Style.spacing.xxs
 
-    Text {
+    PlainText {
       id: scrubLabel
       x: scrubChip.contentLeftInset
       y: scrubChip.contentTopInset
@@ -244,7 +244,6 @@ Ui.BorderSurface {
       color: Commons.Color.tooltip.text
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
-      textFormat: Text.PlainText
     }
   }
 }

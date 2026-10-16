@@ -77,7 +77,7 @@ Controls.TabBar {
       bottomPadding: Style.spacing.md
       Accessible.name: text
 
-      contentItem: Text {
+      contentItem: PlainText {
         text: viewTab.text
         color: viewTab.checked ? Commons.Color.accent : root.foreground
         font.family: root.fontFamily

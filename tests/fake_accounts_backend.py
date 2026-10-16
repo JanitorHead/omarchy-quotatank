@@ -60,8 +60,10 @@ else:
 
 claude = dict(next(row for row in accounts if row["active"]))
 claude.update(accounts=accounts, accountSwitch={"mode": "auto", "threshold": 95})
+# The notice is markup-shaped, as a provider's own text can be (DeepInfra's suspend reason); the panel must show it as text.
 kimi = {"id": "kimi", "name": "Kimi Code", "status": "ok", "errorKind": "", "message": "", "authCommand": "kimi login",
-        "plan": "Kimi Vivace", "account": "", "source": "Kimi Code usage API", "credits": None, "notice": "",
+        "plan": "Kimi Vivace", "account": "", "source": "Kimi Code usage API", "credits": None,
+        "notice": '<img src="http://127.0.0.1:9/quotatank-markup.png">Suspended',
         "windows": [window("weekly", "Weekly limit", 40, 4 * 86400, WEEK),
                     window("limit-0", "5-hour limit", 12, 9000, SESSION)],
         "history": {"h24": [], "d7": []}}

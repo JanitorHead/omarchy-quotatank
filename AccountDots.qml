@@ -350,7 +350,7 @@ Item {
     }
 
     // Five or more accounts: three dots, then how many more.
-    Text {
+    PlainText {
       id: moreLabel
       objectName: "accountDotsMore"
       visible: root.extra > 0 && !root.allUsedUp
@@ -386,7 +386,7 @@ Item {
         OpacityAnimator { duration: root.duration(root.motion ? root.motion.row : 0); easing.type: Easing.OutCubic }
       }
 
-      Text {
+      PlainText {
         id: hintLabel
         x: Style.spacing.sm
         height: parent.height

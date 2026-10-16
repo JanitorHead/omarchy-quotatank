@@ -200,9 +200,8 @@ Column {
     onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
   }
 
-  component Label: Text {
+  component Label: PlainText {
     width: parent.width
-    textFormat: Text.PlainText
     wrapMode: Text.WordWrap
     color: root.foreground
     font.family: root.fontFamily

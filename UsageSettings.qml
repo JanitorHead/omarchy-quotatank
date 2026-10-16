@@ -409,7 +409,7 @@ Column {
       onActiveFocusChanged: if (activeFocus) root.revealRequested(backButton)
     }
 
-    Text {
+    PlainText {
       id: headerTitle
       anchors.left: backButton.visible ? backButton.right : parent.left
       anchors.leftMargin: backButton.visible ? Style.spacing.md : 0
@@ -438,11 +438,10 @@ Column {
     }
   }
 
-  Text {
+  PlainText {
     visible: root.errorText !== ""
     width: parent.width
     text: root.errorText
-    textFormat: Text.PlainText
     wrapMode: Text.WordWrap
     color: root.urgent
     font.family: root.fontFamily
@@ -1963,12 +1962,11 @@ Column {
   }
 
   // ---- building blocks
-  component Label: Text {
+  component Label: PlainText {
     width: parent.width
     color: root.foreground
     font.family: root.fontFamily
     font.pixelSize: Style.font.bodySmall
-    textFormat: Text.PlainText
     wrapMode: Text.WordWrap
   }
 
@@ -2118,7 +2116,7 @@ Column {
     transform: Translate { id: lift }
     Component.onCompleted: replay()
     onVisibleChanged: if (visible) replay()
-    Text {
+    PlainText {
       id: resultMark
       width: Style.space(10)
       text: result.line.tone === "ok" ? "✓" : result.line.tone === "error" ? "✕" : "›"
@@ -2192,7 +2190,7 @@ Column {
       width: parent.width
       implicitHeight: waitingLabel.implicitHeight
       height: implicitHeight
-      Text {
+      PlainText {
         id: spinnerGlyph
         width: Style.space(10)
         horizontalAlignment: Text.AlignHCenter
@@ -2335,7 +2333,7 @@ Column {
       anchors.rightMargin: Style.spacing.md
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.spacing.xxs
-      Text {
+      PlainText {
         width: parent.width
         text: pageRow.title
         color: root.foreground
@@ -2344,7 +2342,7 @@ Column {
         font.bold: true
         elide: Text.ElideRight
       }
-      Text {
+      PlainText {
         width: parent.width
         visible: text !== ""
         text: pageRow.summary
@@ -2354,7 +2352,7 @@ Column {
         elide: Text.ElideRight
       }
     }
-    Text {
+    PlainText {
       id: pageChevron
       anchors.right: parent.right
       anchors.rightMargin: Style.spacing.lg
@@ -3150,7 +3148,7 @@ Column {
       colorization: 1.0
       colorizationColor: providerMark.tint
     }
-    Text {
+    PlainText {
       anchors.centerIn: parent
       visible: markImage.status !== Image.Ready
       text: providerMark.providerId.charAt(0).toUpperCase()

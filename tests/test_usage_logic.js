@@ -341,6 +341,10 @@ assert.equal(context.alertFigure(null, "Used"), null);
 assert.ok(context.alertText("warning", 20, "Used").includes("80"), "a Used alert names usage");
 assert.ok(!context.alertText("warning", 20, "Used").includes("20"), "a Used alert never names the left figure");
 assert.ok(context.alertText("critical", 5, "Remaining").includes("5"), "a Remaining alert names what is left");
+assert.equal(context.notificationBody('Running low: 3 <img src="http://127.0.0.1:9/x"> & <b>more</b> left'),
+  "Running low: 3 &lt;img src=\"http://127.0.0.1:9/x\"&gt; &amp; &lt;b&gt;more&lt;/b&gt; left",
+  "a notification body's markup reaches the server escaped, ampersands first");
+assert.equal(context.notificationBody("&lt;"), "&amp;lt;", "an entity in provider text stays the characters it was");
 
 // Pace: the tick is elapsed time; the projection follows the recent rate for short limits and the
 // window's average blended with the last day for weekly and monthly ones.

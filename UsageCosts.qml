@@ -304,7 +304,7 @@ Item {
       }
     }
 
-    Text {
+    PlainText {
       visible: root.loading && !root.hasResult
       width: parent.width
       topPadding: Style.spacing.huge
@@ -326,7 +326,7 @@ Item {
       padding: Style.spacing.xxl
       radius: Style.cornerRadius
 
-      Text {
+      PlainText {
         id: errorText
         anchors.left: parent.left
         anchors.right: parent.right
@@ -335,7 +335,6 @@ Item {
         anchors.rightMargin: errorCard.contentRightInset
         anchors.topMargin: errorCard.contentTopInset
         text: root.errorText
-        textFormat: Text.PlainText
         color: root.urgent
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
@@ -393,7 +392,7 @@ Item {
             : (root.delta.direction > 0 ? "Up " : "Down ") + Math.abs(root.delta.percent) + "% on the previous "
               + UsageLogic.costPeriodPhrase(root.displayedPeriodDays)) : ""
 
-          Text {
+          PlainText {
             id: deltaLabel
             anchors.centerIn: parent
             text: deltaChip.text
@@ -406,7 +405,7 @@ Item {
         }
       }
 
-      Text {
+      PlainText {
         objectName: "costSummaryLine"
         width: parent.width
         text: root.summaryLine()
@@ -416,7 +415,7 @@ Item {
         wrapMode: Text.WordWrap
       }
 
-      Text {
+      PlainText {
         objectName: "costPricingNotice"
         visible: root.metric === "cost" && root.lowPricingCoverage
         width: parent.width
@@ -458,7 +457,7 @@ Item {
             color: Commons.Color.accent
           }
 
-          Text {
+          PlainText {
             objectName: "costLiveText"
             text: root.liveText()
             color: Commons.Color.accent
@@ -487,7 +486,7 @@ Item {
           fontFamily: root.fontFamily
         }
 
-        Text {
+        PlainText {
           anchors.right: parent.right
           anchors.baseline: chartTitle.baseline
           text: root.chartRange()
@@ -515,7 +514,7 @@ Item {
         clockFormat: root.clockFormat
       }
 
-      Text {
+      PlainText {
         visible: root.periods.some(function(row) { return row.historyStatus === "unavailable" })
         width: parent.width
         text: "Outlined gaps: history unavailable"
@@ -596,7 +595,7 @@ Item {
         fontFamily: root.fontFamily
       }
 
-      Text {
+      PlainText {
         anchors.left: cacheTitle.right
         anchors.leftMargin: Style.spacing.controlGap
         anchors.right: cacheMeter.left
@@ -631,7 +630,7 @@ Item {
         }
       }
 
-      Text {
+      PlainText {
         id: cacheValue
         anchors.right: parent.right
         anchors.rightMargin: Style.spacing.md
@@ -685,13 +684,13 @@ Item {
             width: (content.width - Style.spacing.xxl) / 2
             spacing: Style.spacing.labelGap
 
-            Text {
+            PlainText {
               text: parent.modelData.label
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
-            Text {
+            PlainText {
               text: parent.modelData.value
               color: root.foreground
               font.family: root.fontFamily
@@ -708,11 +707,10 @@ Item {
 
         Repeater {
           model: root.providers
-          delegate: Text {
+          delegate: PlainText {
             required property var modelData
             width: parent.width
             text: String(modelData.name || modelData.id || "") + " · " + root.providerMetaText(modelData)
-            textFormat: Text.PlainText
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -722,7 +720,7 @@ Item {
       }
     }
 
-    Text {
+    PlainText {
       visible: root.hasResult && Number(root.totals.records || 0) === 0
       width: parent.width
       topPadding: Style.spacing.huge

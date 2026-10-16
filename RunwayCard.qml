@@ -138,7 +138,7 @@ Ui.BorderSurface {
       width: parent.width
       implicitHeight: Math.max(titleText.implicitHeight, resetClock.implicitHeight)
 
-      Text {
+      PlainText {
         id: titleText
         objectName: "runwayTitle"
         anchors.left: parent.left
@@ -153,7 +153,7 @@ Ui.BorderSurface {
         elide: Text.ElideRight
       }
 
-      Text {
+      PlainText {
         id: resetClock
         anchors.right: parent.right
         text: root.runway ? root.clock(root.runway.resetsAt) : ""
@@ -210,7 +210,7 @@ Ui.BorderSurface {
             width: laneColumn.width
             height: root.laneHeight
 
-            Text {
+            PlainText {
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
               width: root.labelWidth
@@ -266,7 +266,7 @@ Ui.BorderSurface {
                 color: root.urgent
               }
 
-              Text {
+              PlainText {
                 objectName: "runwayNote"
                 visible: lane.placement !== "none"
                 anchors.verticalCenter: parent.verticalCenter
@@ -312,7 +312,7 @@ Ui.BorderSurface {
       width: parent.width
       implicitHeight: nowLabel.implicitHeight
 
-      Text {
+      PlainText {
         id: nowLabel
         x: laneArea.trackX - Math.round(implicitWidth / 2)
         text: "now"
@@ -321,7 +321,7 @@ Ui.BorderSurface {
         font.pixelSize: Style.font.caption
       }
 
-      Text {
+      PlainText {
         anchors.right: parent.right
         text: "reset"
         color: root.dim
@@ -330,7 +330,7 @@ Ui.BorderSurface {
       }
     }
 
-    Text {
+    PlainText {
       objectName: "runwayHint"
       visible: text !== ""
       width: parent.width
@@ -341,7 +341,7 @@ Ui.BorderSurface {
       wrapMode: Text.WordWrap
     }
 
-    Text {
+    PlainText {
       objectName: "runwayPool"
       visible: text !== ""
       width: parent.width

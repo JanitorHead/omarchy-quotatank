@@ -187,7 +187,7 @@ FocusScope {
         anchors.rightMargin: box.padX + Border.right(box.spec)
         clip: true
 
-        Text {
+        PlainText {
           anchors.verticalCenter: parent.verticalCenter
           width: parent.width
           visible: edit.text === "" && edit.preeditText === ""

@@ -14,6 +14,9 @@ ShellRoot {
   property var quiet: null
   property var runwayCard: null
   property var notice: null
+  property var markupNotice: null
+  // Port 9 (discard) on loopback: were the tag ever read as rich text, nothing would answer.
+  readonly property string markup: '<img src="http://127.0.0.1:9/quotatank-markup.png">Suspended'
   property var events: null
   property var widget: null
   property var argvs: []
@@ -58,6 +61,26 @@ ShellRoot {
     }
     return null
   }
+  // Text items that would read markup: anything but PlainText. Provider text must stay text.
+  function markupSinks(item, found) {
+    found = found || []
+    if (!item) return found
+    if (item.textFormat !== undefined && item.textFormat !== Text.PlainText)
+      found.push((item.objectName || String(item)) + " = " + item.textFormat)
+    var children = item.children || []
+    for (var i = 0; i < children.length; i++) markupSinks(children[i], found)
+    return found
+  }
+  function textShowing(item, text) {
+    if (!item) return null
+    if (item.textFormat !== undefined && item.text === text) return item
+    var children = item.children || []
+    for (var i = 0; i < children.length; i++) {
+      var found = textShowing(children[i], text)
+      if (found) return found
+    }
+    return null
+  }
   // A 5-hour window rising at `rate` %/s over its last 50 minutes, or holding still.
   function session(used, rate, resetsIn) {
     var samples = []
@@ -93,13 +116,14 @@ ShellRoot {
       names: ["Work", "Personal", "Spare", "Broken"], accountState: stateOf("single"), nowSeconds: now, motion: motion })
     list.useRequested.connect(function(accountId) { root.used = root.used.concat([accountId]) })
     rising = create("LimitCard.qml", { width: 420, window: session(70, 0.01), nowSeconds: now, motion: motion })
-    quiet = create("LimitCard.qml", { width: 420, window: session(31, 0), nowSeconds: now, motion: motion })
+    quiet = create("LimitCard.qml", { width: 420, window: Object.assign(session(31, 0), { label: markup }), nowSeconds: now, motion: motion })
     var provider = { id: "claude", status: "ok", accounts: [accounts[0], login("personal", { windows: [session(60, 0), weekly(10)] })] }
     runwayCard = create("RunwayCard.qml", { width: 420, motion: motion, nowSeconds: now, names: ["Work", "Personal"],
       counted: [0], runway: UsageLogic.accountRunway(provider, "single", [0], now, [0, 1]) })
     notice = create("EventNotice.qml", { width: 420, motion: motion, shown: true,
       text: "Omarchy moved new Claude sessions to Personal at 16:27: Work reached 95%. Running sessions stay on Work." })
     notice.dismissed.connect(function() { root.dismissals++ })
+    markupNotice = create("EventNotice.qml", { width: 420, motion: motion, shown: true, text: markup })
     events = create("AccountEvents.qml", { providers: team("work", 90) })
     events.runArgv = function(argv) { root.argvs = root.argvs.concat([argv]) }
     events.refreshRequested.connect(function() { root.refreshes++ })
@@ -158,6 +182,14 @@ ShellRoot {
     check(notice.height > 0 && notice.visible, "the notice opens")
     find(notice, "eventNoticeDismiss").clicked()
     check(root.dismissals === 1, "the notice can be dismissed")
+
+    // Markup-shaped provider text is drawn as the characters it is, by no text item that reads markup.
+    var shown = textShowing(markupNotice, markup)
+    check(shown !== null && shown.textFormat === Text.PlainText, "a notice shows markup as text")
+    shown = textShowing(quiet, markup)
+    check(shown !== null && shown.textFormat === Text.PlainText, "a limit label shows markup as text")
+    var sinks = markupSinks(host)
+    check(sinks.length === 0, "text items that read markup: " + sinks.join(", "))
 
     // Use runs Omarchy's command and asks for a reading; the next readings make the notices.
     events.track(now)
@@ -221,6 +253,14 @@ ShellRoot {
         w.selectProviderId("kimi")
         root.check(!w.accountOverview && w.detail === w.provider, "a single account keeps the provider layout")
         root.check(w.limitCards.count === 2 && w.headline.text !== "", "its cards and headline are as before")
+        // The detail lives in the panel's popup: walk it from its content root.
+        var content = w.accountList
+        while (content.parent) content = content.parent
+        var detailNotice = root.find(content, "detailNotice")
+        root.check(detailNotice && detailNotice.text === root.markup && detailNotice.textFormat === Text.PlainText,
+          "the provider's notice shows markup as text")
+        var panelSinks = root.markupSinks(content).concat(root.markupSinks(w))
+        root.check(panelSinks.length === 0, "panel text items that read markup: " + panelSinks.join(", "))
         w.selectProviderId("claude")
         // The recorder stands in for Omarchy: it notes the command and switches the synthetic registry.
         w.accountEvents.runArgv = function(argv) {

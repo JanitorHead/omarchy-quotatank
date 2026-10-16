@@ -650,7 +650,7 @@ Ui.Panel {
       var crossing = result.crossings[k]
       var critical = crossing.severity === "critical"
       Util.execArgv(["notify-send", "--app-name=Quotatank", "--urgency=" + (critical ? "critical" : "normal"),
-        crossing.title, crossing.body || UsageLogic.alertText(crossing.severity, crossing.remaining, crossing.mode)])
+        crossing.title, UsageLogic.notificationBody(crossing.body || UsageLogic.alertText(crossing.severity, crossing.remaining, crossing.mode))])
     }
   }
 
@@ -1148,7 +1148,7 @@ Ui.Panel {
       font.weight: Font.Medium
     }
 
-    Text {
+    PlainText {
       visible: chipLine.tag !== ""
       anchors.baseline: chipValue.baseline
       rightPadding: chipLine.spaceWidth
@@ -1170,7 +1170,7 @@ Ui.Panel {
       motion: root.motion
     }
 
-    Text {
+    PlainText {
       visible: chipLine.suffix !== ""
       anchors.baseline: chipValue.baseline
       text: " · " + chipLine.suffix
@@ -1453,7 +1453,7 @@ Ui.Panel {
                 colorizationColor: providerChip.contentColor
               }
 
-              Text {
+              PlainText {
                 anchors.centerIn: parent
                 visible: providerMarkImage.status !== Image.Ready
                 text: UsageLogic.providerMark(String(providerChip.modelData.id))
@@ -1474,7 +1474,7 @@ Ui.Panel {
               width: Math.ceil(initialLabel.implicitWidth)
               height: Math.ceil(initialLabel.implicitHeight)
 
-              Text {
+              PlainText {
                 id: initialLabel
                 text: providerChip.initial
                 color: providerChip.topColor
@@ -1668,7 +1668,7 @@ Ui.Panel {
               width: parent.width
               implicitHeight: Math.max(panelTitle.implicitHeight, headerActions.implicitHeight)
 
-              Text {
+              PlainText {
                 id: panelTitle
                 anchors.left: parent.left
                 anchors.right: headerActions.left
@@ -1725,7 +1725,7 @@ Ui.Panel {
               onProviderRequested: function(value) { root.selectProviderId(value) }
             }
 
-            Text {
+            PlainText {
               width: parent.width
               text: {
                 if (root.viewMode === "costs")
@@ -1736,19 +1736,17 @@ Ui.Panel {
                 return context + (backend.loading ? (context ? " · " : "") + "Refreshing…" : "")
               }
               visible: text !== ""
-              textFormat: Text.PlainText
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
             }
 
-            Text {
+            PlainText {
               objectName: "limitsHeadline"
               width: parent.width
               visible: root.viewMode === "limits" && text !== ""
               text: root.headline.text
-              textFormat: Text.PlainText
               color: root.headline.urgent ? root.urgent : root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.heading
@@ -1803,12 +1801,11 @@ Ui.Panel {
             width: parent.width
             spacing: Style.spacing.lg
 
-            Text {
+            PlainText {
               objectName: "liveActivityStatus"
               width: parent.width
               visible: activityBackend.useLive && text !== ""
               text: activityBackend.liveNotice
-              textFormat: Text.PlainText
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -1866,7 +1863,7 @@ Ui.Panel {
             }
           }
 
-          Text {
+          PlainText {
             visible: root.viewMode === "limits" && root.providers.length === 0 && (!backend.loading || root.skeletonDue)
             width: parent.width
             topPadding: root.skeletonDue ? 0 : Style.spacing.huge
@@ -1930,12 +1927,11 @@ Ui.Panel {
                   anchors.rightMargin: sessionBadge.visible ? Style.spacing.md : 0
                   anchors.verticalCenter: parent.verticalCenter
 
-                  Text {
+                  PlainText {
                     id: detailName
                     objectName: "accountDetailName"
                     width: Math.min(implicitWidth, parent.width * 0.6)
                     text: root.selectedAccount ? root.accountNames[root.selectedAccountIndex] || "" : ""
-                    textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -1943,7 +1939,7 @@ Ui.Panel {
                     elide: Text.ElideRight
                   }
 
-                  Text {
+                  PlainText {
                     objectName: "accountDetailMeta"
                     width: Math.max(0, parent.width - detailName.width)
                     anchors.baseline: detailName.baseline
@@ -1957,7 +1953,6 @@ Ui.Panel {
                       if (UsageLogic.accountSourceKind(account, root.proxyMode) === "omp") parts.push("from omp")
                       return parts.length > 0 ? " · " + parts.join(" · ") : ""
                     }
-                    textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -1986,24 +1981,22 @@ Ui.Panel {
                 }
               }
 
-              Text {
+              PlainText {
                 objectName: "accountActivityDetails"
                 width: parent.width
                 visible: activityBackend.useLive && root.accountActivityExpanded
                 text: UsageLogic.sessionDetails(sessionBadge.load)
-                textFormat: Text.PlainText
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.WordWrap
               }
 
-              Text {
+              PlainText {
                 objectName: "accountHeadline"
                 width: parent.width
                 visible: text !== ""
                 text: root.accountHeadline.text
-                textFormat: Text.PlainText
                 color: root.accountHeadline.urgent ? root.urgent : root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.heading
@@ -2032,7 +2025,7 @@ Ui.Panel {
                 anchors.topMargin: errorCard.contentTopInset
                 spacing: Style.spacing.labelGap
 
-                Text {
+                PlainText {
                   width: parent.width
                   text: UsageLogic.errorTitle(root.detail)
                   color: root.urgent
@@ -2042,13 +2035,12 @@ Ui.Panel {
                   wrapMode: Text.WordWrap
                 }
 
-                Text {
+                PlainText {
                   width: parent.width
                   text: root.errorBody(root.detail)
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
-                  textFormat: Text.PlainText
                   wrapMode: Text.WordWrap
                 }
 
@@ -2072,7 +2064,7 @@ Ui.Panel {
               }
             }
 
-            Text {
+            PlainText {
               objectName: "detailNotice"
               visible: text !== ""
               width: parent.width
@@ -2262,12 +2254,11 @@ Ui.Panel {
 
           // One quiet pointer to providers set up here but not monitored; it goes away once each is
           // monitored or ignored under Settings → Providers.
-          Text {
+          PlainText {
             objectName: "foundProvidersLine"
             visible: root.viewMode === "limits" && root.foundProviders.length > 0
             width: parent.width
             text: UsageLogic.foundSummary(root.foundProviders) + " · Set up"
-            textFormat: Text.PlainText
             color: foundArea.containsMouse ? root.foreground : root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -2304,7 +2295,7 @@ Ui.Panel {
             width: parent.width
             implicitHeight: Math.max(footerLeft.implicitHeight, footerRight.implicitHeight)
 
-            Text {
+            PlainText {
               id: footerLeft
               objectName: "footerLeft"
               HoverHandler { id: footerHover }
@@ -2329,7 +2320,7 @@ Ui.Panel {
               elide: Text.ElideRight
             }
 
-            Text {
+            PlainText {
               id: footerRight
               objectName: "footerRight"
               anchors.right: parent.right
@@ -2408,7 +2399,7 @@ Ui.Panel {
         width: parent.width
         implicitHeight: moneyFigure.implicitHeight
 
-        Text {
+        PlainText {
           anchors.left: parent.left
           anchors.right: moneyFigure.left
           anchors.rightMargin: Style.spacing.controlGap
@@ -2421,7 +2412,7 @@ Ui.Panel {
           elide: Text.ElideRight
         }
 
-        Text {
+        PlainText {
           id: moneyFigure
           anchors.right: moneyUnit.left
           anchors.rightMargin: Style.spacing.sm
@@ -2432,7 +2423,7 @@ Ui.Panel {
           font.bold: true
         }
 
-        Text {
+        PlainText {
           id: moneyUnit
           anchors.right: parent.right
           anchors.baseline: moneyFigure.baseline
@@ -2455,7 +2446,7 @@ Ui.Panel {
         motion: root.motion
       }
 
-      Text {
+      PlainText {
         width: parent.width
         text: moneyCard.sourceLine()
         color: root.dim
@@ -2464,7 +2455,7 @@ Ui.Panel {
         wrapMode: Text.WordWrap
       }
 
-      Text {
+      PlainText {
         visible: text !== ""
         width: parent.width
         text: moneyCard.spendLine()
@@ -2474,7 +2465,7 @@ Ui.Panel {
         wrapMode: Text.WordWrap
       }
 
-      Text {
+      PlainText {
         visible: text !== ""
         width: parent.width
         text: (moneyCard.stressed ? moneyCard.money(moneyCard.amount) + " left, at or below your "
@@ -2513,7 +2504,7 @@ Ui.Panel {
       anchors.topMargin: creditsCard.contentTopInset
       spacing: Style.spacing.md
 
-      Text {
+      PlainText {
         width: parent.width
         text: root.creditsPrimary(creditsCard.credits)
         color: root.foreground
@@ -2523,7 +2514,7 @@ Ui.Panel {
         elide: Text.ElideRight
       }
 
-      Text {
+      PlainText {
         visible: creditsCard.hasMeter
         width: parent.width
         text: creditsCard.hasMeter
@@ -2547,7 +2538,7 @@ Ui.Panel {
         motion: root.motion
       }
 
-      Text {
+      PlainText {
         visible: text !== ""
         width: parent.width
         text: root.creditsDetail(creditsCard.credits)

@@ -128,7 +128,7 @@ Column {
       fontFamily: root.fontFamily
     }
 
-    Text {
+    PlainText {
       id: modeText
       objectName: "accountsMode"
       anchors.right: parent.right

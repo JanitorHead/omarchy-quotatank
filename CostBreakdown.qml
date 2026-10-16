@@ -244,7 +244,7 @@ Column {
           font.pixelSize: Style.font.bodySmall
         }
 
-        Text {
+        PlainText {
           anchors.left: nameText.right
           anchors.leftMargin: Style.spacing.md
           anchors.right: bar.left
@@ -252,7 +252,6 @@ Column {
           anchors.baseline: nameText.baseline
           visible: width > Style.space(24)
           text: row.context
-          textFormat: Text.PlainText
           elide: Text.ElideRight
           color: root.dim
           font.family: root.fontFamily
@@ -287,7 +286,7 @@ Column {
           }
         }
 
-        Text {
+        PlainText {
           id: value
           anchors.right: parent.right
           anchors.rightMargin: Style.spacing.md

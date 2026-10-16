@@ -42,7 +42,7 @@ Controls.ComboBox {
   Accessible.name: label + ": " + currentText
   onActivated: changed(String(currentValue))
 
-  contentItem: Text {
+  contentItem: PlainText {
     id: selectedLabel
     text: root.displayText
     color: root.foreground
@@ -52,7 +52,7 @@ Controls.ComboBox {
     elide: Text.ElideRight
   }
 
-  indicator: Text {
+  indicator: PlainText {
     id: chevron
     x: root.width - width - Style.spacing.sm
     anchors.verticalCenter: parent.verticalCenter
@@ -129,7 +129,7 @@ Controls.ComboBox {
     onHoveredChanged: if (hovered) optionList.currentIndex = index
     text: modelData.label
     Accessible.name: text
-    contentItem: Text {
+    contentItem: PlainText {
       text: optionDelegate.text
       color: optionDelegate.modelData.value === root.value ? Commons.Color.accent : root.foreground
       font.family: root.fontFamily

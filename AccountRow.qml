@@ -163,11 +163,10 @@ Ui.BorderSurface {
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.spacing.xxs
 
-      Text {
+      PlainText {
         objectName: "accountName"
         width: parent.width
         text: root.name
-        textFormat: Text.PlainText
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
@@ -175,11 +174,10 @@ Ui.BorderSurface {
         elide: Text.ElideRight
       }
 
-      Text {
+      PlainText {
         objectName: "accountStatus"
         width: parent.width
         text: root.statusText
-        textFormat: Text.PlainText
         color: root.statusTone === "urgent" ? root.urgent : root.statusTone === "accent" ? root.accent : root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -237,7 +235,7 @@ Ui.BorderSurface {
         font.weight: Font.DemiBold
       }
 
-      Text {
+      PlainText {
         id: inUseTag
         objectName: "accountInUse"
         visible: root.inUse
@@ -310,7 +308,7 @@ Ui.BorderSurface {
         ToolTip.text: root.resetCount + " banked reset" + (root.resetCount === 1 ? "" : "s")
           + (resetClick.enabled ? " · click to apply one" : " · none to apply now")
 
-        Text {
+        PlainText {
           id: resetLabel
           objectName: "accountResetLabel"
           anchors.centerIn: parent

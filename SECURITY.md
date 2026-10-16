@@ -31,6 +31,14 @@ Direct provider requests reject HTTP redirects and verify HTTPS certificates.
 Unexpected collector errors use fixed display messages rather than raw exception
 details, which can contain credential or account data.
 
+Text from providers, proxies, files, settings, and command output is untrusted.
+Every text item the plugin draws is `PlainText.qml` (`Text.PlainText`), so
+markup-shaped input such as `<img src=…>` is shown as characters and never makes
+the shell load a resource. Desktop notification bodies are escaped before
+`notify-send`, because Omarchy's notification server reads body markup.
+Provider-supplied notice text is bounded to 300 characters with credentials
+redacted.
+
 Private state is stored below
 `${XDG_STATE_HOME:-~/.local/state}/omarchy/model-usage/`. The directory uses mode
 `0700`; files use mode `0600`. Transcript paths, session identifiers, message
