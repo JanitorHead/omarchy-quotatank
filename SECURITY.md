@@ -154,8 +154,22 @@ On another computer, Quotatank reads two services the user starts there. From an
 serves conversations, so the settings say to keep it on Tailscale or behind an SSH tunnel.
 From an omp auth gateway it requests only `/v1/usage`. The gateway token can also send
 model requests: it is saved like the management key (stdin to `management-key.py`, a
-`0600` file, only the path in settings) and goes over plain HTTP only to this computer or
-to a Tailscale address this computer reaches through Tailscale; anything else needs HTTPS.
+`0600` file, only the path in settings) and goes over plain HTTP only to this computer,
+named by a loopback address or `localhost`, or through Tailscale to the computer the
+address names. An address in Tailscale's range is not enough, since other networks hand
+out `100.64.0.0/10` too: tailscaled, listening from the same network namespace, must say
+it is connected with its own TUN interface and that a computer it knows has the address
+(and, for a name, that MagicDNS name), and the connection is bound to that interface.
+Names that resolve to loopback are refused, so a DNS server cannot hand the token to a
+local program. Anything else needs HTTPS.
+
+This protects the token from the networks the computer joins: their addresses, DHCP,
+DNS and carrier-grade NAT. Like the rest of the plugin, it does not protect it from
+programs running as the same user or as root, which can read the token file, nor from
+the tailnet's administrators. One case remains: if the gateway's computer leaves the
+tailnet in the moment between the check and the connection while an exit node or a
+subnet route covers its address, Tailscale routes the connection there. Only a tailnet
+administrator can remove a computer, and only HTTPS pins the gateway's identity.
 omp URLs are a scheme, a host and an optional port only, redirects are refused,
 environment proxies are ignored for these requests, and bodies and event lines are capped.
 

@@ -2391,7 +2391,7 @@ function ompGatewayProblem(message, url) {
   if (/unreadable usage data/.test(text))
     return { summary: "not a gateway", text: "That address did not answer like omp's auth gateway. Check the URL, and update omp there if it is older." }
   if (/plain HTTP only to this computer or over Tailscale/.test(text))
-    return { summary: "needs HTTPS or Tailscale", text: "The token goes over plain HTTP only to this computer or over Tailscale. Use an https:// address, or check that Tailscale is connected on both computers." }
+    return { summary: "needs HTTPS or Tailscale", text: "The token goes over plain HTTP only to this computer or over Tailscale. Use an https:// address, or check that Tailscale is connected on both computers and that the address is that computer's Tailscale name or address." }
   var sentences = text.split(/\.\s+/)
   var kept = []
   for (var i = 0; i < sentences.length; i++)
