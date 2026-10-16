@@ -58,7 +58,7 @@ Item {
     topPadding: Style.spacing.md
     bottomPadding: Style.spacing.md
 
-    Text {
+    PlainText {
       id: noticeText
       objectName: "eventNoticeText"
       anchors.left: parent.left
@@ -68,7 +68,6 @@ Item {
       anchors.rightMargin: Style.spacing.sm
       anchors.topMargin: card.contentTopInset + Math.max(0, (dismiss.implicitHeight - implicitHeight) / 2)
       text: root.lastText
-      textFormat: Text.PlainText
       color: root.foreground
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall

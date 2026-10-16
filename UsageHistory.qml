@@ -109,7 +109,7 @@ Item {
       width: parent.width
       implicitHeight: Math.max(axisStart.implicitHeight, axisMiddle.implicitHeight, axisEnd.implicitHeight)
 
-      Text {
+      PlainText {
         id: axisStart
         anchors.left: parent.left
         text: root.mode === "h24" ? "−24H" : "−7D"
@@ -118,7 +118,7 @@ Item {
         font.pixelSize: Style.font.caption
       }
 
-      Text {
+      PlainText {
         id: axisMiddle
         anchors.horizontalCenter: parent.horizontalCenter
         text: root.mode === "h24" ? "−12H" : "−3D"
@@ -127,7 +127,7 @@ Item {
         font.pixelSize: Style.font.caption
       }
 
-      Text {
+      PlainText {
         id: axisEnd
         anchors.right: parent.right
         text: "now"

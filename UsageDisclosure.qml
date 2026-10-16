@@ -20,7 +20,7 @@ Controls.AbstractButton {
   Accessible.name: text
   Accessible.description: checked ? "Expanded" : "Collapsed"
 
-  contentItem: Text {
+  contentItem: PlainText {
     text: (root.checked ? "▾ " : "▸ ") + root.text
     color: root.foreground
     font.family: root.fontFamily

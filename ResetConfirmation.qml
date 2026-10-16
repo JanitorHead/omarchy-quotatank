@@ -21,7 +21,7 @@ Column {
   }
   function focusFirst() { cancelButton.forceActiveFocus() }
 
-  Text {
+  PlainText {
     width: parent.width
     text: root.backend.state === "result" ? "Banked reset" : "Apply a banked reset?"
     color: root.foreground
@@ -30,16 +30,15 @@ Column {
     font.bold: true
     wrapMode: Text.WordWrap
   }
-  Text {
+  PlainText {
     width: parent.width
     text: root.backend.accountLabel + " · " + root.backend.planLabel
-    textFormat: Text.PlainText
     color: root.foreground
     font.family: root.fontFamily
     font.pixelSize: Style.font.bodySmall
     wrapMode: Text.WrapAnywhere
   }
-  Text {
+  PlainText {
     width: parent.width
     visible: root.backend.state === "loading" || root.backend.state === "sending"
     text: root.backend.state === "loading" ? "Checking available resets…" : "Applying reset…"
@@ -47,7 +46,7 @@ Column {
     font.family: root.fontFamily
     font.pixelSize: Style.font.bodySmall
   }
-  Text {
+  PlainText {
     width: parent.width
     visible: root.backend.state === "ready"
     text: "Use 1 of " + root.backend.details.availableCount + " available resets. The reset expiring soonest is selected first."
@@ -80,10 +79,9 @@ Column {
           fontFamily: root.fontFamily
           onClicked: root.backend.selectedIndex = option.index
         }
-        Text {
+        PlainText {
           width: parent.width
           text: root.expiry(option.modelData) + "\n" + option.modelData.description
-          textFormat: Text.PlainText
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -92,11 +90,10 @@ Column {
       }
     }
   }
-  Text {
+  PlainText {
     width: parent.width
     visible: root.backend.message !== ""
     text: root.backend.message
-    textFormat: Text.PlainText
     color: root.foreground
     font.family: root.fontFamily
     font.pixelSize: Style.font.bodySmall

@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.2
+
+### Security
+
+- Text from providers is always drawn as plain text. A markup-shaped string, such as a DeepInfra suspension reason carrying an `<img>` tag, could otherwise render as rich text and make the shell fetch an image of any size. Every text item now uses a local `PlainText` component, as Omarchy's plugin guidelines ask; notification bodies are escaped; provider notices are bounded to 300 characters. Reported in the marketplace review.
+
 ## 1.9.1
 
 ### Fixed

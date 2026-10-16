@@ -23,7 +23,7 @@ Row {
 
   spacing: Style.spacing.controlGap
 
-  Text {
+  PlainText {
     id: paceLabel
     anchors.verticalCenter: parent.verticalCenter
     text: "How the tick and projection work"
@@ -48,7 +48,7 @@ Row {
     border.color: root.dim
     border.width: Style.normalBorderWidth
 
-    Text {
+    PlainText {
       anchors.centerIn: parent
       text: "i"
       color: root.foreground

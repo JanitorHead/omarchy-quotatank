@@ -63,7 +63,7 @@ Item {
         fontFamily: root.fontFamily
       }
 
-      Text {
+      PlainText {
         id: period
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
@@ -107,7 +107,7 @@ Item {
             }
           }
 
-          Text {
+          PlainText {
             id: modelName
             anchors.left: parent.left
             anchors.leftMargin: Style.spacing.md
@@ -121,7 +121,7 @@ Item {
             elide: Text.ElideRight
           }
 
-          Text {
+          PlainText {
             id: modelValue
             anchors.right: parent.right
             anchors.rightMargin: Style.spacing.md
@@ -135,7 +135,7 @@ Item {
           }
         }
 
-        Text {
+        PlainText {
           id: otherRow
           width: parent.width
           anchors.top: rowBody.bottom

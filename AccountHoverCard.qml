@@ -83,7 +83,7 @@ Ui.BorderSurface {
       width: parent.width
       height: Math.max(cardTitle.implicitHeight, cardMode.implicitHeight)
 
-      Text {
+      PlainText {
         id: cardTitle
         objectName: "hoverCardTitle"
         width: parent.width - (cardMode.text !== "" ? cardMode.implicitWidth + Style.spacing.lg : 0)
@@ -95,7 +95,7 @@ Ui.BorderSurface {
         font.weight: Font.DemiBold
       }
 
-      Text {
+      PlainText {
         id: cardMode
         objectName: "hoverCardMode"
         anchors.right: parent.right
@@ -153,7 +153,7 @@ Ui.BorderSurface {
               width: parent.width
               height: accountName.implicitHeight
 
-              Text {
+              PlainText {
                 id: accountName
                 width: Math.min(implicitWidth, parent.width - (inUse.visible ? inUse.implicitWidth + Style.spacing.md : 0))
                 text: String(accountRow.row.name)
@@ -164,7 +164,7 @@ Ui.BorderSurface {
                 font.weight: Font.Medium
               }
 
-              Text {
+              PlainText {
                 id: inUse
                 visible: !!accountRow.row.inUse
                 x: accountName.width + Style.spacing.md
@@ -177,7 +177,7 @@ Ui.BorderSurface {
               }
             }
 
-            Text {
+            PlainText {
               objectName: "hoverCardStatus-" + accountRow.index
               width: parent.width
               text: String(accountRow.row.status)
@@ -231,7 +231,7 @@ Ui.BorderSurface {
       width: parent.width
       height: Math.max(readLabel.implicitHeight, detailsLabel.implicitHeight)
 
-      Text {
+      PlainText {
         id: readLabel
         objectName: "hoverCardRead"
         text: root.model ? String(root.model.readText || "") : ""
@@ -240,7 +240,7 @@ Ui.BorderSurface {
         font.pixelSize: Style.font.caption
       }
 
-      Text {
+      PlainText {
         id: detailsLabel
         objectName: "hoverCardMore"
         anchors.right: parent.right

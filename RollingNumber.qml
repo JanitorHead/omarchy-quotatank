@@ -138,7 +138,7 @@ Item {
     font.features: ({ "tnum": 1 })
   }
 
-  Text {
+  PlainText {
     id: probe
     visible: false
     text: "0"
@@ -214,7 +214,7 @@ Item {
         onPitchChanged: snap()
         Component.onCompleted: snap()
 
-        Text {
+        PlainText {
           id: digitColumn
           visible: cell.isDigit
           width: cell.width
@@ -229,11 +229,10 @@ Item {
           font.features: ({ "tnum": 1 })
         }
 
-        Text {
+        PlainText {
           id: runText
           visible: !cell.isDigit
           text: cell.isDigit ? "" : String(cell.modelData.text)
-          textFormat: Text.PlainText
           color: root.color
           lineHeightMode: Text.FixedHeight
           lineHeight: cell.pitch

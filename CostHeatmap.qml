@@ -79,7 +79,7 @@ Column {
       fontFamily: root.fontFamily
     }
 
-    Text {
+    PlainText {
       id: range
       anchors.right: parent.right
       anchors.baseline: title.baseline
@@ -99,7 +99,7 @@ Column {
     Repeater {
       model: root.grid ? root.grid.dayNames : []
 
-      delegate: Text {
+      delegate: PlainText {
         required property string modelData
         required property int index
         y: index * (root.cellHeight + root.cellGap) + Math.round((root.cellHeight - implicitHeight) / 2)
@@ -157,7 +157,7 @@ Column {
     Repeater {
       model: [0, 6, 12, 18]
 
-      delegate: Text {
+      delegate: PlainText {
         required property int modelData
         x: root.cellX(modelData)
         text: root.hourLabel(modelData)
@@ -168,11 +168,10 @@ Column {
     }
   }
 
-  Text {
+  PlainText {
     objectName: "costHeatReadout"
     width: parent.width
     text: root.readoutText
-    textFormat: Text.PlainText
     elide: Text.ElideRight
     color: root.hoveredCell >= 0 ? root.foreground : root.dim
     font.family: root.fontFamily

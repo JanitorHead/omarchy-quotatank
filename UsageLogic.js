@@ -956,6 +956,14 @@ function alertText(level, remaining, mode) {
   return title + ": " + quotaText(figure, mode)
 }
 
+// A desktop notification body as literal text. Omarchy's notification server advertises body markup, so
+// a provider's currency or label carrying `<img …>` or `<b>` would be read as markup; spec escaping keeps
+// it text. The summary is plain text by the spec and is passed as is.
+function notificationBody(text) {
+  return String(text === null || text === undefined ? "" : text)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
 // Providers that get a bar chip: a reading for the chosen window, money left to spend, or a failure the user must see.
 function barProviders(providers, selector) {
   var result = []

@@ -72,6 +72,12 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(credits["spendable"], 0.0)
         self.assertEqual(notice, "DeepInfra has suspended this account (limit reached).")
 
+    def test_suspend_reason_is_bounded_text(self):
+        reason = "<img src='http://127.0.0.1:9/x.png'>" + "x" * 5000
+        _, _, notice = usage.parse_deepinfra({**CHECKLIST, "suspended": True, "suspend_reason": reason}, USAGE, NOW)
+        self.assertLessEqual(len(notice), 300, "an unbounded reason from DeepInfra stays a short line")
+        self.assertTrue(notice.startswith("DeepInfra has suspended this account (<img"), "the reason is kept as text")
+
     def test_unavailable_month_spend_stays_unknown(self):
         _, credits, _ = usage.parse_deepinfra(CHECKLIST, None, NOW)
         self.assertEqual(credits["spend"], {})

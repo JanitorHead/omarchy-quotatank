@@ -16,6 +16,7 @@
 - `UsageCosts.qml` renders the metric/period controls, time chart, token mix, pricing coverage percentages, and provider/model breakdowns without parsing raw history in QML.
 - `BlockMeter.qml` renders one track item per fixed block plus only the partial boundary fragment—there is no duplicate full-width fill layer.
 - `UsageHistory.qml` receives small pre-bucketed arrays; large history files are never parsed in QML.
+- `PlainText.qml` is the plugin's only text item: a `Text` fixed to `Text.PlainText`. Use it instead of `Text` (Omarchy's plugin UI-safety rule), so provider strings never render as rich text. The Limits QML contract fails on any text item that reads markup.
 
 The packaged script and assets are found with `Qt.resolvedUrl`, so cloned plugins and symlinked development checkouts use the plugin's actual source directory. Restart the desktop shell to apply QML/JavaScript edits on the symlinked installation described below.
 

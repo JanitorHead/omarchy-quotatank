@@ -140,7 +140,7 @@ Item {
     topPadding: Style.spacing.xxs
     bottomPadding: Style.spacing.xxs
 
-    Text {
+    PlainText {
       id: readoutLabel
       x: readout.contentLeftInset
       y: readout.contentTopInset
@@ -148,7 +148,6 @@ Item {
       color: Commons.Color.tooltip.text
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
-      textFormat: Text.PlainText
     }
   }
 

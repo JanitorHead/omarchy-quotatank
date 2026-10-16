@@ -347,7 +347,7 @@ Item {
           border.width: Style.spacing.hairline
           border.color: root.alpha(root.foreground, 0.15)
 
-          Text {
+          PlainText {
             anchors.centerIn: parent
             text: "—"
             color: root.dim
@@ -487,7 +487,7 @@ Item {
           }
         }
 
-        Text {
+        PlainText {
           visible: !!readout.bucket && readout.bucket.gap
           text: "History unavailable"
           color: Qt.darker(Commons.Color.tooltip.text, 1.25)
@@ -495,7 +495,7 @@ Item {
           font.pixelSize: Style.font.caption
         }
 
-        Text {
+        PlainText {
           visible: !!readout.bucket && readout.bucket.unpricedRecords > 0
           text: readout.bucket ? UsageLogic.costRequestsText(readout.bucket.unpricedRecords) + " not priced" : ""
           color: root.urgent
@@ -513,7 +513,7 @@ Item {
     width: parent.width
     implicitHeight: axisStart.implicitHeight
 
-    Text {
+    PlainText {
       id: axisStart
       anchors.left: parent.left
       text: root.axisLabel(0)
@@ -522,7 +522,7 @@ Item {
       font.pixelSize: Style.font.caption
     }
 
-    Text {
+    PlainText {
       anchors.horizontalCenter: parent.horizontalCenter
       text: root.axisLabel(Math.floor(root.buckets.length / 2))
       color: root.dim
@@ -530,7 +530,7 @@ Item {
       font.pixelSize: Style.font.caption
     }
 
-    Text {
+    PlainText {
       anchors.right: parent.right
       text: root.hourly ? "now" : "today"
       color: root.dim
@@ -562,7 +562,7 @@ Item {
       color: line.swatch
     }
 
-    Text {
+    PlainText {
       id: labelText
       anchors.left: parent.left
       anchors.leftMargin: line.hasSwatch ? mark.width + Style.spacing.sm : 0
@@ -570,7 +570,6 @@ Item {
       anchors.rightMargin: Style.spacing.lg
       anchors.verticalCenter: parent.verticalCenter
       text: line.label
-      textFormat: Text.PlainText
       elide: Text.ElideRight
       color: line.strong ? Commons.Color.tooltip.text : Qt.darker(Commons.Color.tooltip.text, 1.25)
       font.family: root.fontFamily
@@ -578,7 +577,7 @@ Item {
       font.weight: line.strong ? Font.DemiBold : Font.Normal
     }
 
-    Text {
+    PlainText {
       id: valueText
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter

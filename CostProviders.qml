@@ -72,7 +72,7 @@ Column {
       fontFamily: root.fontFamily
     }
 
-    Text {
+    PlainText {
       id: hint
       objectName: "costProviderHint"
       anchors.right: parent.right
@@ -82,7 +82,6 @@ Column {
       horizontalAlignment: Text.AlignRight
       text: root.isolatedName !== "" ? root.isolatedName + " only · click again for all"
         : root.interactive && !root.hintSeen ? "hover to focus · click to isolate" : ""
-      textFormat: Text.PlainText
       elide: Text.ElideLeft
       color: root.dim
       font.family: root.fontFamily
@@ -178,7 +177,7 @@ Column {
           }
         }
 
-        Text {
+        PlainText {
           id: name
           anchors.left: mark.right
           anchors.leftMargin: Style.spacing.lg
@@ -186,7 +185,6 @@ Column {
           anchors.rightMargin: Style.spacing.controlGap
           anchors.verticalCenter: parent.verticalCenter
           text: String(row.entry.name || row.modelData)
-          textFormat: Text.PlainText
           elide: Text.ElideRight
           color: root.foreground
           font.family: root.fontFamily
@@ -220,7 +218,7 @@ Column {
           }
         }
 
-        Text {
+        PlainText {
           id: value
           objectName: "costProviderValue-" + row.modelData
           anchors.right: parent.right
@@ -236,7 +234,7 @@ Column {
         }
       }
 
-      Text {
+      PlainText {
         id: meta
         visible: String(row.entry.meta || "") !== ""
         anchors.left: line.left
@@ -245,7 +243,6 @@ Column {
         anchors.top: line.bottom
         anchors.topMargin: Style.spacing.xxs
         text: String(row.entry.meta || "")
-        textFormat: Text.PlainText
         wrapMode: Text.WordWrap
         color: root.dim
         font.family: root.fontFamily
