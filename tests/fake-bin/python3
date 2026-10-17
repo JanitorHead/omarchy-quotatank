@@ -3,12 +3,12 @@ set -euo pipefail
 
 if [[ ${1:-} == */scripts/usage-fetch.py ]]; then
   shift
-  exec /usr/bin/python3 "${MODEL_USAGE_FAKE_BACKEND:?}" "$@"
+  exec /usr/bin/python3 "${QUOTATANK_FAKE_BACKEND:?}" "$@"
 fi
 
 if [[ ${1:-} == */scripts/cost-fetch.py ]]; then
   shift
-  exec /usr/bin/python3 "${MODEL_USAGE_FAKE_COST_BACKEND:?}" "$@"
+  exec /usr/bin/python3 "${QUOTATANK_FAKE_COST_BACKEND:?}" "$@"
 fi
 
 if [[ ${1:-} == */scripts/proxy-activity.py ]]; then

@@ -25,14 +25,13 @@ Column {
   // is running: Settings → Providers shows each provider's state from them.
   property var usagePayload: null
   property bool usageLoading: false
-  property string proxyImplementation: ""
   property var costSources: []
   // "" is the index; otherwise one of the page ids below.
   property string page: ""
   property string errorText: ""
   readonly property bool saving: keyWriter.running
   property alias priceEditor: prices
-  readonly property string proxyName: UsageLogic.proxyName(proxyImplementation)
+  readonly property string proxyName: "CLIProxyAPI"
   readonly property bool proxyMode: value("usageSource", "direct") === "cliproxy"
   readonly property string quotaMode: String(value("quotaMode", "Used")) === "Remaining" ? "Remaining" : "Used"
   // Each monitored provider is a card like the ones in Limits (same fill, border, and corners), so
@@ -92,8 +91,6 @@ Column {
     for (var i = 0; i < pages.length; i++) if (pages[i].id === page) return pages[i].title
     return "Settings"
   }
-  readonly property string fuseboxRepositoryUrl: "https://github.com/DigitalPals/Fusebox"
-
   // Motion (DESIGN §1): durations come from the panel's Motion; without one, the Display setting decides.
   property var motion: null
   readonly property bool reducedMotion: motion ? motion.reduced === true : String(value("motion", "system")) === "reduced"
@@ -484,89 +481,7 @@ Column {
     }
     Hint { text: root.proxyMode ? "Limits come from every account on your " + root.proxyName + " server." : "Limits come from the CLIs, apps, and IDEs you are signed in to on this computer, plus API keys saved here or set in the environment." }
 
-    // omp (Oh My Pi) signs in to accounts of its own. Read here, they join the providers below; through
-    // omp's auth gateway, so do the accounts of omp on another computer.
-    Column {
-      id: ompSource
-      objectName: "ompSource"
-      visible: !root.proxyMode
-      width: parent.width
-      spacing: Style.spacing.md
-
-      Column {
-        width: parent.width
-        spacing: Style.spacing.xxs
-        Label { text: "omp"; font.bold: true }
-        StatusLine { objectName: "ompStatus"; line: root.ompLocalLine }
-      }
-      SwitchRow {
-        objectName: "ompLocal"
-        visible: !(root.ompFound === false && root.omp.local)
-        label: "Read omp's accounts"
-        checked: root.omp.local
-        onToggled: root.set("ompLocal", !checked)
-      }
-      Hint {
-        objectName: "ompLocalHint"
-        readonly property string failure: root.ompLocalLine.tone === "error" ? UsageLogic.ompLocalMessage(root.ompStatus) : ""
-        text: root.ompFound === false && root.omp.local
-          ? "Install omp to add the accounts it signs in to, or read omp on another computer below."
-          : failure !== "" ? failure
-          : root.omp.local && root.ompStatus && root.ompStatus.local === "unused"
-          ? "Once you sign in to an account in omp, its accounts join the providers below. Until then Quotatank does not run omp."
-          : "Adds the accounts omp signs in to, with their limits, from omp usage on this computer. An account you also use here shows once."
-        color: failure !== "" ? root.urgent : Qt.darker(root.foreground, 1.5)
-      }
-
-      SettingsSection {
-        id: ompGatewaySection
-        objectName: "ompGatewaySection"
-        width: parent.width
-        // Under the "omp" heading the name needs no repeating, which leaves the summary room.
-        title: "On another computer (limits)"
-        summary: UsageLogic.ompGatewaySummary(root.settings, root.ompStatus)
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        onRevealRequested: function(item) { root.revealRequested(item) }
-
-        Hint { text: "Reads the limits of the accounts omp uses on another computer, through omp's auth gateway. Set it up only if you already run the gateway there; without it, limits come from this computer." }
-        WhereLabel { text: "On the other computer" }
-        Repeater {
-          model: UsageLogic.ompGatewayRecipe()
-          delegate: CommandBlock {
-            required property var modelData
-            required property int index
-            objectName: "ompGatewayCommand-" + index
-            command: modelData.command
-          }
-        }
-        TextRow {
-          objectName: "ompGatewayUrl"
-          label: "Gateway URL"
-          placeholder: "http://100.x.y.z:" + UsageLogic.OMP_GATEWAY_PORT
-          source: root.omp.gatewayUrl
-          validate: function(text) { return UsageLogic.ompServerUrlProblem(text, true) }
-          onApplied: function(text) { root.set("ompGatewayUrl", text) }
-        }
-        KeyRow {
-          objectName: "ompGatewayToken"
-          label: "Gateway token"
-          settingKey: "ompGatewayKeyFile"
-          hint: "This token can also send model requests. Quotatank only asks the gateway for /v1/usage, sends the token over plain HTTP only to this computer or over Tailscale, keeps it in a private file, and never shows it again."
-        }
-        TestBlock {
-          objectName: "ompGatewayTest"
-          ready: root.omp.gatewayUrl !== "" && root.omp.gatewayKeyFile !== "" && UsageLogic.ompServerUrlProblem(root.omp.gatewayUrl, true) === ""
-          blockedReason: root.omp.gatewayUrl === "" ? "Enter the gateway URL and save its token to test it."
-            : root.omp.gatewayKeyFile === "" ? "Save the gateway token to test it." : ""
-          running: gatewayProbe.active
-          waitingText: "Asking the gateway" + UsageLogic.ompOnHost(root.omp.gatewayUrl) + "…"
-          lines: root.ompGatewayLines
-          onRequested: root.testOmpGateway()
-        }
-      }
-    }
-    // Like the proxy's settings above them, the source's settings end with a rule before the providers.
+    // Like the proxy's settings below, the source ends with a rule before the providers.
     Ui.PanelSeparator { visible: !root.proxyMode; width: parent.width; foreground: root.foreground }
 
     Column {
@@ -593,15 +508,7 @@ Column {
         settingKey: "cliproxyKeyFile"
         hint: "The key is saved privately on this device and lets the widget list the proxy's providers and accounts."
       }
-      LinkButton { objectName: "fuseboxRepositoryLink"; text: "Fusebox on GitHub ↗"; url: root.fuseboxRepositoryUrl }
-
-      SwitchRow {
-        objectName: "liveAccountActivityToggle"
-        label: "Live account activity"
-        checked: root.value("liveAccountActivity", true) !== false
-        onToggled: root.set("liveAccountActivity", !checked)
-      }
-      Hint { text: "Fusebox streams which account serves each request. CLIProxyAPI needs CPA Usage Keeper for that." }
+      Hint { text: "CPA Usage Keeper tells which account served the latest request. Without it, every account still gets its own card." }
       TextRow {
         id: keeperUrlField
         objectName: "costKeeperUrl"
@@ -1041,6 +948,91 @@ Column {
       Hint {
         visible: root.moreSignIns.length + root.moreKeys.length === 0
         text: "No provider matches “" + root.providerFilter.trim() + "”."
+      }
+    }
+
+    // omp (Oh My Pi) signs in to accounts of its own. Read here, they join the providers above; through
+    // omp's auth gateway, so do the accounts of omp on another computer. It comes after the providers it
+    // adds to, so Monitored opens the page.
+    Ui.PanelSeparator { visible: !root.proxyMode; width: parent.width; foreground: root.foreground }
+    Column {
+      id: ompSource
+      objectName: "ompSource"
+      visible: !root.proxyMode
+      width: parent.width
+      spacing: Style.spacing.md
+
+      Column {
+        width: parent.width
+        spacing: Style.spacing.xxs
+        Label { text: "omp"; font.bold: true }
+        StatusLine { objectName: "ompStatus"; line: root.ompLocalLine }
+      }
+      SwitchRow {
+        objectName: "ompLocal"
+        visible: !(root.ompFound === false && root.omp.local)
+        label: "Read omp's accounts"
+        checked: root.omp.local
+        onToggled: root.set("ompLocal", !checked)
+      }
+      Hint {
+        objectName: "ompLocalHint"
+        readonly property string failure: root.ompLocalLine.tone === "error" ? UsageLogic.ompLocalMessage(root.ompStatus) : ""
+        text: root.ompFound === false && root.omp.local
+          ? "Install omp to add the accounts it signs in to, or read omp on another computer below."
+          : failure !== "" ? failure
+          : root.omp.local && root.ompStatus && root.ompStatus.local === "unused"
+          ? "Once you sign in to an account in omp, its accounts join the providers above. Until then Quotatank does not run omp."
+          : "Adds the accounts omp signs in to, with their limits, from omp usage on this computer. An account you also use here shows once."
+        color: failure !== "" ? root.urgent : Qt.darker(root.foreground, 1.5)
+      }
+
+      SettingsSection {
+        id: ompGatewaySection
+        objectName: "ompGatewaySection"
+        width: parent.width
+        // Under the "omp" heading the name needs no repeating, which leaves the summary room.
+        title: "On another computer (limits)"
+        summary: UsageLogic.ompGatewaySummary(root.settings, root.ompStatus)
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onRevealRequested: function(item) { root.revealRequested(item) }
+
+        Hint { text: "Reads the limits of the accounts omp uses on another computer, through omp's auth gateway. Set it up only if you already run the gateway there; without it, limits come from this computer." }
+        WhereLabel { text: "On the other computer" }
+        Repeater {
+          model: UsageLogic.ompGatewayRecipe()
+          delegate: CommandBlock {
+            required property var modelData
+            required property int index
+            objectName: "ompGatewayCommand-" + index
+            command: modelData.command
+          }
+        }
+        TextRow {
+          objectName: "ompGatewayUrl"
+          label: "Gateway URL"
+          placeholder: "http://100.x.y.z:" + UsageLogic.OMP_GATEWAY_PORT
+          source: root.omp.gatewayUrl
+          validate: function(text) { return UsageLogic.ompServerUrlProblem(text, true) }
+          onApplied: function(text) { root.set("ompGatewayUrl", text) }
+        }
+        KeyRow {
+          objectName: "ompGatewayToken"
+          label: "Gateway token"
+          settingKey: "ompGatewayKeyFile"
+          hint: "This token can also send model requests. Quotatank only asks the gateway for /v1/usage, sends the token over plain HTTP only to this computer or over Tailscale, keeps it in a private file, and never shows it again."
+        }
+        TestBlock {
+          objectName: "ompGatewayTest"
+          ready: root.omp.gatewayUrl !== "" && root.omp.gatewayKeyFile !== "" && UsageLogic.ompServerUrlProblem(root.omp.gatewayUrl, true) === ""
+          blockedReason: root.omp.gatewayUrl === "" ? "Enter the gateway URL and save its token to test it."
+            : root.omp.gatewayKeyFile === "" ? "Save the gateway token to test it." : ""
+          running: gatewayProbe.active
+          waitingText: "Asking the gateway" + UsageLogic.ompOnHost(root.omp.gatewayUrl) + "…"
+          lines: root.ompGatewayLines
+          onRequested: root.testOmpGateway()
+        }
       }
     }
   }

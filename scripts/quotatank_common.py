@@ -1,4 +1,4 @@
-"""Shared state-file, error-sanitizing, server-URL, address and omp identity helpers for Model Usage backends."""
+"""Shared folder, state-file, error-sanitizing, server-URL, address and omp identity helpers for Quotatank backends."""
 
 from __future__ import annotations
 
@@ -18,6 +18,41 @@ import time
 import urllib.parse
 from pathlib import Path
 from typing import Any
+
+# Quotatank keeps its private files in `omarchy/quotatank` under the XDG config and state homes. 1.x called
+# that folder `model-usage`; plugin_folder moves it once, the first time a 2.x backend needs the folder.
+PLUGIN_FOLDER = "quotatank"
+LEGACY_PLUGIN_FOLDER = "model-usage"
+
+
+def plugin_folder(home: Path) -> Path:
+    """`<home>/omarchy/quotatank`, after moving 1.x's `<home>/omarchy/model-usage` there when only that exists."""
+    target = home / "omarchy" / PLUGIN_FOLDER
+    legacy = home / "omarchy" / LEGACY_PLUGIN_FOLDER
+    if not os.path.lexists(target) and legacy.is_dir() and not legacy.is_symlink():
+        try:
+            os.rename(legacy, target)
+        except OSError:
+            pass  # Another backend moved it first; the target is there now.
+    return target
+
+
+def config_folder() -> Path:
+    """Saved keys: `$XDG_CONFIG_HOME/omarchy/quotatank`, `~/.config` by default."""
+    return plugin_folder(Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")).expanduser())
+
+
+def state_folder() -> Path:
+    """History, caches and omp's work folder: `$XDG_STATE_HOME/omarchy/quotatank`, `~/.local/state` by default."""
+    return plugin_folder(Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state")).expanduser())
+
+
+def move_legacy_folders() -> None:
+    """Run first by every backend that reads a saved path. The widget rewrites 1.x paths to the new folder
+    (UsageLogic.legacyPathSettings) before its first refresh; moving the folders here makes them resolve."""
+    config_folder()
+    state_folder()
+
 
 # omp (Oh My Pi) provider ids of the subscriptions Quotatank also reads, and the Quotatank id of each.
 # omp 18.11 reports MiniMax usage as "minimax-code"; "minimax-coding-plan" is its model-catalog name.
@@ -402,7 +437,7 @@ def atomic_write_json(path: Path, payload: Any) -> None:
     fd = None
     try:
         for _ in range(16):
-            candidate = ".model-usage-" + secrets.token_hex(16) + ".tmp"
+            candidate = ".quotatank-" + secrets.token_hex(16) + ".tmp"
             try:
                 fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL
                              | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=directory_fd)

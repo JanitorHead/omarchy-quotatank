@@ -26,8 +26,8 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 BACKEND = ROOT / "scripts" / "usage-fetch.py"
 sys.path.insert(0, str(BACKEND.parent))
-import model_usage_common as common  # noqa: E402
-SPEC = importlib.util.spec_from_file_location("model_usage_backend_omp", BACKEND)
+import quotatank_common as common  # noqa: E402
+SPEC = importlib.util.spec_from_file_location("quotatank_backend_omp", BACKEND)
 assert SPEC and SPEC.loader
 usage = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = usage
@@ -709,7 +709,7 @@ class LocalOmpTests(OmpTestCase):
         arguments, folder = self.log.read_text().splitlines()
         self.assertEqual(arguments, "usage --json --no-extensions")
         # One fixed folder, private and left empty, instead of a new temporary folder per run.
-        workdir = self.state_home / "omarchy" / "model-usage" / "omp-workdir"
+        workdir = self.state_home / "omarchy" / "quotatank" / "omp-workdir"
         self.assertEqual(Path(folder), workdir)
         self.assertEqual(stat.S_IMODE(workdir.stat().st_mode), 0o700)
         self.assertEqual(list(workdir.iterdir()), [])

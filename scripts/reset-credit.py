@@ -80,8 +80,6 @@ def resolve_account(client, account_id, remaining):
     if len(matches) != 1:
         raise usage.ProviderFailure("config", "This account changed or is unavailable. Refresh its usage first.")
     entry = matches[0]
-    if entry.get("_rust") is True:
-        raise usage.ProviderFailure("unsupported", "Banked Codex resets are unavailable through Fusebox.")
     if entry.get("disabled") is True or entry.get("status") == "disabled":
         raise usage.ProviderFailure("config", "This account is paused in CLIProxyAPI.")
     claims = entry.get("id_token") if isinstance(entry.get("id_token"), dict) else {}
@@ -153,4 +151,5 @@ def main():
 
 
 if __name__ == "__main__":
+    usage.config_folder()  # Saved key paths may still name 1.x's folder; it moves first.
     main()

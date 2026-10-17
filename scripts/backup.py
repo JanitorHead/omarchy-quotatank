@@ -28,7 +28,7 @@ import subprocess
 import sys
 import tempfile
 
-from model_usage_common import open_private_directory
+from quotatank_common import config_folder, open_private_directory
 
 
 def load_management_key():
@@ -614,4 +614,5 @@ def providers(settings: dict) -> set[str]:
 
 
 if __name__ == "__main__":
+    config_folder()  # Saved key paths may still name 1.x's folder; it moves first.
     raise SystemExit(main())

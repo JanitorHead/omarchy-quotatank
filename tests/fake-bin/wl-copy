@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 # Synthetic clipboard writer for the settings copy checks: records the arguments a Copy button passes.
 set -euo pipefail
-/usr/bin/python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@" >>"${MODEL_USAGE_COPY_LOG:?}"
+/usr/bin/python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@" >>"${QUOTATANK_COPY_LOG:?}"

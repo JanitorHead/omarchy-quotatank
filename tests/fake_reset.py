@@ -16,7 +16,7 @@ parser.add_argument("--credit-id")
 parser.add_argument("--request-id")
 args = parser.parse_args()
 time.sleep(0.05)
-log = Path(os.environ["MODEL_USAGE_RESET_LOG"])
+log = Path(os.environ["QUOTATANK_RESET_LOG"])
 if args.action == "prepare":
     result = {"ok": True, "availableCount": 2, "target": "target", "requestId": "fixed-request",
               "credits": [{"id": "first", "title": "Full reset", "description": "Current usage limits",

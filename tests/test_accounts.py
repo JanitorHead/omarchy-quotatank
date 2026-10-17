@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 BACKEND = ROOT / "scripts" / "usage-fetch.py"
 sys.path.insert(0, str(BACKEND.parent))
-SPEC = importlib.util.spec_from_file_location("model_usage_backend_accounts", BACKEND)
+SPEC = importlib.util.spec_from_file_location("quotatank_backend_accounts", BACKEND)
 assert SPEC and SPEC.loader
 usage = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = usage

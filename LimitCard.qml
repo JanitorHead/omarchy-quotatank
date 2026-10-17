@@ -185,7 +185,8 @@ Ui.BorderSurface {
         elide: Text.ElideRight
       }
 
-      // Where this pace takes the limit: "runs out 17:50 · pace 52%" or "lasts until reset".
+      // Where this pace takes the limit: "runs out 17:50 · pace 52%" or "lasts until reset". Hovering it
+      // explains the tick and the projection (UsageLogic.PACING_LEGEND).
       PlainText {
         id: verdictText
         objectName: "limitVerdict"
@@ -201,6 +202,17 @@ Ui.BorderSurface {
         font.weight: root.verdict.urgent ? Font.DemiBold : Font.Normal
         horizontalAlignment: Text.AlignRight
         elide: Text.ElideLeft
+
+        HoverHandler {
+          id: verdictHover
+          enabled: root.known
+          cursorShape: Qt.WhatsThisCursor
+        }
+
+        Ui.PanelToolTip {
+          visible: verdictHover.hovered
+          text: UsageLogic.PACING_LEGEND
+        }
       }
     }
 

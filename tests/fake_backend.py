@@ -29,7 +29,7 @@ if args.providers == "kimi":
     print('["malformed backend response"]')
     raise SystemExit(0)
 
-payload = json.loads(Path(os.environ["MODEL_USAGE_NORMALIZED_FIXTURE"]).read_text())
+payload = json.loads(Path(os.environ["QUOTATANK_NORMALIZED_FIXTURE"]).read_text())
 now = int(time.time())
 payload["generatedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
 for provider in payload["providers"]:

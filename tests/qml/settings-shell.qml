@@ -23,7 +23,7 @@ ShellRoot {
   property int twinEvents: 0
   property int remoteActivities: 0
   property int ticks: 0
-  readonly property string fakeLive: Quickshell.env("MODEL_USAGE_FAKE_OMP_LIVE")
+  readonly property string fakeLive: Quickshell.env("QUOTATANK_FAKE_OMP_LIVE")
 
   QtObject {
     id: liveStub
@@ -35,7 +35,7 @@ ShellRoot {
     if (!condition) throw new Error("SETTINGS TEST FAILED: " + message)
   }
   function create(name, values) {
-    var component = Qt.createComponent(Quickshell.env("MODEL_USAGE_REPO_URL") + "/" + name)
+    var component = Qt.createComponent(Quickshell.env("QUOTATANK_REPO_URL") + "/" + name)
     check(component.status === Component.Ready, component.errorString())
     var object = component.createObject(root, values || {})
     check(object !== null, component.errorString())

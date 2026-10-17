@@ -29,7 +29,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
-from model_usage_common import OMP_PROVIDERS, normalize_server_url, omp_account_id
+from quotatank_common import OMP_PROVIDERS, move_legacy_folders, normalize_server_url, omp_account_id
 
 SPEC = importlib.util.spec_from_file_location("omp_live_usage", Path(__file__).with_name("usage-fetch.py"))
 assert SPEC and SPEC.loader
@@ -597,4 +597,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     usage.stop_on_signals()
+    move_legacy_folders()
     main()

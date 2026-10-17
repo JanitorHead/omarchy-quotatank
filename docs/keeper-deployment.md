@@ -7,8 +7,8 @@ records each proxy request. When it is configured, the percentage in the menu
 bar belongs to the last-used account, and hovering a provider shows that
 account and its last request time.
 
-Keeper is optional and is not part of this plugin. Fusebox reports account
-activity on its own, and local CLI sign-ins do not need it. Without Keeper,
+Keeper is optional and is not part of this plugin; local CLI sign-ins do not
+need it. Without Keeper,
 CLIProxyAPI accounts still get their own cards; only the last-used account is
 unknown.
 

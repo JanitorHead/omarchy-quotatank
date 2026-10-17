@@ -27,7 +27,7 @@ ShellRoot {
   property int phase: 0
   property int ticks: 0
   property int waitTicks: 0
-  readonly property string markers: Quickshell.env("MODEL_USAGE_ACCOUNTS_MARKERS")
+  readonly property string markers: Quickshell.env("QUOTATANK_ACCOUNTS_MARKERS")
 
   FloatingWindow {
     visible: true
@@ -45,7 +45,7 @@ ShellRoot {
     }
   }
   function create(name, props) {
-    var component = Qt.createComponent(Quickshell.env("MODEL_USAGE_REPO_URL") + "/" + name)
+    var component = Qt.createComponent(Quickshell.env("QUOTATANK_REPO_URL") + "/" + name)
     check(component.status === Component.Ready, component.errorString())
     var object = component.createObject(host, props || {})
     check(object !== null, "create " + name)
@@ -235,7 +235,7 @@ ShellRoot {
           Qt.quit()
           return
         }
-        root.widget = Qt.createComponent(Quickshell.env("MODEL_USAGE_REPO_URL") + "/Panel.qml").createObject(host, {
+        root.widget = Qt.createComponent(Quickshell.env("QUOTATANK_REPO_URL") + "/Panel.qml").createObject(host, {
           moduleName: "test.limits", ipcTarget: "test.limits",
           settings: { enabledProviders: ["claude", "kimi"], refreshIntervalSec: 3600, barDisplayMode: "Percentages" } })
         root.check(root.widget !== null, "panel loads")

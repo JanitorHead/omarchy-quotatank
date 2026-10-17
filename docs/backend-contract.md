@@ -34,8 +34,7 @@ This contract covers live subscription limits only. The on-demand transcript/cos
       "notice": "",
       "fetchedAt": "2030-01-01T00:00:00+00:00",
       "history": {
-        "h24": [0, 0, 42],
-        "d7": [0, 42]
+        "h24": [0, 0, 42]
       },
       "activity": {
         "lastIncreaseAt": 1893455100,
@@ -130,16 +129,16 @@ Omarchy logins come from `${XDG_STATE_HOME:-~/.local/state}/omarchy/agents/accou
 
 Logins and keys are read with at most four concurrent reads under one shared deadline. A failing login or key keeps its own `status` and error fields and does not affect the others. Tokens and keys are never written to the output.
 
-Each entry in `accounts` carries `origin`, the kind of reading: `omarchy` (an Omarchy login), `key` (an API key, primary or extra), `signin` (the provider's single native reading), `omp` (an account read from omp), or `proxy` (a Fusebox or CLIProxyAPI account). `source` keeps its meaning: a human description of the API that answered. A provider with two or more Omarchy logins also carries `accountSwitch` from the registry: `{"mode": "manual" | "auto", "threshold": 50..100}`. `auto` means Omarchy moves new sessions to the account with the most headroom at the threshold, `manual` that it only notifies. A missing or invalid value reads as Omarchy's default, `manual` at 95.
+Each entry in `accounts` carries `origin`, the kind of reading: `omarchy` (an Omarchy login), `key` (an API key, primary or extra), `signin` (the provider's single native reading), `omp` (an account read from omp), or `proxy` (a CLIProxyAPI account). `source` keeps its meaning: a human description of the API that answered. A provider with two or more Omarchy logins also carries `accountSwitch` from the registry: `{"mode": "manual" | "auto", "threshold": 50..100}`. `auto` means Omarchy moves new sessions to the account with the most headroom at the threshold, `manual` that it only notifies. A missing or invalid value reads as Omarchy's default, `manual` at 95.
 
 ## omp accounts
 
 omp (Oh My Pi) keeps its own subscription sign-ins. Three optional flags add them as accounts of the providers Quotatank already reads. omp is a source, never a provider, so it adds nothing to `detected` or `installed`.
 
-- `--omp local` runs `omp usage --json --no-extensions`: omp is found on `PATH` (plus the usual user bin folders) and runs without stdin, with a 45-second deadline and a 2 MiB output ceiling. Its error output is discarded and no secret is passed to it. It runs in one fixed, empty folder, `omp-workdir` inside the state folder (`--state-dir`, else `${XDG_STATE_HOME:-~/.local/state}/omarchy/model-usage`), created private (0700), so no project's omp settings apply and a stopped run leaves nothing elsewhere. `omp --version` (5 seconds) supplies `omp.version` when it answers as omp does (`omp/18.11.0`). `--omp off`, the default, runs nothing.
+- `--omp local` runs `omp usage --json --no-extensions`: omp is found on `PATH` (plus the usual user bin folders) and runs without stdin, with a 45-second deadline and a 2 MiB output ceiling. Its error output is discarded and no secret is passed to it. It runs in one fixed, empty folder, `omp-workdir` inside the state folder (`--state-dir`, else `${XDG_STATE_HOME:-~/.local/state}/omarchy/quotatank`), created private (0700), so no project's omp settings apply and a stopped run leaves nothing elsewhere. `omp --version` (5 seconds) supplies `omp.version` when it answers as omp does (`omp/18.11.0`). `--omp off`, the default, runs nothing.
 - omp runs only once it has set itself up on this computer: `agent.db` in omp's agent folder (`${PI_CODING_AGENT_DIR:-~/.omp/agent}`) must be a regular file. Only its existence is checked; it is never opened. omp's first run creates its state (its credential database there and about 110 MB under `~/.omp`), which is the user's to start, so an omp that is installed but unused gives `local: "unused"` and nothing runs, not even `omp --version`.
 - `--omp-gateway-url URL` requests `GET <URL>/v1/usage` from an omp auth gateway. No other path is ever requested, because the gateway token can also spend model quota. The request uses the providers' HTTP client (TLS verified, redirects refused, a 2 MiB body ceiling and the `--timeout` deadline) and ignores the environment's proxy settings. `--omp-gateway-key-file PATH` sends the gateway token as `Authorization: Bearer`; the file follows the `--key-file` rules (a regular file owned by the user with mode 0600, one ASCII line of at most 8 KiB). Settings saves it as `ompGatewayKeyFile` through `scripts/management-key.py`.
-- The gateway URL is the gateway's address alone: `http` or `https`, a host and an optional port, with at most a trailing `/`. A path, query, fragment, user name, backslash or whitespace is refused (`split_server_url` in `scripts/model_usage_common.py`). HTTPS may reach any host. Plain HTTP carries the token only to this computer or through Tailscale to the computer the address names (`plain_http_token_routes`), and the host is resolved within 2 seconds. A host that names this computer by itself, a loopback address or `localhost`, must resolve only to loopback; any other name that resolves to loopback is refused, since a DNS server would then choose which local program gets the token. Any other host must resolve only to Tailscale addresses (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), and being in those ranges proves nothing, since other networks hand out `100.64.0.0/10` as carrier-grade NAT space. So the backend asks tailscaled's LocalAPI (`/var/run/tailscale/tailscaled.sock`, readable by any local user), which has 2 seconds in all to answer every question: tailscaled must listen on that socket from this network namespace (`/proc/net/unix` lists only the reader's namespace, each socket under the path it was bound with, compared after resolving symlinks), `status?peers=false` must say `BackendState` `Running` with `TUN` true (userspace mode cannot carry other programs' traffic), exactly one TUN interface (IFF_TUN, not a TAP) must hold one of this computer's Tailscale addresses, and `whois` (asked as `address:0`, the form tailscaled 1.38 needs) must name a computer that has each address as its own. A host given by name must also be that computer's MagicDNS name, in full or, for a computer of this tailnet (`MagicDNSSuffix`), as its first label alone; a computer shared from another tailnet goes by its full name, as MagicDNS has it. The request then connects only to the addresses checked, never to a second lookup's answer, and its `Host` header still names the host. A connection to a Tailscale address is bound to that interface (`SO_BINDTODEVICE`, which needs Linux 5.7 or later without `CAP_NET_RAW`) before it connects, so it fails rather than leave another way when Tailscale disconnects after the check; it is never retried another way. Anything else is refused ("The omp gateway token goes over plain HTTP only to this computer or over Tailscale. Use an https:// address, or check that Tailscale is connected and that the address is that computer's Tailscale name or address."), including a private LAN address or a name that resolves to one: a name or address that is a trusted computer on one network can be anyone on the next, and other computers on the network can read plain HTTP. A name that does not resolve is a network failure. These checks guard the token against the networks the computer joins, not against programs running as the same user or as root, nor the tailnet's administrators; and if the gateway's computer leaves the tailnet between the check and the connection while an exit node or a subnet route covers its address, Tailscale routes the connection there (SECURITY.md).
+- The gateway URL is the gateway's address alone: `http` or `https`, a host and an optional port, with at most a trailing `/`. A path, query, fragment, user name, backslash or whitespace is refused (`split_server_url` in `scripts/quotatank_common.py`). HTTPS may reach any host. Plain HTTP carries the token only to this computer or through Tailscale to the computer the address names (`plain_http_token_routes`), and the host is resolved within 2 seconds. A host that names this computer by itself, a loopback address or `localhost`, must resolve only to loopback; any other name that resolves to loopback is refused, since a DNS server would then choose which local program gets the token. Any other host must resolve only to Tailscale addresses (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), and being in those ranges proves nothing, since other networks hand out `100.64.0.0/10` as carrier-grade NAT space. So the backend asks tailscaled's LocalAPI (`/var/run/tailscale/tailscaled.sock`, readable by any local user), which has 2 seconds in all to answer every question: tailscaled must listen on that socket from this network namespace (`/proc/net/unix` lists only the reader's namespace, each socket under the path it was bound with, compared after resolving symlinks), `status?peers=false` must say `BackendState` `Running` with `TUN` true (userspace mode cannot carry other programs' traffic), exactly one TUN interface (IFF_TUN, not a TAP) must hold one of this computer's Tailscale addresses, and `whois` (asked as `address:0`, the form tailscaled 1.38 needs) must name a computer that has each address as its own. A host given by name must also be that computer's MagicDNS name, in full or, for a computer of this tailnet (`MagicDNSSuffix`), as its first label alone; a computer shared from another tailnet goes by its full name, as MagicDNS has it. The request then connects only to the addresses checked, never to a second lookup's answer, and its `Host` header still names the host. A connection to a Tailscale address is bound to that interface (`SO_BINDTODEVICE`, which needs Linux 5.7 or later without `CAP_NET_RAW`) before it connects, so it fails rather than leave another way when Tailscale disconnects after the check; it is never retried another way. Anything else is refused ("The omp gateway token goes over plain HTTP only to this computer or over Tailscale. Use an https:// address, or check that Tailscale is connected and that the address is that computer's Tailscale name or address."), including a private LAN address or a name that resolves to one: a name or address that is a trusted computer on one network can be anyone on the next, and other computers on the network can read plain HTTP. A name that does not resolve is a network failure. These checks guard the token against the networks the computer joins, not against programs running as the same user or as root, nor the tailnet's administrators; and if the gateway's computer leaves the tailnet between the check and the connection while an exit node or a subnet route covers its address, Tailscale routes the connection there (SECURITY.md).
 - `--omp-only` reads omp alone: no provider is queried and no history is written. Settings uses it to test an omp source.
 
 Both sources may be given. Only providers named by `--providers` are touched. omp provider ids map to `anthropic` → `claude`, `openai-codex` → `codex`, `opencode-go` → `opencode`, `kimi-code` → `kimi`, `zai` and `zai-coding-plan` → `zai`, `google-antigravity` → `antigravity`, `cursor` → `cursor`, `github-copilot` → `copilot`, and `minimax-code` (omp 18.11's id), `minimax-coding-plan` and `minimax` → `minimax`; other omp providers are ignored. Each source is read for at most 64 reports, 64 disabled sign-ins and 32 limits per report.
@@ -193,8 +192,7 @@ Every CLI the collector runs (`omp`, `agy`, `claude doctor`, `gh auth token`) ru
 
 ## Last-used proxy account activity
 
-`UsageActivityBackend.qml` uses the shared live collector for Rust by default.
-With live disabled, or for Go/Keeper, it runs `scripts/proxy-activity.py` every 15 seconds in
+`UsageActivityBackend.qml` runs `scripts/proxy-activity.py` every 15 seconds in
 CLIProxyAPI mode when a Keeper URL is configured. It reuses `costKeeperUrl` and
 `costKeeperPasswordFile` independently of Costs source configuration. The process reads proxy
 `auth-files`, logs in to Keeper, reads `status` and `usage/identities`, and logs
@@ -222,66 +220,3 @@ responses clear old activity. The worker has a 10-second request budget (plus
 bounded logout), a 15-second QML watchdog, a 2 MiB identity response ceiling, a
 4096-identity limit, and a 64 KiB QML output ceiling. Only opaque account hashes
 and timestamps cross the activity process boundary; no activity is persisted.
-
-## Fusebox account snapshots
-
-The proxy collector first tries the Go auth-file inventory. Legacy HTTP
-401/403/404/405 allows a bounded authenticated native inventory probe; a valid
-`/api/accounts` array is required to identify Rust. An outage is not treated as
-an implementation change. The payload adds `proxyImplementation: go|rust`;
-account rows add the same marker and `supportsBankedReset`. Rust is read-only:
-no `api-call`, mutation, token refresh, or model generation is invoked.
-
-Rust quota rows retain `quotaUpdatedAt` and use it for `fetchedAt` and history
-sampling. Native amounts are percentages, reset timestamps require timezones,
-missing quota remains unknown, and observations older than ten minutes are
-`stale`. Cached windows past reset are omitted. Rust credits stay null and
-banked reset actions are refused. Switching implementations cannot restore old
-credits from a prior successful reading.
-
-Native account activity uses `last_used` and the same hashed filename account
-identity as quota rows. It denotes completed requests including failures;
-timestamp ties are ambiguous, and empty post-restart activity clears selection.
-
-## Fusebox live activity
-
-`UsageLogic.js` owns a reference-counted registry of parentless
-`UsageLiveConnection.qml` objects keyed by proxy URL, key-file path and collector
-path. Multiple bars/panels share a single `scripts/proxy-live.py` process. The
-last consumer stops and destroys it; a connection change clears counts before
-starting the new observer. It never reparents the observer to a panel.
-
-The helper authenticates `/api/live` with a Bearer upgrade header, verifies TLS,
-limits frames to 512 KiB and queues to four frames. Load snapshots report real
-`in_flight` attempts and recent `sessions`. Only hashed account IDs, provider IDs,
-counts and last-used timestamps cross the process boundary. Raw IDs and request
-metadata are discarded. Native IDs are kept privately for mapping file/API-key
-accounts to the existing stable hashes. Omitted inventory accounts have zero
-load after the initial complete snapshot; unmatched quota cards remain unknown.
-
-A 15-second heartbeat/snapshot deadline clears live counts on stale or broken
-connections. Reconnect backoff grows from 2 to 60 seconds and resets only after
-30 seconds of stability. Unsupported endpoints and a missing dependency retry
-at 60 seconds, keeping cached last-used inventory available. QML additionally
-limits stdout to 1 MiB and stops a stalled helper after 20 seconds. A crashed
-helper restarts at most once per minute. Disconnect never replaces quota with
-zero or invents idle. Last-used selection retains its existing semantics.
-
-Inventory reads only `/api/accounts`, at most once per 15 seconds on request,
-account or unknown-ID events, otherwise once per 60 seconds. These read the
-server cache and do not trigger upstream quota refreshes. Heartbeat frames do
-not change visible QML properties. `liveAccountActivity` defaults on,
-Session counts appear beside the subscription title in a right-aligned badge.
-The menu bar remains quota-only. Counts retain Fusebox's recent-affinity meaning:
-sessions may remain assigned after requests finish. Tooltip and expandable
-details explain this; disconnects show “Sessions unknown”. No model discovery,
-per-session queries, extra polling or Fusebox server changes are needed.
-The collector requires optional Python websockets 15+; Go/Keeper retains its
-existing dependency and polling behavior.
-
-Limits settings call the native Rust integration **Fusebox** and expose a
-keyboard-accessible repository link to `https://github.com/DigitalPals/Fusebox`.
-The Go implementation retains its CLIProxyAPI name. Before discovery, the
-source is labelled “Fusebox / CLIProxyAPI”. Saved `usageSource: cliproxy`,
-`cliproxyUrl`, `cliproxyKeyFile` and protocol `proxyImplementation: rust` remain
-compatible; branding adds no network calls or background processes.

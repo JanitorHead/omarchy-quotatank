@@ -11,7 +11,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "scripts" / "usage-fetch.py"
-SPEC = importlib.util.spec_from_file_location("model_usage_backend_grok", BACKEND)
+SPEC = importlib.util.spec_from_file_location("quotatank_backend_grok", BACKEND)
 assert SPEC and SPEC.loader
 usage = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(usage)

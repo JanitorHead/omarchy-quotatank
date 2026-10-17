@@ -22,7 +22,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from model_usage_common import atomic_write_json
+from quotatank_common import atomic_write_json
 
 MAX_BYTES = 16 * 1024 * 1024
 MAX_BUCKETS = 50000
@@ -126,7 +126,7 @@ class Client:
             "subject_token": token,
             "subject_token_type": "urn:t3:params:oauth:token-type:environment-bootstrap",
             "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
-            "scope": "orchestration:read", "client_label": "Omarchy Model Usage",
+            "scope": "orchestration:read", "client_label": "Quotatank",
             "client_device_type": "desktop", "client_os": "Linux",
         }).encode()
         req = urllib.request.Request(self.url + "/oauth/token", data=data,

@@ -219,7 +219,7 @@ arrays, and a `null` `previous`.
 typically running on another computer as `omp stats --host <address> --port <port>`.
 The URL is the server's address alone, `http` or `https`, a host and an optional port,
 with at most a trailing `/`; a path, query, fragment, user name, backslash or whitespace
-is refused (`normalize_server_url` in `scripts/model_usage_common.py`). HTTPS may reach
+is refused (`normalize_server_url` in `scripts/quotatank_common.py`). HTTPS may reach
 any host; plain HTTP only loopback, private (RFC 1918, IPv6 unique-local) and Tailscale
 (`100.64.0.0/10`, `*.ts.net`) addresses or single-label host names. No credential is
 sent, so this is broader than the omp gateway rule. The dashboard has no authentication
@@ -416,7 +416,7 @@ when a Claude or Codex request names a credential id the last listing did not, a
 once every 10 minutes (a listing that failed counts). It runs only after `omp --version`
 (5 seconds) answers `omp/<major>.<minor>…` with 18.9 or later, the first release with
 `omp usage reset`, and like `usage-fetch.py` it runs omp in the private `omp-workdir`
-folder of `${XDG_STATE_HOME:-~/.local/state}/omarchy/model-usage`. Each listed account
+folder of `${XDG_STATE_HOME:-~/.local/state}/omarchy/quotatank`. Each listed account
 maps its `credentialId` to `{"provider": <Quotatank id>, "accountId": "omp-" + the first
 12 hex digits of sha256("<omp provider>|<lowercase email>")}` (omp's account id when
 there is no email), the id `usage-fetch.py` gives the same omp account. An email listed

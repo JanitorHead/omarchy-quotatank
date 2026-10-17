@@ -88,7 +88,7 @@ class CliProxyTests(unittest.TestCase):
 
     def test_xdg_key_location_and_override(self):
         with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": "/config", "CLIPROXY_API_KEY_FILE": ""}):
-            self.assertEqual(usage.cliproxy_key_path(), Path("/config/omarchy/model-usage/cliproxy.key"))
+            self.assertEqual(usage.cliproxy_key_path(), Path("/config/omarchy/quotatank/cliproxy.key"))
             with mock.patch.dict(os.environ, {"CLIPROXY_API_KEY_FILE": "/private/proxy.key"}):
                 self.assertEqual(usage.cliproxy_key_path(), Path("/private/proxy.key"))
 

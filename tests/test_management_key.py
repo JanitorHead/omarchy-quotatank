@@ -91,7 +91,7 @@ class ManagementKeyTests(unittest.TestCase):
 
     def test_symlink_or_public_key_directory_is_rejected(self):
         with tempfile.TemporaryDirectory() as config:
-            directory = Path(config) / "omarchy/model-usage/management-keys"
+            directory = Path(config) / "omarchy/quotatank/management-keys"
             directory.parent.mkdir(parents=True)
             target = Path(config) / "target"
             target.mkdir(mode=0o700)
@@ -136,7 +136,7 @@ class ManagementKeyTests(unittest.TestCase):
                 config = root / "config"
                 outside = root / "outside"
                 outside.mkdir(mode=0o700)
-                parts = ("config", "omarchy", "model-usage")
+                parts = ("config", "omarchy", "quotatank")
                 parent = root
                 for part in parts[:depth]:
                     parent /= part

@@ -26,7 +26,7 @@ ShellRoot {
     if (!condition) { console.error("RESET TEST FAILED: " + message); Qt.exit(1) }
   }
   function create(name, props) {
-    var component = Qt.createComponent(Quickshell.env("MODEL_USAGE_REPO_URL") + "/" + name)
+    var component = Qt.createComponent(Quickshell.env("QUOTATANK_REPO_URL") + "/" + name)
     check(component.status === Component.Ready, component.errorString())
     var object = component.createObject(host, props)
     check(object !== null, "create " + name)
@@ -42,7 +42,7 @@ ShellRoot {
     return null
   }
   Component.onCompleted: {
-    backend = create("ResetBackend.qml", { usageBackend: usage, scriptPath: Quickshell.env("MODEL_USAGE_FAKE_RESET") })
+    backend = create("ResetBackend.qml", { usageBackend: usage, scriptPath: Quickshell.env("QUOTATANK_FAKE_RESET") })
     form = create("ResetConfirmation.qml", { backend: backend, width: 420 })
     backend.finished.connect(function() { root.finishes++ })
     usage.usageSource = "direct"
@@ -109,7 +109,7 @@ ShellRoot {
         root.widget = root.create("Panel.qml", { moduleName: "test.reset", ipcTarget: "test.reset",
           settings: { usageSource: "cliproxy", cliproxyUrl: "https://proxy.test/prefix",
             cliproxyKeyFile: "/private/proxy key", enabledProviders: [], refreshIntervalSec: 3600 } })
-        root.widget.resetAction.scriptPath = Quickshell.env("MODEL_USAGE_FAKE_RESET")
+        root.widget.resetAction.scriptPath = Quickshell.env("QUOTATANK_FAKE_RESET")
         root.phase++
       } else if (root.phase === 6 && root.widget.providers.length > 0) {
         root.widget.selectProviderId("codex")

@@ -64,7 +64,7 @@ class BackupTestCase(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix="quotatank-backup-"))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         self.config = self.root / "config"
-        self.keys_dir = self.config / "omarchy" / "model-usage" / "management-keys"
+        self.keys_dir = self.config / "omarchy" / "quotatank" / "management-keys"
         self.work = self.root / "work"
         self.backup_path = self.work / "backup.qtb"
         manifest = write_file(self.root / "manifest.json", json.dumps(MANIFEST_DOC), 0o644)

@@ -50,7 +50,7 @@ class ProjectContractTests(unittest.TestCase):
         self.assertEqual(keys, {
             "refreshIntervalSec", "enabledProviders", "barDisplayMode", "quotaMode", "barWindow", "barWindowSecondary", "barProviders",
             "barProviderLimits", "barShowResets", "barResetTimeFormat", "barResetDateFormat",
-            "warningThreshold", "criticalThreshold", "liveAccountActivity",
+            "warningThreshold", "criticalThreshold",
             "usageSource", "cliproxyUrl", "cliproxyKeyFile", "hideAccountEmails", "squareUsageCards", "providerColors", "notifyLimitThresholds", "costPriceOverrides",
             "costLocalProviders", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers", "extraKeys",
             "ompLocal", "ompGatewayUrl", "ompGatewayKeyFile", "ompStatsUrl", "barAccountMode", "motion", "accountModes",
@@ -61,7 +61,7 @@ class ProjectContractTests(unittest.TestCase):
     def test_provider_registry_matches_backend_manifest_and_key_helper(self):
         registry = js_registry()
         ids = [entry["id"] for entry in registry]
-        backend = load_script("usage-fetch.py", "model_usage_backend_registry")
+        backend = load_script("usage-fetch.py", "quotatank_backend_registry")
         self.assertEqual(ids, list(backend.PROVIDER_ORDER), "UsageLogic.js lists the backend's providers in its order")
         self.assertEqual({entry["id"]: entry["name"] for entry in registry}, {id: backend.PROVIDER_NAMES[id] for id in ids})
         keyed = [entry["id"] for entry in registry if entry["auth"] != "signin"]
@@ -75,7 +75,7 @@ class ProjectContractTests(unittest.TestCase):
                 if entry["keysUrl"]:
                     self.assertRegex(entry["keysUrl"], r"^https://[^\s]+$")
 
-        helper = load_script("management-key.py", "model_usage_management_key_registry")
+        helper = load_script("management-key.py", "quotatank_management_key_registry")
         self.assertEqual(list(helper.KEY_PROVIDERS), keyed, "management-key.py stores keys for the same providers")
 
         widget = json.loads((ROOT / "manifest.json").read_text())["barWidget"]
@@ -104,7 +104,7 @@ class ProjectContractTests(unittest.TestCase):
         cost_backend = (ROOT / "CostBackend.qml").read_text()
         self.assertIn('Qt.resolvedUrl("scripts/usage-fetch.py")', backend)
         self.assertIn('Qt.resolvedUrl("scripts/cost-fetch.py")', cost_backend)
-        self.assertTrue((ROOT / "scripts" / "model_usage_common.py").is_file())
+        self.assertTrue((ROOT / "scripts" / "quotatank_common.py").is_file())
         self.assertIn('Qt.resolvedUrl("assets/', panel)
         registry = js_registry()
         expected = {entry["id"] + suffix + ".svg" for entry in registry for suffix in ("", "-bar")}
@@ -154,7 +154,7 @@ class ProjectContractTests(unittest.TestCase):
         usage_backend = (ROOT / "scripts" / "usage-fetch.py").read_text()
         cost_backend = (ROOT / "scripts" / "cost-fetch.py").read_text()
         for source in (usage_backend, cost_backend):
-            self.assertIn("from model_usage_common import", source)
+            self.assertIn("from quotatank_common import", source)
 
     def test_performance_and_orientation_guards_are_present(self):
         panel = (ROOT / "Panel.qml").read_text()

@@ -12,7 +12,7 @@
 
 ![The menu bar chips above the Limits panel: tiles for Claude, Codex, Kimi, and OpenCode, two Claude accounts with Work spending now and in use and Personal with room and a Use button, the headline 5-hour limit runs out in 1h 11m, limit cards with a dashed forecast, and a runway card where Personal takes over when Work runs out; beside it the Costs tab with a total 38% above the previous 30 days, a daily chart, providers, a model breakdown, and a heatmap of when you spend](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/hero.png)
 
-Quotatank reads the plan limits and prepaid balances of **49 AI coding providers** with the sign-ins and keys you already have: several accounts per provider, every account behind a **Fusebox or CLIProxyAPI** server, and everything **omp (Oh My Pi)** is signed in to, on this computer or another. A second tab shows what your coding agents would cost at API rates, by day, model, project, and subagent.
+Quotatank reads the plan limits and prepaid balances of **49 AI coding providers** with the sign-ins and keys you already have: several accounts per provider, every account behind a **CLIProxyAPI** server, and everything **omp (Oh My Pi)** is signed in to, on this computer or another. A second tab shows what your coding agents would cost at API rates, by day, model, project, and subagent.
 
 <sub>Screenshots use fixture data in the Tokyo Night theme.</sub>
 
@@ -20,7 +20,7 @@ Quotatank reads the plan limits and prepaid balances of **49 AI coding providers
 
 **49 providers**, plus every account on a proxy or in omp. Each one is read with what it already uses on this computer; nothing to configure for a sign-in, one paste for a key. [Connect a source](#connect-a-source) says what each one shows and where its credentials come from.
 
-![Every supported provider with its mark, in three groups: 18 sign-ins on this computer, 17 coding plans with an API key, and 14 prepaid balances, plus every account on a Fusebox or CLIProxyAPI server](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/providers.png)
+![Every supported provider with its mark, in three groups: 18 sign-ins on this computer, 17 coding plans with an API key, and 14 prepaid balances, plus every account on a CLIProxyAPI server](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/providers.png)
 
 `key` marks a sign-in that can also use an API key instead.
 
@@ -36,7 +36,7 @@ Z.ai Coding Plan (and BigModel) · MiniMax Coding Plan · Synthetic · Chutes ·
 
 OpenRouter · DeepSeek · Moonshot · Venice · DeepInfra · Vercel AI Gateway · Poe · Atlas Cloud · Charm Hyper · Sail Research · Sofya · v0 · Manus · TypeSafe (Jev)
 
-**Several accounts.** Omarchy's Claude Code, Codex, and Grok accounts, extra API keys, Fusebox and CLIProxyAPI accounts, and omp's accounts, each read on its own.
+**Several accounts.** Omarchy's Claude Code, Codex, and Grok accounts, extra API keys, CLIProxyAPI accounts, and omp's accounts, each read on its own.
 
 ## Why it is different
 
@@ -70,7 +70,7 @@ The built-in `omarchy.agents` widget can run alongside Quotatank. To keep only Q
 - Omarchy with schema-v1 shell plugins.
 - Python 3.10 or newer. The quota and cost backends use only the standard library.
 - Network access for quota checks. Costs can download the public LiteLLM price table and contact the T3 or omp servers you configure.
-- Optional: Python `websockets` 15 or newer, for live account activity from Fusebox; omp 18.9 or newer for omp's live account mapping.
+- Optional: omp 18.9 or newer for omp's live account mapping.
 
 </details>
 
@@ -83,7 +83,7 @@ Every source of a second account shows the same way:
 - **Claude Code, Codex, and Grok accounts added with Omarchy** (`omarchy agent account add claude work`). The account new sessions start with is marked **in use**; **Use** on another runs `omarchy agent account use` for you. The header shows Omarchy's rule: `switches at 95%` or `notifies at 95%`.
 - **Several API keys for one provider.** Under **Settings → Providers**, a provider with a saved key offers **Add another key…**: name it and save it, and it is read on its own.
 - **omp's accounts**, on this computer or through omp's gateway on another. An account you also use directly appears once.
-- **Fusebox and CLIProxyAPI accounts**, each with its plan and, in CLIProxyAPI mode, its banked Codex resets behind a confirmation.
+- **CLIProxyAPI accounts**, each with its plan and its banked Codex resets behind a confirmation.
 
 In the menu bar, a dot per account sits beside the chip: filled for the account counted, a ring coloured by each other account's state. Hover the chip for every account's 5-hour and weekly use and its trend. In Limits, each row says what matters now (`spending now`, `used up · back 18:02`, `switched 16:27`) next to a 24-hour trend you can read with the pointer; pick a row for its full detail.
 
@@ -93,7 +93,7 @@ In the menu bar, a dot per account sits beside the chip: filled for the account 
 
 ## Limits and pace
 
-Every limit card has a meter, a pace tick, and a forecast. The tick marks where even use would be by now, so blocks past it are use ahead of pace. A dashed stretch after the fill shows where the current pace takes the limit before it resets, red when it runs out first; faint marks show your warning and critical levels. Hover the meter for the time it reaches that level at this pace, or when it passed it. A 5-hour limit projects from its recent rate, newest samples weighing most; weekly and monthly limits blend this window's average with the last 24 hours, so one busy hour does not predict a weekly run-out.
+Every limit card has a meter, a pace tick, and a forecast. The tick marks where even use would be by now, so blocks past it are use ahead of pace. A dashed stretch after the fill shows where the current pace takes the limit before it resets, red when it runs out first; faint marks show your warning and critical levels. Hover the meter for the time it reaches that level at this pace, or when it passed it. A 5-hour limit projects from its recent rate, newest samples weighing most; weekly and monthly limits blend this window's average with the last 24 hours, so one busy hour does not predict a weekly run-out. Hover a card's status line for how the tick and the projection work.
 
 <details>
 <summary>Every status line</summary>
@@ -149,7 +149,7 @@ Local Claude Code, Codex, OpenCode, and omp history are read on this computer; T
 
 ## omp (Oh My Pi)
 
-![Two settings pages: Providers with the omp section, omp found with three accounts, Read omp's accounts on, and the gateway on another computer answering with three accounts; Costs with omp on another computer, Tailscale or SSH tunnel commands to copy, the warning that the dashboard also serves conversations, and a Test that found 18,811 requests and a live feed](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/omp.png)
+![Two settings pages: the omp section at the end of Providers, omp found with three accounts, Read omp's accounts on, and the gateway on another computer answering with three accounts; Costs with omp on another computer, Tailscale or SSH tunnel commands to copy, the warning that the dashboard also serves conversations, and a Test that found 18,811 requests and a live feed](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/omp.png)
 
 If you work through [omp](https://github.com/can1357/oh-my-pi), Quotatank reads what omp knows:
 
@@ -172,13 +172,13 @@ Colors and control borders come from the active Omarchy theme and change with it
 
 ## Settings that apply as you go
 
-![The Providers settings page with the omp section and the monitored providers, beside the Menu bar page](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/settings.png)
+![The Providers settings page with the monitored providers first and the omp section under them, beside the Menu bar page](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/settings.png)
 
 The gear opens an index of six pages, and each row already says what the page is set to. There is no Save button: every switch, selector, and valid number applies the moment it changes, so you can compare the bar with the setting still in front of you. Keys and tokens are the exception, with an explicit **Save** that writes a private file, after which the page shows **Replace** and **Remove**.
 
 | Page | What lives there |
 |---|---|
-| **Providers** | The source (local sign-ins or a Fusebox / CLIProxyAPI server). **Found on this computer** offers sign-ins Quotatank detected but is not monitoring, with **Monitor** and **Ignore**. **Monitored** gives each provider in use its own card with its mark: what the last check found (`Connected · Claude Max 20x`, `Sign-in expired`, `No key saved`) and, when signed out, a **Sign in** or **Install and sign in** button; a grip to drag it into the order tiles and chips follow; **Monitor** and **Menu bar** switches; its key editor when it takes an API key; and **Customize** to read it as used or left and pin the limits its chip shows. **More providers** folds away everything else, filterable by name, with the same buttons, a link to get each tool, and a link to each provider's key page |
+| **Providers** | The source (local sign-ins or a CLIProxyAPI server). **Found on this computer** offers sign-ins Quotatank detected but is not monitoring, with **Monitor** and **Ignore**. **Monitored** gives each provider in use its own card with its mark: what the last check found (`Connected · Claude Max 20x`, `Sign-in expired`, `No key saved`) and, when signed out, a **Sign in** or **Install and sign in** button; a grip to drag it into the order tiles and chips follow; **Monitor** and **Menu bar** switches; its key editor when it takes an API key; and **Customize** to read it as used or left and pin the limits its chip shows. **More providers** folds away everything else, filterable by name, with the same buttons, a link to get each tool, and a link to each provider's key page. Last, **omp**: read its accounts here, or through its gateway on another computer |
 | **Menu bar** | Chips or the widget icon, the limit each chip shows, a second limit, reset times and formats, one chip per provider or per account, how many chips the bar holds, hiding used-up providers |
 | **Alerts** | Desktop notifications, the percentage thresholds, and the low-balance amounts |
 | **Display** | Used or left, provider colors, square cards, hidden account emails, motion |
@@ -210,7 +210,7 @@ flowchart TB
   subgraph Limits
     cli["Sign-ins on this computer<br/>CLIs · apps · IDEs"] --> uf["usage-fetch.py"]
     keys["API keys<br/>saved here or in the environment"] --> uf
-    proxy["Fusebox / CLIProxyAPI<br/>one row per account"] --> uf
+    proxy["CLIProxyAPI<br/>one row per account"] --> uf
     ompl["omp accounts<br/>here or through omp's gateway"] --> uf
     uf --> chips["Menu bar chips"]
     uf --> panel["Limits tab"]
@@ -288,16 +288,16 @@ Turn the provider on under **Settings → Providers → More providers**, then s
 
 Quotatank reads existing credentials and never writes authentication state; sign-in stays with each tool. Claude Code, OpenAI Codex, OpenCode Go, OpenRouter, and GitHub Copilot have been checked against live accounts. The other providers follow their documentation and established open-source readers (CodexBar, oh-my-pi) and are tested against recorded responses; the ones without public documentation (Alibaba Coding Plan, IBM Bob, ClawRouter, TypeSafe) can break when the provider changes its site. The [configuration reference](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#providers-and-authentication) lists the files and endpoints each provider uses.
 
-### Fusebox or CLIProxyAPI
+### CLIProxyAPI
 
-1. Open **Settings → Providers** and choose **Fusebox / CLIProxyAPI** under **Source**.
+1. Open **Settings → Providers** and choose **CLIProxyAPI** under **Source**.
 2. Enter the server URL, for example `http://127.0.0.1:8317`, and leave the field.
 3. Enter the Management API key that the server's management panel accepts and press **Save**. Client API keys and bcrypt hashes do not work.
 4. Managed accounts are discovered automatically, one row each.
 
 The key is saved to a private file (`0600`) and is never loaded back into the form. Remote servers must allow remote management. Quota lookups cover Claude, Codex, Kimi, and Antigravity accounts; other providers show an unsupported notice.
 
-For CLIProxyAPI, the optional CPA Usage Keeper adds the last-used account to the menu bar. See the [account activity guide](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/keeper-deployment.md).
+The optional CPA Usage Keeper adds the last-used account to the menu bar. See the [account activity guide](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/keeper-deployment.md).
 
 ### omp
 
@@ -343,4 +343,4 @@ The other commands are `open`, `close`, `toggle`, `show`, `hide`, `next`, `confi
 
 ## Credits and license
 
-Quotatank is a derived work of [omarchy-modelusage](https://github.com/DigitalPals/omarchy-modelusage) by DigitalPals, released under the MIT license. Quotatank is MIT licensed too. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Provider names and marks belong to their owners and do not imply endorsement.
+Quotatank started as a fork of [omarchy-modelusage](https://github.com/DigitalPals/omarchy-modelusage) by DigitalPals, released under the MIT license, and is MIT licensed too. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Provider names and marks belong to their owners and do not imply endorsement.

@@ -10,7 +10,7 @@ ShellRoot {
     if (!condition) { console.error("QUOTA TEST FAILED: " + message); Qt.exit(1) }
   }
   Component.onCompleted: {
-    var component = Qt.createComponent(Quickshell.env("MODEL_USAGE_REPO_URL") + "/UsageBackend.qml")
+    var component = Qt.createComponent(Quickshell.env("QUOTATANK_REPO_URL") + "/UsageBackend.qml")
     check(component.status === Component.Ready, component.errorString())
     backend = component.createObject(root, {settings: {
       usageSource: "cliproxy", cliproxyUrl: "https://old.example", enabledProviders: ["codex"]}})
