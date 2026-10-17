@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 BACKEND = ROOT / "scripts" / "usage-fetch.py"
 sys.path.insert(0, str(BACKEND.parent))
-SPEC = importlib.util.spec_from_file_location("model_usage_backend", BACKEND)
+SPEC = importlib.util.spec_from_file_location("quotatank_backend", BACKEND)
 assert SPEC and SPEC.loader
 usage = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = usage
@@ -269,7 +269,7 @@ class FailureAndIsolationTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in result["windows"]], ["session", "weekly", "monthly"])
         self.assertEqual(captured["headers"]["authorization"], "Bearer secret-key")
         # The edge in front of opencode.ai rejects Python's default agent.
-        self.assertTrue(captured["headers"]["user-agent"].startswith("omarchy-model-usage/"))
+        self.assertTrue(captured["headers"]["user-agent"].startswith("quotatank/"))
 
     def test_opencode_missing_key_and_insecure_base(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -465,7 +465,6 @@ class HistoryAndContractTests(unittest.TestCase):
             saved = json.loads(history_file.read_text())
             self.assertEqual(len(saved["providers"]["claude"]), 2)
             self.assertEqual(len(provider["history"]["h24"]), 24)
-            self.assertEqual(len(provider["history"]["d7"]), 7)
             self.assertEqual(provider["history"]["h24"][-1], 95)
 
             history_file.write_text('{"schemaVersion":2,"providers":{"claude":[null,["bad",20],[1,999]]},"windows":{}}')
@@ -511,7 +510,7 @@ class HistoryAndContractTests(unittest.TestCase):
         provider = usage.error_provider("kimi", "timeout", "timed out")
         with tempfile.TemporaryDirectory() as temporary:
             usage.update_and_attach_history([provider], Path(temporary), 2_000_000_000)
-        self.assertEqual(provider["history"], {"h24": [], "d7": []})
+        self.assertEqual(provider["history"], {"h24": []})
 
     def test_provider_filter_order_and_empty_selection(self):
         self.assertEqual(usage.parse_provider_ids("kimi,claude,unknown"), ["claude", "kimi"])

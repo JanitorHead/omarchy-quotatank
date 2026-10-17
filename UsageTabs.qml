@@ -38,9 +38,11 @@ Controls.TabBar {
       height: Style.space(2)
       color: Commons.Color.accent
 
+      // A NumberAnimation, not an XAnimator: the view can change while the panel is closed, and an
+      // animator does not run without frames, which left the indicator under the previous tab.
       Behavior on x {
         enabled: root.settled
-        XAnimator {
+        NumberAnimation {
           duration: root.motion ? root.motion.duration(root.motion.row) : 0
           easing.type: Easing.InOutCubic
         }

@@ -124,7 +124,7 @@ class CollectorTests(HangingOmpTestCase):
                 self.assertEqual(process.wait(timeout=10), 128 + signum)
                 self.assert_gone(omp, helper)
         # omp ran in Quotatank's private folder and left nothing among the temporary files.
-        self.assertEqual(self.folders(), {str(self.root / "state-home" / "omarchy" / "model-usage" / "omp-workdir")})
+        self.assertEqual(self.folders(), {str(self.root / "state-home" / "omarchy" / "quotatank" / "omp-workdir")})
         self.assertEqual(list((self.root / "tmp").iterdir()), [])
 
     def test_a_killed_collector_takes_omp_with_it(self):

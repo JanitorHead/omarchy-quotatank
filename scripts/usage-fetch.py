@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch AI subscription usage for the Omarchy Model Usage plugin.
+"""Fetch AI subscription usage for the Quotatank Omarchy plugin.
 
 The provider CLIs own authentication. This process only reads their existing
 credentials, performs read-only usage calls, and emits a provider-neutral JSON
@@ -41,9 +41,9 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 from xml.etree import ElementTree
 
-from model_usage_common import (
-    OMP_PROVIDERS, atomic_write_json, clean_message, omp_account_id, open_private_directory, plain_http_token_routes,
-    resolve_host, split_server_url,
+from quotatank_common import (
+    OMP_PROVIDERS, atomic_write_json, clean_message, config_folder, omp_account_id, open_private_directory,
+    move_legacy_folders, plain_http_token_routes, resolve_host, split_server_url, state_folder,
 )
 
 SCHEMA_VERSION = 1
@@ -202,7 +202,6 @@ MAX_CLIPROXY_ACCOUNTS = 32
 MAX_CLIPROXY_PROVIDERS = 32
 # Managed account types whose quota CLIProxyAPI can look up; other providers are listed as unsupported.
 CLIPROXY_QUOTA_PROVIDERS = ("claude", "codex", "kimi", "antigravity")
-RUST_QUOTA_STALE_SECONDS = 10 * 60
 
 
 class ProviderFailure(Exception):
@@ -278,7 +277,7 @@ def base_provider(provider_id: str) -> dict[str, Any]:
         "credits": None,
         "notice": "",
         "fetchedAt": now_iso(),
-        "history": {"h24": [], "d7": []},
+        "history": {"h24": []},
     }
 
 
@@ -322,7 +321,7 @@ def provider_key_path(provider_id: str) -> Path:
     override = os.environ.get(provider_id.upper() + "_API_KEY_FILE")
     if override:
         return Path(override).expanduser()
-    return config_home() / "omarchy" / "model-usage" / (provider_id + ".key")
+    return config_folder() / (provider_id + ".key")
 
 
 # Set while an `--extra-key` file is read. That key's file is its only source, so the environment, which belongs
@@ -966,7 +965,7 @@ def fetch_codex(timeout: float, home: Path | None = None) -> dict[str, Any]:
 
     try:
         rpc = CodexRpcStream(process)
-        initialize = {"clientInfo": {"name": "omarchy-model-usage", "version": "1"}}
+        initialize = {"clientInfo": {"name": "quotatank", "version": "2"}}
         rpc_request(rpc, 1, "initialize", timeout, initialize)
         rpc.send({"method": "initialized", "params": {}})
 
@@ -1209,9 +1208,7 @@ def fetch_kimi(timeout: float) -> dict[str, Any]:
 
 OPENCODE_DEFAULT_API_BASE = "https://opencode.ai"
 OPENCODE_USAGE_PATH = "/zen/go/v1/usage"
-OPENCODE_USER_AGENT = (
-    "omarchy-model-usage/1.2.0 (+https://github.com/JanitorHead/omarchy-quotatank)"
-)
+OPENCODE_USER_AGENT = "quotatank/2 (+https://github.com/JanitorHead/omarchy-quotatank)"
 OPENCODE_WINDOWS = (
     ("rolling", "session", "5-hour limit", FIVE_HOURS),
     ("weekly", "weekly", "Weekly limit", SEVEN_DAYS),
@@ -7120,8 +7117,7 @@ def cliproxy_key_path() -> Path:
     override = os.environ.get("CLIPROXY_API_KEY_FILE")
     if override:
         return Path(override).expanduser()
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
-    return config_home / "omarchy" / "model-usage" / "cliproxy.key"
+    return config_folder() / "cliproxy.key"
 
 
 def read_private_key(path: Path, name: str = "Proxy management key") -> str:
@@ -7177,18 +7173,14 @@ class CliProxyClient:
     def __init__(self, address: str, key: str):
         self.base_url = normalize_cliproxy_url(address)
         self.key = key
-        self.implementation = "auto"
 
-    def request(self, path: str, timeout: float, payload: dict[str, Any] | None = None,
-                *, native: bool = False) -> Any:
-        name = "Fusebox" if native or self.implementation == "rust" else "CLIProxyAPI"
+    def request(self, path: str, timeout: float, payload: dict[str, Any] | None = None) -> Any:
         headers = {"Authorization": "Bearer " + self.key, "Accept": "application/json"}
         body = None
         if payload is not None:
             headers["Content-Type"] = "application/json"
             body = json.dumps(payload).encode("utf-8")
-        prefix = "/api/" if native else "/v0/management/"
-        request = urllib.request.Request(self.base_url + prefix + path, data=body, headers=headers)
+        request = urllib.request.Request(self.base_url + "/v0/management/" + path, data=body, headers=headers)
         try:
             opener = urllib.request.build_opener(NoRedirects())
             with opener.open(request, timeout=timeout) as response:
@@ -7196,83 +7188,30 @@ class CliProxyClient:
         except urllib.error.HTTPError as exc:
             exc.close()
             if exc.code in (401, 403):
-                error = ProviderFailure("config", f"{name} rejected the management key or remote management access.")
-            elif exc.code == 429:
-                error = ProviderFailure("rate_limited", f"{name} is rate limiting management requests.")
-            else:
-                error = ProviderFailure("http", f"{name} management endpoint returned HTTP {exc.code}.")
-            error.http_status = exc.code
-            raise error from None
+                raise ProviderFailure("config", "CLIProxyAPI rejected the management key or remote management access.") from None
+            if exc.code == 429:
+                raise ProviderFailure("rate_limited", "CLIProxyAPI is rate limiting management requests.") from None
+            raise ProviderFailure("http", f"CLIProxyAPI management endpoint returned HTTP {exc.code}.") from None
         except (TimeoutError, urllib.error.URLError, OSError) as exc:
             reason = getattr(exc, "reason", exc)
             if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
-                raise ProviderFailure("timeout", f"{name} usage request timed out.") from None
-            raise ProviderFailure("network", f"Could not reach {name}. Check the server URL, network, and TLS certificate.") from None
+                raise ProviderFailure("timeout", "CLIProxyAPI usage request timed out.") from None
+            raise ProviderFailure("network", "Could not reach CLIProxyAPI. Check the server URL, network, and TLS certificate.") from None
         if len(raw) > MAX_HTTP_RESPONSE_BYTES:
-            raise ProviderFailure("malformed", f"{name} returned unexpectedly large usage data.")
+            raise ProviderFailure("malformed", "CLIProxyAPI returned unexpectedly large usage data.")
         try:
             return json.loads(raw)
         except (ValueError, UnicodeDecodeError, RecursionError):
-            raise ProviderFailure("malformed", f"{name} returned unreadable JSON.") from None
+            raise ProviderFailure("malformed", "CLIProxyAPI returned unreadable JSON.") from None
 
     def auth_files(self, timeout: float) -> list[dict[str, Any]]:
-        deadline = time.monotonic() + timeout
-        if self.implementation == "rust":
-            return self.rust_accounts(timeout)
-        try:
-            payload = self.request("auth-files", timeout)
-        except ProviderFailure as legacy_error:
-            # Rust's unsupported legacy paths can pass through client auth and
-            # return 401. Only a valid authenticated native inventory proves Rust.
-            if self.implementation == "go" or getattr(legacy_error, "http_status", None) not in (401, 403, 404, 405):
-                raise
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise ProviderFailure("timeout", "CLIProxyAPI account discovery timed out.") from None
-            try:
-                return self.rust_accounts(remaining)
-            except ProviderFailure as native_error:
-                if getattr(native_error, "http_status", None) in (401, 403, 404, 405):
-                    raise legacy_error from None
-                raise
+        payload = self.request("auth-files", timeout)
         if not isinstance(payload, dict) or not isinstance(payload.get("files"), list):
             raise ProviderFailure("malformed", "CLIProxyAPI returned an invalid account list.")
-        self.implementation = "go"
         return [entry for entry in payload["files"] if isinstance(entry, dict)]
-
-    def rust_accounts(self, timeout: float) -> list[dict[str, Any]]:
-        payload = self.request("accounts", timeout, native=True)
-        if not isinstance(payload, list) or len(payload) > 4096:
-            raise ProviderFailure("malformed", "Fusebox returned an invalid account list.")
-        entries, seen = [], set()
-        for row in payload:
-            if (not isinstance(row, dict) or not isinstance(row.get("id"), str)
-                    or not 0 < len(row["id"]) <= 512 or not isinstance(row.get("provider"), str)
-                    or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", row["provider"])
-                    or not isinstance(row.get("disabled"), bool)
-                    or row.get("kind") not in ("oauth", "api-key", "service-account")):
-                raise ProviderFailure("malformed", "Fusebox returned an invalid account list.")
-            identity = row["id"]
-            # Go's OAuth auth-file ID is its filename. Keep hashes/private
-            # labels stable across a Go-to-Rust migration of the same files.
-            if identity.startswith("file:"):
-                filename = identity[5:]
-                if (not filename or filename in (".", "..") or "/" in filename or "\\" in filename
-                        or row.get("file") != filename):
-                    raise ProviderFailure("malformed", "Fusebox returned an invalid account identity.")
-                identity = filename
-            marker = (row["provider"], identity)
-            if marker in seen:
-                raise ProviderFailure("malformed", "Fusebox returned duplicate account identities.")
-            seen.add(marker)
-            entries.append(dict(row, id=identity, _native_id=row["id"], _rust=True))
-        self.implementation = "rust"
-        return entries
 
     def usage(self, entry: dict[str, Any], url: str, headers: dict[str, str], timeout: float,
               data: dict[str, Any] | None = None) -> Any:
-        if entry.get("_rust") is True or self.implementation == "rust":
-            raise ProviderFailure("unsupported", "Fusebox does not expose upstream account actions.")
         index = entry.get("auth_index") or entry.get("authIndex")
         if not isinstance(index, str) or not index.strip():
             raise ProviderFailure("config", "CLIProxyAPI account has no auth_index. Check the account in its management panel.")
@@ -7399,90 +7338,10 @@ def cliproxy_account_record(provider_id: str, entry: dict[str, Any]) -> dict[str
     result.update(source="CLIProxyAPI management API", authCommand="", origin="proxy",
                   accountId=hashlib.sha256((provider_id + ":" + identity).encode()).hexdigest()[:16],
                   account=clean_message(entry.get("email") or entry.get("label") or entry.get("account") or "Managed account"))
-    result.update(proxyImplementation="rust" if entry.get("_rust") is True else "go",
-                  supportsBankedReset=entry.get("_rust") is not True)
-    return result
-
-
-def rust_timestamp(value: Any, *, observed: bool = False, now: float | None = None) -> float | None:
-    if value is None:
-        return None
-    try:
-        if not isinstance(value, str) or not 0 < len(value) <= 64:
-            raise ValueError
-        # Rust emits nanoseconds; Python 3.10's ISO parser accepts only
-        # millisecond or microsecond precision. Normalize to microseconds.
-        value = re.sub(r"(:\d{2}\.)(\d+)(?=(?:Z|[+-]\d{2}:\d{2})$)",
-                       lambda match: match[1] + (match[2] + "000000")[:6], value)
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        stamp = parsed.timestamp()
-        current = time.time() if now is None else now
-        if parsed.tzinfo is None or stamp <= 0 or (observed and stamp > current + 60):
-            raise ValueError
-        return stamp
-    except (ValueError, TypeError, OverflowError):
-        raise ProviderFailure("malformed", "Fusebox returned an invalid quota or activity timestamp.") from None
-
-
-def fetch_rust_account(provider_id: str, entry: dict[str, Any]) -> dict[str, Any]:
-    result = cliproxy_account_record(provider_id, entry)
-    result.update(source="Fusebox accounts API", supportsBankedReset=False)
-    if entry.get("disabled") is True:
-        result.update(status="disabled", notice="This account is paused in Fusebox.")
-        return result
-    if provider_id not in ("claude", "codex") or entry.get("kind") != "oauth":
-        result.update(status="unsupported", notice="Fusebox does not expose subscription quotas for this account.")
-        return result
-    try:
-        quota = entry.get("quota")
-        if not isinstance(quota, dict) or not isinstance(quota.get("windows"), list) or len(quota["windows"]) > 128:
-            raise ProviderFailure("malformed", "Fusebox returned invalid quota data.")
-        now = time.time()
-        observed = rust_timestamp(quota.get("updated_at"), observed=True, now=now)
-        windows, seen = [], set()
-        for row in quota["windows"]:
-            if not isinstance(row, dict) or not isinstance(row.get("name"), str) or not 0 < len(row["name"]) <= 128:
-                raise ProviderFailure("malformed", "Fusebox returned an invalid quota window.")
-            used = number(row.get("used")) if isinstance(row.get("used"), (int, float)) else None
-            model = row.get("model")
-            if used is None or not 0 <= used <= 100 or (model is not None and (not isinstance(model, str) or not 0 < len(model) <= 128)):
-                raise ProviderFailure("malformed", "Fusebox returned an invalid quota amount or model scope.")
-            name = row["name"]
-            window_id = {"5h": "session" if provider_id == "claude" else "codex-primary",
-                         "week": "weekly" if provider_id == "claude" else "codex-secondary"}.get(name)
-            window_id = window_id if window_id and not model else "rust-" + hashlib.sha256(json.dumps([name, model]).encode()).hexdigest()[:16]
-            if window_id in seen:
-                raise ProviderFailure("malformed", "Fusebox returned duplicate quota windows.")
-            seen.add(window_id)
-            reset = rust_timestamp(row.get("resets_at"), now=now)
-            # A cached window past its reset cannot claim fresh capacity.
-            if reset is not None and reset <= now:
-                continue
-            seconds = {"5h": FIVE_HOURS, "week": SEVEN_DAYS, "day": 86400}.get(name)
-            label = {"5h": "5-hour limit", "week": "Weekly limit", "day": "Daily limit"}.get(name, name.title())
-            if model:
-                label = model.title() + " · " + label
-            windows.append(make_window(window_id, label, used, reset, seconds))
-        if observed is None or not windows:
-            raise ProviderFailure("quota_unavailable", "Subscription quotas are not available in the Fusebox cache yet.")
-        raw_plan = quota.get("plan")
-        if raw_plan is not None and (not isinstance(raw_plan, str) or len(raw_plan) > 128):
-            raise ProviderFailure("malformed", "Fusebox returned invalid plan metadata.")
-        result.update(windows=windows, quotaUpdatedAt=observed,
-                      fetchedAt=datetime.fromtimestamp(observed, timezone.utc).isoformat(),
-                      planType=clean_message(raw_plan or ""),
-                      plan=clean_message(CODEX_PLAN_LABELS.get(raw_plan, raw_plan or "") if provider_id == "codex" else raw_plan or ""),
-                      stale=now - observed > RUST_QUOTA_STALE_SECONDS)
-        if result["stale"]:
-            result["notice"] = "Last known reading · The Fusebox quota cache is more than 10 minutes old."
-    except ProviderFailure as exc:
-        result.update(status="error", errorKind=exc.kind, message=exc.message)
     return result
 
 
 def fetch_cliproxy_account(provider_id: str, entry: dict[str, Any], client: CliProxyClient, timeout: float) -> dict[str, Any]:
-    if entry.get("_rust") is True:
-        return fetch_rust_account(provider_id, entry)
     result = cliproxy_account_record(provider_id, entry)
     if entry.get("disabled") is True or entry.get("status") == "disabled":
         result.update(status="disabled", notice="This account is paused in CLIProxyAPI.")
@@ -7531,15 +7390,13 @@ def fetch_cliproxy_account(provider_id: str, entry: dict[str, Any], client: CliP
 
 
 def collect_cliproxy(provider_ids: list[str], timeout: float, address: str, key_path: Path,
-                     discover: bool = False, metadata: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+                     discover: bool = False) -> list[dict[str, Any]]:
     if not provider_ids and not discover:
         return []
     overall_deadline = time.monotonic() + timeout if discover else None
     try:
         client = CliProxyClient(address, read_cliproxy_key(key_path))
         entries = client.auth_files(timeout)
-        if metadata is not None:
-            metadata["proxyImplementation"] = client.implementation if client.implementation != "auto" else "go"
     except ProviderFailure as exc:
         if discover:
             provider_ids = ["cliproxy"]
@@ -7571,13 +7428,11 @@ def collect_cliproxy(provider_ids: list[str], timeout: float, address: str, key_
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             readings = list(pool.map(account, matching[:MAX_CLIPROXY_ACCOUNTS]))
-        successful = [reading for reading in readings if reading["status"] == "ok" and not reading.get("stale")]
+        successful = [reading for reading in readings if reading["status"] == "ok"]
         # A rotating pool still has capacity when one account is exhausted.
         # Select by the binding window, never sum unrelated percentages.
         active = [reading for reading in readings if reading["status"] != "disabled"]
-        stale = [reading for reading in active if reading["status"] == "ok"]
-        candidates = successful or stale
-        best = dict(max(candidates, key=lambda reading: 100 - used if (used := dynamic_window_used(reading)) is not None else -1) if candidates else (active or readings)[0])
+        best = dict(max(successful, key=lambda reading: 100 - used if (used := dynamic_window_used(reading)) is not None else -1) if successful else (active or readings)[0])
         if discover:
             best["accounts"] = readings
         best["accountCount"] = len(matching)
@@ -7585,7 +7440,6 @@ def collect_cliproxy(provider_ids: list[str], timeout: float, address: str, key_
         notes = [best["notice"]] if best["notice"] else []
         if len(matching) > 1 and best["status"] not in ("disabled", "unsupported"):
             notes.append(f"{len(successful)} of {len(matching)} accounts checked successfully. Showing the account with the most remaining quota." if successful
-                         else "Only last-known quota readings are available." if stale
                          else f"None of {len(matching)} accounts could be checked.")
         if len(matching) > MAX_CLIPROXY_ACCOUNTS:
             notes.append(f"Only the first {MAX_CLIPROXY_ACCOUNTS} accounts were checked.")
@@ -7607,8 +7461,7 @@ def collect_cliproxy(provider_ids: list[str], timeout: float, address: str, key_
 
 def history_path(state_dir: Path | None = None) -> Path:
     if state_dir is None:
-        state_home = Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state"))
-        state_dir = state_home / "omarchy" / "model-usage"
+        state_dir = state_folder()
     return state_dir / "history.json"
 
 
@@ -7763,14 +7616,11 @@ def record_history(history: dict[str, Any], readings: dict[str, dict[str, Any]],
         samples = [row for row in history["providers"].get(key, []) if cutoff <= row[0] <= stamp + 300]
         reading = readings.get(key)
         used = dynamic_window_used(reading) if reading else None
-        observation = int(reading.get("quotaUpdatedAt", stamp)) if reading else stamp
-        if reading and reading.get("proxyImplementation") == "rust" and (reading.get("stale") or (samples and observation <= samples[-1][0])):
-            used = None
         if used is not None:
-            if samples and observation - samples[-1][0] < 60:
-                samples[-1] = [observation, round(used, 2)]
+            if samples and stamp - samples[-1][0] < 60:
+                samples[-1] = [stamp, round(used, 2)]
             else:
-                samples.append([observation, round(used, 2)])
+                samples.append([stamp, round(used, 2)])
             changed = True
         history["providers"][key] = samples[-HISTORY_MAX_SAMPLES:]
     for key in list(history["windows"]):
@@ -7867,12 +7717,9 @@ def series_activity(history: dict[str, Any], keys: list[str]) -> dict[str, Any]:
 
 
 def attach_history(history: dict[str, Any], key: str, reading: dict[str, Any], stamp: int) -> None:
-    """Give a reading its chart buckets and, when it succeeded, each of its windows its own series."""
+    """Give a reading its 24-hour trend buckets and, when it succeeded, each of its windows its own series."""
     samples = history["providers"].get(key, [])
-    reading["history"] = {
-        "h24": bucket_history(samples, stamp, 24, 24 * 60 * 60),
-        "d7": bucket_history(samples, stamp, 7, SEVEN_DAYS),
-    }
+    reading["history"] = {"h24": bucket_history(samples, stamp, 24, 24 * 60 * 60)}
     windows = reading.get("windows")
     if reading.get("status") != "ok" or not isinstance(windows, list):
         return
@@ -8654,7 +8501,6 @@ def build_payload(
     omp_local: bool = False, omp_gateway_url: str = "", omp_gateway_key_file: Path | None = None,
     omp_only: bool = False,
 ) -> dict[str, Any]:
-    metadata: dict[str, Any] = {}
     omp = omp_executable()
     reads_local = omp_local and omp is not None and omp_set_up()
     # omp takes longer than most providers, so it is read while they are.
@@ -8665,7 +8511,7 @@ def build_payload(
         if omp_only:
             providers: list[dict[str, Any]] = []
         elif source == "cliproxy":
-            providers = collect_cliproxy(provider_ids, timeout, cliproxy_url, key_file or cliproxy_key_path(), discover=True, metadata=metadata)
+            providers = collect_cliproxy(provider_ids, timeout, cliproxy_url, key_file or cliproxy_key_path(), discover=True)
             try:
                 server = normalize_cliproxy_url(cliproxy_url)
             except ProviderFailure:
@@ -8705,7 +8551,6 @@ def build_payload(
         "detected": detected_providers(),
         "installed": installed_providers(),
         "omp": omp_summary,
-        **metadata,
     }
 
 
@@ -8755,4 +8600,5 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     stop_on_signals()
+    move_legacy_folders()
     raise SystemExit(main())

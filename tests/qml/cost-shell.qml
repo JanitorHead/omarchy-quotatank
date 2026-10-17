@@ -32,7 +32,7 @@ ShellRoot {
     if (!condition) throw new Error("COST TEST FAILED: " + message)
   }
   function create(name, values) {
-    var component = Qt.createComponent(Quickshell.env("MODEL_USAGE_REPO_URL") + "/" + name)
+    var component = Qt.createComponent(Quickshell.env("QUOTATANK_REPO_URL") + "/" + name)
     check(component.status === Component.Ready, component.errorString())
     var object = component.createObject(root, values || {})
     check(object !== null, component.errorString())
@@ -394,7 +394,7 @@ ShellRoot {
 
   FileView {
     id: dimensionsFile
-    path: Quickshell.env("MODEL_USAGE_COST_DIMENSIONS_FIXTURE")
+    path: Quickshell.env("QUOTATANK_COST_DIMENSIONS_FIXTURE")
     blockLoading: true
   }
 

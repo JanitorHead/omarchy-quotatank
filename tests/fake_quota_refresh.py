@@ -14,7 +14,7 @@ parser.add_argument("--cliproxy-url")
 parser.add_argument("--cliproxy-key-file")
 parser.add_argument("--key-file", action="append", default=[])
 args = parser.parse_args()
-with Path(os.environ["MODEL_USAGE_QUOTA_REQUESTS"]).open("a") as stream:
+with Path(os.environ["QUOTATANK_QUOTA_REQUESTS"]).open("a") as stream:
     stream.write(json.dumps(vars(args)) + "\n")
 time.sleep(0.15)
 print(json.dumps({"schemaVersion": 1, "source": args.source,

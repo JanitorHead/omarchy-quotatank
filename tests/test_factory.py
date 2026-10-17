@@ -12,7 +12,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "scripts" / "usage-fetch.py"
-SPEC = importlib.util.spec_from_file_location("model_usage_backend_factory", BACKEND)
+SPEC = importlib.util.spec_from_file_location("quotatank_backend_factory", BACKEND)
 assert SPEC and SPEC.loader
 usage = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(usage)
@@ -193,7 +193,7 @@ class FetchTests(FactoryCase):
         self.assertEqual(http.call_args.args[1]["Authorization"], "Bearer fk-synthetic-dotenv")
 
     def test_saved_key_at_the_default_location_is_used(self):
-        self.saved_key(path=self.root / "config" / "omarchy" / "model-usage" / "factory.key")
+        self.saved_key(path=self.root / "config" / "omarchy" / "quotatank" / "factory.key")
         with mock.patch.object(usage, "http_json", side_effect=router(success_routes())) as http:
             result = usage.fetch_factory(3)
         self.assertEqual(result["status"], "ok")

@@ -17,7 +17,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from model_usage_common import OMP_PROVIDERS, normalize_server_url, resolve_host
+from quotatank_common import OMP_PROVIDERS, normalize_server_url, resolve_host
 
 MAX_BYTES = 2 * 1024 * 1024
 MAX_ROWS = 4096
@@ -94,7 +94,7 @@ def read_body(response: Any, deadline: float) -> bytes:
 def get_json(url: str, timeout: float) -> Any:
     deadline = time.monotonic() + timeout
     request = urllib.request.Request(url, headers={"Accept": "application/json",
-                                                   "User-Agent": "omarchy-model-usage/1"})
+                                                   "User-Agent": "quotatank/2"})
     # Environment proxies are ignored: the server is this computer, a private network or the user's own HTTPS host.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirects())
     try:

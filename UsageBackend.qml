@@ -47,7 +47,6 @@ Item {
   // Providers whose CLI is on PATH, or null before a payload says: Settings offers Sign in for these
   // and Install for the rest.
   readonly property var installed: payload && payload.installed !== undefined ? UsageLogic.listOrEmpty(payload.installed) : null
-  readonly property string proxyImplementation: String(payload && payload.proxyImplementation || "")
   readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl, cliproxyKeyFile, keyFiles, extraKeyArguments, ompArguments])
   readonly property string scriptPath: localPath(Qt.resolvedUrl("scripts/usage-fetch.py"))
   readonly property double nextRefreshAt: lastAttemptAt > 0
@@ -121,18 +120,18 @@ Item {
     if (fetchProcess.connectionId !== connectionId) {
       pendingRefresh = true
     } else if (fetchProcess.outputTooLarge) {
-      fetchError = "Model usage backend returned too much data"
+      fetchError = "Quotatank's limits reader returned too much data"
     } else if (fetchProcess.timedOut) {
-      fetchError = "Model usage backend timed out"
+      fetchError = "Quotatank's limits reader timed out"
     } else if (!fetchProcess.exitSeen) {
       fetchError = "Could not start python3 for Quotatank"
     } else if (fetchProcess.lastExit !== 0) {
-      fetchError = "Model usage backend exited with status " + fetchProcess.lastExit
+      fetchError = "Quotatank's limits reader exited with status " + fetchProcess.lastExit
     } else {
       var parsed = null
       try { parsed = JSON.parse(fetchProcess.body) } catch (e) { parsed = null }
       if (!parsed || parsed.schemaVersion !== 1 || !UsageLogic.isListLike(parsed.providers)) {
-        fetchError = "Model usage backend returned unreadable data"
+        fetchError = "Quotatank's limits reader returned unreadable data"
       } else {
         var backendError = String(parsed.backendError || "")
         if (backendError !== "") {

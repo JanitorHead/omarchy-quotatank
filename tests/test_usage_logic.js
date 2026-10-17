@@ -161,17 +161,6 @@ const resetStale = context.preserveProxyReadings({ source: "cliproxy", providers
   { source: "cliproxy", providers: [{ ...resetFailure, accounts: [resetFailure] }] });
 assert.equal(context.accountResetLabel(resetStale.providers[0].accounts[0]), "2 banked resets");
 assert.equal(resetStale.providers[0].accounts[0].stale, true);
-const goSnapshot = { source: "cliproxy", proxyImplementation: "go",
-  providers: [{ ...resetAccount, proxyImplementation: "go", accounts: [{ ...resetAccount, proxyImplementation: "go" }] }] };
-const nativeFailure = { ...resetFailure, windows: [], proxyImplementation: "rust", supportsBankedReset: false };
-const rustSnapshot = context.preserveProxyReadings(goSnapshot,
-  { source: "cliproxy", proxyImplementation: "rust", providers: [{ ...nativeFailure, accounts: [nativeFailure] }] });
-assert.equal(rustSnapshot.providers[0].accounts[0].credits, null, "implementation changes never restore Go reset credits");
-assert.equal(rustSnapshot.providers[0].accounts[0].windows.length, 0);
-const malformedNative = context.preserveProxyReadings(
-  { source: "cliproxy", providers: [{ ...priorAccount, proxyImplementation: "rust" }] },
-  { source: "cliproxy", providers: [{ ...failedAccount, proxyImplementation: "rust", errorKind: "malformed" }] });
-assert.equal(malformedNative.providers[0].status, "error", "invalid native data cannot become a successful retained reading");
 
 const customRows = [{model: " vendor/Model[1m] ", inputCostPerMillionTokens: "2",
   outputCostPerMillionTokens: "8", cacheReadCostPerMillionTokens: "0", cacheWriteCostPerMillionTokens: ""}];
@@ -191,27 +180,10 @@ const specialId = context.encodeCostPrices([{...customRows[0], model: "__proto__
 assert.ok(Object.prototype.hasOwnProperty.call(JSON.parse(specialId), "__proto__"));
 console.log("Custom cost price validation: passed");
 
-const a = { id: 'codex', accountId: '0123456789abcdef' };
-const b = { id: 'codex', accountId: 'fedcba9876543210' };
-const activity = { liveState: 'live', liveAccounts: [
-  { provider: 'codex', accountId: a.accountId, inFlight: 3, sessions: 5 },
-  { provider: 'codex', accountId: b.accountId, inFlight: 1, sessions: 1 }
-] };
-activity.liveState = 'reconnecting';
-assert.equal(context.accountLoad(a, activity), null);
-assert.equal(context.sessionBadgeText(null), 'Sessions unknown');
-assert.equal(context.sessionBadgeText({sessions: 0}), '0 sessions');
-assert.equal(context.sessionBadgeText({sessions: 1, inFlight: 3}), '1 session');
-assert.equal(context.sessionBadgeText({sessions: 5, inFlight: 0}), '5 sessions');
-assert.match(context.sessionDetails({sessions: 5}), /may remain assigned after a request finishes/);
-const payload = { schemaVersion: 1, state: 'live', message: 'Live', providers: [], accounts: activity.liveAccounts };
-assert.equal(context.validLivePayload(payload), true);
-assert.equal(context.validLivePayload({ ...payload, state: 'reconnecting' }), false);
-assert.equal(context.validLivePayload({ ...payload, accounts: [{...activity.liveAccounts[0], inFlight: NaN}] }), false);
-assert.equal(context.validLivePayload({ ...payload, accounts: [{...activity.liveAccounts[0], inFlight: true}] }), false);
-let created = 0, stopped = 0, destroyed = 0;
+// The shared live-connection registry (omp-live.py): one object per key, stopped by its last consumer.
+let created = 0, stopped = 0;
 const factory = { createObject(parent) { assert.equal(parent,null); created++; return {
-  stop() { stopped++; }, destroy() { destroyed++; }
+  stop() { stopped++; }
 }; } };
 assert.equal(context.acquireLive('test', factory, {}), context.acquireLive('test', factory, {}));
 assert.equal(created,1);
@@ -286,7 +258,7 @@ assert.equal(context.remainingForWindow(weeklyOnly, "monthly"), 42, "the primary
 assert.equal(context.usedFromRemaining(30), 70);
 assert.equal(context.usedFromRemaining(null), null);
 
-// Shared number formatting and the Limits view's per-model rows.
+// Shared number formatting.
 assert.equal(context.formatTokens(8166), "8.17K");
 assert.equal(context.formatTokens(0), "0");
 assert.equal(context.formatTokens(null), "0");
@@ -294,15 +266,6 @@ assert.equal(context.formatTokens(2_500_000), "2.50M");
 assert.equal(context.formatUsd(0.00122625), "$0.0012");
 assert.equal(context.formatUsd(12.345), "$12.35");
 assert.equal(context.formatUsd(null), "—");
-const modelRows = [
-  { provider: "opencode", model: "small", totalTokens: 10, costUsd: 0.01 },
-  { provider: "claude", model: "other", totalTokens: 999, costUsd: 1 },
-  { provider: "opencode", model: "heavy", totalTokens: 5000, costUsd: null },
-];
-assert.equal(JSON.stringify(context.providerModels(modelRows, "opencode").map(row => row.model)),
-  '["heavy","small"]', "one provider, heaviest first, unknown cost kept in the list");
-assert.equal(context.providerModels(modelRows, "kimi").length, 0);
-assert.equal(context.providerModels(null, "opencode").length, 0);
 
 // Used versus remaining: both sides of one allowance, and the label that goes
 // with each. Provider dashboards show usage, so that is the default.
@@ -762,6 +725,18 @@ assert.equal(context.changedFromDefaults({}).length, 0, "missing keys already re
 assert.equal(context.changedFromDefaults({ quotaMode: "Remaining", barWindow: "auto", usageSource: "cliproxy" }).join(","), "quotaMode",
   "only preferences that differ count; connections never do");
 console.log("Reset defaults: passed");
+
+// 2.0 moved the private folder: saved 1.x paths follow it, JSON settings included; nothing else changes.
+const asJson = (value) => JSON.parse(JSON.stringify(value));
+const legacyKey = "/home/u/.config/omarchy/model-usage/management-keys/k1";
+assert.deepEqual(asJson(context.legacyPathSettings({
+  cliproxyKeyFile: legacyKey, openrouterKeyFile: "/home/u/keys/or.key", refreshIntervalSec: 900,
+  extraKeys: JSON.stringify({ zai: [{ id: "k-0123abcd", name: "Work", file: legacyKey }] }),
+  ompGatewayKeyFile: "/home/u/.config/omarchy/quotatank/management-keys/k2" })), {
+  cliproxyKeyFile: "/home/u/.config/omarchy/quotatank/management-keys/k1",
+  extraKeys: JSON.stringify({ zai: [{ id: "k-0123abcd", name: "Work", file: "/home/u/.config/omarchy/quotatank/management-keys/k1" }] }) });
+assert.deepEqual(asJson(context.legacyPathSettings({ cliproxyKeyFile: "/home/u/model-usage/k" })), {}, "only the omarchy folder moves");
+assert.deepEqual(asJson(context.legacyPathSettings(null)), {});
 
 // The provider registry: every provider once, set up one of three ways, offered by name in the
 // manifest's provider lists. Sign-in providers are monitored by default; every provider gets a chip.
@@ -1339,13 +1314,12 @@ console.log("omp settings, live feed and account modes: passed");
   assert.equal(context.accountAnswersTo(merged, "omp-ffffffffffff"), false);
   assert.equal(context.accountAnswersTo(merged, ""), false);
 
-  // One recent map: live omp requests, and through a proxy now for a request in flight, else its last request.
+  // One recent map: live omp requests, and through a proxy each account's last request.
   const recentMap = plain(context.mergeRecentActivity({ "claude@omp-0123456789ab": NOW - 50, "codex@a1": NOW - 400 },
-    [{ provider: "codex", accountId: "a2", inFlight: 2 }, { provider: "codex", accountId: "a3", inFlight: 0 }],
     [{ id: "codex", status: "ok", accountId: "a1", lastUsedAt: NOW - 100 }, { id: "codex", status: "ok", accountId: "a2", lastUsedAt: NOW - 900 },
-     { id: "codex", status: "ambiguous", lastUsedAt: NOW - 1 }], NOW));
-  assert.deepEqual(recentMap, { "claude@omp-0123456789ab": NOW - 50, "codex@a1": NOW - 100, "codex@a2": NOW },
-    "the newest sign wins; a request in flight is now; idle and ambiguous rows add nothing");
+     { id: "codex", status: "ambiguous", lastUsedAt: NOW - 1 }]));
+  assert.deepEqual(recentMap, { "claude@omp-0123456789ab": NOW - 50, "codex@a1": NOW - 100, "codex@a2": NOW - 900 },
+    "the newest sign wins; ambiguous rows add nothing");
 
   // Mode: the Settings choice wins; a proxy, an omp pool, or two accounts rising within an hour mean together.
   const pair = (a, b) => ({ id: "claude", accounts: [rose(a), { ...rose(b), accountId: "personal" }] });
@@ -1441,20 +1415,19 @@ console.log("omp settings, live feed and account modes: passed");
   assert.equal(context.accountCanUse(personal, "single", true), false, "proxy accounts have no Use");
 
   // How new sessions pick an account: one text for the ACCOUNTS header and the hover card.
-  assert.equal(context.accountModeText({ ...claude, accountSwitch: { mode: "auto", threshold: 95 } }, "single", false, ""),
+  assert.equal(context.accountModeText({ ...claude, accountSwitch: { mode: "auto", threshold: 95 } }, "single", false),
     "Omarchy · switches at 95%");
-  assert.equal(context.accountModeText({ ...claude, accountSwitch: { mode: "manual", threshold: 90 } }, "single", false, ""),
+  assert.equal(context.accountModeText({ ...claude, accountSwitch: { mode: "manual", threshold: 90 } }, "single", false),
     "Omarchy · notifies at 90%");
-  assert.equal(context.accountModeText(claude, "single", false, ""), "");
-  assert.equal(context.accountModeText({ ...claude, pool: { source: "omp" } }, "together", false, ""), "Used together · omp");
-  assert.equal(context.accountModeText(claude, "together", true, "Fusebox"), "Used together · Fusebox");
+  assert.equal(context.accountModeText(claude, "single", false), "");
+  assert.equal(context.accountModeText({ ...claude, pool: { source: "omp" } }, "together", false), "Used together · omp");
+  assert.equal(context.accountModeText(claude, "together", true), "Used together · CLIProxyAPI");
   assert.equal(context.accountModeText({ ...claude, accounts: [{ ...work, origins: ["omarchy", "omp"] }, personal] },
-    "together", false, ""), "Used together · omp", "an account omp also reads counts as omp");
+    "together", false), "Used together · omp", "an account omp also reads counts as omp");
   assert.equal(context.accountSourceKind({ accountId: "work", source: "Claude OAuth usage API" }, false), "omarchy",
     "source describes the API; only origin names the kind");
   assert.equal(context.accountSourceKind({ accountId: "a1", origin: "proxy" }, false), "proxy");
   assert.equal(context.accountSourceKind({ accountId: "a1" }, true), "proxy");
-  assert.equal(context.accountSourceKind({ accountId: "f00d", proxyImplementation: "go" }, false), "proxy");
   assert.equal(context.accountSourceKind({ origin: "omp", accountId: "x" }, false), "omp");
   assert.equal(context.accountSourceKind({ accountId: "k-0123abcd" }, false), "key");
   assert.equal(context.accountSourceKind({ accountId: "primary" }, false), "key");
@@ -1486,9 +1459,9 @@ console.log("omp settings, live feed and account modes: passed");
     windows: [{ ...quiet([30, 60, 90][i]), id: "primary" }] }));
   const proxied = { id: "codex", status: "ok", accountId: "2", accounts: proxyAccounts };
   const viaProxy = stateOf(proxied, { proxyMode: true, recentByAccount: context.mergeRecentActivity(null,
-    [{ provider: "codex", accountId: "1", inFlight: 1 }], [{ id: "codex", status: "ok", accountId: "0", lastUsedAt: NOW - 3600 }], NOW) });
+    [{ id: "codex", status: "ok", accountId: "1", lastUsedAt: NOW - 30 }, { id: "codex", status: "ok", accountId: "0", lastUsedAt: NOW - 3600 }]) });
   assert.equal(viaProxy.mode, "together");
-  assert.deepEqual(viaProxy.counted, [1], "through a proxy the account with a request in flight is counted, not an hour-old last one");
+  assert.deepEqual(viaProxy.counted, [1], "through a proxy the account that just served a request is counted, not an hour-old last one");
   assert.equal(viaProxy.value, 1);
   assert.deepEqual(viaProxy.inUse, [false, false, false]);
   assert.deepEqual(stateOf(proxied, { proxyMode: true }).counted, [2], "nothing spending: the least headroom");
@@ -1802,7 +1775,7 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
   assert.equal(hoverOf(claude(hoverAccounts, { pool: { source: "omp" } })).modeText, "Used together · omp",
     "the same words as the ACCOUNTS header");
   const viaProxy = claude(hoverAccounts);
-  const proxyHover = hoverOf(viaProxy, { proxyMode: true, proxyLabel: "CLIProxyAPI" }, { proxyMode: true });
+  const proxyHover = hoverOf(viaProxy, { proxyMode: true }, { proxyMode: true });
   assert.equal(proxyHover.modeText, "Used together · CLIProxyAPI");
   assert.deepEqual(plain(proxyHover.rows.map((row) => row.inUse)), [false, false, false, false, false],
     "\"in use\" only one at a time, as the rows say");

@@ -32,16 +32,8 @@ Ui.Panel {
   readonly property var foundProviders: proxyMode ? [] : UsageLogic.foundProviders(backend.detected,
     backend.enabledProviderIds, UsageLogic.listOrEmpty(setting("dismissedProviders", UsageLogic.DEFAULT_SETTINGS.dismissedProviders)))
   property string selectedProviderId: ""
-  property string historyMode: "h24"
   property string viewMode: "limits"
   property string settingsReturnView: "limits"
-  // History follows the reading the detail shows: the selected account, or the provider.
-  readonly property bool historyAvailable: viewMode === "limits" && !!detail
-    && !!detail.history
-    && ((UsageLogic.isListLike(detail.history.h24) && detail.history.h24.length > 0)
-      || (UsageLogic.isListLike(detail.history.d7) && detail.history.d7.length > 0))
-  readonly property bool tokensAvailable: viewMode === "limits" && !!provider
-    && provider.status !== "error" && providerModels.length > 0
   readonly property bool configuring: viewMode === "settings"
   property alias settingsForm: configForm
   property alias resetAction: resetBackend
@@ -122,10 +114,6 @@ Ui.Panel {
   }
   readonly property var providerSummary: providers.length > 0 ? providers[providerIndex] : null
   readonly property var provider: providerSummary
-  // Per-model token activity for the provider on screen, taken from the same
-  // estimated-cost scan the Costs tab uses so both views always agree.
-  readonly property var providerModels: UsageLogic.providerModels(
-    costBackend.payload ? costBackend.payload.models : [], provider ? provider.id : "")
   readonly property var proxyAccounts: UsageLogic.listOrEmpty(providerSummary && providerSummary.accounts)
   // A proxy always shows its accounts; locally a provider lists them once it has more than one
   // (Omarchy subscription accounts, extra API keys, accounts omp reads).
@@ -146,12 +134,11 @@ Ui.Panel {
   // omp's live feed (OmpActivity.qml): requests as they happen, with their accounts. Tests put a
   // stand-in with the same signals and properties here.
   property QtObject ompActivity: ompActivityHelper
-  // The latest sign of use per account: live omp requests and, through a proxy, its requests in flight
-  // (now) and each account's last request; the newest wins (UsageLogic.mergeRecentActivity).
+  // The latest sign of use per account: live omp requests and, through a proxy, each account's last
+  // request; the newest wins (UsageLogic.mergeRecentActivity).
   readonly property var recentByAccount: UsageLogic.mergeRecentActivity(
     ompActivity && ompActivity.recentByAccount ? ompActivity.recentByAccount : null,
-    proxyMode && activityBackend.useLive ? activityBackend.liveAccounts : [],
-    proxyMode ? activityBackend.providers : [], nowSeconds)
+    proxyMode ? activityBackend.providers : [])
   readonly property var accountModeChoices: UsageLogic.parseAccountModes(setting("accountModes", "{}"))
   readonly property var accountStates: {
     var states = {}
@@ -238,11 +225,6 @@ Ui.Panel {
     detailSlideFrom = direction * Style.space(12)
     detailSwapAnimation.start()
   }
-
-  // Session details of the selected proxy account, opened from its session badge. They close when
-  // another account is shown, not when a reading moves the same account to another row.
-  property bool accountActivityExpanded: false
-  onDetailKeyChanged: accountActivityExpanded = false
 
   // A proxy account's banked reset: the confirmation takes over the panel, as before.
   function resetAccount(accountId) {
@@ -536,14 +518,11 @@ Ui.Panel {
 
   function showLimits() {
     viewMode = "limits"
-    // Limits also renders per-model tokens, so it needs the same scan.
-    costBackend.ensureLoaded()
     open()
   }
 
   function showCosts() {
     viewMode = "costs"
-    costBackend.ensureLoaded()
     open()
   }
 
@@ -559,6 +538,14 @@ Ui.Panel {
   function showCostSettings() {
     settingsReturnView = "costs"
     showSettings("costs")
+  }
+
+  // Only Costs, and Settings → Costs with the sources the last scan found, read transcripts; Limits never
+  // waits on a scan.
+  readonly property bool costsShown: opened && (viewMode === "costs" || (configuring && configForm.page === "costs"))
+  onCostsShownChanged: if (costsShown) {
+    costBackend.ensureLoaded()
+    if (remoteCostsChanged && !remoteCostTimer.running) scanRemoteCosts()
   }
 
   function leaveSettings() {
@@ -586,6 +573,18 @@ Ui.Panel {
     configForm.finishSave(true)
     return true
   }
+
+  // Saved 1.x key paths follow the private folder to omarchy/quotatank, once (UsageLogic.legacyPathSettings).
+  // This runs as settings arrive, before the backends' first refresh starts.
+  function moveLegacyPaths() {
+    var moved = UsageLogic.legacyPathSettings(settings)
+    if (Object.keys(moved).length === 0) return
+    var entry = Object.assign({}, settings, moved)
+    if (bar && bar.shell && typeof bar.shell.updateEntryInline === "function") bar.shell.updateEntryInline(moduleName, entry)
+    settings = entry
+  }
+  onSettingsChanged: moveLegacyPaths()
+  Component.onCompleted: moveLegacyPaths()
 
   function handleBarPress(buttonCode) {
     if (buttonCode === Qt.MiddleButton) nextProvider()
@@ -713,7 +712,6 @@ Ui.Panel {
     if (account.reading && account.reading.status === "disabled") text += "\nThis account is now paused."
     if (account.reading && account.reading.stale) text += "\nQuota is a last-known reading."
     if (activityBackend.fetchError !== "" && account.reading) text += "\nShowing last-known account activity."
-    if (activityBackend.rustProxy) text += "\nLatest completed request, including failures; activity resets when the proxy restarts."
     return text
   }
 
@@ -829,8 +827,6 @@ Ui.Panel {
   onOpenedChanged: if (opened) {
     nowMs = Date.now()
     latchDefaultAccount()
-    costBackend.ensureLoaded()
-    if (remoteCostsChanged && !remoteCostTimer.running) scanRemoteCosts()
     if (panelFlick) panelFlick.contentY = 0
     Qt.callLater(function() {
       if (resetBackend.active) resetForm.focusFirst()
@@ -845,7 +841,6 @@ Ui.Panel {
   onViewModeChanged: {
     if (costsView) costsView.closeMenu()
     if (viewMode !== "settings") configForm.discardKey()
-    if (viewMode === "costs") costBackend.ensureLoaded()
     if (panelFlick) panelFlick.contentY = 0
   }
 
@@ -894,13 +889,13 @@ Ui.Panel {
   }
 
   // omp stats on another computer indexed new requests. Its figures change only with a new scan: while
-  // the panel is open that runs at most once a minute; a closed panel scans when it next opens.
+  // Costs shows that runs at most once a minute; otherwise it scans when Costs next shows.
   property bool remoteCostsChanged: false
   property int remoteCostScans: 0
   function followRemoteActivity() {
     if (!costBackend.requested) return
     remoteCostsChanged = true
-    if (opened && !remoteCostTimer.running) scanRemoteCosts()
+    if (costsShown && !remoteCostTimer.running) scanRemoteCosts()
   }
   function scanRemoteCosts() {
     remoteCostsChanged = false
@@ -911,7 +906,7 @@ Ui.Panel {
   Timer {
     id: remoteCostTimer
     interval: 60000
-    onTriggered: if (root.remoteCostsChanged && root.opened) root.scanRemoteCosts()
+    onTriggered: if (root.remoteCostsChanged && root.costsShown) root.scanRemoteCosts()
   }
 
   // A first open with nothing read yet shows placeholder blocks, but only once reading takes over a
@@ -1188,8 +1183,8 @@ Ui.Panel {
     bar: root.bar
     text: "󱚣"
     active: root.alarming
-    tooltipText: root.provider ? "Model usage · " + root.provider.name
-      + (root.proxyMode ? "\n" + root.lastAccountTooltip(root.lastAccount(root.provider)) : "") : "Model usage"
+    tooltipText: root.provider ? "Quotatank · " + root.provider.name
+      + (root.proxyMode ? "\n" + root.lastAccountTooltip(root.lastAccount(root.provider)) : "") : "Quotatank"
     onPressed: function(buttonCode) { root.handleBarPress(buttonCode) }
   }
 
@@ -1317,8 +1312,7 @@ Ui.Panel {
           // built only while this chip's card shows.
           readonly property bool hoverCardEligible: multiAccount
           readonly property var hoverModel: root.hoverChip === providerChip && multiAccount && root.hoverCardShown
-            ? UsageLogic.barHoverModel(modelData, accountState, { proxyMode: root.proxyMode,
-              proxyLabel: UsageLogic.proxyName(backend.proxyImplementation), nowSeconds: root.nowSeconds,
+            ? UsageLogic.barHoverModel(modelData, accountState, { proxyMode: root.proxyMode, nowSeconds: root.nowSeconds,
               extraKeys: root.setting("extraKeys", "{}"), readAtSeconds: root.readingSeconds(modelData), stale: stale,
               formatClock: root.clockText })
             : null
@@ -1768,7 +1762,6 @@ Ui.Panel {
             proxyProviders: root.proxyMode ? backend.providers : []
             usagePayload: root.proxyMode ? null : backend.payload
             usageLoading: backend.loading
-            proxyImplementation: backend.proxyImplementation
             costSources: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sources) : []
             ompActivity: root.ompActivity
             motion: root.motion
@@ -1801,17 +1794,6 @@ Ui.Panel {
             width: parent.width
             spacing: Style.spacing.lg
 
-            PlainText {
-              objectName: "liveActivityStatus"
-              width: parent.width
-              visible: activityBackend.useLive && text !== ""
-              text: activityBackend.liveNotice
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-            }
-
             AccountList {
               id: accountListView
               objectName: "accountList"
@@ -1826,8 +1808,7 @@ Ui.Panel {
               proxyMode: root.proxyMode
               resetsActionable: root.proxyMode && !resetBackend.active && !resetBackend.busy
               useBusyId: root.accountEvents.useBusyId
-              headerText: UsageLogic.accountModeText(root.provider, root.accountMode, root.proxyMode,
-                UsageLogic.proxyName(backend.proxyImplementation))
+              headerText: UsageLogic.accountModeText(root.provider, root.accountMode, root.proxyMode)
               quotaMode: root.selectedQuotaMode
               warningThreshold: root.warningThreshold
               criticalThreshold: root.criticalThreshold
@@ -1870,7 +1851,7 @@ Ui.Panel {
             bottomPadding: root.skeletonDue ? 0 : Style.spacing.huge
             text: backend.loading
               ? "Reading your limits…"
-              : root.proxyMode ? "No enabled managed accounts found. Check the accounts configured in " + UsageLogic.proxyName(backend.proxyImplementation) + "."
+              : root.proxyMode ? "No enabled managed accounts found. Check the accounts configured in CLIProxyAPI."
               : "Nothing to show yet. Sign in to a provider's CLI or app, or turn one on under Settings → Providers."
             color: root.dim
             font.family: root.fontFamily
@@ -1916,80 +1897,41 @@ Ui.Panel {
               width: parent.width
               spacing: Style.spacing.md
 
-              Item {
+              Row {
                 objectName: "accountDetailHeader"
                 width: parent.width
-                implicitHeight: Math.max(detailName.implicitHeight, sessionBadge.visible ? sessionBadge.implicitHeight : 0)
 
-                Row {
-                  anchors.left: parent.left
-                  anchors.right: sessionBadge.visible ? sessionBadge.left : parent.right
-                  anchors.rightMargin: sessionBadge.visible ? Style.spacing.md : 0
-                  anchors.verticalCenter: parent.verticalCenter
-
-                  PlainText {
-                    id: detailName
-                    objectName: "accountDetailName"
-                    width: Math.min(implicitWidth, parent.width * 0.6)
-                    text: root.selectedAccount ? root.accountNames[root.selectedAccountIndex] || "" : ""
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: true
-                    elide: Text.ElideRight
-                  }
-
-                  PlainText {
-                    objectName: "accountDetailMeta"
-                    width: Math.max(0, parent.width - detailName.width)
-                    anchors.baseline: detailName.baseline
-                    text: {
-                      var account = root.selectedAccount
-                      if (!account) return ""
-                      var parts = []
-                      var plan = account.plan || account.planType ? UsageLogic.accountPlanLabel(account) : ""
-                      if (plan !== "" && plan !== detailName.text) parts.push(plan)
-                      if (root.providerState && root.providerState.inUse[root.selectedAccountIndex] === true) parts.push("in use")
-                      if (UsageLogic.accountSourceKind(account, root.proxyMode) === "omp") parts.push("from omp")
-                      return parts.length > 0 ? " · " + parts.join(" · ") : ""
-                    }
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    elide: Text.ElideRight
-                  }
+                PlainText {
+                  id: detailName
+                  objectName: "accountDetailName"
+                  width: Math.min(implicitWidth, parent.width * 0.6)
+                  text: root.selectedAccount ? root.accountNames[root.selectedAccountIndex] || "" : ""
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  font.bold: true
+                  elide: Text.ElideRight
                 }
 
-                Ui.Button {
-                  id: sessionBadge
-                  objectName: "accountSessionBadge"
-                  readonly property var load: UsageLogic.accountLoad(root.selectedAccount, activityBackend)
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  visible: activityBackend.useLive && !!root.selectedAccount
-                  text: UsageLogic.sessionBadgeText(load)
-                  focusable: true
-                  bordered: true
-                  horizontalPadding: Style.spacing.sm
-                  verticalPadding: Style.spacing.xs
-                  foreground: load !== null && load.sessions > 0 ? root.foreground : root.dim
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.caption
-                  tooltipText: UsageLogic.sessionDetails(load)
-                  Accessible.name: text + (root.accountActivityExpanded ? ", hide session details" : ", show session details")
-                  onClicked: root.accountActivityExpanded = !root.accountActivityExpanded
+                PlainText {
+                  objectName: "accountDetailMeta"
+                  width: Math.max(0, parent.width - detailName.width)
+                  anchors.baseline: detailName.baseline
+                  text: {
+                    var account = root.selectedAccount
+                    if (!account) return ""
+                    var parts = []
+                    var plan = account.plan || account.planType ? UsageLogic.accountPlanLabel(account) : ""
+                    if (plan !== "" && plan !== detailName.text) parts.push(plan)
+                    if (root.providerState && root.providerState.inUse[root.selectedAccountIndex] === true) parts.push("in use")
+                    if (UsageLogic.accountSourceKind(account, root.proxyMode) === "omp") parts.push("from omp")
+                    return parts.length > 0 ? " · " + parts.join(" · ") : ""
+                  }
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  elide: Text.ElideRight
                 }
-              }
-
-              PlainText {
-                objectName: "accountActivityDetails"
-                width: parent.width
-                visible: activityBackend.useLive && root.accountActivityExpanded
-                text: UsageLogic.sessionDetails(sessionBadge.load)
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                wrapMode: Text.WordWrap
               }
 
               PlainText {
@@ -2074,7 +2016,7 @@ Ui.Panel {
                 var notice = String(reading.notice || "")
                 if (notice !== "") return notice
                 if (!root.accountOverview) return ""
-                if (reading.status === "disabled") return "This account is paused in " + UsageLogic.proxyName(backend.proxyImplementation) + "."
+                if (reading.status === "disabled") return "This account is paused in CLIProxyAPI."
                 if (reading.status !== "ok") return "Quota unavailable"
                 if (UsageLogic.listOrEmpty(reading.windows).length === 0 && UsageLogic.spendable(reading) === null)
                   return "No subscription limits reported."
@@ -2131,11 +2073,6 @@ Ui.Panel {
                   motion: root.motion
                 }
               }
-              PacingLegend {
-                foreground: root.foreground
-                dim: root.dim
-                fontFamily: root.fontFamily
-              }
             }
 
             RunwayCard {
@@ -2176,57 +2113,6 @@ Ui.Panel {
                 credits: root.detail ? root.detail.credits : null
                 visible: creditsToggle.checked
               }
-            }
-
-            Ui.PanelSeparator {
-              visible: root.historyAvailable
-              foreground: root.foreground
-            }
-
-            UsageDisclosure {
-              id: historyToggle
-              visible: root.historyAvailable
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              text: "History"
-            }
-
-            UsageHistory {
-              id: history
-              visible: historyToggle.checked && root.historyAvailable
-              width: parent.width
-              history: root.detail && root.detail.history ? root.detail.history : ({ h24: [], d7: [] })
-              mode: root.historyMode
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onModeChanged: root.historyMode = mode
-            }
-
-            Ui.PanelSeparator {
-              visible: root.tokensAvailable
-              foreground: root.foreground
-            }
-
-            UsageDisclosure {
-              id: tokensToggle
-              visible: root.tokensAvailable
-              width: parent.width
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              text: "Tokens by model"
-            }
-
-            UsageTokenModels {
-              id: tokensByModel
-              visible: tokensToggle.checked && root.tokensAvailable
-              width: parent.width
-              models: root.providerModels
-              periodLabel: costBackend.payload && costBackend.payload.period
-                ? String(costBackend.payload.period.label || "") : ""
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              motion: root.motion
             }
           }
 

@@ -1,6 +1,6 @@
 """Synthetic usage-fetch for the Limits QML contract.
 
-Claude has two Omarchy logins and Kimi a single account. Marker files in MODEL_USAGE_ACCOUNTS_MARKERS
+Claude has two Omarchy logins and Kimi a single account. Marker files in QUOTATANK_ACCOUNTS_MARKERS
 stand in for Omarchy's registry, so every reading shows what Omarchy did, however often the panel reads:
 - none: Work is in use and spending fast; Personal is 40% used.
 - `used-personal` (the test's Use command made it): Personal is in use.
@@ -20,7 +20,7 @@ parser.add_argument("--providers", default="claude,kimi")
 parser.add_argument("--source", default="direct")
 args, _unknown = parser.parse_known_args()
 
-markers = Path(os.environ["MODEL_USAGE_ACCOUNTS_MARKERS"])
+markers = Path(os.environ["QUOTATANK_ACCOUNTS_MARKERS"])
 phase = 2 if (markers / "omarchy-switched").exists() else 1 if (markers / "used-personal").exists() else 0
 now = int(time.time())
 SESSION, WEEK = 18000, 604800
@@ -43,7 +43,7 @@ def login(account_id: str, label: str, plan: str, session: float, rate: float, w
             "active": active, "primary": account_id == "work", "accountCount": 2, "credits": None, "notice": "",
             "windows": [window("session", "5-hour limit", session, 9000, SESSION, rate),
                         window("weekly", "Weekly limit", weekly, 3 * 86400, WEEK)],
-            "history": {"h24": [max(0.0, session - 2 * (23 - i)) for i in range(24)], "d7": []},
+            "history": {"h24": [max(0.0, session - 2 * (23 - i)) for i in range(24)]},
             "activity": {"lastIncreaseAt": now - 60 if rate else now - 7200, "lastDelta": 3 if rate else 0,
                          "lastReadingAt": now}}
 
@@ -66,7 +66,7 @@ kimi = {"id": "kimi", "name": "Kimi Code", "status": "ok", "errorKind": "", "mes
         "notice": '<img src="http://127.0.0.1:9/quotatank-markup.png">Suspended',
         "windows": [window("weekly", "Weekly limit", 40, 4 * 86400, WEEK),
                     window("limit-0", "5-hour limit", 12, 9000, SESSION)],
-        "history": {"h24": [], "d7": []}}
+        "history": {"h24": []}}
 selected = {value for value in args.providers.split(",") if value}
 payload = {"schemaVersion": 1, "generatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
            "providers": [row for row in (claude, kimi) if row["id"] in selected]}

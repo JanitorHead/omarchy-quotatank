@@ -15,7 +15,7 @@
 - `scripts/omp_stats.py` reads the four aggregate endpoints of an `omp stats` dashboard with bounded, concurrent GET requests and keeps only counters, costs, and provider, model and folder names.
 - `UsageCosts.qml` renders the metric/period controls, time chart, token mix, pricing coverage percentages, and provider/model breakdowns without parsing raw history in QML.
 - `BlockMeter.qml` renders one track item per fixed block plus only the partial boundary fragment—there is no duplicate full-width fill layer.
-- `UsageHistory.qml` receives small pre-bucketed arrays; large history files are never parsed in QML.
+- Limits reads only small pre-bucketed history arrays (the 24-hour trend behind the account sparklines and hover card); large history files are never parsed in QML.
 - `PlainText.qml` is the plugin's only text item: a `Text` fixed to `Text.PlainText`. Use it instead of `Text` (Omarchy's plugin UI-safety rule), so provider strings never render as rich text. The Limits QML contract fails on any text item that reads markup.
 
 The packaged script and assets are found with `Qt.resolvedUrl`, so cloned plugins and symlinked development checkouts use the plugin's actual source directory. Restart the desktop shell to apply QML/JavaScript edits on the symlinked installation described below.
@@ -49,7 +49,7 @@ Live UI checks are opt-in. They launch a separate Quickshell test instance and
 show popups on the current desktop; they do not restart the running shell:
 
 ```bash
-MODEL_USAGE_LIVE_TESTS=1 ./tests/run
+QUOTATANK_LIVE_TESTS=1 ./tests/run
 ```
 
 This checks QML loading, dark/light palettes, unusual accents, changed
@@ -63,7 +63,7 @@ For changes to popup positioning or bar layout, explicitly enable the full
 four-edge cycle:
 
 ```bash
-MODEL_USAGE_LIVE_TESTS=1 MODEL_USAGE_TEST_ALL_EDGES=1 ./tests/run
+QUOTATANK_LIVE_TESTS=1 QUOTATANK_TEST_ALL_EDGES=1 ./tests/run
 ```
 
 `qmllint` cannot resolve child properties of Omarchy's dynamic `QtObject` theme tokens, the injected `bar` object, or Quickshell's native `QProcess::ExitStatus` signal type from the supplied import tree. The harness disables those two warning categories, treats every other warning as a failure, and uses the live Quickshell contract as the authoritative compile/runtime check for the dynamic bindings.

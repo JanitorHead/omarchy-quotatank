@@ -9,8 +9,8 @@ import Quickshell
 ShellRoot {
   id: root
 
-  readonly property string repoUrl: Quickshell.env("MODEL_USAGE_REPO_URL")
-  readonly property string phaseName: Quickshell.env("MODEL_USAGE_BAR_PHASE") || "components"
+  readonly property string repoUrl: Quickshell.env("QUOTATANK_REPO_URL")
+  readonly property string phaseName: Quickshell.env("QUOTATANK_BAR_PHASE") || "components"
   readonly property real now: Math.floor(Date.now() / 1000)
   readonly property var thresholds: ({ warningThreshold: 25, criticalThreshold: 10 })
   property var logic: null
@@ -72,7 +72,7 @@ ShellRoot {
   function account(id, label, used, extra) {
     return Object.assign({ id: "claude", accountId: id, label: label, status: "ok", origin: "omarchy",
       windows: [win("session", "5-hour limit", used, 7200, 18000), win("weekly", "Weekly limit", 30, 300000, 604800)],
-      activity: {}, history: { h24: [10, 20, 30, 40, 50, used], d7: [] } }, extra || {})
+      activity: {}, history: { h24: [10, 20, 30, 40, 50, used] } }, extra || {})
   }
 
   function provider(accounts, extra) {
@@ -368,11 +368,10 @@ ShellRoot {
     function () {
       check(widget.accountMode === "together", "Claude is used together")
       check(countedEverywhere("claude") === "[1] | [1] | [1]", "together, chip, tile and rows count Personal: " + countedEverywhere("claude"))
-      // The detail stays on the account it showed (M6), and session details stay open across readings.
+      // The detail stays on the account it showed (M6), across readings too.
       check(widget.selectedAccount.accountId === "main", "the detail does not follow the counted account mid-view")
-      widget.accountActivityExpanded = true
       widget.usageBackend.payload = JSON.parse(JSON.stringify(widget.usageBackend.payload))
-      check(widget.accountActivityExpanded && widget.selectedAccount.accountId === "main", "a new reading keeps the detail and its details")
+      check(widget.selectedAccount.accountId === "main", "a new reading keeps the detail")
       widget.selectProviderId("codex")
       widget.selectProviderId("claude")
       return true

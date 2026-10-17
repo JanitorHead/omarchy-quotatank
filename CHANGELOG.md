@@ -4,6 +4,30 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.0.0
+
+Quotatank 2 stands on its own: it no longer carries integrations or names inherited from the project it started from.
+
+### Removed
+
+- **Fusebox support.** The Fusebox (CLIProxyAPI-Rust) proxy is no longer read: no native `/api/accounts` inventory, no live session counts, and no optional `websockets` dependency. The `liveAccountActivity` setting is gone. CLIProxyAPI and CPA Usage Keeper work as before; a Fusebox server now answers as an unreachable CLIProxyAPI.
+- **History and Tokens by model** in Limits. Per-model tokens are in Costs (isolate a provider, **Breakdown → Model**, metric **Tokens**). The 24-hour trend behind account sparklines and the chip hover card stays; the backend no longer sends 7-day buckets (`history.d7`).
+- The **How the tick and projection work** row under the limit cards: hover a card's status line for the same explanation.
+
+### Changed
+
+- **Private files move to `omarchy/quotatank`.** Keys, tokens, and state lived in `~/.config/omarchy/model-usage` and `~/.local/state/omarchy/model-usage`. The first 2.0 backend run renames both folders (never through a symlink, and only when the new one does not exist yet), and the widget rewrites the key paths saved in its settings once.
+- Requests identify as `quotatank/2`, and errors and the bar tooltip say Quotatank. The development test switches are `QUOTATANK_LIVE_TESTS` and `QUOTATANK_TEST_ALL_EDGES`.
+- Limits no longer starts a cost scan: transcripts are read only when Costs, or **Settings → Costs**, is on screen, and scans for omp on another computer follow the same rule.
+- **Settings → Providers** opens on the providers: the omp section, with its gateway setup, now comes after them.
+- The README says Quotatank started as a fork of omarchy-modelusage; the MIT notice for DigitalPals stays.
+
+### Fixed
+
+- Opening the panel straight on Costs (or back on Limits) left the tab underline under the previous tab.
+
+Smoke-tested on live Claude Code, Codex and omp accounts, including the folder move and the settings rewrite of a real 1.9.3 install. CLIProxyAPI, CPA Usage Keeper and the omp gateway were verified with fixtures and contract tests only.
+
 ## 1.9.3
 
 ### Security

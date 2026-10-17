@@ -274,7 +274,7 @@ class OmpTranscriptTests(unittest.TestCase):
         self.assertEqual(len(set(session_ids)), 4)
         self.assertTrue(all(costs.valid_hash(value) for value in session_ids))
 
-    def test_omp_model_usage_lines_count_as_background_spend(self):
+    def test_omp_quotatank_lines_count_as_background_spend(self):
         warm = {"type": "model_usage", "id": "w1", "parentId": "m1", "timestamp": "2030-01-15T10:05:00Z",
                 "purpose": "cache-warm", "role": "assistant", "api": "anthropic-messages",
                 "provider": "anthropic", "model": "test-model", "stopReason": "stop",

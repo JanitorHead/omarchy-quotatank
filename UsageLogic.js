@@ -1,6 +1,6 @@
 .pragma library
 
-// One observer per connection across bars, monitors and open panels. The
+// One omp-live.py per omp setup across bars, monitors and open panels. The
 // shared object has no panel parent; the final consumer explicitly stops it.
 var liveConnections = ({})
 
@@ -9,7 +9,6 @@ function acquireLive(key, factory, properties) {
   if (!entry) {
     // Create in this engine-wide library context, not a consumer's context.
     // A parentless object alone still loses its functions when its creator dies.
-    if (!factory) factory = Qt.createComponent("UsageLiveConnection.qml")
     var object = factory.createObject(null, properties)
     if (!object) return null
     entry = { object: object, references: 0 }
@@ -27,60 +26,6 @@ function releaseLive(key) {
     delete liveConnections[key]
     entry.object.stop()
   }
-}
-
-function validLivePayload(payload) {
-  if (!payload || payload.schemaVersion !== 1) return false
-  if (payload.heartbeat === true) return true
-  if (!contains(["live", "reconnecting", "unavailable"], payload.state)
-      || typeof payload.message !== "string" || payload.message.length > 256
-      || !isListLike(payload.providers) || payload.providers.length > 4096
-      || !isListLike(payload.accounts) || payload.accounts.length > 4096) return false
-  var seen = ({})
-  for (var p = 0; p < payload.providers.length; p++) {
-    var provider = payload.providers[p]
-    if (!provider || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(provider.id)
-        || !contains(["ok", "ambiguous"], provider.status)
-        || (provider.status === "ok" && !/^[a-f0-9]{16}$/.test(provider.accountId))
-        || typeof provider.lastUsedAt !== "number" || !isFinite(provider.lastUsedAt)
-        || provider.lastUsedAt <= 0) return false
-  }
-  for (var i = 0; i < payload.accounts.length; i++) {
-    var row = payload.accounts[i]
-    if (!row || !/^[a-f0-9]{16}$/.test(row.accountId)
-        || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(row.provider)) return false
-    if (seen[row.accountId]) return false
-    seen[row.accountId] = true
-    var counts = [row.inFlight, row.sessions]
-    for (var j = 0; j < counts.length; j++)
-      if (typeof counts[j] !== "number" || !isFinite(counts[j])
-          || Math.floor(counts[j]) !== counts[j] || counts[j] < 0 || counts[j] > 1000000) return false
-  }
-  return payload.state === "live" || payload.accounts.length === 0
-}
-
-function accountLoad(account, activity) {
-  if (!account || !activity || activity.liveState !== "live") return null
-  var rows = listOrEmpty(activity.liveAccounts)
-  for (var i = 0; i < rows.length; i++)
-    if (rows[i].accountId === account.accountId && rows[i].provider === account.id) return rows[i]
-  return null
-}
-
-function sessionBadgeText(load) {
-  if (!load) return "Sessions unknown"
-  return load.sessions + (load.sessions === 1 ? " session" : " sessions")
-}
-
-function sessionDetails(load) {
-  if (!load) return "Session counts are unknown until Fusebox reconnects."
-  return sessionBadgeText(load) + " assigned to this account recently. Sessions may remain assigned after a request finishes."
-}
-
-function proxyName(implementation) {
-  if (implementation === "rust") return "Fusebox"
-  if (implementation === "go") return "CLIProxyAPI"
-  return "Fusebox / CLIProxyAPI"
 }
 
 function clamp(value, minimum, maximum) {
@@ -134,20 +79,6 @@ function formatTokens(value) {
 
 function formatUsd(value) {
   return formatMoney(value, "USD")
-}
-
-// Models of one provider, heaviest first, for the Limits view's token list.
-function providerModels(models, providerId) {
-  var rows = []
-  var list = listOrEmpty(models)
-  for (var i = 0; i < list.length; i++) {
-    if (String(list[i] && list[i].provider || "") !== providerId) continue
-    rows.push(list[i])
-  }
-  rows.sort(function(left, right) {
-    return Number(right.totalTokens || 0) - Number(left.totalTokens || 0)
-  })
-  return rows
 }
 
 function minRemaining(provider) {
@@ -809,7 +740,7 @@ function paceStatusText(pace, mode) {
   return "No usage yet"
 }
 
-// One legend for all limit cards of a provider, shown once under them. Each card's line gives its figures.
+// What the tick and the projection mean, on hover of any limit card's verdict. Each card's line gives its figures.
 // Lines are wrapped by hand: the shell tooltip does not wrap text.
 var PACING_LEGEND = [
   "The tick on each meter is the pace: where usage",
@@ -1229,11 +1160,25 @@ var DEFAULT_SETTINGS = {
   creditCriticalUsd: 1,
   refreshIntervalSec: 900,
   costLocalProviders: ["claude", "codex", "opencode"],
-  liveAccountActivity: true,
   ompLocal: true,
   barAccountMode: "dots",
   motion: "system",
   accountModes: "{}"
+}
+
+// Quotatank 2 keeps its private files in omarchy/quotatank; 1.x kept them in omarchy/model-usage, and the
+// backends move that folder (plugin_folder in scripts/quotatank_common.py). The settings that still name
+// it, rewritten: key file paths and the JSON settings that list them (extraKeys, costT3Servers). {} when
+// none does, so Panel saves this once.
+function legacyPathSettings(settings) {
+  var moved = {}
+  if (!settings || typeof settings !== "object") return moved
+  for (var key in settings) {
+    var value = settings[key]
+    if (typeof value === "string" && value.indexOf("/omarchy/model-usage/") >= 0)
+      moved[key] = value.split("/omarchy/model-usage/").join("/omarchy/quotatank/")
+  }
+  return moved
 }
 
 // The keys of `settings` that differ from their default; what Reset would change.
@@ -1723,7 +1668,7 @@ function errorTitle(provider) {
   if (!provider) return "Provider unavailable"
   var name = String(provider.name || provider.id || "Provider")
   switch (provider.errorKind) {
-  case "config": return proxyName(provider.proxyImplementation) + " configuration required"
+  case "config": return "CLIProxyAPI configuration required"
   case "no_credentials": return name + " sign-in required"
   case "expired": return name + " sign-in expired"
   case "rate_limited": return name + " is rate limited"
@@ -1735,17 +1680,8 @@ function errorTitle(provider) {
 
 function preserveProxyReadings(previous, next) {
   if (!previous || previous.source !== "cliproxy") return next
-  if (previous.proxyImplementation && next.proxyImplementation
-      && previous.proxyImplementation !== next.proxyImplementation) return next
-  if (!next.proxyImplementation && previous.proxyImplementation)
-    next.proxyImplementation = previous.proxyImplementation
   function retain(old, fresh) {
     if (!old || !fresh || fresh.status !== "error" || old.status !== "ok") return fresh
-    if (old.proxyImplementation && fresh.proxyImplementation
-        && old.proxyImplementation !== fresh.proxyImplementation) return fresh
-    if (fresh.errorKind === "malformed" || fresh.supportsBankedReset === false
-        && fresh.proxyImplementation !== old.proxyImplementation) return fresh
-    if (fresh.proxyImplementation === "rust" && fresh.errorKind === "quota_unavailable") return fresh
     return Object.assign({}, fresh, {
       status: "ok", stale: true, windows: old.windows, credits: old.credits,
       plan: old.plan, account: old.account, fetchedAt: old.fetchedAt,
@@ -2157,7 +2093,7 @@ function syncKeyedOrder(list, keys) {
 // Settings says about omp, the Test results, and the lines of omp's live feed (scripts/omp-live.py).
 // Then the per-provider account mode that Providers → Customize sets.
 
-// Quotatank ids of the subscriptions omp signs in to (OMP_PROVIDERS in scripts/model_usage_common.py).
+// Quotatank ids of the subscriptions omp signs in to (OMP_PROVIDERS in scripts/quotatank_common.py).
 var OMP_PROVIDER_IDS = ["claude", "codex", "kimi", "opencode", "antigravity", "copilot", "cursor", "zai", "minimax"]
 var OMP_STATS_PORT = 3847
 var OMP_GATEWAY_PORT = 4000
@@ -2249,7 +2185,7 @@ function ompLoopbackHost(host) {
   return host === "localhost" || host === "::1" || /^127\.[0-9]+\.[0-9]+\.[0-9]+$/.test(host)
 }
 
-// Plain HTTP stays on networks the user controls (plain_http_allowed in model_usage_common.py):
+// Plain HTTP stays on networks the user controls (plain_http_allowed in quotatank_common.py):
 // loopback, private LANs, Tailscale addresses, MagicDNS names and single-label names.
 function ompPlainHttpHost(host) {
   var octet = "(0|[1-9][0-9]{0,2})"
@@ -2279,7 +2215,7 @@ function ompTailscaleHost(host) {
 }
 
 // What is wrong with an omp server address, or "" when the backends take it (normalize_server_url
-// in scripts/model_usage_common.py): a scheme, a host and an optional port, nothing after them but one
+// in scripts/quotatank_common.py): a scheme, a host and an optional port, nothing after them but one
 // "/"; HTTPS anywhere, plain HTTP only to this computer, a private network or Tailscale. With `gateway`
 // (the token it sends can spend model quota) plain HTTP stays on this computer and Tailscale. Empty turns
 // the server off.
@@ -2687,7 +2623,7 @@ function noteOmpLog(log, event, nowSeconds) {
   return list
 }
 
-// One omp-live.py per omp setup, shared like the proxy's live connection (see acquireLive). The
+// One omp-live.py per omp setup, shared through acquireLive. The
 // component is created here, in the library's context, so the shared object outlives its first panel.
 function acquireOmpLive(key, properties) {
   if (liveConnections[key]) return acquireLive(key, null, properties)
@@ -2773,11 +2709,10 @@ function accountAnswersTo(account, accountId) {
 }
 
 // The latest sign of use per account ("<provider>@<accountId>" → epoch seconds), one map for every
-// surface: live omp requests (`ompRecent`, OmpActivity.recentByAccount) and, through a proxy, its own
-// activity: `nowSeconds` for an account with a request in flight (`inFlight`, the live connection's
-// accounts), else when its last request ended (`lastUsed`, UsageActivityBackend.providers). Where
-// several say something about one account, the newest wins, so a request in flight always does.
-function mergeRecentActivity(ompRecent, inFlight, lastUsed, nowSeconds) {
+// surface: live omp requests (`ompRecent`, OmpActivity.recentByAccount) and, through a proxy, when each
+// account's last request ended (`lastUsed`, UsageActivityBackend.providers). Where both say something
+// about one account, the newest wins.
+function mergeRecentActivity(ompRecent, lastUsed) {
   var result = {}
   var key
   function note(name, at) {
@@ -2788,10 +2723,6 @@ function mergeRecentActivity(ompRecent, inFlight, lastUsed, nowSeconds) {
   var used = listOrEmpty(lastUsed)
   for (var i = 0; i < used.length; i++)
     if (used[i] && used[i].status === "ok" && used[i].accountId) note(String(used[i].id) + "@" + String(used[i].accountId), used[i].lastUsedAt)
-  var flying = listOrEmpty(inFlight)
-  for (var j = 0; j < flying.length; j++)
-    if (flying[j] && Number(flying[j].inFlight) > 0 && flying[j].accountId)
-      note(String(flying[j].provider) + "@" + String(flying[j].accountId), nowSeconds)
   return result
 }
 
@@ -2895,7 +2826,7 @@ function accountSourceKind(account, proxyMode) {
   if (!account) return ""
   var origin = String(account.origin || "")
   if (origin === "omarchy" || origin === "signin" || origin === "key" || origin === "omp" || origin === "proxy") return origin
-  if (proxyMode || account.proxyImplementation) return "proxy"
+  if (proxyMode) return "proxy"
   var id = String(account.accountId || "")
   if (id === "primary" || /^k-[0-9a-f]{8}$/.test(id)) return "key"
   if (/^omp-/.test(id)) return "omp"
@@ -3026,12 +2957,12 @@ function accountCanUse(account, mode, proxyMode) {
 }
 
 // How new sessions pick among a provider's accounts, for the ACCOUNTS header and the hover card alike:
-// "Used together · omp" (omp's pool, or an account omp reads), "Used together · Fusebox" (a proxy, named
-// by `proxyLabel`), "Omarchy · switches at 95%" or "Omarchy · notifies at 95%"; "" otherwise.
-function accountModeText(provider, mode, proxyMode, proxyLabel) {
+// "Used together · omp" (omp's pool, or an account omp reads), "Used together · CLIProxyAPI" (a proxy),
+// "Omarchy · switches at 95%" or "Omarchy · notifies at 95%"; "" otherwise.
+function accountModeText(provider, mode, proxyMode) {
   if (!provider) return ""
   if (mode === "together") {
-    if (proxyMode) return "Used together · " + String(proxyLabel || "proxy")
+    if (proxyMode) return "Used together · CLIProxyAPI"
     var accounts = providerAccounts(provider)
     var omp = !!provider.pool
     for (var i = 0; i < accounts.length && !omp; i++) {
@@ -3675,7 +3606,7 @@ function barAgoText(seconds) {
 // The hover card of a chip with several accounts (DESIGN §2.4), as plain text and values, from the
 // provider's accountState() so it says what the chip and Limits say. It lists every account up to
 // BAR_HOVER_ROWS; past that the counted ones, then those closest to a limit, and `more` for the rest.
-// Rows follow the dots' order and are keyed by account. `options`: proxyMode, proxyLabel, nowSeconds,
+// Rows follow the dots' order and are keyed by account. `options`: proxyMode, nowSeconds,
 // extraKeys, readAtSeconds, stale, formatClock(epochSeconds) → "18:02".
 function barHoverModel(provider, state, options) {
   var opts = options || {}
@@ -3734,7 +3665,7 @@ function barHoverModel(provider, state, options) {
   var readText = readAtSeconds <= 0 ? "" : opts.stale
     ? "Read " + barAgoText(now - readAtSeconds) + " ago" : "Read at " + clock(readAtSeconds)
   return { title: providerShortName(provider) + " · " + accounts.length + " accounts",
-           modeText: accountModeText(provider, state ? state.mode : "single", opts.proxyMode === true, opts.proxyLabel),
+           modeText: accountModeText(provider, state ? state.mode : "single", opts.proxyMode === true),
            rows: rows, more: Math.max(0, accounts.length - rows.length), readText: readText, stale: !!opts.stale }
 }
 

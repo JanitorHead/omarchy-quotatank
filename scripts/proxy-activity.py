@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read Rust account activity or match Keeper requests to Go proxy accounts.
+"""Match CPA Usage Keeper requests to CLIProxyAPI accounts.
 
 Only account hashes and timestamps leave this process. Never consume CPA's
 usage queue, fetch request contents, or run upstream quota calls here.
@@ -79,10 +79,8 @@ def collect(proxy_url, proxy_key_file, keeper_url, password_file, timeout):
     deadline = time.monotonic() + timeout
     proxy = usage.CliProxyClient(proxy_url, usage.read_cliproxy_key(proxy_key_file))
     entries = proxy.auth_files(timeout)
-    if proxy.implementation == "rust":
-        return normalize_rust_activity(entries)
     if not keeper_url:
-        raise keeper.KeeperError("Configure CPA Usage Keeper to track last-used accounts on the Go proxy.")
+        raise keeper.KeeperError("Configure CPA Usage Keeper to track last-used accounts on CLIProxyAPI.")
     client = keeper.Client(keeper_url, max(0.1, deadline - time.monotonic()))
     logged_in = False
     try:
@@ -101,25 +99,6 @@ def collect(proxy_url, proxy_key_file, keeper_url, password_file, timeout):
                 client.request("auth/logout", {}, limit=64 * 1024)
             except keeper.KeeperError:
                 pass
-
-
-def normalize_rust_activity(entries, now=None):
-    now = time.time() if now is None else now
-    latest = {}
-    for entry in entries:
-        provider = entry["provider"]
-        timestamp = usage.rust_timestamp(entry.get("last_used"), observed=True, now=now)
-        if timestamp is None:
-            continue
-        account_id = usage.cliproxy_account_record(provider, entry)["accountId"]
-        previous = latest.get(provider)
-        if previous is None or timestamp > previous[0]:
-            latest[provider] = (timestamp, {account_id})
-        elif timestamp == previous[0]:
-            previous[1].add(account_id)
-    return [{"id": provider, "status": "ok" if len(ids) == 1 else "ambiguous",
-             "accountId": next(iter(ids)) if len(ids) == 1 else "", "lastUsedAt": timestamp}
-            for provider, (timestamp, ids) in sorted(latest.items())]
 
 
 def main():
@@ -144,4 +123,5 @@ def main():
 
 
 if __name__ == "__main__":
+    usage.config_folder()  # Saved key paths may still name 1.x's folder; it moves first.
     main()

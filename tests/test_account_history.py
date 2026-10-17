@@ -13,7 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "scripts" / "usage-fetch.py"
 sys.path.insert(0, str(BACKEND.parent))
-SPEC = importlib.util.spec_from_file_location("model_usage_backend_account_history", BACKEND)
+SPEC = importlib.util.spec_from_file_location("quotatank_backend_account_history", BACKEND)
 assert SPEC and SPEC.loader
 usage = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = usage
@@ -87,7 +87,6 @@ class AccountSeriesTests(AccountHistoryTestCase):
         self.assertEqual([window["samples"] for window in work["windows"]], [[[NOW, 5]], [[NOW, 20]]])
         for account, binding in ((main, 40), (work, 20)):
             self.assertEqual(len(account["history"]["h24"]), 24)
-            self.assertEqual(len(account["history"]["d7"]), 7)
             self.assertEqual(account["history"]["h24"][-1], binding)
         self.assertEqual(claude["history"]["h24"][-1], 20)
 
@@ -100,16 +99,6 @@ class AccountSeriesTests(AccountHistoryTestCase):
         self.assertEqual(first["windows"][0]["samples"], [[NOW, 30], [NOW + 900, 60]])
         self.assertEqual(second["windows"][0]["samples"], [[NOW, 50]])
         self.assertIsNot(codex["windows"][0], second["windows"][0])
-
-    def test_account_readings_follow_the_fusebox_observation_rules(self) -> None:
-        def rust(observed: int) -> dict:
-            return dict(reading("claude", 20, 30), proxyImplementation="rust", quotaUpdatedAt=observed, stale=False)
-
-        self.refresh(pool(("r1", rust(NOW - 60))), NOW)
-        claude = self.refresh(pool(("r1", rust(NOW - 60))), NOW + 120)
-
-        self.assertEqual(self.saved()["providers"]["claude@r1"], [[NOW - 60, 30]], "a repeated observation adds nothing")
-        self.assertEqual(claude["accounts"][0]["activity"]["lastReadingAt"], NOW - 60)
 
     def test_accounts_without_an_id_or_with_a_repeated_id_keep_no_series_of_their_own(self) -> None:
         codex = pool(("a1", reading("codex", 10, 10)), ("a1", reading("codex", 20, 20)), ("", reading("codex", 30, 30)))
@@ -243,7 +232,7 @@ class CapTests(AccountHistoryTestCase):
         self.assertIn("activity", tracked)
         self.assertNotIn("samples", untracked["windows"][0])
         self.assertNotIn("activity", untracked)
-        self.assertEqual(untracked["history"], {"h24": [], "d7": []})
+        self.assertEqual(untracked["history"], {"h24": []})
 
     def test_unseen_accounts_fill_the_remaining_places_most_recent_first(self) -> None:
         self.refresh(codex_pool([f"old{index}" for index in range(5)]), NOW - 2 * HOUR)
@@ -280,7 +269,7 @@ class CapTests(AccountHistoryTestCase):
         self.assertEqual(kept, {f"codex@a{index}" for index in range(1, len(kept) + 1)}, "then the last in payload order")
         dropped = codex["accounts"][len(kept)]
         self.assertNotIn("samples", dropped["windows"][0])
-        self.assertEqual(dropped["history"], {"h24": [], "d7": []})
+        self.assertEqual(dropped["history"], {"h24": []})
         self.assertEqual(dropped["activity"], NO_ACTIVITY)
         self.assertEqual(self.saved()["providers"]["codex"][-1], [NOW + 900, 10], "provider history is kept")
 

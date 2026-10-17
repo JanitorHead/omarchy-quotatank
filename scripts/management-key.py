@@ -18,7 +18,7 @@ import stat
 import sys
 import uuid
 
-from model_usage_common import open_private_directory
+from quotatank_common import config_folder, open_private_directory
 
 
 def interrupted(_signum, _frame):
@@ -56,8 +56,7 @@ def unlink_previous(directory: Path, directory_fd: int, previous: Path) -> bool:
 
 def key_directory() -> Path:
     """Where managed API keys live; backup.py restores into the same directory."""
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
-    return config_home / "omarchy" / "model-usage" / "management-keys"
+    return config_folder() / "management-keys"
 
 
 def valid_key(key: str) -> bool:

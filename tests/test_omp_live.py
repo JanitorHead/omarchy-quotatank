@@ -526,7 +526,7 @@ class ResetListingTests(unittest.TestCase):
                            "OMP_FAKE_LISTING": str(root / "listing.json")}
             with mock.patch.dict(os.environ, environment):
                 self.assertEqual(live.read_reset_listing(), LISTING)
-            workdir = str(root / "state" / "omarchy" / "model-usage" / "omp-workdir")
+            workdir = str(root / "state" / "omarchy" / "quotatank" / "omp-workdir")
             self.assertEqual((root / "omp.log").read_text().splitlines(),
                              ["--version", workdir, "usage reset --json --no-extensions", workdir])
 

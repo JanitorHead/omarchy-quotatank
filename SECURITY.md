@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---|---|
-| 1.1.1 and later on the 1.1.x line | Yes |
-| 1.1.0, 1.0.x, and earlier | No; update for hardened private-state writes |
+| 2.0.x | Yes |
+| 1.9.x and earlier | No; update to 2.0 |
 
 ## Reporting a vulnerability
 
@@ -40,7 +40,7 @@ Provider-supplied notice text is bounded to 300 characters with credentials
 redacted.
 
 Private state is stored below
-`${XDG_STATE_HOME:-~/.local/state}/omarchy/model-usage/`. The directory uses mode
+`${XDG_STATE_HOME:-~/.local/state}/omarchy/quotatank/`. The directory uses mode
 `0700`; files use mode `0600`. Transcript paths, session identifiers, message
 identifiers, and de-duplication keys are hashed before they enter durable state.
 Project folders are kept by name only (the last path component), never as paths.
@@ -68,7 +68,7 @@ cannot redirect the write, permission change, or cleanup. This does not isolate
 the plugin from another process already running as the same user or as root.
 
 In CLIProxyAPI mode, the plugin reads a user-owned management key file with
-private permissions (default: `$XDG_CONFIG_HOME/omarchy/model-usage/cliproxy.key`,
+private permissions (default: `$XDG_CONFIG_HOME/omarchy/quotatank/cliproxy.key`,
 where `XDG_CONFIG_HOME` defaults to `~/.config`). This user-provided credential
 is separate from generated state. The key is sent only to the configured
 management server; redirects are rejected and HTTPS certificates are verified.
@@ -191,7 +191,7 @@ payload so they can be shown when the user disables the setting.
 The GUI accepts the management key in a masked field and passes it to the
 storage helper over stdin, never argv, environment variables, logs, or
 `shell.json`. The helper creates a `0600` file inside the private `0700`
-`$XDG_CONFIG_HOME/omarchy/model-usage/management-keys/` directory. Only its path
+`$XDG_CONFIG_HOME/omarchy/quotatank/management-keys/` directory. Only its path
 is saved in widget settings. A failed settings update discards the staged file;
 successful replacement removes the previous GUI-managed key file while leaving
 manually configured files intact. Blank input preserves the existing key.

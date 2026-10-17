@@ -1,7 +1,7 @@
 """Synthetic omp-live.py: an account map, the remote feed's state, three requests (one served by a known
 credential, one by an unknown one, one background request without a credential) and remote activity,
 then heartbeats until SIGTERM. Following omp stats at host "broken" sends a malformed line instead.
-Each start and stop is recorded in MODEL_USAGE_OMP_LIVE_MARKER.
+Each start and stop is recorded in QUOTATANK_OMP_LIVE_MARKER.
 """
 import argparse
 import json
@@ -20,7 +20,7 @@ host = urllib.parse.urlsplit(args.stats_url or "").hostname or ""
 
 
 def record(event):
-    with open(os.environ["MODEL_USAGE_OMP_LIVE_MARKER"], "a") as handle:
+    with open(os.environ["QUOTATANK_OMP_LIVE_MARKER"], "a") as handle:
         handle.write(json.dumps({"event": event, "host": host, "argv": sys.argv[1:], "pid": os.getpid()}) + "\n")
 
 

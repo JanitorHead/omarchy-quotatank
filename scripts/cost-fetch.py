@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from model_usage_common import atomic_write_json, clean_message
+from quotatank_common import atomic_write_json, clean_message, move_legacy_folders, state_folder
 import omp_stats
 import t3_costs
 
@@ -305,8 +305,7 @@ def folder_basename(folder: str) -> str:
 
 def state_path(name: str, state_dir: Path | None = None) -> Path:
     if state_dir is None:
-        state_home = Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state"))
-        state_dir = state_home / "omarchy" / "model-usage"
+        state_dir = state_folder()
     return state_dir / name
 
 
@@ -1411,7 +1410,7 @@ def save_rate_cache(
 def fetch_rate_document(timeout: float) -> Any:
     request = urllib.request.Request(
         LITELLM_RATES_URL,
-        headers={"Accept": "application/json", "User-Agent": "omarchy-model-usage/1"},
+        headers={"Accept": "application/json", "User-Agent": "quotatank/2"},
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         body = response.read(MAX_RATE_BYTES + 1)
@@ -2263,4 +2262,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    move_legacy_folders()
     raise SystemExit(main())

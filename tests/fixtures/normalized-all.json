@@ -20,7 +20,7 @@
       "credits": { "label": "Extra usage", "currency": "USD", "used": 12.5, "limit": 50, "remaining": 37.5, "total": null, "unlimited": false, "resetCreditsAvailable": null },
       "notice": "",
       "fetchedAt": "2030-01-01T00:00:00+00:00",
-      "history": { "h24": [5, 8, 12, 18, 24, 30, 42, 38, 33, 28, 25, 31, 44, 52, 60, 58, 62, 68, 70, 74, 77, 82, 87, 91], "d7": [20, 32, 45, 50, 66, 74, 91] }
+      "history": { "h24": [5, 8, 12, 18, 24, 30, 42, 38, 33, 28, 25, 31, 44, 52, 60, 58, 62, 68, 70, 74, 77, 82, 87, 91] }
     },
     {
       "id": "codex",
@@ -41,7 +41,7 @@
       "credits": { "label": "Credits", "currency": "", "used": null, "limit": null, "remaining": 17.5, "total": null, "unlimited": false, "resetCreditsAvailable": 2 },
       "notice": "",
       "fetchedAt": "2030-01-01T00:00:00+00:00",
-      "history": { "h24": [4, 8, 11, 20, 25, 29, 35, 42], "d7": [12, 24, 36, 42, 58, 71, 80] }
+      "history": { "h24": [4, 8, 11, 20, 25, 29, 35, 42] }
     },
     {
       "id": "kimi",
@@ -60,7 +60,7 @@
       "credits": { "label": "Extra usage", "currency": "USD", "used": 50, "limit": 200, "remaining": 100, "total": 200, "unlimited": false, "resetCreditsAvailable": null },
       "notice": "",
       "fetchedAt": "2030-01-01T00:00:00+00:00",
-      "history": { "h24": [0, 4, 8, 12, 18, 24, 31, 40, 52, 63, 70, 75], "d7": [4, 12, 23, 36, 49, 62, 75] }
+      "history": { "h24": [0, 4, 8, 12, 18, 24, 31, 40, 52, 63, 70, 75] }
     }
   ]
 }

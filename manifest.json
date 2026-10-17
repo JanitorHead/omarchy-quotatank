@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "janitorhead.quotatank",
   "name": "Quotatank",
-  "version": "1.9.3",
+  "version": "2.0.0",
   "author": "JanitorHead",
   "license": "MIT",
   "description": "Menu-bar AI usage tracker for coding agents: 49 providers, several accounts each. See how much of your Claude Code, Codex, Gemini CLI, Antigravity, GitHub Copilot, Cursor, Kimi, Grok, Kiro, Z.ai GLM, MiniMax, Qwen or OpenCode plan is left: 5-hour and weekly limits, resets, pace and run-out forecasts per account, with Omarchy account switching. Tracks prepaid balances: OpenRouter, DeepSeek and more. Reads omp (Oh My Pi) live. Costs charts LLM spend per model, project and subagent, like ccusage.",
@@ -167,8 +167,7 @@
       "ompStatsUrl": "",
       "barAccountMode": "dots",
       "motion": "system",
-      "accountModes": "{}",
-      "liveAccountActivity": true
+      "accountModes": "{}"
     },
     "schema": [
       {
@@ -180,12 +179,12 @@
           "cliproxy"
         ],
         "defaultValue": "direct",
-        "description": "Read local CLI sign-ins or query Fusebox and CLIProxyAPI accounts. Proxy implementations are detected automatically. Costs has its own source setting."
+        "description": "Read local CLI sign-ins or query CLIProxyAPI accounts. Costs has its own source setting."
       },
       {
         "key": "cliproxyUrl",
         "type": "string",
-        "label": "Fusebox / CLIProxyAPI server URL",
+        "label": "CLIProxyAPI server URL",
         "defaultValue": "http://127.0.0.1:8317",
         "description": "Server, management.html, or /v0/management URL. HTTPS certificates are verified."
       },
@@ -490,7 +489,7 @@
         "key": "enabledProviders",
         "type": "multiselect",
         "label": "Providers",
-        "description": "Select providers to monitor in local mode. Providers with a sign-in of their own appear once you sign in; API-key providers need a key saved in settings or set in the environment. Fusebox and CLIProxyAPI discover all managed providers automatically.",
+        "description": "Select providers to monitor in local mode. Providers with a sign-in of their own appear once you sign in; API-key providers need a key saved in settings or set in the environment. CLIProxyAPI discovers all managed providers automatically.",
         "noSelectionText": "No providers",
         "placeholderText": "Search providers...",
         "emptyText": "No providers found",
@@ -1339,7 +1338,7 @@
         "type": "string",
         "label": "CPA Usage Keeper URL",
         "defaultValue": "",
-        "description": "Optional Keeper URL for Go proxy account activity. Fusebox reports activity directly. Not used for Costs."
+        "description": "Optional Keeper URL for CLIProxyAPI account activity. Not used for Costs."
       },
       {
         "key": "costKeeperPasswordFile",
@@ -1442,13 +1441,6 @@
         "label": "Account use per provider",
         "defaultValue": "{}",
         "description": "Managed by Settings → Providers → Customize. Per provider, whether its accounts are used one at a time or together; absent means automatic."
-      },
-      {
-        "key": "liveAccountActivity",
-        "type": "boolean",
-        "label": "Live account activity",
-        "defaultValue": true,
-        "description": "Use one shared Fusebox stream for requests serving now. Older Rust proxies show unavailable activity."
       }
     ]
   }

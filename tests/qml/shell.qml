@@ -6,13 +6,13 @@ import qs.Commons
 ShellRoot {
   id: root
 
-  readonly property string resultPath: Quickshell.env("MODEL_USAGE_TEST_RESULT")
-  readonly property string panelUrl: Quickshell.env("MODEL_USAGE_PANEL_URL")
-  readonly property string meterUrl: Quickshell.env("MODEL_USAGE_METER_URL")
-  readonly property string backendUrl: Quickshell.env("MODEL_USAGE_BACKEND_URL")
-  readonly property string costBackendUrl: Quickshell.env("MODEL_USAGE_COST_BACKEND_URL")
-  readonly property string costViewUrl: Quickshell.env("MODEL_USAGE_COST_VIEW_URL")
-  readonly property bool screenshotMode: Quickshell.env("MODEL_USAGE_SCREENSHOT_MODE") === "1"
+  readonly property string resultPath: Quickshell.env("QUOTATANK_TEST_RESULT")
+  readonly property string panelUrl: Quickshell.env("QUOTATANK_PANEL_URL")
+  readonly property string meterUrl: Quickshell.env("QUOTATANK_METER_URL")
+  readonly property string backendUrl: Quickshell.env("QUOTATANK_BACKEND_URL")
+  readonly property string costBackendUrl: Quickshell.env("QUOTATANK_COST_BACKEND_URL")
+  readonly property string costViewUrl: Quickshell.env("QUOTATANK_COST_VIEW_URL")
+  readonly property bool screenshotMode: Quickshell.env("QUOTATANK_SCREENSHOT_MODE") === "1"
   property var failures: []
   property var objects: []
   property var widget: null
@@ -25,7 +25,7 @@ ShellRoot {
   property var costView: null
   property int waitAttempts: 0
   property int lastGoodWaitAttempts: 0
-  readonly property var panelPositions: Quickshell.env("MODEL_USAGE_TEST_ALL_EDGES") === "1"
+  readonly property var panelPositions: Quickshell.env("QUOTATANK_TEST_ALL_EDGES") === "1"
     ? ["top", "bottom", "left", "right"] : ["top"]
   property int panelPositionIndex: 0
   property bool settingsPanelChecks: false

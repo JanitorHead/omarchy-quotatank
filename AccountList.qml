@@ -195,8 +195,7 @@ Column {
         useBusy: root.useBusyId !== "" && root.useBusyId === accountId
         // Banked resets apply through the proxy, so only its accounts show them.
         resetCount: root.proxyMode && UsageLogic.accountResetLabel(accountData) !== "" ? Number(resetCredits) : -1
-        resetEnabled: root.resetsActionable && !!accountData && accountData.status === "ok"
-          && accountData.supportsBankedReset !== false && Number(resetCredits) > 0
+        resetEnabled: root.resetsActionable && !!accountData && accountData.status === "ok" && Number(resetCredits) > 0
         quotaMode: root.quotaMode
         warningThreshold: root.warningThreshold
         criticalThreshold: root.criticalThreshold

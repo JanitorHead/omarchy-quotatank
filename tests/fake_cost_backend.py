@@ -21,7 +21,7 @@ if args.providers == "" and args.t3_servers == "[]":
     print('["malformed cost response"]')
     raise SystemExit(0)
 
-payload = json.loads(Path(os.environ["MODEL_USAGE_COST_FIXTURE"]).read_text())
+payload = json.loads(Path(os.environ["QUOTATANK_COST_FIXTURE"]).read_text())
 payload["source"] = "transcripts"
 payload["testRequest"] = {"force": args.refresh_prices, "prices": args.price_overrides,
                           "servers": args.t3_servers, "providers": args.providers}

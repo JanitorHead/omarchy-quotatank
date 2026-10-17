@@ -13,7 +13,6 @@ ShellRoot {
     property string usageSource: "cliproxy"
     property string cliproxyUrl: "http://synthetic.invalid"
     property string cliproxyKeyFile: ""
-    property string proxyImplementation: "go"
     readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl])
     function localPath(url) { return String(url).replace("file://", "") }
   }
@@ -22,15 +21,15 @@ ShellRoot {
     if (!condition) { console.error("ACTIVITY TEST FAILED: " + message); Qt.exit(1) }
   }
   Component.onCompleted: {
-    var component = Qt.createComponent(Quickshell.env("MODEL_USAGE_REPO_URL") + "/UsageActivityBackend.qml")
+    var component = Qt.createComponent(Quickshell.env("QUOTATANK_REPO_URL") + "/UsageActivityBackend.qml")
     check(component.status === Component.Ready, component.errorString())
     backend = component.createObject(host, { usageBackend: usage,
       settings: { costKeeperUrl: "http://synthetic.invalid/old" },
-      scriptPath: Quickshell.env("MODEL_USAGE_FAKE_ACTIVITY") })
+      scriptPath: Quickshell.env("QUOTATANK_FAKE_ACTIVITY") })
     check(backend !== null, "create activity backend")
     startupProbe = component.createObject(host, { usageBackend: usage,
       settings: { costKeeperUrl: "http://synthetic.invalid/old" },
-      scriptPath: Quickshell.env("MODEL_USAGE_FAKE_ACTIVITY") })
+      scriptPath: Quickshell.env("QUOTATANK_FAKE_ACTIVITY") })
     startupProbe.providersChanged.connect(function() {
       if (!startupProbe.providers.length) return
       root.check(startupProbe.providers[0].accountId === "new", "startup response uses its original connection")
@@ -51,7 +50,7 @@ ShellRoot {
       var b = root.backend
       if (root.phase === 0 && root.ticks >= 2) {
         b.settings = { costKeeperUrl: "http://synthetic.invalid/new",
-          costKeeperPasswordFile: Quickshell.env("MODEL_USAGE_ACTIVITY_MARKER") }
+          costKeeperPasswordFile: Quickshell.env("QUOTATANK_ACTIVITY_MARKER") }
         root.check(b.providers.length === 0, "changing Keeper clears activity immediately")
         root.phase++
       } else if (root.phase === 1 && b.providers.length > 0) {
@@ -69,12 +68,8 @@ ShellRoot {
         root.phase++
       } else if (root.phase === 3 && b.fetchError !== "") {
         root.check(b.providers.length === 0, "oversized output cannot supply account activity")
-        b.settings = { liveAccountActivity: false }
+        b.settings = {}
         root.check(!b.trackingEnabled && b.notice.indexOf("Configure") >= 0, "missing Keeper gives setup guidance")
-        usage.proxyImplementation = "rust"
-        root.check(b.trackingEnabled && b.rustProxy, "Rust activity works without Keeper")
-        usage.proxyImplementation = "go"
-        root.check(!b.trackingEnabled && b.providers.length === 0, "changing implementation clears native activity")
         root.check(root.startupVerified, "activity startup probe completed")
         console.log("Activity QML contract: passed")
         Qt.quit()

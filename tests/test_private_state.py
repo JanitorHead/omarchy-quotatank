@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import model_usage_common as common
+import quotatank_common as common
 
 
 class PrivateStateTests(unittest.TestCase):
@@ -30,6 +30,27 @@ class PrivateStateTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(self.sentinel.stat().st_mode), 0o644)
         self.assertEqual(stat.S_IMODE(self.outside.stat().st_mode), 0o755)
         self.assertEqual(list(self.outside.iterdir()), [self.sentinel])
+
+    def test_the_1x_folder_moves_once_and_never_through_a_symlink(self):
+        home = self.root / "home"
+        legacy = home / "omarchy" / "model-usage"
+        legacy.mkdir(parents=True, mode=0o700)
+        (legacy / "history.json").write_text("{}")
+        target = common.plugin_folder(home)
+        self.assertEqual(target, home / "omarchy" / "quotatank")
+        self.assertEqual((target / "history.json").read_text(), "{}", "1.x's files come along")
+        self.assertFalse(legacy.exists())
+        legacy.mkdir(mode=0o700)
+        (legacy / "stray").write_text("later")
+        common.plugin_folder(home)
+        self.assertTrue((legacy / "stray").exists(), "an existing 2.x folder is never replaced")
+        self.assertFalse((target / "stray").exists())
+        other = self.root / "other"
+        (other / "omarchy").mkdir(parents=True)
+        (other / "omarchy" / "model-usage").symlink_to(self.outside, target_is_directory=True)
+        common.plugin_folder(other)
+        self.assertFalse((other / "omarchy" / "quotatank").exists(), "a symlinked 1.x folder stays where it is")
+        self.assertOutsideUnchanged()
 
     def test_create_and_replace_private_state_without_changing_ancestors(self):
         parent = self.root / "parent"
@@ -203,7 +224,7 @@ class PrivateStateTests(unittest.TestCase):
     def test_temporary_symlink_collision_is_neither_followed_nor_removed(self):
         directory = self.root / "state"
         directory.mkdir(mode=0o700)
-        collision = directory / (".model-usage-" + "a" * 32 + ".tmp")
+        collision = directory / (".quotatank-" + "a" * 32 + ".tmp")
         collision.symlink_to(self.sentinel)
         with mock.patch.object(common.secrets, "token_hex", side_effect=["a" * 32, "b" * 32]):
             common.atomic_write_json(directory / "cache.json", {})
