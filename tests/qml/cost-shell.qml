@@ -466,7 +466,7 @@ ShellRoot {
         root.check(dimensions.visible && dimensions.options.length === 3, "Model, Project and Agent are offered")
         root.check(root.find(root.costs, "costModel-0").name === "claude-opus-4-6", "models rank by cost")
         dimensions.changed("project")
-        root.check(root.find(root.costs, "costModel-0") === null && root.find(root.costs, "costProject-0").name === "quotatank"
+        root.check(root.find(root.costs, "costModel-0") === null && root.find(root.costs, "costProject-0").name === "web-shop"
           && root.find(root.costs, "costProject-3").name === "Other", "Project lists folders, the folded rest last")
         dimensions.changed("agent")
         root.check(root.find(root.costs, "costAgent-0").name === "Main sessions" && root.find(root.costs, "costAgent-1").name === "Subagents"

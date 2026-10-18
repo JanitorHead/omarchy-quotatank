@@ -9,7 +9,9 @@
 5. Refresh the README screenshots under `docs/screenshots/*.png` when visible UI
    changes. Use fixture data or owner-approved captures with account identities
    hidden. Crop to the widget; never publish unrelated desktop content or account
-   tooltips. Label fixture examples in the README.
+   tooltips. Project and folder names, computer and host names (footers, URLs,
+   summaries), emails and paths must be made up, in the fixtures and in the test
+   data alike. Label fixture examples in the README.
    Update root `preview.png` separately: the marketplace reads this image, not
    the README gallery. The current 1920×1080 composition uses the title, a short
    provider tagline, the Limits panel with eight provider tiles, and the Providers

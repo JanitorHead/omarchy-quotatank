@@ -930,7 +930,7 @@ console.log("Provider setup: passed");
     ],
     projects: [
       { id: "other", name: "Other", costUsd: 9, totalTokens: 10, records: 3 },
-      { id: "a1", name: "quotatank", costUsd: 3, totalTokens: 5, records: 1 },
+      { id: "a1", name: "web-shop", costUsd: 3, totalTokens: 5, records: 1 },
       { id: "b2", name: "billing-api", costUsd: 5, totalTokens: 5, records: 1375 }
     ],
     agents: [{ id: "subagent", costUsd: 2, totalTokens: 100, records: 4 }, { id: "main", costUsd: 6, totalTokens: 50, records: 9 }]
@@ -951,7 +951,7 @@ console.log("Provider setup: passed");
   assert.equal(models[2].fraction, 0);
   assert.equal(context.costBreakdownRows(dimensions, "model", "tokens")[0].name, "kimi-k2", "Tokens ranks by tokens, priced or not");
   const projects = context.costBreakdownRows(dimensions, "project", "cost");
-  assert.equal(projects.map(row => row.name).join(","), "billing-api,quotatank,Other", "the folded Other folder stays last");
+  assert.equal(projects.map(row => row.name).join(","), "billing-api,web-shop,Other", "the folded Other folder stays last");
   assert.equal(projects[0].context + "|" + projects[1].context, "1,375 requests|1 request");
   const agents = context.costBreakdownRows(dimensions, "agent", "cost");
   assert.equal(agents.map(row => row.name + " · " + row.context).join("|"),

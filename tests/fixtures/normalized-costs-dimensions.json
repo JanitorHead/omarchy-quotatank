@@ -28,7 +28,7 @@
     { "provider": "kimi", "providerName": "Kimi Code", "model": "Unknown model", "costUsd": null, "cacheSavingsUsd": null, "uncachedInputTokens": 100000, "cachedInputTokens": 100000, "cacheCreationTokens": 0, "outputTokens": 30000, "reasoningTokens": 0, "totalTokens": 230000, "records": 4, "pricedRecords": 0, "unpricedRecords": 4, "sessions": 1, "costSource": "unpriced" }
   ],
   "projects": [
-    { "id": "6f1d0c2a9b31", "name": "quotatank", "costUsd": 6.1, "totalTokens": 2600000, "records": 19 },
+    { "id": "6f1d0c2a9b31", "name": "web-shop", "costUsd": 6.1, "totalTokens": 2600000, "records": 19 },
     { "id": "a83e5b7c41d0", "name": "billing-api", "costUsd": 3.2, "totalTokens": 1500000, "records": 12 },
     { "id": "c09f2e6d1a74", "name": "mobile-app", "costUsd": 1.9, "totalTokens": 900000, "records": 7 },
     { "id": "other", "name": "Other", "costUsd": 1.14, "totalTokens": 500000, "records": 4 }
