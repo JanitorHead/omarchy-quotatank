@@ -293,6 +293,16 @@ To keep `omp stats` running after a reboot, the Costs settings page gives a syst
 
 **The panel asks me to sign in.** Press **Sign in** on the provider's card, or run the command displayed for that provider and press `r`. Quotatank never repairs credentials itself; it only opens the provider's own sign-in.
 
+**`omarchy plugin update` says it cannot fast-forward.** The repository's history was rewritten on 18 October 2026, so a copy installed before then cannot fast-forward to it. Move that copy to the current version once; settings, saved keys, and history live outside the plugin folder and are kept:
+
+```bash
+git -C ~/.config/omarchy/plugins/janitorhead.quotatank fetch origin main
+git -C ~/.config/omarchy/plugins/janitorhead.quotatank reset --hard FETCH_HEAD
+omarchy restart shell
+```
+
+Later updates work as before.
+
 **Codex reports unavailable.** Confirm `codex` is on `PATH` and `codex login` succeeds. The collector uses current app-server RPC with `-s read-only -a never`; it does not call the older private web endpoint.
 
 **Kimi does not appear.** Confirm `kimi login` has created `~/.kimi-code/credentials/kimi-code.json`, or set `KIMI_CODE_HOME` to the CLI's actual data directory.

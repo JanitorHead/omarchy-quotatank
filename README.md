@@ -62,6 +62,8 @@ omarchy plugin update janitorhead.quotatank
 omarchy plugin remove janitorhead.quotatank
 ```
 
+Installed before 18 October 2026 and `update` cannot fast-forward? See [Troubleshooting](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#troubleshooting).
+
 The built-in `omarchy.agents` widget can run alongside Quotatank. To keep only Quotatank, run `omarchy plugin disable omarchy.agents`. To put the chips somewhere else in the bar, use `omarchy bar move janitorhead.quotatank left`.
 
 <details>
