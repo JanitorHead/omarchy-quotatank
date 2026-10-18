@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import io
 import json
@@ -179,6 +180,34 @@ class FailureAndIsolationTests(unittest.TestCase):
                 with mock.patch.object(usage, "http_json", side_effect=rejected):
                     self.assertEqual(usage.fetch_claude(1)["errorKind"], "expired")
                 self.assertEqual(usage.fetch_kimi(1)["errorKind"], "expired")
+
+    def test_a_failed_claude_or_codex_reading_still_names_its_account(self):
+        # The saved sign-in names the account without the network, so omp's reading of it is not a second account.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            claude_dir = root / "claude"
+            claude_dir.mkdir()
+            (claude_dir / ".credentials.json").write_text(json.dumps({
+                "claudeAiOauth": {"accessToken": "secret", "expiresAt": (int(time.time()) + 3600) * 1000}}))
+            (root / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": "dev@example.com"}}))
+            codex_dir = root / "codex"
+            codex_dir.mkdir()
+            claims = base64.urlsafe_b64encode(json.dumps({"email": "work@example.com"}).encode()).decode().rstrip("=")
+            (codex_dir / "auth.json").write_text(json.dumps({"tokens": {"id_token": f"e30.{claims}.sig"}}))
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            codex = bin_dir / "codex"
+            codex.write_text("#!/bin/sh\nexit 1\n")  # an app-server that stops before it answers
+            codex.chmod(0o755)
+            offline = usage.ProviderFailure("network", "Could not reach the usage endpoint.")
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_dir), "CODEX_HOME": str(codex_dir)}), \
+                    mock.patch.object(usage, "runtime_environment", return_value={**os.environ, "PATH": str(bin_dir)}), \
+                    mock.patch.object(usage.Path, "home", return_value=root), \
+                    mock.patch.object(usage, "http_json", side_effect=offline):
+                claude = usage.fetch_claude(1)
+                codex_result = usage.fetch_codex(1)
+        self.assertEqual((claude["errorKind"], claude["account"]), ("network", "dev@example.com"))
+        self.assertEqual((codex_result["errorKind"], codex_result["account"]), ("rpc", "work@example.com"))
 
     def test_expired_claude_sign_in_is_renewed_by_claude_code(self):
         with tempfile.TemporaryDirectory() as temporary:

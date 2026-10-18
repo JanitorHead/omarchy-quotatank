@@ -587,6 +587,23 @@ class MergeTests(unittest.TestCase):
         self.assertEqual((claude["accounts"][0]["accountId"], claude["accounts"][0]["errorKind"]), ("main", "expired"))
         self.assertEqual({account["accountCount"] for account in claude["accounts"]}, {4})
 
+    def test_a_failed_reading_of_omps_account_shows_omps_figures_as_that_one_account(self):
+        # At login the native reader often fails before the network is up; omp still has the account's figures.
+        for kind in ("network", "rpc", "expired"):
+            with self.subTest(kind=kind):
+                failed = dict(usage.error_provider("codex", kind, "Could not reach the usage endpoint."),
+                              account="Work@example.com")
+                providers = [failed]
+                self.merge(providers, ["codex"])
+                codex = providers[0]
+                self.assertNotIn("accounts", codex)
+                self.assertEqual((codex["status"], codex["errorKind"], codex["message"]), ("ok", "", ""))
+                self.assertEqual((codex["source"], codex["plan"]), ("omp usage report", "ChatGPT Pro Lite"))
+                self.assertTrue(codex["windows"])
+                self.assertEqual(codex["notice"], "Could not reach the usage endpoint.")
+                self.assertEqual((codex["account"], codex["origins"]), ("Work@example.com", ["signin", "omp"]))
+                self.assertEqual(codex["ompAccountId"], omp_id("openai-codex", "work@example.com"))
+
     def test_an_api_key_reading_is_the_primary_key(self):
         providers = [native("zai")]
         self.merge(providers, ["zai"])

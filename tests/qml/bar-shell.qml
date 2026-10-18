@@ -18,6 +18,7 @@ ShellRoot {
   property var motion: null
   property var number: null
   property var dots: null
+  property var cardWindow: null
   property var card: null
   property var widget: null
   property var live: null
@@ -222,7 +223,16 @@ ShellRoot {
         { accountSwitch: { mode: "auto", threshold: 95 } })
       var model = logic.hover(data, logic.state(data, Object.assign({ modes: "{}", nowSeconds: now }, thresholds)), { nowSeconds: now,
         readAtSeconds: now - 120, formatClock: function (seconds) { return Qt.formatTime(new Date(seconds * 1000), "HH:mm") } })
-      root.card = create("AccountHoverCard.qml", stage.host, { y: 70, model: model, motion: motion, open: true })
+      // Hosted like Panel.qml's: a popup that shows while the card is open or fading, and lets go of its
+      // anchor once the fade-out ends, so the card leaves its window from inside that last frame.
+      root.cardWindow = Qt.createQmlObject('import QtQuick; import Quickshell; PopupWindow { property var stageWindow: null; '
+        + 'property bool held: true; property Item card: null; visible: held && !!card && (card.open || card.opacity > 0); '
+        + 'color: "transparent"; implicitWidth: 400; implicitHeight: 300; anchor.window: held ? stageWindow : null; '
+        + 'anchor.rect.x: 10; anchor.rect.y: 70; anchor.rect.width: 1; anchor.rect.height: 1 }', root, "cardWindow")
+      cardWindow.stageWindow = stage
+      root.card = create("AccountHoverCard.qml", cardWindow.contentItem, { model: model, motion: motion, open: true })
+      card.opacityChanged.connect(function () { if (card.opacity === 0 && !card.open) cardWindow.held = false })
+      cardWindow.card = card
       return true
     },
     function () {
@@ -270,6 +280,7 @@ ShellRoot {
     },
     function () {
       if (card.opacity !== 0) return waited < 40 ? false : check(false, "hover card fades out")
+      check(!cardWindow.held && !cardWindow.visible, "the faded card's window closes")
       console.log("Bar QML contract: passed (components)")
       Qt.quit()
       return false

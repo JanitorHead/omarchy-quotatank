@@ -51,18 +51,19 @@ Ui.BorderSurface {
   opacity: open ? 1 : 0
   scale: open ? 1 : 0.97
 
-  // The property keeps its old value until an Animator ends, so it still tells the direction here.
-  // Without Panel's Motion nothing animates.
+  // NumberAnimation, not an Animator: the fade-out's last opacity hides the card's window (Panel.qml), and
+  // an Animator that loses its window while it writes that value back crashes Qt 6.11. Without Panel's
+  // Motion nothing animates.
   Behavior on opacity {
-    OpacityAnimator {
-      duration: root.motion ? root.motion.duration(root.opacity < 0.5 ? root.motion.popIn : root.motion.popOut) : 0
-      easing.type: root.opacity < 0.5 ? Easing.OutCubic : Easing.InCubic
+    NumberAnimation {
+      duration: root.motion ? root.motion.duration(root.open ? root.motion.popIn : root.motion.popOut) : 0
+      easing.type: root.open ? Easing.OutCubic : Easing.InCubic
     }
   }
   Behavior on scale {
-    ScaleAnimator {
-      duration: root.motion ? root.motion.duration(root.opacity < 0.5 ? root.motion.popIn : root.motion.popOut) : 0
-      easing.type: root.opacity < 0.5 ? Easing.OutCubic : Easing.InCubic
+    NumberAnimation {
+      duration: root.motion ? root.motion.duration(root.open ? root.motion.popIn : root.motion.popOut) : 0
+      easing.type: root.open ? Easing.OutCubic : Easing.InCubic
     }
   }
 

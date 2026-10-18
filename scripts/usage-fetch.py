@@ -623,6 +623,16 @@ def request_claude_usage(login: dict[str, Any], timeout: float) -> Any:
     )
 
 
+def claude_signed_in_email(home: Path | None) -> str:
+    """The email of a Claude Code login, from its account record (no network); "" when it names none."""
+    try:
+        account_data = read_json(claude_account_file(home))
+    except (OSError, ValueError, RecursionError):
+        return ""
+    oauth_account = account_data.get("oauthAccount") if isinstance(account_data, dict) else None
+    return str(oauth_account.get("emailAddress") or "") if isinstance(oauth_account, dict) else ""
+
+
 @provider_fetcher("claude")
 def fetch_claude_accounts(timeout: float) -> dict[str, Any]:
     return omarchy_account_result("claude", fetch_claude, timeout)
@@ -642,6 +652,9 @@ def fetch_claude(timeout: float, home: Path | None = None) -> dict[str, Any]:
     except (OSError, ValueError, json.JSONDecodeError):
         return error_provider(provider_id, "no_credentials", "Claude Code credentials could not be read.")
 
+    # The email names the account even when the reading fails, so omp's reading of the same account is
+    # recognised as this one instead of being listed as a second account.
+    account = claude_signed_in_email(home)
     # A token Claude Code could not renew is still sent: offline, that reads as a connection error
     # rather than a sign-in prompt. If it comes back rejected, the network is up by now, which at the
     # first check after login it often was not when Claude Code tried; so Claude Code gets one more
@@ -662,16 +675,7 @@ def fetch_claude(timeout: float, home: Path | None = None) -> dict[str, Any]:
             payload = request_claude_usage(login, timeout)
         windows, credits = parse_claude_usage(payload)
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
-
-    account = ""
-    try:
-        account_data = read_json(claude_account_file(home))
-        oauth_account = account_data.get("oauthAccount") if isinstance(account_data, dict) else None
-        if isinstance(oauth_account, dict):
-            account = str(oauth_account.get("emailAddress") or "")
-    except (OSError, ValueError, RecursionError):
-        pass
+        return dict(error_provider(provider_id, exc.kind, exc.message), account=account)
 
     result = base_provider(provider_id)
     result.update(
@@ -928,10 +932,27 @@ def parse_codex_rate_limits(
     return windows, credits, plan, reached
 
 
+def codex_home(home: Path | None = None) -> Path:
+    """A Codex login's folder: `home` for an Omarchy login, else `$CODEX_HOME` or `~/.codex`."""
+    return home if home is not None else Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser()
+
+
+def codex_signed_in_email(home: Path | None) -> str:
+    """The email in a Codex login's saved ID token (no network), so a failed reading still names its account and
+    omp's reading of it is not listed as a second account; "" when it names none."""
+    try:
+        auth = read_json(codex_home(home) / "auth.json")
+    except (OSError, ValueError, RecursionError):
+        return ""
+    tokens = auth.get("tokens") if isinstance(auth, dict) else None
+    id_token = tokens.get("id_token") if isinstance(tokens, dict) else None
+    email = jwt_claims(id_token).get("email") if isinstance(id_token, str) else None
+    return email.strip() if isinstance(email, str) else ""
+
+
 @provider_detector("codex")
 def detect_codex() -> bool:
-    codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")).expanduser()
-    return (codex_home / "auth.json").is_file()
+    return (codex_home() / "auth.json").is_file()
 
 
 @provider_fetcher("codex")
@@ -997,9 +1018,10 @@ def fetch_codex(timeout: float, home: Path | None = None) -> dict[str, Any]:
             result["notice"] = "Codex returned no subscription rate limits."
         return result
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return dict(error_provider(provider_id, exc.kind, exc.message), account=codex_signed_in_email(home))
     except (OSError, BrokenPipeError) as exc:
-        return error_provider(provider_id, "rpc", f"Codex app-server stopped unexpectedly: {exc}")
+        return dict(error_provider(provider_id, "rpc", f"Codex app-server stopped unexpectedly: {exc}"),
+                    account=codex_signed_in_email(home))
     finally:
         try:
             process.terminate()
@@ -8343,6 +8365,17 @@ def native_origin(provider: dict[str, Any], reading: dict[str, Any], cliproxy: b
     return "omarchy" if "accounts" in provider else "signin"
 
 
+def stand_in_omp_reading(native: dict[str, Any], entry: dict[str, Any]) -> None:
+    """A failed native reading takes omp's reading of the same account, in place: the account keeps its identity
+    and its own failure becomes the notice, so a reader that could not reach its provider (at login, before the
+    network is up) shows omp's figures instead of an error beside a second copy of the account."""
+    failure = native.get("message") or ""
+    native.update({key: copy.deepcopy(entry[key]) for key in ("status", "errorKind", "message", "windows", "credits",
+                                                                "source", "fetchedAt")})
+    native["plan"] = native.get("plan") or entry["plan"]
+    native["notice"] = failure or entry["notice"]
+
+
 def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
                        accounts: list[tuple[OmpIdentity, dict[str, Any]]], cliproxy: bool) -> dict[str, Any] | None:
     """The provider's result with its omp accounts merged in (backend contract, "omp accounts")."""
@@ -8362,6 +8395,8 @@ def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
         for native in matches:
             native["origins"] = [native_origin(provider, native, cliproxy), "omp"]
             native.setdefault("ompAccountId", entry["accountId"])
+            if native["status"] != "ok" and entry["status"] == "ok":
+                stand_in_omp_reading(native, entry)
         if not matches:
             added.append(entry)
     if added:

@@ -4,6 +4,15 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.0.1
+
+### Fixed
+
+- **Closing the account hover card crashed the whole Omarchy shell.** When a chip's hover card finished fading out (the pointer left it, or a click opened the panel), its window closed while a Qt render-thread animator was still finishing, and Quickshell crashed with a segmentation fault in `QQuickAnimatorProxyJob`. The card now fades with ordinary animations. This hit every provider shown with two or more accounts.
+- **A Claude Code or Codex account read through omp showed up twice at login.** When the provider's own reading failed (the network not up yet, an app-server that stopped), it named no account, so omp's reading of the same account was listed as a second one: two dots, and a hover card that could crash the shell. A failed reading now names its account from the saved sign-in, and when omp read that account it shows omp's figures, with the failure as a notice, until the provider answers again.
+
+Both bugs were reproduced on Quickshell 0.3.1 with Qt 6.11.2 and checked fixed there: the crash in the test suite, which now hosts the card in a popup window as the panel does, and the duplicate accounts against live Claude Code, Codex and omp sign-ins with the network blocked.
+
 ## 2.0.0
 
 Quotatank 2 stands on its own: it no longer carries integrations or names inherited from the project it started from.
