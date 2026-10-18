@@ -18,7 +18,7 @@ Quotatank reads the plan limits and prepaid balances of **49 AI coding providers
 
 ## Providers
 
-**49 providers**, plus every account on a proxy or in omp. Each one is read with what it already uses on this computer; nothing to configure for a sign-in, one paste for a key. [Connect a source](#connect-a-source) says what each one shows and where its credentials come from.
+**50 providers**, plus every account on a proxy or in omp. Each one is read with what it already uses on this computer; nothing to configure for a sign-in, one paste for a key. [Connect a source](#connect-a-source) says what each one shows and where its credentials come from.
 
 ![Every supported provider with its mark, in three groups: 18 sign-ins on this computer, 17 coding plans with an API key, and 14 prepaid balances, plus every account on a CLIProxyAPI server](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/providers.png)
 
@@ -34,7 +34,7 @@ Z.ai Coding Plan (and BigModel) · MiniMax Coding Plan · Synthetic · Chutes ·
 
 **Prepaid balances.** What you can still spend, in the provider's own currency, with low-balance alerts.
 
-OpenRouter · DeepSeek · Moonshot · Venice · DeepInfra · Vercel AI Gateway · Poe · Atlas Cloud · Charm Hyper · Sail Research · Sofya · v0 · Manus · TypeSafe (Jev)
+OpenRouter · DeepSeek · Moonshot · Venice · DeepInfra · Vercel AI Gateway · Poe · Atlas Cloud · Charm Hyper · Sail Research · Sofya · v0 · Manus · TypeSafe (Jev) · Xiaomi MiMo
 
 **Several accounts.** Omarchy's Claude Code, Codex, and Grok accounts, extra API keys, CLIProxyAPI accounts, and omp's accounts, each read on its own.
 
@@ -287,6 +287,7 @@ Turn the provider on under **Settings → Providers → More providers**, then s
 | v0 | API key, or `V0_API_KEY` | The billing allowance, or the prepaid balance |
 | Manus | API key, or `MANUS_API_KEY` | The credit balance and the next refresh |
 | TypeSafe | The console's Cookie header, or `TYPESAFE_COOKIE`: TypeSafe has no balance API for keys | The prepaid balance, this cycle's spend, and credit expiry |
+| Xiaomi MiMo | The platform console's Cookie header, or `MIMO_COOKIE`: MiMo has no balance API for keys | The prepaid balance with its paid and granted parts, and on Token Plan accounts the monthly credit window with its period-end reset |
 
 Quotatank reads existing credentials and never writes authentication state; sign-in stays with each tool. Claude Code, OpenAI Codex, OpenCode Go, OpenRouter, and GitHub Copilot have been checked against live accounts. The other providers follow their documentation and established open-source readers (CodexBar, oh-my-pi) and are tested against recorded responses; the ones without public documentation (Alibaba Coding Plan, IBM Bob, ClawRouter, TypeSafe) can break when the provider changes its site. The [configuration reference](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#providers-and-authentication) lists the files and endpoints each provider uses.
 

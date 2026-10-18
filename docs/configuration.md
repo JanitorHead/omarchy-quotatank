@@ -66,6 +66,7 @@ Each of these is off until turned on under **Settings → Providers**. Save a ke
 | v0 | `GET https://api.v0.dev/v1/user/billing` | `V0_API_KEY` |
 | Manus | `GET https://api.manus.ai/v2/usage.availableCredits` | `MANUS_API_KEY` |
 | TypeSafe | The console's billing page: its Next.js billing action, found in the page's scripts and cached for 12 hours. TypeSafe has no balance API for keys, so the credential is the console's `Cookie` header | `TYPESAFE_COOKIE` |
+| Xiaomi MiMo | `GET https://platform.xiaomimimo.com/api/v1/balance`, `/tokenPlan/detail`, and `/tokenPlan/usage`. MiMo has no balance API for keys, so the credential is the console's `Cookie` header; the Token Plan endpoints are optional and a pay-as-you-go account just reports its balance | `MIMO_COOKIE` |
 
 A key is only ever sent to its own provider. Where a company runs an international and a China platform (Z.ai/BigModel, MiniMax, Moonshot), the international host is asked first and the other one only when the key is rejected.
 
@@ -220,7 +221,7 @@ In **Settings → Costs → Custom prices**, add the exact model ID and its inpu
 | `barProviders` | every provider | Enabled providers allowed to show percentage chips; independent of popup visibility |
 | `warningThreshold` | `25` | Warn when a limit has this much or less left. Stored as % left; Settings show it as % used under `Used` (25 left is 75 used) |
 | `criticalThreshold` | `10` | Critical when this much or less is left. Stored as % left; must not be looser than `warningThreshold` |
-| `creditWarningUsd` | `5` | Low-balance warning for prepaid providers (OpenRouter, DeepSeek, Moonshot, Venice, DeepInfra, Vercel AI Gateway, Poe, Atlas Cloud, Charm Hyper, Sail Research, Sofya, v0, Manus, TypeSafe): what can still be spent, in the balance's currency or unit, at or below this amount |
+| `creditWarningUsd` | `5` | Low-balance warning for prepaid providers (OpenRouter, DeepSeek, Moonshot, Venice, DeepInfra, Vercel AI Gateway, Poe, Atlas Cloud, Charm Hyper, Sail Research, Sofya, v0, Manus, TypeSafe, Xiaomi MiMo): what can still be spent, in the balance's currency or unit, at or below this amount |
 | `creditCriticalUsd` | `1` | Low-balance critical amount; must not be above `creditWarningUsd` |
 | `costPriceOverrides` | `"{}"` | JSON string managed by Custom model prices; exact IDs mapped to USD-per-million rates |
 | `costLocalProviders` | `["claude", "codex", "opencode"]` | Local cost sources (`claude`, `codex`, `opencode`), independent of quota providers |
