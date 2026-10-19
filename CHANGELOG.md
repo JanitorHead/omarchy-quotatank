@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.1.0
+
+### Added
+
+- **Xiaomi MiMo, 50 providers in all.** The prepaid balance with its paid and granted parts and, on a Token Plan, the month's credits with the plan's name and its period-end reset; an account without a plan reads "Pay as you go", and an expired plan says so instead of showing a stale limit. MiMo has no balance API for keys, so, like TypeSafe, it reads the console with the Cookie header you paste from its balance page; the header is sent only to `platform.xiaomimimo.com`, never follows a redirect, and a signed-out session asks for a fresh paste. Contributed by @cbayschm74 in #1. Ported from CodexBar's reader and tested against its recorded replies, not a live account.
+
 ## 2.0.1
 
 ### Fixed
