@@ -53,10 +53,10 @@ PROVIDER_ORDER = (
     "claude", "codex", "kimi", "opencode", "antigravity", "gemini", "copilot", "cursor", "grok",
     "kiro", "jetbrains", "nous", "muse",
     "factory", "amp", "kilo", "codebuff", "huggingface",
-    "zai", "minimax", "mimo", "synthetic", "chutes", "ollama", "warp", "zenmux", "clinepass", "alibaba",
+    "zai", "minimax", "synthetic", "chutes", "ollama", "warp", "zenmux", "clinepass", "alibaba",
     "commandcode", "devpass", "xkiro", "ibmbob", "umans", "neuralwatt", "aixy", "clawrouter",
     "openrouter", "deepseek", "moonshot", "venice", "deepinfra", "vercel", "poe", "atlascloud",
-    "hyper", "sailresearch", "sofya", "v0", "manus", "typesafe",
+    "hyper", "sailresearch", "sofya", "v0", "manus", "typesafe", "mimo",
 )
 PROVIDER_NAMES = {
     "claude": "Claude Code",
@@ -77,7 +77,6 @@ PROVIDER_NAMES = {
     "huggingface": "Hugging Face",
     "zai": "Z.ai Coding Plan",
     "minimax": "MiniMax Coding Plan",
-    "mimo": "Xiaomi MiMo",
     "synthetic": "Synthetic",
     "chutes": "Chutes",
     "ollama": "Ollama Cloud",
@@ -109,6 +108,7 @@ PROVIDER_NAMES = {
     "v0": "v0",
     "manus": "Manus",
     "typesafe": "TypeSafe",
+    "mimo": "Xiaomi MiMo",
     # Names CLIProxyAPI reports for accounts it manages.
     "gemini-cli": "Gemini CLI",
     "qwen": "Qwen",
@@ -157,7 +157,6 @@ PROVIDER_KEY_ENV: dict[str, tuple[str, ...]] = {
     "huggingface": ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"),
     "zai": ("Z_AI_API_KEY", "ZAI_API_KEY"),
     "minimax": ("MINIMAX_CODING_API_KEY", "MINIMAX_API_KEY"),
-    "mimo": ("MIMO_COOKIE",),
     "synthetic": ("SYNTHETIC_API_KEY",),
     "chutes": ("CHUTES_API_KEY",),
     "ollama": ("OLLAMA_API_KEY",),
@@ -185,6 +184,7 @@ PROVIDER_KEY_ENV: dict[str, tuple[str, ...]] = {
     "v0": ("V0_API_KEY",),
     "manus": ("MANUS_API_KEY",),
     "typesafe": ("TYPESAFE_COOKIE",),
+    "mimo": ("MIMO_COOKIE",),
 }
 
 ONE_DAY = 24 * 60 * 60
@@ -3995,6 +3995,40 @@ def bearer_headers(token: str) -> dict[str, str]:
     return {"Authorization": "Bearer " + token, "Accept": "application/json"}
 
 
+# A Cookie header as pasted from a browser's developer tools: the bare header, `Cookie: …`, or a
+# whole "Copy as cURL" command (`-H 'Cookie: …'`, `-b '…'`). TypeSafe and Xiaomi MiMo take one.
+COOKIE_PASTE_PATTERNS = (
+    re.compile(r"-H\s*'Cookie:\s*([^']+)'", re.IGNORECASE),
+    re.compile(r'-H\s*"Cookie:\s*([^"]+)"', re.IGNORECASE),
+    re.compile(r"\bcookie:\s*'([^']+)'", re.IGNORECASE),
+    re.compile(r'\bcookie:\s*"([^"]+)"', re.IGNORECASE),
+    re.compile(r"\bcookie:\s*([^\r\n]+)", re.IGNORECASE),
+    re.compile(r"(?:^|\s)(?:--cookie|-b)\s*'([^']+)'", re.IGNORECASE),
+    re.compile(r'(?:^|\s)(?:--cookie|-b)\s*"([^"]+)"', re.IGNORECASE),
+    re.compile(r"(?:^|\s)-b([^\s=]+=[^\s]+)", re.IGNORECASE),
+    re.compile(r"(?:^|\s)(?:--cookie|-b)\s+([^\s]+)", re.IGNORECASE),
+)
+
+
+def pasted_cookie(token: str, name: str, page: str) -> str:
+    """The Cookie header from a paste. curl commands, a `Cookie:` prefix, and wrapping quotes are accepted;
+    `name` and `page` say whose header it is and where it is copied from when nothing usable is left."""
+    value = token.strip()
+    for pattern in COOKIE_PASTE_PATTERNS:
+        match = pattern.search(value)
+        if match and match.group(1).strip():
+            value = match.group(1).strip()
+            break
+    if value[:7].lower() == "cookie:":
+        value = value[7:].strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1]
+    value = value.strip()
+    if not value or any(ch < " " or ch > "~" for ch in value):
+        raise ProviderFailure("no_credentials", f"{name} needs a nonempty single-line Cookie header from {page}.")
+    return value
+
+
 def first_accepting_host(hosts: tuple[str, ...], read: Callable[[str], Any]) -> tuple[str, Any]:
     """`read(host)` from the first host that accepts the key.
 
@@ -4253,177 +4287,6 @@ def fetch_minimax(timeout: float, key_file: Path | None = None) -> dict[str, Any
                   windows=windows, credits=credits)
     if not windows:
         result["notice"] = "MiniMax reported no Token Plan limits for this key."
-    return result
-
-
-# --------------------------------------------------------------- Xiaomi MiMo
-#
-# Added in this fork; ported from CodexBar's docs/mimo.md and MiMoUsageFetcher.swift (MIT). The
-# balance and Token Plan quota live behind the platform console, so the pasted Cookie header is
-# the credential: an inference key (sk-…) or a Token Plan key (tp-…) cannot read them. Every
-# answer is a `code` envelope, and a stale session answers HTTP 401 with a loginUrl. The two
-# Token Plan endpoints are optional, so a pay-as-you-go account just reports its balance.
-
-MIMO_API = "https://platform.xiaomimimo.com/api/v1"
-MIMO_REFERER = "https://platform.xiaomimimo.com/#/console/balance"
-MIMO_SESSION_EXPIRED = "Xiaomi MiMo session expired."
-MIMO_PERIOD_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S")
-
-
-def mimo_cookie(token: str) -> str:
-    """The Cookie header from a paste. curl commands, a `Cookie:` prefix, and wrapping quotes are
-    accepted, as in TypeSafe's paste handling (TYPESAFE_COOKIE_PATTERNS below)."""
-    value = token.strip()
-    for pattern in TYPESAFE_COOKIE_PATTERNS:
-        match = pattern.search(value)
-        if match and match.group(1).strip():
-            value = match.group(1).strip()
-            break
-    if value[:7].lower() == "cookie:":
-        value = value[7:].strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        value = value[1:-1]
-    value = value.strip()
-    if not value or any(ch < " " or ch > "~" for ch in value):
-        raise ProviderFailure(
-            "no_credentials", "Xiaomi MiMo needs a nonempty single-line Cookie header from the balance console."
-        )
-    return value
-
-
-def mimo_headers(cookie: str) -> dict[str, str]:
-    return {"Cookie": cookie, "Referer": MIMO_REFERER,
-            "Accept": "application/json", "User-Agent": SIGNIN_USER_AGENT}
-
-
-def mimo_envelope(payload: Any, what: str) -> Any:
-    """The `data` of a platform reply. `code` 401 or 403, or a loginUrl, means the console session
-    is gone; anything else that is not `code` 0 is the provider's own error."""
-    if not isinstance(payload, dict):
-        raise ProviderFailure("malformed", f"Xiaomi MiMo returned unreadable {what} data.")
-    code = number(payload.get("code"))
-    if code is None:
-        raise ProviderFailure("malformed", f"Xiaomi MiMo returned unreadable {what} data.")
-    if code != 0:
-        if code in (401, 403) or payload.get("loginUrl"):
-            raise ProviderFailure("expired", MIMO_SESSION_EXPIRED)
-        message = clean_message(str(payload.get("message") or payload.get("msg") or ""))
-        raise ProviderFailure("http", f"Xiaomi MiMo reported an error for the {what} request." +
-                              (f" {message}" if message else ""))
-    return payload.get("data")
-
-
-def mimo_period_end(value: Any) -> int | None:
-    """`currentPeriodEnd` is UTC wall time (`yyyy-MM-dd HH:mm:ss`), unlike the epoch seconds the
-    other providers report. An absent or unparseable date leaves the window without a reset."""
-    if not isinstance(value, str) or not value.strip():
-        return None
-    text = value.strip()
-    for pattern in MIMO_PERIOD_FORMATS:
-        try:
-            parsed = datetime.strptime(text, pattern)
-        except ValueError:
-            continue
-        return int(parsed.replace(tzinfo=timezone.utc).timestamp())
-    return None
-
-
-def parse_mimo_balance(payload: Any) -> dict[str, Any]:
-    """The console balance becomes `credits`: prepaid money with its paid and granted parts.
-
-    The amounts are strings in the API. A Token Plan account reports quota in `windows` too, and
-    both can be present at once."""
-    data = mimo_envelope(payload, "balance")
-    if not isinstance(data, dict):
-        raise ProviderFailure("malformed", "Xiaomi MiMo returned no balance payload.")
-    balance = number(data.get("balance"))
-    currency = str(data.get("currency") or "").strip().upper()
-    if balance is None or not currency:
-        raise ProviderFailure("malformed", "Xiaomi MiMo returned unreadable balance data.")
-    return {
-        "label": "Balance",
-        "currency": currency,
-        "used": None,
-        "limit": None,
-        "remaining": balance,
-        "total": None,
-        "unlimited": False,
-        "resetCreditsAvailable": None,
-        "spendable": max(0.0, balance),
-        "spend": {},
-        "granted": number(data.get("giftBalance")),
-        "toppedUp": number(data.get("cashBalance")),
-    }
-
-
-def parse_mimo_plan(detail: Any) -> tuple[str, int | None, bool]:
-    """The plan name, when the current period ends, and whether the plan has expired."""
-    data = mimo_envelope(detail, "Token Plan")
-    if not isinstance(data, dict):
-        return "", None, False
-    plan = str(data.get("planCode") or "").strip()
-    return plan, mimo_period_end(data.get("currentPeriodEnd")), bool(data.get("expired"))
-
-
-def parse_mimo_windows(usage: Any, period_end: int | None) -> list[dict[str, Any]]:
-    """The Token Plan's monthly credit allowance as one window per reported item, with the real
-    reset from the plan detail. The counts are credits and stay in the detail text, not money."""
-    data = mimo_envelope(usage, "Token Plan")
-    if not isinstance(data, dict) or not isinstance(data.get("monthUsage"), dict):
-        return []
-    month = data["monthUsage"]
-    windows: list[dict[str, Any]] = []
-    for index, item in enumerate(dict_list(month.get("items"))):
-        percent = number(item.get("percent"))
-        if percent is None:
-            continue
-        used, limit = number(item.get("used")), number(item.get("limit"))
-        detail = f"{amount_text(used)}/{amount_text(limit)} credits" \
-            if used is not None and limit is not None else ""
-        name = str(item.get("name") or "").strip()
-        windows.append(make_window("monthly" if index == 0 else f"monthly-{index + 1}",
-                                   name or "Token Plan", percent, period_end, None, detail))
-    if not windows:
-        percent = number(month.get("percent"))
-        if percent is not None:
-            windows.append(make_window("monthly", "Token Plan", percent, period_end, None, ""))
-    return windows
-
-
-@provider_fetcher("mimo", keyed=True)
-def fetch_mimo(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
-    provider_id = "mimo"
-    try:
-        token = provider_key("mimo", key_file)
-    except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
-    if not token:
-        return error_provider(provider_id, "no_credentials",
-                              "No Xiaomi MiMo Cookie header was found. Paste one under Settings → Providers.")
-    try:
-        headers = mimo_headers(mimo_cookie(token))
-        credits = parse_mimo_balance(http_json(MIMO_API + "/balance", headers, timeout))
-    except ProviderFailure as exc:
-        if exc.kind == "expired":
-            return error_provider(provider_id, "expired",
-                                  "Xiaomi MiMo rejected the saved Cookie header. "
-                                  "Paste a fresh one under Settings → Providers.")
-        return error_provider(provider_id, exc.kind, exc.message)
-    plan, period_end, expired = "", None, False
-    windows: list[dict[str, Any]] = []
-    # A pay-as-you-go account has no plan on these endpoints; the balance above is the whole answer.
-    try:
-        plan, period_end, expired = parse_mimo_plan(http_json(MIMO_API + "/tokenPlan/detail", headers, timeout))
-    except ProviderFailure:
-        pass
-    try:
-        windows = parse_mimo_windows(http_json(MIMO_API + "/tokenPlan/usage", headers, timeout), period_end)
-    except ProviderFailure:
-        pass
-    result = base_provider(provider_id)
-    result.update(plan=plan, source="Xiaomi MiMo platform API", windows=windows, credits=credits)
-    if expired:
-        result["notice"] = "The Xiaomi MiMo Token Plan has expired."
     return result
 
 
@@ -7038,37 +6901,6 @@ TYPESAFE_SCRIPT_RE = re.compile(r"""<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>""
 TYPESAFE_CHUNK_RE = re.compile(r"\.js(?:$|\?)", re.IGNORECASE)
 TYPESAFE_ACTION_RE = re.compile(r'"([0-9a-f]{40,})"[^)]{0,150}"getBillingOverviewResult"', re.IGNORECASE)
 TYPESAFE_ACTION_ID_RE = re.compile(r"[0-9a-fA-F]{40,}")
-TYPESAFE_COOKIE_PATTERNS = (
-    re.compile(r"-H\s*'Cookie:\s*([^']+)'", re.IGNORECASE),
-    re.compile(r'-H\s*"Cookie:\s*([^"]+)"', re.IGNORECASE),
-    re.compile(r"\bcookie:\s*'([^']+)'", re.IGNORECASE),
-    re.compile(r'\bcookie:\s*"([^"]+)"', re.IGNORECASE),
-    re.compile(r"\bcookie:\s*([^\r\n]+)", re.IGNORECASE),
-    re.compile(r"(?:^|\s)(?:--cookie|-b)\s*'([^']+)'", re.IGNORECASE),
-    re.compile(r'(?:^|\s)(?:--cookie|-b)\s*"([^"]+)"', re.IGNORECASE),
-    re.compile(r"(?:^|\s)-b([^\s=]+=[^\s]+)", re.IGNORECASE),
-    re.compile(r"(?:^|\s)(?:--cookie|-b)\s+([^\s]+)", re.IGNORECASE),
-)
-
-
-def typesafe_cookie(token: str) -> str:
-    """The Cookie header from a paste. curl commands, a `Cookie:` prefix, and wrapping quotes are accepted."""
-    value = token.strip()
-    for pattern in TYPESAFE_COOKIE_PATTERNS:
-        match = pattern.search(value)
-        if match and match.group(1).strip():
-            value = match.group(1).strip()
-            break
-    if value[:7].lower() == "cookie:":
-        value = value[7:].strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        value = value[1:-1]
-    value = value.strip()
-    if not value or any(ch < " " or ch > "~" for ch in value):
-        raise ProviderFailure(
-            "no_credentials", "TypeSafe needs a nonempty single-line Cookie header from the billing page."
-        )
-    return value
 
 
 def typesafe_request(
@@ -7295,13 +7127,127 @@ def fetch_typesafe(timeout: float, key_file: Path | None = None) -> dict[str, An
         return missing
     deadline = time.monotonic() + timeout
     try:
-        cookie = typesafe_cookie(token)
+        cookie = pasted_cookie(token, "TypeSafe", "the billing page")
         fields = parse_typesafe_billing(typesafe_billing_reply(cookie, deadline))
     except ProviderFailure as exc:
         return keyed_error(provider_id, exc, "TypeSafe",
                            fix="Paste a fresh Cookie header under Settings → Providers.")
     result = base_provider(provider_id)
     result.update(source="TypeSafe billing page", **fields)
+    return result
+
+
+# --------------------------------------------------------------- Xiaomi MiMo
+#
+# Ported from CodexBar's MiMoUsageFetcher.swift and docs/mimo.md. MiMo serves the balance and the
+# Token Plan only to its signed-in console, not to API keys (sk-… or tp-…), so the pasted Cookie
+# header is the credential, as for TypeSafe. Every reply is a `{code, message, data}` envelope.
+MIMO_ORIGIN = "https://platform.xiaomimimo.com"
+MIMO_API = MIMO_ORIGIN + "/api/v1"
+MIMO_CONSOLE = MIMO_ORIGIN + "/#/console/balance"
+# The console session itself; CodexBar refuses a header without them too.
+MIMO_SESSION_COOKIES = ("api-platform_serviceToken", "userId")
+MIMO_PAY_AS_YOU_GO = "Pay as you go"
+
+
+def mimo_headers(token: str) -> dict[str, str]:
+    """The console's request headers around the pasted session. The console names the browser's zone
+    in x-timeZone; UTC is asked for here because `currentPeriodEnd` is read as UTC."""
+    cookie = pasted_cookie(token, "Xiaomi MiMo", "the balance console")
+    names = {part.split("=", 1)[0].strip() for part in cookie.split(";")}
+    absent = [name for name in MIMO_SESSION_COOKIES if name not in names]
+    if absent:
+        raise ProviderFailure("expired", f"The saved Cookie header has no {' or '.join(absent)} cookie. "
+                              "Copy it again from the balance console while signed in.")
+    return {"Cookie": cookie, "Accept": "application/json", "Origin": MIMO_ORIGIN, "Referer": MIMO_CONSOLE,
+            "x-timeZone": "UTC+00:00", "User-Agent": SIGNIN_USER_AGENT}
+
+
+def mimo_data(path: str, headers: dict[str, str], deadline: float) -> Any:
+    """`data` from one console reply. A redirect to the sign-in page, HTTP 401/403, or code 401/403
+    means the session is over; any other nonzero code is the console's own refusal."""
+    try:
+        payload = http_json(MIMO_API + path, headers, time_left(deadline))
+    except ProviderFailure as exc:
+        if getattr(exc, "http_status", None) in range(300, 400):
+            raise ProviderFailure("expired", "Xiaomi MiMo sent the request to its sign-in page.") from None
+        raise
+    code = number(payload.get("code")) if isinstance(payload, dict) else None
+    if code is None:
+        raise ProviderFailure("malformed", "Xiaomi MiMo returned unreadable account data.")
+    if code in (401, 403):
+        raise ProviderFailure("expired", "Xiaomi MiMo rejected the console session.")
+    if code != 0:
+        raise ProviderFailure("http", f"Xiaomi MiMo refused the request (code {code:.0f}).")
+    return payload.get("data")
+
+
+def parse_mimo_balance(data: Any) -> dict[str, Any]:
+    """The prepaid balance with its paid (`cashBalance`) and granted (`giftBalance`) parts. The
+    amounts are numeric text, and a part the console leaves blank is unknown."""
+    fields = data if isinstance(data, dict) else {}
+    balance = usd(fields.get("balance"))
+    currency = str(fields.get("currency") or "").strip().upper()
+    if balance is None or not currency:
+        raise ProviderFailure("malformed", "Xiaomi MiMo returned no balance.")
+    return balance_credits("Balance", currency, balance, max(0.0, balance),
+                           granted=usd(fields.get("giftBalance")), toppedUp=usd(fields.get("cashBalance")))
+
+
+def parse_mimo_plan(data: Any) -> tuple[str, int | None, str]:
+    """The plan's name, when its month ends, and a notice. An account without a Token Plan pays as it
+    goes. The code can carry the billing period (`lite:year`); `currentPeriodEnd` is UTC wall time."""
+    fields = data if isinstance(data, dict) else {}
+    code = str(fields.get("planCode") or "").split(":")[0].strip()
+    if not code:
+        return MIMO_PAY_AS_YOU_GO, None, ""
+    plan = "Token Plan " + code.title()
+    if fields.get("expired") is True:
+        return plan, None, f"The Xiaomi MiMo {plan} has expired."
+    return plan, utc_timestamp(fields.get("currentPeriodEnd")), ""
+
+
+def parse_mimo_usage(data: Any, resets_at: int | None) -> list[dict[str, Any]]:
+    """The month's credit allowance from its first item, the month's total (`month_total_token`).
+    The share comes from the counts: the reported `percent` is a fraction, 0.0505 for 5.05%."""
+    month = data.get("monthUsage") if isinstance(data, dict) else None
+    items = dict_list(month.get("items")) if isinstance(month, dict) else []
+    used, limit = (number(items[0].get(key)) for key in ("used", "limit")) if items else (None, None)
+    if used is None or limit is None or limit <= 0:
+        return []
+    return [make_window("monthly", "Monthly credits", used / limit * 100.0, resets_at, None,
+                        f"{amount_text(used)} of {amount_text(limit)} credits")]
+
+
+@provider_fetcher("mimo", keyed=True)
+def fetch_mimo(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
+    provider_id = "mimo"
+    token, missing = key_or_error(provider_id, key_file, "Xiaomi MiMo")
+    if missing:
+        if missing["errorKind"] == "no_credentials":
+            missing["message"] = ("No Xiaomi MiMo Cookie header was found. Paste the one from "
+                                  "platform.xiaomimimo.com/#/console/balance under Settings → Providers.")
+        return missing
+    try:
+        headers = mimo_headers(token)
+    except ProviderFailure as exc:
+        return error_provider(provider_id, exc.kind, exc.message)
+    deadline = time.monotonic() + timeout
+    try:
+        credits = parse_mimo_balance(mimo_data("/balance", headers, deadline))
+    except ProviderFailure as exc:
+        return keyed_error(provider_id, exc, "Xiaomi MiMo",
+                           fix="Paste a fresh Cookie header under Settings → Providers.")
+    plan, windows, notice = "", [], ""
+    # The Token Plan adds to the balance: a failed plan request never hides what was read.
+    try:
+        plan, resets_at, notice = parse_mimo_plan(mimo_data("/tokenPlan/detail", headers, deadline))
+        if plan != MIMO_PAY_AS_YOU_GO and not notice:
+            windows = parse_mimo_usage(mimo_data("/tokenPlan/usage", headers, deadline), resets_at)
+    except ProviderFailure:
+        pass
+    result = base_provider(provider_id)
+    result.update(plan=plan, source="Xiaomi MiMo console", windows=windows, credits=credits, notice=notice)
     return result
 
 

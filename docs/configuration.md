@@ -66,7 +66,7 @@ Each of these is off until turned on under **Settings → Providers**. Save a ke
 | v0 | `GET https://api.v0.dev/v1/user/billing` | `V0_API_KEY` |
 | Manus | `GET https://api.manus.ai/v2/usage.availableCredits` | `MANUS_API_KEY` |
 | TypeSafe | The console's billing page: its Next.js billing action, found in the page's scripts and cached for 12 hours. TypeSafe has no balance API for keys, so the credential is the console's `Cookie` header | `TYPESAFE_COOKIE` |
-| Xiaomi MiMo | `GET https://platform.xiaomimimo.com/api/v1/balance`, `/tokenPlan/detail`, and `/tokenPlan/usage`. MiMo has no balance API for keys, so the credential is the console's `Cookie` header; the Token Plan endpoints are optional and a pay-as-you-go account just reports its balance | `MIMO_COOKIE` |
+| Xiaomi MiMo | The console's `GET https://platform.xiaomimimo.com/api/v1/balance`, then `/tokenPlan/detail` and, for an active Token Plan, `/tokenPlan/usage`. MiMo has no balance API for keys, so the credential is the console's `Cookie` header, which must hold its `api-platform_serviceToken` and `userId` cookies. A failed plan request leaves the balance shown; an account without a Token Plan reads as pay as you go | `MIMO_COOKIE` |
 
 A key is only ever sent to its own provider. Where a company runs an international and a China platform (Z.ai/BigModel, MiniMax, Moonshot), the international host is asked first and the other one only when the key is rejected.
 
