@@ -1056,10 +1056,11 @@ var PROVIDER_SETUP = {
 // also their default order everywhere. `short` is the tile and chip name. `auth` says how one is set
 // up: "signin" (a CLI, app, or IDE sign-in the provider owns), "key" (an API key saved here or set in
 // `keyEnv`, the first environment variable the backend reads), or "both". `keysUrl` is where a key is
-// created, `keysLinkText` the link to it, `keyLabel` what the saved secret is called (TypeSafe's is a
-// console Cookie header, not an API key), and `keyHelp` how to get it; `signIn` is the one-line hint
-// shown while a provider is not set up. `money` marks providers that lead with a prepaid balance rather
-// than percentages; `lightIcon` marks dark marks that ship an `assets/<id>-light.svg` for light surfaces.
+// created, `keysLinkText` the link to it, `keyLabel` what the saved secret is called (TypeSafe's and
+// Xiaomi MiMo's are console Cookie headers, not API keys), and `keyHelp` how to get it; `signIn` is the
+// one-line hint shown while a provider is not set up. `money` marks providers that lead with a prepaid
+// balance rather than percentages; `lightIcon` marks dark marks that ship an `assets/<id>-light.svg`
+// for light surfaces.
 var LOCAL_PROVIDERS = [
   { id: "claude", name: "Claude Code", short: "Claude", auth: "signin", signIn: "Run claude auth login" },
   { id: "codex", name: "OpenAI Codex", short: "Codex", auth: "signin", signIn: "Run codex login", lightIcon: true },
@@ -1109,7 +1110,8 @@ var LOCAL_PROVIDERS = [
   { id: "sofya", name: "Sofya", short: "Sofya", auth: "key", money: true, keyEnv: "SOFYA_API_KEY", keysUrl: "https://sofya.co/dashboard", signIn: "Save a Sofya API key" },
   { id: "v0", name: "v0", short: "v0", auth: "key", money: true, keyEnv: "V0_API_KEY", keysUrl: "https://v0.app/settings/keys", signIn: "Save a v0 API key", lightIcon: true },
   { id: "manus", name: "Manus", short: "Manus", auth: "key", money: true, keyEnv: "MANUS_API_KEY", keysUrl: "https://manus.im/app#settings/developers", signIn: "Save a Manus API key", lightIcon: true },
-  { id: "typesafe", name: "TypeSafe", short: "TypeSafe", auth: "key", money: true, keyEnv: "TYPESAFE_COOKIE", keysUrl: "https://console.typesafe.ai/settings/billing", keyLabel: "Cookie header", keysLinkText: "Open billing ↗", keyHelp: "Open billing signed in, then copy the request's Cookie header from the browser's developer tools (Network). It lasts as long as that console session.", signIn: "Paste the Cookie header from console.typesafe.ai/settings/billing (an inference API key cannot replace it)", lightIcon: true }
+  { id: "typesafe", name: "TypeSafe", short: "TypeSafe", auth: "key", money: true, keyEnv: "TYPESAFE_COOKIE", keysUrl: "https://console.typesafe.ai/settings/billing", keyLabel: "Cookie header", keysLinkText: "Open billing ↗", keyHelp: "Open billing signed in, then copy the request's Cookie header from the browser's developer tools (Network). It lasts as long as that console session.", signIn: "Paste the Cookie header from console.typesafe.ai/settings/billing (an inference API key cannot replace it)", lightIcon: true },
+  { id: "mimo", name: "Xiaomi MiMo", short: "MiMo", auth: "key", money: true, keyEnv: "MIMO_COOKIE", keysUrl: "https://platform.xiaomimimo.com/#/console/balance", keyLabel: "Cookie header", keysLinkText: "Open balance ↗", keyHelp: "Open the balance console signed in, then copy the request's Cookie header from the browser's developer tools (Network). It lasts as long as that console session.", signIn: "Paste the Cookie header from platform.xiaomimimo.com/#/console/balance (an API key cannot replace it)", lightIcon: true }
 ].map(function (entry) {
   // Every entry carries every field, so QML bindings never read `undefined` as text.
   return Object.assign({ money: false, keyEnv: "", keysUrl: "", keyLabel: "API key", keysLinkText: "Get a key ↗", keyHelp: "",
@@ -1255,7 +1257,8 @@ var PROVIDER_COLORS = {
   sofya: "#a3ab1e",
   v0: "#8b8b9e",
   manus: "#7b6ff0",
-  typesafe: "#0ea5a4"
+  typesafe: "#0ea5a4",
+  mimo: "#fb8147"
 }
 
 // ---- Settings → Providers (local mode)

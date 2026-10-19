@@ -783,7 +783,7 @@ assert.equal(placedIds("waiting"), "gemini", "a monitored sign-in that is not si
 assert.equal(placedIds("found"), "copilot", "set up here, not monitored, not dismissed");
 assert.equal(placedIds("moreSignIns"), "opencode,antigravity,grok,kiro,jetbrains,nous,muse,factory,kilo,codebuff,huggingface");
 assert.equal(placedIds("moreKeys"), "zai,minimax,synthetic,chutes,ollama,warp,zenmux,clinepass,alibaba,commandcode,devpass,xkiro,ibmbob,umans,"
-  + "neuralwatt,aixy,clawrouter,deepseek,moonshot,venice,deepinfra,vercel,poe,atlascloud,hyper,sailresearch,sofya,v0,manus,typesafe",
+  + "neuralwatt,aixy,clawrouter,deepseek,moonshot,venice,deepinfra,vercel,poe,atlascloud,hyper,sailresearch,sofya,v0,manus,typesafe,mimo",
   "a dismissed provider stays available under More providers");
 assert.equal(["listed", "waiting", "found", "moreSignIns", "moreKeys"].reduce((total, section) => total + placed[section].length, 0),
   registryIds.length, "no provider is listed twice or lost");

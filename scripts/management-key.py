@@ -34,7 +34,7 @@ KEY_PROVIDERS = (
     "zai", "minimax", "synthetic", "chutes", "ollama", "warp", "zenmux", "clinepass", "alibaba",
     "commandcode", "devpass", "xkiro", "ibmbob", "umans", "neuralwatt", "aixy", "clawrouter",
     "openrouter", "deepseek", "moonshot", "venice", "deepinfra", "vercel", "poe", "atlascloud",
-    "hyper", "sailresearch", "sofya", "v0", "manus", "typesafe",
+    "hyper", "sailresearch", "sofya", "v0", "manus", "typesafe", "mimo",
 )
 SETTING_NAMES = frozenset({"cliproxyKeyFile", "costKeeperPasswordFile", "ompGatewayKeyFile"}
                           | {provider + "KeyFile" for provider in KEY_PROVIDERS})

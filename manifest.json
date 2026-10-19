@@ -5,7 +5,7 @@
   "version": "2.0.1",
   "author": "JanitorHead",
   "license": "MIT",
-  "description": "Menu-bar AI usage tracker for coding agents: 49 providers, several accounts each. See how much of your Claude Code, Codex, Gemini CLI, Antigravity, GitHub Copilot, Cursor, Kimi, Grok, Kiro, Z.ai GLM, MiniMax, Qwen or OpenCode plan is left: 5-hour and weekly limits, resets, pace and run-out forecasts per account, with Omarchy account switching. Tracks prepaid balances: OpenRouter, DeepSeek and more. Reads omp (Oh My Pi) live. Costs charts LLM spend per model, project and subagent, like ccusage.",
+  "description": "Menu-bar AI usage tracker for coding agents: 50 providers, several accounts each. See how much of your Claude Code, Codex, Gemini CLI, Antigravity, GitHub Copilot, Cursor, Kimi, Grok, Kiro, Z.ai GLM, MiniMax, Qwen or OpenCode plan is left: 5-hour and weekly limits, resets, pace and run-out forecasts per account, with Omarchy account switching. Tracks prepaid balances: OpenRouter, DeepSeek and more. Reads omp (Oh My Pi) live. Costs charts LLM spend per model, project and subagent, like ccusage.",
   "kinds": [
     "bar-widget"
   ],
@@ -81,6 +81,7 @@
       "v0KeyFile": "",
       "manusKeyFile": "",
       "typesafeKeyFile": "",
+      "mimoKeyFile": "",
       "hideAccountEmails": true,
       "squareUsageCards": true,
       "providerColors": false,
@@ -137,7 +138,8 @@
         "sofya",
         "v0",
         "manus",
-        "typesafe"
+        "typesafe",
+        "mimo"
       ],
       "barWindow": "auto",
       "barWindowSecondary": "none",
@@ -448,6 +450,13 @@
         "description": "Managed automatically when you save a TypeSafe Cookie header in settings. TYPESAFE_COOKIE in the environment takes precedence."
       },
       {
+        "key": "mimoKeyFile",
+        "type": "string",
+        "label": "Xiaomi MiMo session file",
+        "defaultValue": "",
+        "description": "Managed automatically when you save a Xiaomi MiMo Cookie header in settings. MIMO_COOKIE in the environment takes precedence."
+      },
+      {
         "key": "hideAccountEmails",
         "type": "boolean",
         "label": "Hide account emails",
@@ -709,6 +718,10 @@
           {
             "value": "typesafe",
             "label": "TypeSafe"
+          },
+          {
+            "value": "mimo",
+            "label": "Xiaomi MiMo"
           }
         ]
       },
@@ -921,6 +934,10 @@
           {
             "value": "typesafe",
             "label": "TypeSafe"
+          },
+          {
+            "value": "mimo",
+            "label": "Xiaomi MiMo"
           }
         ]
       },
@@ -1087,7 +1104,8 @@
           "sofya",
           "v0",
           "manus",
-          "typesafe"
+          "typesafe",
+          "mimo"
         ],
         "options": [
           {
@@ -1285,6 +1303,10 @@
           {
             "value": "typesafe",
             "label": "TypeSafe"
+          },
+          {
+            "value": "mimo",
+            "label": "Xiaomi MiMo"
           }
         ]
       },

@@ -140,27 +140,31 @@ class ParseTests(unittest.TestCase):
                 self.assertEqual(raised.exception.kind, kind)
 
 
+def typesafe_cookie(token):
+    return usage.pasted_cookie(token, "TypeSafe", "the billing page")
+
+
 class CookieTests(unittest.TestCase):
     def test_a_bare_header_is_used_as_is(self):
-        self.assertEqual(usage.typesafe_cookie("session=abc; other=def"), "session=abc; other=def")
+        self.assertEqual(typesafe_cookie("session=abc; other=def"), "session=abc; other=def")
 
     def test_a_cookie_prefix_and_surrounding_space_are_removed(self):
-        self.assertEqual(usage.typesafe_cookie(" Cookie: arbitrary=value "), "arbitrary=value")
+        self.assertEqual(typesafe_cookie(" Cookie: arbitrary=value "), "arbitrary=value")
 
     def test_curl_commands_are_unwrapped(self):
         url = "curl 'https://console.typesafe.ai/settings/billing'"
-        self.assertEqual(usage.typesafe_cookie(f"{url} -H 'Cookie: a=1; b=2'"), "a=1; b=2")
-        self.assertEqual(usage.typesafe_cookie(f"{url} -b 'a=1; b=2'"), "a=1; b=2")
+        self.assertEqual(typesafe_cookie(f"{url} -H 'Cookie: a=1; b=2'"), "a=1; b=2")
+        self.assertEqual(typesafe_cookie(f"{url} -b 'a=1; b=2'"), "a=1; b=2")
 
     def test_wrapping_quotes_are_removed(self):
-        self.assertEqual(usage.typesafe_cookie("'session=abc'"), "session=abc")
-        self.assertEqual(usage.typesafe_cookie('"session=abc"'), "session=abc")
+        self.assertEqual(typesafe_cookie("'session=abc'"), "session=abc")
+        self.assertEqual(typesafe_cookie('"session=abc"'), "session=abc")
 
     def test_unusable_headers_are_rejected(self):
         for token in ("   ", "a=1\nb=2", "a=é"):
             with self.subTest(token=token):
                 with self.assertRaises(usage.ProviderFailure) as raised:
-                    usage.typesafe_cookie(token)
+                    typesafe_cookie(token)
                 self.assertEqual(raised.exception.kind, "no_credentials")
 
 
