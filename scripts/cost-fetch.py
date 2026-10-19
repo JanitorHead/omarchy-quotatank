@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from quotatank_common import atomic_write_json, clean_message, move_legacy_folders, state_folder
+from quotatank_common import atomic_write_json, clean_message, move_legacy_folders, opencode_database_path, state_folder
 import omp_stats
 import t3_costs
 
@@ -619,45 +619,6 @@ class DbSignature:
         self.st_ino = inode
         self.st_mtime_ns = mtime_ns
         self.st_mtime = mtime_ns / 1_000_000_000
-
-
-def opencode_data_root() -> Path:
-    override = os.environ.get("XDG_DATA_HOME")
-    root = Path(override).expanduser() if override else Path.home() / ".local" / "share"
-    return root / "opencode"
-
-
-def opencode_database_path() -> Path:
-    override = os.environ.get("OPENCODE_DB") or os.environ.get("OPENCODE_DATABASE")
-    if override:
-        return Path(override).expanduser()
-    data_root = opencode_data_root()
-    default = data_root / "opencode.db"
-    candidates: list[tuple[int, str, Path]] = []
-    try:
-        with os.scandir(data_root) as entries:
-            for entry in entries:
-                if entry.name.startswith(".") or not entry.name.endswith(".db"):
-                    continue
-                if not entry.is_file(follow_symlinks=False):
-                    continue
-                path = Path(entry.path)
-                # Each channel build owns a database, and the write-ahead log
-                # moves on every committed message, so it is the better clock.
-                stamps = []
-                for suffix in ("", "-wal"):
-                    try:
-                        stamps.append(os.stat(str(path) + suffix, follow_symlinks=False).st_mtime_ns)
-                    except OSError:
-                        continue
-                if stamps:
-                    candidates.append((max(stamps), str(path), path))
-    except OSError:
-        return default
-    if not candidates:
-        return default
-    candidates.sort()
-    return candidates[-1][2]
 
 
 def opencode_signature(path: Path) -> DbSignature | None:

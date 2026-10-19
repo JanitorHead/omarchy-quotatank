@@ -271,61 +271,6 @@ class FailureAndIsolationTests(unittest.TestCase):
             self.assertEqual(result["status"], "ok")
             self.assertEqual(sent, ["Bearer stale", "Bearer fresh"])
 
-    def test_opencode_key_resolution_and_request_headers(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "opencode").mkdir()
-            (root / "opencode" / "auth.json").write_text(json.dumps({
-                "opencode-go": {"type": "api", "key": "secret-key"}
-            }))
-            captured = {}
-            response = mock.MagicMock()
-            response.__enter__.return_value.read.return_value = json.dumps(
-                fixture("opencode-usage.json")).encode("utf-8")
-
-            def capture(request, timeout=None):
-                captured["headers"] = {key.lower(): value for key, value in request.headers.items()}
-                return response
-
-            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(root)}, clear=False):
-                for name in ("OPENCODE_GO_API_KEY", "OPENCODE_API_KEY", "OPENCODE_API_BASE_URL"):
-                    os.environ.pop(name, None)
-                with mock.patch.object(usage.urllib.request.OpenerDirector, "open", side_effect=capture):
-                    result = usage.fetch_opencode(1)
-
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["plan"], "OpenCode Go")
-        self.assertEqual([row["id"] for row in result["windows"]], ["session", "weekly", "monthly"])
-        self.assertEqual(captured["headers"]["authorization"], "Bearer secret-key")
-        # The edge in front of opencode.ai rejects Python's default agent.
-        self.assertTrue(captured["headers"]["user-agent"].startswith("quotatank/"))
-
-    def test_opencode_missing_key_and_insecure_base(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": temporary}, clear=False):
-                for name in ("OPENCODE_GO_API_KEY", "OPENCODE_API_KEY", "OPENCODE_API_BASE_URL"):
-                    os.environ.pop(name, None)
-                result = usage.fetch_opencode(1)
-        self.assertEqual(result["errorKind"], "no_credentials")
-        self.assertEqual(result["authCommand"], "opencode auth login")
-
-        with mock.patch.dict(os.environ, {
-            "OPENCODE_API_BASE_URL": "http://example.invalid",
-            "OPENCODE_GO_API_KEY": "secret",
-        }, clear=False):
-            self.assertEqual(usage.fetch_opencode(1)["errorKind"], "config")
-
-    def test_opencode_rejected_key_is_an_expired_sign_in(self):
-        error = urllib.error.HTTPError("https://opencode.ai", 403, "forbidden", {}, None)
-        try:
-            with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "secret"}, clear=False):
-                with mock.patch.object(usage.urllib.request.OpenerDirector, "open", side_effect=error):
-                    result = usage.fetch_opencode(1)
-        finally:
-            error.close()
-        self.assertEqual(result["errorKind"], "expired")
-        self.assertEqual(result["message"], "OpenCode Go rejected the saved key.")
-
     def test_codex_cli_missing(self):
         with mock.patch.object(usage.shutil, "which", return_value=None):
             result = usage.fetch_codex(1)

@@ -238,7 +238,7 @@ Sign in to each tool the way you already do, or from Quotatank: **Sign in** open
 | GitHub Copilot | `gh auth login`, or the Copilot sign-in of your editor | Monthly chat, completions, and premium request allowances |
 | Cursor | The Cursor app, or `cursor-agent login` | The monthly plan allowance and on-demand spend |
 | Kimi Code | `kimi login` | Weekly and 5-hour limits |
-| OpenCode Go | `opencode auth login`, or `OPENCODE_GO_API_KEY` | 5-hour, weekly, and monthly limits |
+| OpenCode Go | `opencode auth login` with OpenCode Console or a Go key, or `OPENCODE_GO_API_KEY` | 5-hour, weekly, and monthly limits |
 | Grok CLI | `grok login` | The billing-period allowance |
 | Kiro | `kiro-cli login` | Monthly credits and overage |
 | JetBrains AI | AI Assistant in any JetBrains IDE | The monthly quota and top-up credits, read from the IDE's own files |
@@ -289,7 +289,7 @@ Turn the provider on under **Settings → Providers → More providers**, then s
 | TypeSafe | The console's Cookie header, or `TYPESAFE_COOKIE`: TypeSafe has no balance API for keys | The prepaid balance, this cycle's spend, and credit expiry |
 | Xiaomi MiMo | The console's Cookie header, or `MIMO_COOKIE`: MiMo has no balance API for keys | The prepaid balance with its paid and granted parts, and a Token Plan's monthly credits until the period ends |
 
-Quotatank reads existing credentials and never writes authentication state; sign-in stays with each tool. Claude Code, OpenAI Codex, OpenCode Go, OpenRouter, and GitHub Copilot have been checked against live accounts. The other providers follow their documentation and established open-source readers (CodexBar, oh-my-pi) and are tested against recorded responses; the ones without public documentation (Alibaba Coding Plan, IBM Bob, ClawRouter, TypeSafe, Xiaomi MiMo) can break when the provider changes its site. The [configuration reference](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#providers-and-authentication) lists the files and endpoints each provider uses.
+Quotatank reads existing credentials and never writes authentication state; sign-in stays with each tool. Claude Code, OpenAI Codex, OpenCode Go, OpenRouter, GitHub Copilot, and Xiaomi MiMo have been checked against live accounts. The other providers follow their documentation and established open-source readers (CodexBar, oh-my-pi) and are tested against recorded responses. Providers without public documentation (Alibaba Coding Plan, IBM Bob, ClawRouter, TypeSafe, Xiaomi MiMo) can break when the provider changes its site. The [configuration reference](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#providers-and-authentication) lists the files and endpoints each provider uses.
 
 ### CLIProxyAPI
 

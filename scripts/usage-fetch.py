@@ -43,7 +43,8 @@ from xml.etree import ElementTree
 
 from quotatank_common import (
     OMP_PROVIDERS, atomic_write_json, clean_message, config_folder, omp_account_id, open_private_directory,
-    move_legacy_folders, plain_http_token_routes, resolve_host, split_server_url, state_folder,
+    move_legacy_folders, opencode_data_root, opencode_database_path, plain_http_token_routes, resolve_host,
+    split_server_url, state_folder,
 )
 
 SCHEMA_VERSION = 1
@@ -1224,11 +1225,15 @@ def fetch_kimi(timeout: float) -> dict[str, Any]:
 
 # --------------------------------------------------------------- OpenCode
 #
-# The Go plan meters come from the endpoint the OpenCode ecosystem reads. The
-# key belongs to the OpenCode CLI, so it is taken from the CLI's own credential
-# store (or the environment) and never written back. The edge in front of
-# opencode.ai answers 403 to Python's default User-Agent, so the probe has to
-# identify itself.
+# The Go plan meters come from the endpoint the OpenCode ecosystem reads, with a sign-in the
+# OpenCode CLI owns and Quotatank never writes back or refreshes. OpenCode 2 keeps sign-ins in the
+# `credential` table of its SQLite store, one active account per integration; it imported the
+# older auth.json once and no longer writes it. Two integrations reach the Go plan: `opencode`,
+# OpenCode Console (a device sign-in that OpenCode refreshes itself, or a service-account key),
+# and `opencode-go`, a Go API key. The Console sign-in goes first because a key expires for good:
+# signing in again does not renew it. A Console request names its organization in `x-org-id`, as
+# OpenCode's own (packages/core/src/plugin/provider/opencode.ts). The edge in front of opencode.ai
+# answers 403 to Python's default User-Agent, so the probe identifies itself.
 
 OPENCODE_DEFAULT_API_BASE = "https://opencode.ai"
 OPENCODE_USAGE_PATH = "/zen/go/v1/usage"
@@ -1238,29 +1243,72 @@ OPENCODE_WINDOWS = (
     ("weekly", "weekly", "Weekly limit", SEVEN_DAYS),
     ("monthly", "monthly", "Monthly limit", THIRTY_DAYS),
 )
+OPENCODE_INTEGRATIONS = ("opencode", "opencode-go")
+# The account OpenCode uses for an integration: the active one, else the newest.
+OPENCODE_ACTIVE_CREDENTIAL = (
+    "SELECT value FROM credential WHERE integration_id = ? ORDER BY active IS 1 DESC, time_updated DESC LIMIT 1"
+)
+OPENCODE_SIGN_IN = "Run `opencode auth login` and choose OpenCode Console."
+OPENCODE_REJECTED = {
+    "console": "OpenCode Console no longer accepts this sign-in. " + OPENCODE_SIGN_IN,
+    "key": "OpenCode Go rejected the saved key: it has expired, or its account has no Go plan. Signing in "
+           "again does not renew a key. " + OPENCODE_SIGN_IN,
+}
+OPENCODE_CONSOLE_EXPIRED = ("The OpenCode Console sign-in has expired. Open OpenCode to renew it, or run "
+                            "`opencode auth login` and choose OpenCode Console.")
 
 
-def opencode_data_root() -> Path:
-    override = os.environ.get("XDG_DATA_HOME")
-    root = Path(override).expanduser() if override else Path.home() / ".local" / "share"
-    return root / "opencode"
+def opencode_saved_login(integration: str, value: Any, now_ms: float) -> dict[str, str] | None:
+    """One saved OpenCode credential as a login to try, None when it holds no usable token.
+
+    An expired Console sign-in comes back with an empty token: OpenCode renews it the next time it runs."""
+    saved = json_object(sqlite_text(value)) if not isinstance(value, dict) else value
+    if saved.get("type") == "oauth":
+        token = saved.get("access")
+        if not isinstance(token, str) or not token.strip():
+            return None
+        metadata = saved.get("metadata") if isinstance(saved.get("metadata"), dict) else {}
+        org, email = metadata.get("orgID"), metadata.get("email")
+        expires = number(saved.get("expires"))
+        return {
+            "kind": "console",
+            "token": "" if expires is not None and expires <= now_ms else token.strip(),
+            "org": org if isinstance(org, str) else "",
+            "account": email if isinstance(email, str) else "",
+        }
+    key = saved.get("key")
+    if not isinstance(key, str) or not key.strip():
+        return None
+    return {"kind": "console" if integration == "opencode" else "key", "token": key.strip(), "org": "", "account": ""}
 
 
-def opencode_token() -> str:
+def opencode_logins() -> list[dict[str, str]]:
+    """The sign-ins to try, in order: an environment key alone, else OpenCode's saved Console sign-in,
+    its Go key, and the Go key in the auth.json that OpenCode 1 wrote."""
     for name in ("OPENCODE_GO_API_KEY", "OPENCODE_API_KEY"):
         value = os.environ.get(name)
         if value and value.strip():
-            return value.strip()
-    auth_path = opencode_data_root() / "auth.json"
-    if not auth_path.is_file():
-        return ""
+            return [{"kind": "key", "token": value.strip(), "org": "", "account": ""}]
+    now_ms = time.time() * 1000
+    saved: list[tuple[str, Any]] = []
+    database = opencode_database_path()
+    if database.is_file():
+        try:
+            rows = read_sqlite(database, *((OPENCODE_ACTIVE_CREDENTIAL, (name,)) for name in OPENCODE_INTEGRATIONS))
+            saved.extend(zip(OPENCODE_INTEGRATIONS, rows))
+        except sqlite3.Error:
+            pass  # An OpenCode 1 store has no credential table.
     try:
-        stored = read_json(auth_path)
-    except (OSError, ValueError):
-        return ""
-    entry = stored.get("opencode-go") if isinstance(stored, dict) else None
-    key = entry.get("key") if isinstance(entry, dict) else None
-    return key.strip() if isinstance(key, str) else ""
+        legacy = read_json(opencode_data_root() / "auth.json")
+        saved.append(("opencode-go", legacy.get("opencode-go") if isinstance(legacy, dict) else None))
+    except (OSError, ValueError, RecursionError):
+        pass
+    logins: list[dict[str, str]] = []
+    for integration, value in saved:
+        login = opencode_saved_login(integration, value, now_ms) if value else None
+        if login and not any(login["token"] and login["token"] == known["token"] for known in logins):
+            logins.append(login)
+    return logins
 
 
 def opencode_api_base() -> str:
@@ -1305,40 +1353,50 @@ def parse_opencode_usage(payload: Any) -> list[dict[str, Any]]:
 
 @provider_detector("opencode")
 def detect_opencode() -> bool:
-    return bool(opencode_token())
+    return bool(opencode_logins())
 
 
 @provider_fetcher("opencode")
 def fetch_opencode(timeout: float) -> dict[str, Any]:
     provider_id = "opencode"
-    token = opencode_token()
-    if not token:
-        return error_provider(provider_id, "no_credentials", "No OpenCode Go key was found.")
+    logins = opencode_logins()
+    usable = [login for login in logins if login["token"]]
+    console_expired = len(usable) < len(logins)
+    if not usable:
+        if console_expired:
+            return error_provider(provider_id, "expired", OPENCODE_CONSOLE_EXPIRED)
+        return error_provider(provider_id, "no_credentials", "No OpenCode Go sign-in was found. " + OPENCODE_SIGN_IN)
+    deadline = time.monotonic() + timeout
+    rejected: list[str] = []
     try:
-        payload = http_json(
-            opencode_api_base() + OPENCODE_USAGE_PATH,
-            {
-                "Authorization": "Bearer " + token,
+        url = opencode_api_base() + OPENCODE_USAGE_PATH
+        for login in usable:
+            headers = {
+                "Authorization": "Bearer " + login["token"],
                 "Accept": "application/json",
                 "User-Agent": OPENCODE_USER_AGENT,
-            },
-            timeout,
-        )
-        windows = parse_opencode_usage(payload)
+            }
+            if login["org"]:
+                headers["x-org-id"] = login["org"]
+            try:
+                payload = http_json(url, headers, time_left(deadline))
+            except ProviderFailure as exc:
+                if exc.kind != "expired":
+                    raise
+                rejected.append(login["kind"])  # The next saved sign-in may still be accepted.
+                continue
+            result = base_provider(provider_id)
+            result.update(
+                plan="OpenCode Go",
+                account=login["account"],
+                source="OpenCode Go usage API",
+                windows=parse_opencode_usage(payload),
+            )
+            return result
     except ProviderFailure as exc:
-        if exc.kind == "expired":
-            # A rejected key is either expired or belongs to an account without
-            # a Go plan; both are fixed in the OpenCode CLI.
-            return error_provider(provider_id, "expired", "OpenCode Go rejected the saved key.")
         return error_provider(provider_id, exc.kind, exc.message)
-
-    result = base_provider(provider_id)
-    result.update(
-        plan="OpenCode Go",
-        source="OpenCode Go usage API",
-        windows=windows,
-    )
-    return result
+    message = OPENCODE_CONSOLE_EXPIRED if console_expired else OPENCODE_REJECTED[rejected[0]]
+    return error_provider(provider_id, "expired", message)
 
 
 # --------------------------------------------------------------- Sign-in helpers

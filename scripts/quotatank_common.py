@@ -54,6 +54,49 @@ def move_legacy_folders() -> None:
     state_folder()
 
 
+def opencode_data_root() -> Path:
+    """OpenCode's data folder: `$XDG_DATA_HOME/opencode`, `~/.local/share/opencode` by default."""
+    override = os.environ.get("XDG_DATA_HOME")
+    root = Path(override).expanduser() if override else Path.home() / ".local" / "share"
+    return root / "opencode"
+
+
+def opencode_database_path() -> Path:
+    """OpenCode's SQLite store, which holds its sessions and, since OpenCode 2, its sign-ins.
+
+    `OPENCODE_DB` (or `OPENCODE_DATABASE`) wins; OpenCode reads a relative one against its data folder. Otherwise
+    each release channel owns a `*.db` there, and the one written last is the one in use."""
+    data_root = opencode_data_root()
+    override = os.environ.get("OPENCODE_DB") or os.environ.get("OPENCODE_DATABASE")
+    if override:
+        return data_root / Path(override).expanduser()
+    default = data_root / "opencode.db"
+    candidates: list[tuple[int, str, Path]] = []
+    try:
+        with os.scandir(data_root) as entries:
+            for entry in entries:
+                if entry.name.startswith(".") or not entry.name.endswith(".db"):
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                path = Path(entry.path)
+                # The write-ahead log moves on every committed message, so it is the better clock.
+                stamps = []
+                for suffix in ("", "-wal"):
+                    try:
+                        stamps.append(os.stat(str(path) + suffix, follow_symlinks=False).st_mtime_ns)
+                    except OSError:
+                        continue
+                if stamps:
+                    candidates.append((max(stamps), str(path), path))
+    except OSError:
+        return default
+    if not candidates:
+        return default
+    candidates.sort()
+    return candidates[-1][2]
+
+
 # omp (Oh My Pi) provider ids of the subscriptions Quotatank also reads, and the Quotatank id of each.
 # omp 18.11 reports MiniMax usage as "minimax-code"; "minimax-coding-plan" is its model-catalog name.
 OMP_PROVIDERS = {

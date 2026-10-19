@@ -1065,7 +1065,7 @@ var LOCAL_PROVIDERS = [
   { id: "claude", name: "Claude Code", short: "Claude", auth: "signin", signIn: "Run claude auth login" },
   { id: "codex", name: "OpenAI Codex", short: "Codex", auth: "signin", signIn: "Run codex login", lightIcon: true },
   { id: "kimi", name: "Kimi Code", short: "Kimi", auth: "signin", signIn: "Run kimi login" },
-  { id: "opencode", name: "OpenCode Go", short: "OpenCode", auth: "signin", keyEnv: "OPENCODE_GO_API_KEY", signIn: "Run opencode auth login" },
+  { id: "opencode", name: "OpenCode Go", short: "OpenCode", auth: "signin", keyEnv: "OPENCODE_GO_API_KEY", signIn: "Run opencode auth login and choose OpenCode Console" },
   { id: "antigravity", name: "Antigravity", short: "Antigravity", auth: "signin", signIn: "Open Antigravity, or run agy and sign in", lightIcon: true },
   { id: "gemini", name: "Gemini CLI", short: "Gemini", auth: "signin", signIn: "Run gemini and sign in with Google" },
   { id: "copilot", name: "GitHub Copilot", short: "Copilot", auth: "signin", keyEnv: "COPILOT_API_TOKEN", signIn: "Run gh auth login", lightIcon: true },

@@ -62,11 +62,16 @@ All provider records have the same core keys, including error records. `status` 
 The `opencode` provider is a direct HTTPS call rather than a CLI RPC: OpenCode's
 Go usage endpoint returns one window per plan period, mapped to `session`
 (5 hours), `weekly` (7 days), and `monthly` (30 days) with `percent` as the used
-share and ISO `resetsAt` timestamps. The key comes from `OPENCODE_GO_API_KEY` /
-`OPENCODE_API_KEY` or the CLI's `auth.json`; `OPENCODE_API_BASE_URL` may
-override the endpoint and must be `https`. The request identifies itself with a
-plugin User-Agent because the endpoint rejects Python's default agent, and a
-rejection maps to `expired` so the UI can point at `opencode auth login`.
+share and ISO `resetsAt` timestamps. The sign-in is `OPENCODE_GO_API_KEY` /
+`OPENCODE_API_KEY` when set; otherwise the active OpenCode Console account
+(Bearer access token plus `x-org-id`) and the OpenCode Go key from OpenCode 2's
+`credential` table, then the key in OpenCode 1's `auth.json`, tried in that order
+until one is accepted. A Console reading sets `account` to the account's email.
+`OPENCODE_API_BASE_URL` may override the endpoint and must be `https`. The request
+identifies itself with a plugin User-Agent because the endpoint rejects Python's
+default agent. When every sign-in is rejected, or the only one is a Console
+sign-in past its expiry, the result is `expired` with `opencode auth login` as
+the command.
 
 `barWindow` and `barWindowSecondary` are display-only settings: they select which reported
 windows supply a menu-bar chip's lines. `barWindow` falls back to the provider's most restrictive
