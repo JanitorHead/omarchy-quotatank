@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.1.1
+
+### Fixed
+
+- **OpenCode Go stopped reading after OpenCode 2.** OpenCode 2 keeps its sign-ins in its own database and no longer writes `auth.json`, so a new sign-in never reached Quotatank and an old key stayed in use until it expired. Quotatank now reads OpenCode 2's sign-ins, read-only: the OpenCode Console account first (`opencode auth login`, then OpenCode Console), then the OpenCode Go key, then OpenCode 1's `auth.json`. A rejected sign-in passes to the next one, and a Console reading names its account. An expired Go key now says that signing in again does not renew it and points at the Console sign-in, which is also what the sign-in hint suggests.
+
+### Changed
+
+- Xiaomi MiMo has been checked against a live account: the balance and a Token Plan window read correctly. Thanks again to @cbayschm74.
+
 ## 2.1.0
 
 ### Added
