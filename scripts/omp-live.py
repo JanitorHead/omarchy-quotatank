@@ -350,7 +350,8 @@ def sse_data(lines: Iterable[bytes]) -> Iterator[str]:
         field, _, value = line.partition(":")
         if field == "data":
             value = value.removeprefix(" ")
-            size += len(value)
+            # Each data line costs at least the newline that joins it, so empty ones cannot pile up for free.
+            size += len(value) + 1
             if size > MAX_EVENT_BYTES:
                 raise ValueError("server-sent event is too large")
             data.append(value)
@@ -374,7 +375,8 @@ class RemoteFollower:
     """Follows a stats server's events: a growing `version` is activity, and connection changes are states.
 
     The first event only sets the baseline. The baseline survives reconnects, so activity during an
-    outage is still reported, while a restarted server (counting from 1 again) is not activity.
+    outage is still reported, while a restarted server (counting from 1 again) is not activity. Growth is
+    held until `report`, which the main loop calls once a pass, so a server cannot flood the reader.
     """
 
     def __init__(self, base_url: str, emit: Callable[[dict[str, Any]], None],
@@ -387,6 +389,8 @@ class RemoteFollower:
         self.sleep = sleep
         self.version: int | None = None
         self.state: tuple[str, str] | None = None
+        self.lock = threading.Lock()
+        self.grown: int | None = None  # the newest version that grew since the last report
 
     def set_state(self, state: str, message: str) -> None:
         if (state, message) != self.state:
@@ -399,9 +403,17 @@ class RemoteFollower:
             return
         self.set_state("live", LIVE)
         if self.version is not None and version > self.version:
+            with self.lock:
+                self.grown = version
+        self.version = version
+
+    def report(self) -> None:
+        """One `activity` line for all the growth since the previous report, if there was any."""
+        with self.lock:
+            version, self.grown = self.grown, None
+        if version is not None:
             self.emit({"schemaVersion": SCHEMA_VERSION, "type": "activity", "source": "remote",
                        "version": version, "at": round(self.clock(), 3)})
-        self.version = version
 
     def run(self) -> None:
         self.set_state("reconnecting", CONNECTING)
@@ -552,17 +564,19 @@ class LineWriter:
 
 
 def run(args: argparse.Namespace, emit: Callable[[dict[str, Any]], None]) -> None:
-    """Start the requested followers, then tail session files and send heartbeats until stopped. Session files
-    are read only while omp is set up here. However the loop ends (a closed stdout raises), an omp listing
-    still running ends with it."""
+    """Start the requested followers, then tail session files, report remote activity and send heartbeats until
+    stopped. Session files are read only while omp is set up here. However the loop ends (a closed stdout
+    raises), an omp listing still running ends with it."""
     try:
+        follower = None
         if args.stats_url is not None:
             try:
                 base_url = normalize_server_url(args.stats_url)
             except ValueError:
                 emit(state_line("unavailable", INVALID_URL))
             else:
-                threading.Thread(target=RemoteFollower(base_url, emit).run, daemon=True).start()
+                follower = RemoteFollower(base_url, emit)
+                threading.Thread(target=follower.run, daemon=True).start()
         accounts = AccountMap(emit) if args.accounts else None
         if accounts is not None:
             accounts.refresh()
@@ -574,6 +588,8 @@ def run(args: argparse.Namespace, emit: Callable[[dict[str, Any]], None]) -> Non
                     emit(event)
                     if accounts is not None:
                         accounts.saw(event)
+            if follower is not None:
+                follower.report()
             if time.monotonic() - heartbeat_at >= HEARTBEAT_SECONDS:
                 emit(HEARTBEAT)
                 heartbeat_at = time.monotonic()

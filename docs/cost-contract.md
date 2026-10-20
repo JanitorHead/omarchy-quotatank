@@ -359,7 +359,8 @@ know.
   changes: `reconnecting` (first with “Connecting to omp stats…”), `live` once an
   event with a `version` arrived, or `unavailable` when the server has no live
   events or the URL is not allowed. `message` is fixed, display-safe text.
-- **`activity`** means the server indexed new requests: its event `version` grew.
+- **`activity`** means the server indexed new requests: its event `version` grew. All
+  the growth since the previous 2-second pass is one line with the newest `version`.
 - **`accounts`** maps credential ids to Quotatank providers and account ids. Each
   line replaces the previous map; a reader keeps the last map when none arrives.
   `usage-fetch.py` gives a native reading of the same account `ompAccountId`, so a
@@ -397,12 +398,13 @@ loopback, private (RFC 1918, IPv6 unique local), Tailscale (`100.64.0.0/10`,
 `*.ts.net`) or single-label hosts. The helper only ever requests `GET /api/events`
 (server-sent events), never the `/api/sessions` or `/api/session/trace` endpoints that
 serve conversation contents. It sends no credentials, uses no proxy and follows no
-redirects. The first event sets the `version` baseline; each later increase is one
-`activity` line. The baseline survives reconnects, so activity during an outage is
-still reported once, while a restarted server (counting from 1 again) only resets the
-baseline. Connecting is limited to 10 seconds; a stream silent for 45 seconds (the
-server sends a keep-alive every 15) is reconnected. Lines and events are limited to
-64 KiB. Reconnects back off from 2 to 60 seconds and reset after a connection that
+redirects. The first event sets the `version` baseline; later increases are reported
+as `activity` by the next pass. The baseline survives reconnects, so activity during an
+outage is still reported once, while a restarted server (counting from 1 again) only
+resets the baseline. Connecting is limited to 10 seconds; a stream silent for 45 seconds
+(the server sends a keep-alive every 15) is reconnected. Lines and events are limited
+to 64 KiB; each `data` line of an event counts its newline too, so empty ones add up.
+Reconnects back off from 2 to 60 seconds and reset after a connection that
 lasted 30 seconds. A 404/405 or a response that is not an event stream is
 `unavailable` and retried every 60 seconds; a disallowed URL is `unavailable` and not
 retried. Error details are never forwarded.

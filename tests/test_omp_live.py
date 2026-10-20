@@ -274,6 +274,11 @@ class ServerSentEventTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             list(live.sse_data(lines))
 
+    def test_empty_data_lines_count_toward_the_event_limit(self):
+        for line in (b"data:\n", b"data\n"):
+            with self.subTest(line=line), self.assertRaises(ValueError):
+                list(live.sse_data([line] * (live.MAX_EVENT_BYTES + 1)))
+
     def test_versions(self):
         self.assertEqual(live.event_version('{"version":12,"sync":{"phase":"idle"}}'), 12)
         for data in ('{"version":true}', '{"version":-1}', '{"version":1.5}', '{"phase":"idle"}', "[1]",
@@ -301,6 +306,7 @@ class RemoteFollowerTests(unittest.TestCase):
         lines, pauses = [], []
 
         def sleep(seconds):
+            follower.report()  # the main loop's pass
             pauses.append(seconds)
             clock[0] += seconds
             if len(pauses) >= sleeps:
@@ -321,18 +327,23 @@ class RemoteFollowerTests(unittest.TestCase):
             follower.run()
         return lines, pauses
 
-    def test_version_increases_after_the_first_event_are_activity(self):
-        lines, pauses = self.follow([lambda clock: stream(4, 4, 6, 9)(None)], sleeps=1)
+    def test_growth_since_the_last_report_is_one_activity_line(self):
+        clock, lines = [NOW], []
+        follower = live.RemoteFollower("http://127.0.0.1:3847", lines.append, clock=lambda: clock[0])
+        for version in (4, 4):
+            follower.accept(json.dumps({"version": version}))
+        follower.report()  # the first event only sets the baseline
+        for version in range(5, 10_000):  # a flood between two passes
+            follower.accept(json.dumps({"version": version}))
+        clock[0] += live.POLL_SECONDS
+        follower.report()
+        follower.report()  # nothing grew since
+        follower.accept(json.dumps({"version": 3}))
+        follower.report()  # a lower version is no growth
         self.assertEqual(lines, [
-            {"schemaVersion": 1, "type": "state", "source": "remote", "state": "reconnecting",
-             "message": live.CONNECTING},
             {"schemaVersion": 1, "type": "state", "source": "remote", "state": "live", "message": live.LIVE},
-            {"schemaVersion": 1, "type": "activity", "source": "remote", "version": 6, "at": NOW},
-            {"schemaVersion": 1, "type": "activity", "source": "remote", "version": 9, "at": NOW},
-            {"schemaVersion": 1, "type": "state", "source": "remote", "state": "reconnecting",
-             "message": live.RECONNECTING},
+            {"schemaVersion": 1, "type": "activity", "source": "remote", "version": 9999, "at": NOW + 2},
         ])
-        self.assertEqual(pauses, [2])
 
     def test_reconnects_back_off_and_keep_the_version_baseline(self):
         lines, pauses = self.follow([
@@ -343,7 +354,8 @@ class RemoteFollowerTests(unittest.TestCase):
             ValueError(),
         ])
         self.assertEqual(pauses, [2, 4, 8, 2, 4, 8])
-        self.assertEqual([line["version"] for line in lines if line["type"] == "activity"], [7, 8, 2])
+        # Growth during one connection is one line, reported by the next pass.
+        self.assertEqual([line["version"] for line in lines if line["type"] == "activity"], [8, 2])
         self.assertEqual([line["state"] for line in lines if line["type"] == "state"],
                          ["reconnecting", "reconnecting", "live", "reconnecting", "live", "reconnecting",
                           "live", "reconnecting"])
@@ -640,6 +652,26 @@ class LoopTests(unittest.TestCase):
                      lines.append)
         thread.assert_not_called()
         self.assertEqual(lines, [live.state_line("unavailable", live.INVALID_URL), live.HEARTBEAT])
+
+    def test_remote_growth_is_reported_once_per_pass(self):
+        clock, lines = [0.0], []
+
+        def sleep(seconds):
+            clock[0] += seconds
+            if clock[0] == 2:
+                follower = thread.call_args.kwargs["target"].__self__
+                for version in (1, 2, 3):
+                    follower.accept(json.dumps({"version": version}))
+            if clock[0] >= 6:
+                raise Done
+
+        with mock.patch.object(live.threading, "Thread") as thread, \
+                mock.patch.object(live.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(live.time, "sleep", side_effect=sleep), self.assertRaises(Done):
+            live.run(argparse.Namespace(local=False, stats_url="http://127.0.0.1:3847", accounts=False),
+                     lines.append)
+        self.assertEqual([line.get("type", "heartbeat") for line in lines], ["heartbeat", "state", "activity"])
+        self.assertEqual(lines[-1]["version"], 3)
 
     def test_arguments(self):
         for argv in ([], ["--accounts"], ["--accounts", "--stats-url", "http://127.0.0.1:1"]):
