@@ -4,6 +4,13 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.1.2
+
+### Fixed
+
+- **An omp stats server could make the live helper use ever more memory.** The helper that follows omp on another computer counted only the text of an event's `data` lines toward its 64 KiB limit, so a server that sent empty `data:` lines without ever ending the event grew the helper's memory without bound, and the helper's own heartbeats kept the widget from restarting it. Every `data` line now counts its newline too, so such an event is refused and the connection is retried. Reported by @HANCORE-linux during the marketplace review.
+- **An omp stats server could flood the shell with activity.** Each event whose `version` grew became one line for the shell to parse, as fast as the server sent them (over 500,000 in 8 seconds against a test server). The growth since the previous 2-second pass is now one line with the newest version; the Costs refresh it triggers was already limited to once a minute.
+
 ## 2.1.1
 
 ### Fixed
