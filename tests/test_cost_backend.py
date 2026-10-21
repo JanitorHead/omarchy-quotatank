@@ -654,6 +654,54 @@ class OpenCodeSourceTests(unittest.TestCase):
         assert records is not None
         self.assertEqual(len(records), 1, "OpenCode 2 repeats the older ids; the newer table is read alone")
 
+    @staticmethod
+    def write_grok_session(root: Path, project: str, session: str, turns) -> Path:
+        """A grok CLI session: `usage.json` under a percent-encoded project folder."""
+        folder = root / project / session
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / "usage.json"
+        path.write_text(json.dumps({"sessionId": session, "turns": turns}), encoding="utf-8")
+        return path
+
+    def test_grok_sessions_bill_each_turn_to_its_model(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sessions"
+            path = self.write_grok_session(root, "%2Fhome%2Fuser%2Fdev%2Fmy-app", "sess-1", [
+                {"turnNumber": 1, "endedAt": "2030-01-15T10:00:00.123456789+00:00",
+                 "primaryModelId": "grok-4.7-build",
+                 "modelUsage": {"grok-4.7-build": {
+                     "inputTokens": 1000, "outputTokens": 100, "cachedReadTokens": 400,
+                     "cacheCreationTokens": 0, "reasoningTokens": 30, "totalTokens": 1100,
+                     "modelCalls": 2, "costUsdTicks": 5_000_000_000}}},
+                {"turnNumber": 2, "endedAt": "2030-01-15T10:05:00Z",
+                 "primaryModelId": "grok-4.7-build",
+                 "modelUsage": {"grok-4.7-build": {
+                     "inputTokens": 0, "outputTokens": 0, "cachedReadTokens": 0,
+                     "cacheCreationTokens": 0, "reasoningTokens": 0, "costUsdTicks": 0}}},
+                {"turnNumber": 3, "endedAt": "2030-01-15T10:06:00Z",
+                 "primaryModelId": "grok-4.7-build",
+                 "inputTokens": 20, "outputTokens": 5, "cachedReadTokens": 4,
+                 "cacheCreationTokens": 0, "reasoningTokens": 0, "costUsdTicks": 12_345_678},
+            ])
+            with mock.patch.dict(os.environ, {"GROK_HOME": str(Path(temporary))}, clear=False):
+                records = costs.parse_grok_usage(path, 0)
+
+        self.assertIsNotNone(records)
+        assert records is not None
+        self.assertEqual(len(records), 2, "one record per turn and model; a turn without usage is skipped")
+        first = records[0]
+        self.assertEqual(first.provider, "grok")
+        self.assertEqual((first.uncached_input, first.cached_input, first.cache_creation,
+                          first.output, first.reasoning), (600, 400, 0, 100, 30),
+                         "the CLI counts cache reads inside input and reasoning inside output")
+        self.assertEqual(first.reported_cost_usd, 0.5, "the CLI prices in 10^10 ticks per USD")
+        self.assertEqual(first.project, "my-app", "the project folder is percent-encoded")
+        self.assertEqual(first.model, "grok-4.7-build")
+        fallback = records[1]
+        self.assertEqual(fallback.model, "grok-4.7-build", "a turn without modelUsage falls back to its own totals")
+        self.assertEqual(fallback.dedupe_key, costs.opaque_id("grok:sess-1:3:grok-4.7-build"))
+        self.assertEqual(fallback.reported_cost_usd, 0.0012345678)
+
     def test_omp_harness_maps_tokens_models_and_sessions(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "-tmp" / "2026-09-19T00-00-00-000Z_01a0baea.jsonl"

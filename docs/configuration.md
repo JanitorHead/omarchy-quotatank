@@ -224,7 +224,7 @@ In **Settings → Costs → Custom prices**, add the exact model ID and its inpu
 | `creditWarningUsd` | `5` | Low-balance warning for prepaid providers (OpenRouter, DeepSeek, Moonshot, Venice, DeepInfra, Vercel AI Gateway, Poe, Atlas Cloud, Charm Hyper, Sail Research, Sofya, v0, Manus, TypeSafe, Xiaomi MiMo): what can still be spent, in the balance's currency or unit, at or below this amount |
 | `creditCriticalUsd` | `1` | Low-balance critical amount; must not be above `creditWarningUsd` |
 | `costPriceOverrides` | `"{}"` | JSON string managed by Custom model prices; exact IDs mapped to USD-per-million rates |
-| `costLocalProviders` | `["claude", "codex", "opencode"]` | Local cost sources (`claude`, `codex`, `opencode`), independent of quota providers |
+| `costLocalProviders` | `["claude", "codex", "opencode"]` | Local cost sources (`claude`, `codex`, `opencode`, `grok`), independent of quota providers |
 | `costKeeperUrl` | empty | Optional Keeper URL for last-used quota account activity |
 | `costT3Servers` | `"[]"` | T3 server configurations managed in Costs settings; credentials are private file references |
 | `extraKeys` | `"{}"` | A provider's further API keys, managed by **Settings → Providers → Add another key**: per provider, the first key's name and each further key's id, name, and private key file. Each key is read on its own and shown as its own account |

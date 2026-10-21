@@ -1,7 +1,7 @@
 # Estimated-cost contract
 
 `scripts/cost-fetch.py` writes schema-v1 JSON. Costs combines local Codex/Claude
-history selected by `--providers claude,codex,opencode` with enabled servers in
+history selected by `--providers claude,codex,opencode,grok` with enabled servers in
 `--t3-servers` and, optionally, one omp stats server in `--omp-stats-url` (see
 [Remote omp stats](#remote-omp-stats)). `--t3-servers` is a JSON array of at most four objects:
 `{"id":"home","name":"Home T3","url":"https://t3.example","tokenFile":"/private/token","enabled":true}`.
@@ -35,14 +35,22 @@ harness reports reasoning inside output, so its `output` is used as-is and
 `reasoningTokens` stays informational. Rows are deduplicated by their message
 id, and the database is queried read-only with `query_only` set; no row content
 outside ids, the model and the provider that billed it, timestamp, the working directory's folder name, and the
-token split leaves SQLite. OpenCode's own
-recorded cost is kept and used, because the CLI priced each response with the
+token split leaves SQLite. OpenCode's and the grok CLI's own
+recorded costs are kept and used, because each priced every response with the
 rates of the provider that served it — the only reliable rate for model IDs the
 public table cannot disambiguate (`deepseek-v4.1-flash`, for instance, exists
 there under two vendors with different prices, so the bare id stays
 unresolvable). A custom price still wins over the recorded cost, and a recorded
 zero is treated as "no rate" rather than as a free model, so unknown pricing
 never becomes a `$0.00` claim.
+
+The `grok` local source reads the grok CLI's own session history: one
+`usage.json` per session under `${GROK_HOME:-~/.grok}/sessions`, inside a
+percent-encoded project folder. Each turn is one record per model it used, with
+the CLI's own token split (cache reads sit inside its input tokens, reasoning
+inside its output tokens) and its recorded price, `costUsdTicks` in 10^10 ticks
+per USD. A turn without usage is skipped, and only the project folder name,
+ids, the model, the timestamp, and the token split are read.
 
 `CostBackend.qml` scans on demand, retains same-source results on process failure,
 and clears results when the selected folders or server configuration changes.
