@@ -146,8 +146,16 @@ def parse_timestamp_ms(value: Any) -> int | None:
         return int(numeric) if numeric > 0 else None
     if not isinstance(value, str):
         return None
+    text = value.strip()
+    # datetime.fromisoformat takes exactly three or six fractional digits before
+    # Python 3.11, and the grok CLI writes nanoseconds: keep microseconds.
+    head, dot, tail = text.partition(".")
+    if dot:
+        rest = tail.lstrip("0123456789")
+        digits = tail[:len(tail) - len(rest)][:6]
+        text = head + "." + digits.ljust(6, "0") + rest
     try:
-        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
+        return int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp() * 1000)
     except ValueError:
         return None
 

@@ -99,6 +99,16 @@ def build(records, days: int, *, servers: str = "[]", remote=None):
                                    rates_override=(RATES, PRICING), t3_servers=servers)
 
 
+class TimestampTests(unittest.TestCase):
+    def test_nanoseconds_are_read_on_every_supported_python(self):
+        # datetime.fromisoformat takes at most six fractional digits before
+        # Python 3.11, and the grok CLI writes nanoseconds.
+        self.assertEqual(costs.parse_timestamp_ms("2030-01-15T10:00:00.123456789+00:00"), 1894701600123)
+        self.assertEqual(costs.parse_timestamp_ms("2030-01-15T10:00:00.123456Z"), 1894701600123)
+        self.assertEqual(costs.parse_timestamp_ms("2030-01-15T10:00:00.5+00:00"), 1894701600500)
+        self.assertEqual(costs.parse_timestamp_ms("2030-01-15T10:00:00Z"), 1894701600000)
+
+
 class ProjectNameTests(unittest.TestCase):
     def test_only_the_last_folder_name_is_kept(self):
         self.assertEqual(costs.project_name("/home/user/dev/my-app/"), "my-app")
