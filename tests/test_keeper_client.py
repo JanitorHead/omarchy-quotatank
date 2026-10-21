@@ -23,3 +23,11 @@ class KeeperTests(unittest.TestCase):
             path.chmod(0o644)
             with self.assertRaises(keeper.KeeperError):
                 keeper.read_password(path)
+
+    def test_the_login_crosses_a_network_only_over_https_or_tailscale(self):
+        with self.assertRaises(keeper.KeeperError) as refused:
+            keeper.Client("http://192.168.1.20:8318", 2)
+        self.assertEqual(str(refused.exception), "The Keeper login goes over " + keeper.PLAIN_HTTP_SECRET)
+        for url in ("http://127.0.0.1:8318", "https://keeper.example.com/keeper"):
+            with self.subTest(url=url):
+                self.assertIsNotNone(keeper.Client(url, 2).opener)

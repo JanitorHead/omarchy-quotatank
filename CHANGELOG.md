@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **Another account on the computer could catch a secret sent to this computer.** The omp gateway token, the CLIProxyAPI management key (by default `http://127.0.0.1:8317`), the Keeper password and T3 tokens went over plain HTTP to a loopback port without checking whose server listened there, so while that server was stopped any local account could listen on its port and receive the next poll's secret. Antigravity's session token had the same gap on `127.0.0.1`. A loopback connection now carries a secret only when the kernel lists its server end as yours or root's; otherwise the connection is closed before a byte is sent, and the widget says the port belongs to another account. Reproduced with a listener run as `nobody`: it received the gateway token, the management key and the Keeper password before, and nothing after. Reported by @HANCORE-linux during the marketplace review (omp gateway).
+- **The CLIProxyAPI key, the Keeper password and T3 tokens could cross a network in the clear.** Their server URLs took plain HTTP to any host and followed environment proxies. They now follow the omp gateway token's rule: HTTPS with a verified certificate, or plain HTTP only to this computer or through Tailscale to the computer the address names; proxies are ignored. Settings refuses other plain-HTTP addresses for these servers.
+- **A slow server could hold a check past its timeout.** The timeout applied to each read, so a server that sent a byte at a time kept a request open indefinitely and the whole check then timed out. Every response now also has an overall deadline.
+- **Two patterns could run for hours on a hostile answer.** Amp's usage text and TypeSafe's billing page were matched with patterns that backtrack across the text (about an hour for a 2 MiB page). Amp's text is now read as its own short lines and TypeSafe's script tags in one pass; both stay in milliseconds.
+- **Limit notifications are capped.** A check sends at most three, the worst first, and one that counts the rest, so a source whose limits swing on every refresh cannot flood the desktop.
+
 ## 2.1.2
 
 ### Fixed

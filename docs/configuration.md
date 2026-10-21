@@ -108,7 +108,7 @@ DeepSeek's platform is prepaid, so it is measured in money only. Turn on its **M
 
 Open the Quotatank popup, click the **gear**, and open **Providers**. Select **CLIProxyAPI** under **Source** to discover all providers and accounts managed by [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). Local CLI sign-ins are not needed for this source. The default `direct` source retains the existing behavior. The source applies as soon as it is chosen; the server URL saves when you finish editing it, and the management key when you press its **Save**.
 
-Set **CLIProxyAPI server URL** to your server address (default `http://127.0.0.1:8317`). Dashboard URLs ending in `/management.html`, management API URLs ending in `/v0/management` or `/v0/management/auth-files`, and reverse-proxy path prefixes are accepted. HTTPS certificates are verified; redirects are rejected.
+Set **CLIProxyAPI server URL** to your server address (default `http://127.0.0.1:8317`). Dashboard URLs ending in `/management.html`, management API URLs ending in `/v0/management` or `/v0/management/auth-files`, and reverse-proxy path prefixes are accepted. HTTPS certificates are verified; redirects are rejected. Plain HTTP carries the management key only to this computer or over Tailscale, as for the omp gateway; on this computer, CLIProxyAPI must run as you (or root, as Docker's port forwarding does), and a server another account runs gets nothing. A proxy on another network needs HTTPS.
 
 Enter the server's **Management API key** in the masked settings field and click **Save**. Use the plaintext key accepted by the management panel, not a client API key or a bcrypt hash from the server configuration. The widget stores it automatically in a private file with permissions `0600`; you do not need to create or choose a file. Leave the field blank to keep your existing key. The saved key is never loaded back into the form, and Cancel discards an entered key.
 
@@ -151,7 +151,9 @@ token, then **Save**. Up to four enabled servers are included automatically in
 server with usage contract version 4 or 5. Tokens are stored in private files;
 blank token fields preserve saved credentials. T3 may exchange a connection
 token for an access token; rejected or expired credentials produce a reconnect
-notice. Use a fresh connection token when prompted by the source status.
+notice. Use a fresh connection token when prompted by the source status. Tokens
+go over HTTPS, or over plain HTTP only to this computer (to a T3 server running as
+you) or over Tailscale; a T3 server on another network needs HTTPS.
 
 T3 scans Codex and Claude transcripts readable on its server, **including
 sessions started outside T3**. Another computer contributes only when its

@@ -428,9 +428,10 @@ class GatewayAddressTests(unittest.TestCase):
             def close(self):
                 events.append(("close",))
 
-        with mock.patch.object(socket, "socket", Socket):
-            tailscale = usage.CheckedAddressConnection("omp-box", port=4000, timeout=5,
-                                                       routes=[(IP("fd7a:115c:a1e0::5"), "tailscale0")])
+        with mock.patch.object(socket, "socket", Socket), \
+                mock.patch.object(common, "check_local_server", lambda sock: events.append(("owner checked",))):
+            tailscale = common.CheckedAddressConnection("omp-box", port=4000, timeout=5,
+                                                        routes=[(IP("fd7a:115c:a1e0::5"), "tailscale0")])
             with self.assertRaises(OSError):
                 tailscale.connect()
             self.assertEqual(events, [("socket", socket.AF_INET6),
@@ -438,8 +439,46 @@ class GatewayAddressTests(unittest.TestCase):
                                       ("connect", ("fd7a:115c:a1e0::5", 4000)), ("close",)],
                              "a failed connection through Tailscale is never retried another way")
             events.clear()
-            usage.CheckedAddressConnection("localhost", port=4000, timeout=5, routes=[(IP("127.0.0.1"), None)]).connect()
-            self.assertEqual(events, [("socket", socket.AF_INET), ("connect", ("127.0.0.1", 4000))])
+            common.CheckedAddressConnection("localhost", port=4000, timeout=5, routes=[(IP("127.0.0.1"), None)]).connect()
+            self.assertEqual(events, [("socket", socket.AF_INET), ("connect", ("127.0.0.1", 4000)), ("owner checked",)])
+
+
+class LocalServerOwnerTests(unittest.TestCase):
+    """Any account can listen on a free port above 1023 of this computer, for one while the server a secret is
+    meant for is stopped: a loopback connection carries a secret only to a server that is this user's or root's."""
+
+    @unittest.skipUnless(sys.byteorder == "little", "the rows below are as a little-endian kernel prints them")
+    def test_the_kernels_socket_table_rows_read_as_addresses_and_ports(self):
+        for text, expected in (("0100007F:1F90", (IP("127.0.0.1"), 8080)),
+                               ("00000000000000000000000001000000:0CEA", (IP("::1"), 3306)),
+                               ("0000000000000000FFFF00000100007F:C350", (IP("127.0.0.1"), 50000))):
+            with self.subTest(text=text):
+                self.assertEqual(common.proc_net_endpoint(text), expected)
+
+    def test_the_kernel_names_this_user_as_the_owner_of_a_server_this_user_runs(self):
+        for family, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+            with self.subTest(host=host), socket.socket(family, socket.SOCK_STREAM) as listener:
+                try:
+                    listener.bind((host, 0))
+                except OSError:
+                    self.skipTest(f"{host} is not available here")
+                listener.listen()
+                with common.open_tcp(IP(host), listener.getsockname()[1], 5, None) as sock:
+                    self.assertEqual(common.local_server_owner(sock), os.getuid())
+
+    def test_a_server_of_another_account_or_one_the_kernel_does_not_list_gets_no_token(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        key = write_private(Path(folder.name) / "gateway.key", TOKEN)
+        for owner in (os.getuid() + 1, None):
+            with self.subTest(owner=owner), gateway(body={"reports": []}) as (address, calls), \
+                    mock.patch.object(common, "local_server_owner", return_value=owner):
+                result = usage.read_omp_gateway(address, key, 5)
+            self.assertEqual((result, calls), (("error", usage.OMP_GATEWAY_FAILURES["foreign"], None), []))
+        with gateway(body={"reports": []}) as (address, calls), \
+                mock.patch.object(common, "local_server_owner", return_value=0):
+            self.assertEqual(usage.read_omp_gateway(address, key, 5), ("ok", "", {"reports": []}))
+        self.assertEqual(calls, [("/v1/usage", "Bearer " + TOKEN)], "root's server may have it: root can read it anyway")
 
 
 class ReportMappingTests(unittest.TestCase):

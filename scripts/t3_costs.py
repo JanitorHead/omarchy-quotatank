@@ -11,8 +11,6 @@ import http.client
 import json
 import os
 import re
-import socket
-import ssl
 import stat
 import struct
 import time
@@ -22,7 +20,14 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from quotatank_common import atomic_write_json
+from quotatank_common import (
+    FOREIGN_LOCAL_SERVER, PLAIN_HTTP_SECRET, SECRET_LOOKUP_SECONDS, atomic_write_json, foreign_local_server,
+    secret_opener, secret_socket,
+)
+
+# The connection token and the access token it earns reach HTTPS with a verified certificate, or plain HTTP only
+# on this computer (to this user's or root's server) or through Tailscale; never a proxy.
+PLAIN_HTTP_REFUSED = "The T3 token goes over " + PLAIN_HTTP_SECRET
 
 MAX_BYTES = 16 * 1024 * 1024
 MAX_BUCKETS = 50000
@@ -131,8 +136,11 @@ class Client:
         }).encode()
         req = urllib.request.Request(self.url + "/oauth/token", data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+        opener = secret_opener(self.url, min(SECRET_LOOKUP_SECONDS, self.remaining()), NoRedirects())
+        if opener is None:
+            raise T3Error(PLAIN_HTTP_REFUSED)
         try:
-            with urllib.request.build_opener(NoRedirects()).open(req, timeout=self.remaining()) as response:
+            with opener.open(req, timeout=self.remaining()) as response:
                 parts, size = [], 0
                 while size <= 65536:
                     self.remaining()
@@ -159,11 +167,10 @@ class Client:
 
     def rpc(self, query, token):
         url = urllib.parse.urlsplit(self.url)
-        port = url.port or (443 if url.scheme == "https" else 80)
-        connection = socket.create_connection((url.hostname, port), timeout=self.remaining())
+        connection = secret_socket(self.url, self.remaining())
+        if connection is None:
+            raise T3Error(PLAIN_HTTP_REFUSED)
         try:
-            if url.scheme == "https":
-                connection = ssl.create_default_context().wrap_socket(connection, server_hostname=url.hostname)
             key = base64.b64encode(os.urandom(16)).decode()
             host = url.netloc
             headers = [f"GET {url.path}/ws HTTP/1.1", f"Host: {host}", "Upgrade: websocket",
@@ -404,8 +411,9 @@ def collect(server, query, days, state_dir, timeout):
         return normalized, "fresh", ""
     except T3Error as exc:
         error = str(exc)
-    except (OSError, ValueError, urllib.error.URLError, http.client.HTTPException, RecursionError):
-        error = "Could not read T3 usage. Check the connection, certificate, and server."
+    except (OSError, ValueError, urllib.error.URLError, http.client.HTTPException, RecursionError) as exc:
+        error = (FOREIGN_LOCAL_SERVER if foreign_local_server(exc)
+                 else "Could not read T3 usage. Check the connection, certificate, and server.")
     cached = load_private_json(cache, MAX_BYTES)
     if isinstance(cached, dict) and cached.get("version") == 2:
         try:

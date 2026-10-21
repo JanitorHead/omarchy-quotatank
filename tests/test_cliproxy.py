@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import os
 import subprocess
@@ -128,7 +129,8 @@ class CliProxyTests(unittest.TestCase):
                 self.assertIsNone(credits["resetCreditsAvailable"])
 
     def test_management_errors_are_safe_and_bounded(self):
-        client = usage.CliProxyClient("https://proxy.test", "private-key")
+        # A client keeps the opener its first request builds, so each case gets its own client.
+        client = lambda: usage.CliProxyClient("https://proxy.test", "private-key")
         cases = [
             (urllib.error.HTTPError("https://proxy.test", 401, "private-key", {}, None), "config"),
             (urllib.error.HTTPError("https://proxy.test", 403, "private-key", {}, None), "config"),
@@ -142,20 +144,19 @@ class CliProxyTests(unittest.TestCase):
                 with mock.patch.object(usage.urllib.request, "build_opener") as opener:
                     opener.return_value.open.side_effect = error
                     with self.assertRaises(usage.ProviderFailure) as raised:
-                        client.auth_files(1)
+                        client().auth_files(1)
                 self.assertEqual(raised.exception.kind, kind)
                 self.assertNotIn("private-key", raised.exception.message)
             finally:
                 if hasattr(error, "close"):
                     error.close()
-        for raw in (b"bad-json", b"{}", b"x" * (usage.MAX_HTTP_RESPONSE_BYTES + 1)):
+        for raw in (b"bad-json", b"{}", b"x" * (usage.MAX_HTTP_RESPONSE_BYTES + 4096)):
             with mock.patch.object(usage.urllib.request, "build_opener") as opener:
-                reader = opener.return_value.open.return_value.__enter__.return_value.read
-                reader.return_value = raw
+                body = opener.return_value.open.return_value.__enter__.return_value = io.BytesIO(raw)
                 with self.assertRaises(usage.ProviderFailure) as raised:
-                    client.auth_files(1)
+                    client().auth_files(1)
                 self.assertEqual(raised.exception.kind, "malformed")
-                reader.assert_called_once_with(usage.MAX_HTTP_RESPONSE_BYTES + 1)
+                self.assertLessEqual(body.tell(), usage.MAX_HTTP_RESPONSE_BYTES + 1)
 
     def test_upstream_errors_and_malformed_envelopes(self):
         client = usage.CliProxyClient("https://proxy.test", "private-key")
@@ -323,6 +324,17 @@ class CliProxyIntegrationTests(unittest.TestCase):
                 client.auth_files(1)
         self.assertEqual(raised.exception.kind, "http")
         self.assertEqual(len(calls), 1)
+
+    def test_the_management_key_crosses_no_network_in_the_clear_and_reaches_no_proxy(self):
+        with proxy_server() as (address, calls), proxy_server() as (proxy, proxied), \
+                mock.patch.dict(os.environ, {"http_proxy": proxy, "all_proxy": proxy, "no_proxy": "", "NO_PROXY": ""}):
+            entries = usage.CliProxyClient(address, "private-key").auth_files(2)
+            with self.assertRaises(usage.ProviderFailure) as refused:
+                usage.CliProxyClient("http://192.168.1.20:8317", "private-key").auth_files(2)
+        self.assertTrue(entries)
+        self.assertEqual(([path for path, _key, _body in calls], proxied), (["/v0/management/auth-files"], []))
+        self.assertEqual((refused.exception.kind, refused.exception.message),
+                         ("config", "The proxy management key goes over " + usage.PLAIN_HTTP_SECRET))
 
 
 if __name__ == "__main__":

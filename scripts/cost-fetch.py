@@ -26,7 +26,9 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from quotatank_common import atomic_write_json, clean_message, move_legacy_folders, opencode_database_path, state_folder
+from quotatank_common import (
+    atomic_write_json, clean_message, move_legacy_folders, opencode_database_path, read_capped, state_folder,
+)
 import omp_stats
 import t3_costs
 
@@ -1373,8 +1375,9 @@ def fetch_rate_document(timeout: float) -> Any:
         LITELLM_RATES_URL,
         headers={"Accept": "application/json", "User-Agent": "quotatank/2"},
     )
+    deadline = time.monotonic() + timeout
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = response.read(MAX_RATE_BYTES + 1)
+        body = read_capped(response, MAX_RATE_BYTES, deadline)
     if len(body) > MAX_RATE_BYTES:
         raise ValueError("pricing table is unexpectedly large")
     return json.loads(body)

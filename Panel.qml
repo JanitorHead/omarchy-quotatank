@@ -615,7 +615,8 @@ Ui.Panel {
 
   property var limitSeverityState: ({})
 
-  // Runs after each successful refresh: one desktop notification per window that moved to a worse severity.
+  // Runs after each successful refresh: a desktop notification per window that moved to a worse severity, at most
+  // UsageLogic.MAX_LIMIT_NOTIFICATIONS of them and one that counts the rest.
   function checkLimitCrossings() {
     var readings = []
     for (var i = 0; i < root.providers.length; i++) {
@@ -645,12 +646,10 @@ Ui.Panel {
     var result = UsageLogic.severityCrossings(limitSeverityState, readings)
     limitSeverityState = result.state
     if (!notifyLimitThresholds) return
-    for (var k = 0; k < result.crossings.length; k++) {
-      var crossing = result.crossings[k]
-      var critical = crossing.severity === "critical"
-      Util.execArgv(["notify-send", "--app-name=Quotatank", "--urgency=" + (critical ? "critical" : "normal"),
-        crossing.title, UsageLogic.notificationBody(crossing.body || UsageLogic.alertText(crossing.severity, crossing.remaining, crossing.mode))])
-    }
+    var notifications = UsageLogic.limitNotifications(result.crossings)
+    for (var k = 0; k < notifications.length; k++)
+      Util.execArgv(["notify-send", "--app-name=Quotatank", "--urgency=" + (notifications[k].critical ? "critical" : "normal"),
+        notifications[k].title, notifications[k].body])
   }
 
   function durationUntil(epochSeconds) {

@@ -496,8 +496,7 @@ Column {
         placeholder: "http://127.0.0.1:8317"
         source: String(root.value("cliproxyUrl", "http://127.0.0.1:8317"))
         validate: function(text) {
-          return /^https?:\/\/[^\s/?#@]+(?::[0-9]+)?(?:\/[^\s?#]*)?$/.test(text)
-            ? "" : "Enter an HTTP or HTTPS server URL without credentials, query, or fragment."
+          return UsageLogic.secretServerUrlProblem(text, "Enter an HTTP or HTTPS server URL without credentials, query, or fragment.")
         }
         onApplied: function(text) { root.set("cliproxyUrl", text) }
       }
@@ -516,8 +515,7 @@ Column {
         placeholder: "https://proxy.example.com/keeper"
         source: String(root.value("costKeeperUrl", ""))
         validate: function(text) {
-          return text === "" || /^https?:\/\/[^\s/?#@]+(?::[0-9]+)?(?:\/[^\s?#]*)?$/.test(text)
-            ? "" : "Enter the Keeper HTTP or HTTPS URL, or leave it empty."
+          return text === "" ? "" : UsageLogic.secretServerUrlProblem(text, "Enter the Keeper HTTP or HTTPS URL, or leave it empty.")
         }
         onApplied: function(text) { root.set("costKeeperUrl", text) }
       }
@@ -1384,8 +1382,7 @@ Column {
             source: serverRow.url
             maximumLength: 4096
             validate: function(text) {
-              return /^https?:\/\/[^\s/?#@]+(?:\/[^\s?#]*)?$/.test(text) && !/(?:^|\/)\.{1,2}(?:\/|$)/.test(text)
-                ? "" : "Enter an HTTP or HTTPS URL without credentials, query, or fragment."
+              return UsageLogic.secretServerUrlProblem(text, "Enter an HTTP or HTTPS URL without credentials, query, or fragment.")
             }
             onApplied: function(text) { servers.update(serverRow.index, "url", text) }
           }

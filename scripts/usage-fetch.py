@@ -18,6 +18,7 @@ import ctypes
 import functools
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 import re
@@ -42,9 +43,10 @@ from typing import Any, Callable, Iterator
 from xml.etree import ElementTree
 
 from quotatank_common import (
-    OMP_PROVIDERS, atomic_write_json, clean_message, config_folder, omp_account_id, open_private_directory,
-    move_legacy_folders, opencode_data_root, opencode_database_path, plain_http_token_routes, resolve_host,
-    split_server_url, state_folder,
+    FOREIGN_LOCAL_SERVER, OMP_PROVIDERS, PLAIN_HTTP_SECRET, SECRET_LOOKUP_SECONDS, CheckedAddresses,
+    ForeignLocalServer, atomic_write_json, clean_message, config_folder, foreign_local_server, omp_account_id,
+    open_private_directory, open_tcp, move_legacy_folders, opencode_data_root, opencode_database_path,
+    plain_http_token_routes, read_capped, resolve_host, secret_opener, split_server_url, state_folder,
 )
 
 SCHEMA_VERSION = 1
@@ -399,9 +401,10 @@ def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = Non
     if data is not None and not any(name.lower() == "content-type" for name in headers):
         headers = {**headers, "Content-Type": "application/json"}
     request = urllib.request.Request(url, data=data, headers=headers, method="GET" if data is None else "POST")
+    deadline = time.monotonic() + timeout
     try:
         with (opener or urllib.request.build_opener(NoRedirects())).open(request, timeout=timeout) as response:
-            raw = response.read(MAX_HTTP_RESPONSE_BYTES + 1)
+            raw = read_capped(response, MAX_HTTP_RESPONSE_BYTES, deadline)
             if len(raw) > MAX_HTTP_RESPONSE_BYTES:
                 raise ProviderFailure(
                     "malformed", "The provider returned unexpectedly large usage data."
@@ -417,6 +420,8 @@ def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = Non
         failure.http_status = exc.code
         raise failure from None
     except (TimeoutError, urllib.error.URLError, OSError) as exc:
+        if foreign_local_server(exc):
+            raise ProviderFailure("foreign", FOREIGN_LOCAL_SERVER) from None
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
             raise ProviderFailure("timeout", "The usage request timed out.") from None
@@ -1872,24 +1877,34 @@ def antigravity_rpc(scheme: str, port: int, csrf: str, method: str, body: dict[s
                     timeout: float) -> dict[str, Any]:
     """One Connect call to a language server port on 127.0.0.1.
 
-    http.client rather than urllib, so that no proxy from the environment ever sees the token.
-    The server's certificate is self-signed for loopback; verification is off for this pinned
+    The connection is made by open_tcp, which refuses a port whose server end belongs to another account:
+    the scan in listening_ports is a moment old, and another account can take a port the language server left,
+    or hold 127.0.0.1 while the server listens on ::1 alone. Only then does the token go out, and never through
+    a proxy. The server's certificate is self-signed for loopback; verification is off for this pinned
     address only."""
-    if scheme == "https":
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        connection: http.client.HTTPConnection = http.client.HTTPSConnection(
-            "127.0.0.1", port, timeout=timeout, context=context)
-    else:
-        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    deadline = time.monotonic() + timeout
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
     try:
+        sock = open_tcp(ipaddress.ip_address("127.0.0.1"), port, timeout, None)
+        if scheme == "https":
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            try:
+                sock = context.wrap_socket(sock)
+            except BaseException:
+                sock.close()
+                raise
+        connection.sock = sock
         connection.request("POST", ANTIGRAVITY_RPC_PATH + method,
                            body=json.dumps(body, separators=(",", ":")).encode("utf-8"),
                            headers={"Content-Type": "application/json", "Connect-Protocol-Version": "1",
                                     "X-Codeium-Csrf-Token": csrf})
         response = connection.getresponse()
-        status, raw = response.status, response.read(MAX_HTTP_RESPONSE_BYTES + 1)
+        status, raw = response.status, read_capped(response, MAX_HTTP_RESPONSE_BYTES, deadline)
+    except ForeignLocalServer:
+        raise ProviderFailure("config", "A port Antigravity's language server listed belongs to another account "
+                                        "on this computer, so its session token was not sent.") from None
     except (OSError, http.client.HTTPException) as exc:
         kind = "timeout" if isinstance(exc, TimeoutError) else "network"
         raise ProviderFailure(kind, "Antigravity's language server did not answer.") from None
@@ -2140,9 +2155,10 @@ def http_form_json(url: str, fields: dict[str, str], timeout: float) -> Any:
     request = urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode("ascii"), method="POST",
                                      headers={"Content-Type": "application/x-www-form-urlencoded",
                                               "Accept": "application/json"})
+    deadline = time.monotonic() + timeout
     try:
         with urllib.request.build_opener(NoRedirects()).open(request, timeout=timeout) as response:
-            raw = response.read(MAX_HTTP_RESPONSE_BYTES + 1)
+            raw = read_capped(response, MAX_HTTP_RESPONSE_BYTES, deadline)
     except urllib.error.HTTPError as exc:
         exc.close()
         failure = ProviderFailure("rate_limited" if exc.code == 429 else "http",
@@ -3324,19 +3340,23 @@ AMP_USAGE_URL = "https://ampcode.com/api/internal?userDisplayBalanceInfo"
 AMP_SECRETS_KEY = "apiKey@https://ampcode.com/"
 AMP_AMOUNT = r"([0-9][0-9,]*(?:\.[0-9]+)?)"
 AMP_RENEWAL = r"resets\s+upon\s+renewal\s+in\s+([0-9][0-9,]*)\s+(days?|months?)"
-AMP_IDENTITY = re.compile(r"(?im)^\s*Signed in as\s+([^\s(]+)(?:\s+\(([^\r\n)]+)\))?\s*$")
-AMP_FREE = re.compile(r"(?im)^\s*Amp Free:\s*\$?" + AMP_AMOUNT + r"\s*/\s*\$?" + AMP_AMOUNT
+AMP_IDENTITY = re.compile(r"(?im)^[ \t]*Signed in as\s+([^\s(]+)(?:\s+\(([^\r\n)]+)\))?\s*$")
+AMP_FREE = re.compile(r"(?im)^[ \t]*Amp Free:\s*\$?" + AMP_AMOUNT + r"\s*/\s*\$?" + AMP_AMOUNT
                       + r"\s+remaining(?:\s*\(replenishes\s*\+\$?" + AMP_AMOUNT + r"\s*/\s*hour\))?")
-AMP_FREE_SHARE = re.compile(r"(?im)^\s*Amp Free:\s*" + AMP_AMOUNT + r"\s*%\s+remaining")
-AMP_TIER = re.compile(r"(?im)^\s*Amp\s+([^\r\n]+?)\s+Tier:\s*agent\s+usage\s+\$" + AMP_AMOUNT + r"\s+of\s+\$"
+AMP_FREE_SHARE = re.compile(r"(?im)^[ \t]*Amp Free:\s*" + AMP_AMOUNT + r"\s*%\s+remaining")
+AMP_TIER = re.compile(r"(?im)^[ \t]*Amp[ \t]+(\S[^\r\n]*?)\s+Tier:\s*agent\s+usage\s+\$" + AMP_AMOUNT + r"\s+of\s+\$"
                       + AMP_AMOUNT + r"\s+remaining\b([^\r\n]*?)" + AMP_RENEWAL + r"\b")
-AMP_SUBSCRIPTION = re.compile(r"(?im)^\s*(?:Subscription\s+(.+?)|Amp\s+(.+?)\s+Subscription):\s*" + AMP_AMOUNT
+AMP_SUBSCRIPTION = re.compile(r"(?im)^[ \t]*(?:Subscription[ \t]+(\S.*?)|Amp[ \t]+(\S.*?)\s+Subscription):\s*" + AMP_AMOUNT
                               + r"\s*%\s+other\s+usage\s+and\s+" + AMP_AMOUNT
                               + r"\s*%\s+orb\s+usage\s+remaining\s*-\s*" + AMP_RENEWAL)
 AMP_ORB = re.compile(r"(?i)\borb\s+usage\s+" + AMP_AMOUNT + r"h\s+of\s+" + AMP_AMOUNT
                      + r"h\s+a1\.small\s+orb\s+hours\s+remaining\b")
 AMP_PERIOD = re.compile(r"\bperiod\s+(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})\b")
-AMP_CREDITS = re.compile(r"(?im)^\s*Individual credits:\s*\$?" + AMP_AMOUNT + r"\s+remaining")
+AMP_CREDITS = re.compile(r"(?im)^[ \t]*Individual credits:\s*\$?" + AMP_AMOUNT + r"\s+remaining")
+# Amp's usage text is a few short lines. The patterns above backtrack within a line, so only that much of the
+# text is read, and a longer line is no line of it: the time they take stays a few milliseconds whatever comes.
+AMP_MAX_LINES = 64
+AMP_MAX_LINE = 320
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
@@ -3366,7 +3386,8 @@ def amp_credits(balance: float) -> dict[str, Any]:
 
 def parse_amp_display(text: str, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str, str]:
     """Windows, prepaid credits, plan, and account from Amp's usage text."""
-    text = ANSI_ESCAPE.sub("", text).replace("**", "")
+    text = ANSI_ESCAPE.sub("", text[:AMP_MAX_LINES * (AMP_MAX_LINE + 1) * 2]).replace("**", "")
+    text = "\n".join(line for line in text.splitlines()[:AMP_MAX_LINES] if len(line) <= AMP_MAX_LINE)
     identity = AMP_IDENTITY.search(text)
     windows, plan = [], ""
     tier, subscription = AMP_TIER.search(text), AMP_SUBSCRIPTION.search(text)
@@ -6955,7 +6976,11 @@ TYPESAFE_CHUNK_CAP_SECONDS = 2.0
 TYPESAFE_ACTION_CAP_SECONDS = 6.0
 TYPESAFE_SESSION_EXPIRED = "TypeSafe session expired."
 TYPESAFE_LOGIN_RE = re.compile(r'\\?"\(auth\)\\?",\{\\?"children\\?":\[\\?"login\\?"')
-TYPESAFE_SCRIPT_RE = re.compile(r"""<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>""", re.IGNORECASE)
+# A <script> tag and its src. The tags are found by script_sources in one pass over the page; the src pattern only
+# ever reads one tag of at most TYPESAFE_MAX_TAG characters, so no page makes it backtrack across the page.
+TYPESAFE_SCRIPT_TAG_RE = re.compile(r"<script\b", re.IGNORECASE)
+TYPESAFE_SCRIPT_SRC_RE = re.compile(r"""<script\b[^>]*?\bsrc=["']([^"']+)["']""", re.IGNORECASE)
+TYPESAFE_MAX_TAG = 4096
 TYPESAFE_CHUNK_RE = re.compile(r"\.js(?:$|\?)", re.IGNORECASE)
 TYPESAFE_ACTION_RE = re.compile(r'"([0-9a-f]{40,})"[^)]{0,150}"getBillingOverviewResult"', re.IGNORECASE)
 TYPESAFE_ACTION_ID_RE = re.compile(r"[0-9a-fA-F]{40,}")
@@ -6967,13 +6992,14 @@ def typesafe_request(
     """One request with redirects refused. Error statuses are returned, so callers can classify them."""
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     response: Any = None
+    deadline = time.monotonic() + timeout
     try:
         try:
             response = urllib.request.build_opener(NoRedirects()).open(request, timeout=timeout)
             status = response.status
         except urllib.error.HTTPError as exc:
             response, status = exc, exc.code
-        raw = response.read(MAX_HTTP_RESPONSE_BYTES + 1)
+        raw = read_capped(response, MAX_HTTP_RESPONSE_BYTES, deadline)
         reply_headers = {name.lower(): value for name, value in response.headers.items()}
     except (TimeoutError, urllib.error.URLError, OSError, http.client.HTTPException) as exc:
         reason = getattr(exc, "reason", exc)
@@ -6988,6 +7014,21 @@ def typesafe_request(
     if len(raw) > MAX_HTTP_RESPONSE_BYTES:
         raise ProviderFailure("malformed", "The provider returned unexpectedly large usage data.")
     return status, reply_headers, raw.decode("utf-8", errors="replace")
+
+
+def script_sources(page: str) -> list[str]:
+    """The src of each <script> tag in `page`, which runs to the next ">"; longer tags are skipped. The search
+    resumes after that ">", so the page is read once however many tags it leaves unclosed."""
+    sources: list[str] = []
+    position = 0
+    while (tag := TYPESAFE_SCRIPT_TAG_RE.search(page, position)) is not None:
+        end = page.find(">", tag.start())
+        if end < 0:
+            break
+        if end + 1 - tag.start() <= TYPESAFE_MAX_TAG and (match := TYPESAFE_SCRIPT_SRC_RE.match(page, tag.start(), end + 1)):
+            sources.append(match.group(1))
+        position = end + 1
+    return sources
 
 
 def typesafe_check(status: int, text: str) -> None:
@@ -7013,7 +7054,7 @@ def discover_typesafe_action(cookie: str, deadline: float) -> str:
     )
     typesafe_check(status, page)
     chunks: list[str] = []
-    for source in TYPESAFE_SCRIPT_RE.findall(page):
+    for source in script_sources(page):
         if source.startswith("/"):
             source = TYPESAFE_ORIGIN + source
         if source.startswith(TYPESAFE_ORIGIN + "/") and TYPESAFE_CHUNK_RE.search(source):
@@ -7372,6 +7413,16 @@ class CliProxyClient:
     def __init__(self, address: str, key: str):
         self.base_url = normalize_cliproxy_url(address)
         self.key = key
+        self.opener: urllib.request.OpenerDirector | None = None
+
+    def key_opener(self) -> urllib.request.OpenerDirector:
+        """One opener for this client's requests (secret_opener): the management key reaches HTTPS with a verified
+        certificate, or plain HTTP only on this computer or through Tailscale."""
+        if self.opener is None:
+            self.opener = secret_opener(self.base_url, SECRET_LOOKUP_SECONDS, NoRedirects())
+            if self.opener is None:
+                raise ProviderFailure("config", "The proxy management key goes over " + PLAIN_HTTP_SECRET)
+        return self.opener
 
     def request(self, path: str, timeout: float, payload: dict[str, Any] | None = None) -> Any:
         headers = {"Authorization": "Bearer " + self.key, "Accept": "application/json"}
@@ -7380,10 +7431,11 @@ class CliProxyClient:
             headers["Content-Type"] = "application/json"
             body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(self.base_url + "/v0/management/" + path, data=body, headers=headers)
+        opener = self.key_opener()
+        deadline = time.monotonic() + timeout
         try:
-            opener = urllib.request.build_opener(NoRedirects())
             with opener.open(request, timeout=timeout) as response:
-                raw = response.read(MAX_HTTP_RESPONSE_BYTES + 1)
+                raw = read_capped(response, MAX_HTTP_RESPONSE_BYTES, deadline)
         except urllib.error.HTTPError as exc:
             exc.close()
             if exc.code in (401, 403):
@@ -7392,6 +7444,8 @@ class CliProxyClient:
                 raise ProviderFailure("rate_limited", "CLIProxyAPI is rate limiting management requests.") from None
             raise ProviderFailure("http", f"CLIProxyAPI management endpoint returned HTTP {exc.code}.") from None
         except (TimeoutError, urllib.error.URLError, OSError) as exc:
+            if foreign_local_server(exc):
+                raise ProviderFailure("config", FOREIGN_LOCAL_SERVER) from None
             reason = getattr(exc, "reason", exc)
             if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
                 raise ProviderFailure("timeout", "CLIProxyAPI usage request timed out.") from None
@@ -8179,15 +8233,14 @@ OMP_SIGN_IN_AGAIN = "omp can't renew this sign-in. Sign in again in omp."
 OMP_NOT_SET_UP = "omp is installed but not set up on this computer."
 OMP_GATEWAY_URL_RULE = ("The omp gateway URL must be the gateway's address alone, https://host:port or plain HTTP to "
                         "this computer or a Tailscale address, without a path, user name, query or fragment.")
-OMP_GATEWAY_PLAIN_HTTP = ("The omp gateway token goes over plain HTTP only to this computer or over Tailscale. "
-                          "Use an https:// address, or check that Tailscale is connected and that the address is "
-                          "that computer's Tailscale name or address.")
+OMP_GATEWAY_PLAIN_HTTP = "The omp gateway token goes over " + PLAIN_HTTP_SECRET
 OMP_GATEWAY_FAILURES = {
     "expired": "The omp gateway refused the token.",
     "rate_limited": "The omp gateway is rate limiting usage checks.",
     "timeout": "The omp gateway did not answer in time.",
     "network": "Could not reach the omp gateway. Check its URL, the network and its TLS certificate.",
     "malformed": "The omp gateway returned unreadable usage data.",
+    "foreign": "The omp gateway's port on this computer belongs to another account, so the token was not sent.",
 }
 # What each source reports when the merge cannot take its data (merge_omp_safely).
 OMP_UNREADABLE = {"local": "omp usage returned unreadable data.", "gateway": OMP_GATEWAY_FAILURES["malformed"]}
@@ -8271,56 +8324,12 @@ def read_omp_local(omp: str, state_dir: Path | None = None) -> OmpRead:
         return "error", "omp usage could not be read.", None
 
 
-class CheckedAddresses(urllib.request.HTTPHandler):
-    """Plain HTTP that connects only to `routes`, which the caller checked, in order, instead of looking the
-    host up again: a second answer could name another computer. The Host header still names the host."""
-
-    def __init__(self, routes: list[tuple[Any, str | None]]):
-        super().__init__()
-        self.routes = routes
-
-    def http_open(self, req: urllib.request.Request) -> Any:
-        return self.do_open(functools.partial(CheckedAddressConnection, routes=self.routes), req)
-
-
-class CheckedAddressConnection(http.client.HTTPConnection):
-    def __init__(self, host: str, *, routes: list[tuple[Any, str | None]], **kwargs: Any):
-        super().__init__(host, **kwargs)
-        self.routes = routes
-
-    def connect(self) -> None:
-        failure: OSError = ConnectionRefusedError()
-        for address, interface in self.routes:
-            try:
-                self.sock = open_tcp(address, self.port, self.timeout, interface)
-                return
-            except OSError as exc:
-                failure = exc
-        raise failure
-
-
-def open_tcp(address: Any, port: int, timeout: Any, interface: str | None) -> socket.socket:
-    """A TCP connection to `address`. With `interface`, the socket is bound to it first (SO_BINDTODEVICE), so
-    the connection goes out that interface or not at all."""
-    sock = socket.socket(socket.AF_INET6 if address.version == 6 else socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        if isinstance(timeout, (int, float)):
-            sock.settimeout(timeout)
-        if interface is not None:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode())
-        sock.connect((str(address), port))
-    except BaseException:
-        sock.close()
-        raise
-    return sock
-
-
 def read_omp_gateway(address: str, key_file: Path | None, timeout: float) -> OmpRead:
     """("ok", "", document) from an omp gateway's `GET /v1/usage`, else ("error", message, None).
 
     The token goes over HTTPS, or over plain HTTP only to this computer or through Tailscale to the computer
-    the address names (plain_http_token_routes), and then only along the routes checked. Proxy settings are
-    ignored."""
+    the address names (plain_http_token_routes), and then only along the routes checked; on this computer, only
+    to a server that belongs to this user or root (open_tcp). Proxy settings are ignored."""
     try:
         parts = split_server_url(address)
     except ValueError:

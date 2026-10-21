@@ -176,7 +176,6 @@ class ProjectContractTests(unittest.TestCase):
 
         collector = (ROOT / "scripts" / "usage-fetch.py").read_text()
         self.assertIn('[codex, "-s", "read-only", "-a", "never", "app-server"]', collector)
-        self.assertIn("MAX_HTTP_RESPONSE_BYTES + 1", collector)
         self.assertIn("class CodexRpcStream", collector)
         self.assertNotIn("process.stdout.readline", collector)
 

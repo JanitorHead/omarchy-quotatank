@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import functools
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
 import re
 import secrets
 import socket
+import ssl
 import stat
 import struct
+import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -118,6 +123,18 @@ TAILSCALED_SOCKET = "/var/run/tailscale/tailscaled.sock"
 TAILSCALE_LOCAL_API_HOST = "local-tailscaled.sock"
 TAILSCALE_ANSWER_LIMIT = 1 << 20
 PROC_NET_UNIX = "/proc/net/unix"
+# The kernel's TCP socket tables for this network namespace: who owns each end of every connection.
+PROC_NET_TCP = ("/proc/net/tcp", "/proc/net/tcp6")
+# How long a connection's server end may take to appear there: on loopback it is listed (under the listening
+# socket's owner) as soon as connect() returns, unless SYN cookies are in use and the final ACK is still queued.
+LOCAL_SERVER_LOOKUP_SECONDS = 0.5
+# How long a secret's server name may take to resolve, and tailscaled to answer for it (plain_http_token_routes).
+SECRET_LOOKUP_SECONDS = 2.0
+# What a helper says when a secret would need plain HTTP somewhere it may not go.
+PLAIN_HTTP_SECRET = ("plain HTTP only to this computer or over Tailscale. Use an https:// address, or check that "
+                     "Tailscale is connected and that the address is that computer's Tailscale name or address.")
+FOREIGN_LOCAL_SERVER = ("That port on this computer belongs to another account, so nothing was sent. Start the "
+                        "server as yourself, or use an https:// address.")
 SO_ACCEPTCON = 0x10000  # A listening socket, in /proc/net/unix's flags.
 SYS_CLASS_NET = "/sys/class/net"
 IFF_TUN, IFF_TAP = 0x0001, 0x0002
@@ -165,6 +182,23 @@ def normalize_server_url(address: str) -> str:
     if parts.scheme == "http" and not plain_http_allowed(parts.hostname):
         raise ValueError
     return urllib.parse.urlunsplit(parts)
+
+
+def read_capped(response: Any, limit: int, deadline: float) -> bytes:
+    """At most `limit` + 1 bytes of an HTTP `response`, so the caller can tell a body over `limit`; TimeoutError
+    once `deadline` (a time.monotonic() value) has passed. The socket timeout bounds each read and this bounds
+    them all, so a server that drips its answer holds a request at most one socket timeout past its deadline."""
+    parts: list[bytes] = []
+    size = 0
+    while size <= limit:
+        if time.monotonic() >= deadline:
+            raise TimeoutError
+        part = response.read1(min(65536, limit + 1 - size))
+        if not part:
+            break
+        parts.append(part)
+        size += len(part)
+    return b"".join(parts)
 
 
 def resolve_host(hostname: str, timeout: float) -> list[Any]:
@@ -386,6 +420,167 @@ def plain_http_token_routes(hostname: str, addresses: list[Any], timeout: float)
             return None
         routes.append((address, interface))
     return routes
+
+
+class ForeignLocalServer(ConnectionError):
+    """A loopback connection whose server end belongs to another account on this computer."""
+
+
+def proc_net_endpoint(text: str) -> tuple[Any, int]:
+    """An `ADDRESS:PORT` field of /proc/net/tcp{,6}: the address as the kernel prints it, each 32-bit word in
+    host byte order, and the port in hex. IPv4-mapped IPv6 addresses come back as IPv4."""
+    address, port = text.split(":")
+    raw = b"".join(int(address[index:index + 8], 16).to_bytes(4, sys.byteorder) for index in range(0, len(address), 8))
+    parsed = ipaddress.ip_address(raw)
+    return (parsed.ipv4_mapped or parsed) if parsed.version == 6 else parsed, int(port, 16)
+
+
+def socket_endpoint(name: tuple[Any, ...]) -> tuple[Any, int]:
+    parsed = ipaddress.ip_address(name[0].split("%", 1)[0])
+    return (parsed.ipv4_mapped or parsed) if parsed.version == 6 else parsed, name[1]
+
+
+def local_server_owner(sock: socket.socket, timeout: float = LOCAL_SERVER_LOOKUP_SECONDS) -> int | None:
+    """The user id that owns the server end of `sock`, a TCP connection to a loopback address, or None when the
+    kernel does not list it within `timeout` seconds.
+
+    The server end is the row of the kernel's socket tables whose local end is this socket's peer and whose
+    remote end is this socket. The kernel records a socket's owner when the socket is made and lists a
+    connection not yet accepted under its listening socket's owner, so neither the port nor the program that
+    holds it can claim another account. Only this network namespace's sockets are listed, which is where a
+    loopback connection ends."""
+    wanted = (socket_endpoint(sock.getpeername()), socket_endpoint(sock.getsockname()))
+    # The ports as the table prints them, so only rows that can match are parsed.
+    ports = (f":{wanted[0][1]:04X}", f":{wanted[1][1]:04X}")
+    deadline = time.monotonic() + timeout
+    while True:
+        for path in PROC_NET_TCP:
+            try:
+                with open(path, encoding="ascii", errors="replace") as table:
+                    next(table, None)
+                    for line in table:
+                        # sl, local, remote, state, queues, timer, retransmits, uid, …
+                        fields = line.split(None, 8)
+                        if len(fields) < 8 or not (fields[1].endswith(ports[0]) and fields[2].endswith(ports[1])):
+                            continue
+                        try:
+                            if (proc_net_endpoint(fields[1]), proc_net_endpoint(fields[2])) == wanted:
+                                return int(fields[7])
+                        except ValueError:
+                            continue
+            except OSError:
+                continue
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(0.01)
+
+
+def check_local_server(sock: socket.socket) -> None:
+    """Raise ForeignLocalServer unless the server end of `sock`, a loopback connection, belongs to this user or
+    to root. Any account can listen on a free port above 1023, and the program a secret is meant for may be
+    stopped; this user and root can read the secret anyway."""
+    if local_server_owner(sock) not in (os.getuid(), 0):
+        raise ForeignLocalServer
+
+
+def open_tcp(address: Any, port: int, timeout: Any, interface: str | None) -> socket.socket:
+    """A TCP connection to `address`, an ipaddress address. With `interface`, the socket is bound to it first
+    (SO_BINDTODEVICE), so the connection goes out that interface or not at all. A loopback connection is
+    returned only when its server end is this user's or root's (check_local_server), before a byte is sent."""
+    sock = socket.socket(socket.AF_INET6 if address.version == 6 else socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if isinstance(timeout, (int, float)):
+            sock.settimeout(timeout)
+        if interface is not None:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode())
+        sock.connect((str(address), port))
+        if address.is_loopback:
+            check_local_server(sock)
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
+class CheckedAddresses(urllib.request.HTTPHandler):
+    """Plain HTTP that connects only to `routes`, which the caller checked, in order, instead of looking the
+    host up again: a second answer could name another computer. The Host header still names the host."""
+
+    def __init__(self, routes: list[tuple[Any, str | None]]):
+        super().__init__()
+        self.routes = routes
+
+    def http_open(self, req: urllib.request.Request) -> Any:
+        return self.do_open(functools.partial(CheckedAddressConnection, routes=self.routes), req)
+
+
+class CheckedAddressConnection(http.client.HTTPConnection):
+    def __init__(self, host: str, *, routes: list[tuple[Any, str | None]], **kwargs: Any):
+        super().__init__(host, **kwargs)
+        self.routes = routes
+
+    def connect(self) -> None:
+        self.sock = connect_routes(self.routes, self.port, self.timeout)
+
+
+def connect_routes(routes: list[tuple[Any, str | None]], port: int, timeout: Any) -> socket.socket:
+    """The first of `routes` (plain_http_token_routes) that connects. A server on this computer that belongs to
+    another account ends the attempt: the next address would be the same computer."""
+    failure: OSError = ConnectionRefusedError()
+    for address, interface in routes:
+        try:
+            return open_tcp(address, port, timeout, interface)
+        except ForeignLocalServer:
+            raise
+        except OSError as exc:
+            failure = exc
+    raise failure
+
+
+def secret_routes(hostname: str, timeout: float) -> list[tuple[Any, str | None]] | None:
+    """plain_http_token_routes for `hostname`, looked up within `timeout` seconds; None when plain HTTP may not
+    carry a secret there or the name does not resolve."""
+    addresses = resolve_host(hostname, timeout)
+    return plain_http_token_routes(hostname, addresses, timeout) if addresses else None
+
+
+def secret_opener(url: str, timeout: float, *handlers: Any) -> urllib.request.OpenerDirector | None:
+    """A urllib opener for requests that carry a secret to `url`, with `handlers` (redirect refusal, cookies)
+    added, or None when plain HTTP may not carry it there (secret_routes). HTTPS verifies the server's
+    certificate. Plain HTTP connects only to the checked routes, a loopback one only to this user's or root's
+    server. Proxy settings are ignored, so no proxy sees the secret."""
+    parts = urllib.parse.urlsplit(url)
+    chain = [urllib.request.ProxyHandler({}), *handlers]
+    if parts.scheme == "http":
+        routes = secret_routes(parts.hostname or "", timeout)
+        if routes is None:
+            return None
+        chain.append(CheckedAddresses(routes))
+    elif parts.scheme != "https":
+        return None
+    return urllib.request.build_opener(*chain)
+
+
+def secret_socket(url: str, timeout: float) -> socket.socket | None:
+    """A connected socket for a raw protocol that carries a secret to `url`: TLS with the server's certificate
+    verified for https, else the checked plain-HTTP routes as in secret_opener. None when plain HTTP may not
+    carry the secret there."""
+    parts = urllib.parse.urlsplit(url)
+    hostname = parts.hostname or ""
+    if parts.scheme == "https":
+        raw = socket.create_connection((hostname, parts.port or 443), timeout=timeout)
+        try:
+            return ssl.create_default_context().wrap_socket(raw, server_hostname=hostname)
+        except BaseException:
+            raw.close()
+            raise
+    routes = secret_routes(hostname, min(timeout, SECRET_LOOKUP_SECONDS)) if parts.scheme == "http" else None
+    return None if routes is None else connect_routes(routes, parts.port or 80, timeout)
+
+
+def foreign_local_server(exc: BaseException) -> bool:
+    """Whether `exc`, or the reason urllib wrapped in it, is ForeignLocalServer."""
+    return isinstance(exc, ForeignLocalServer) or isinstance(getattr(exc, "reason", None), ForeignLocalServer)
 
 
 def omp_account_id(provider: str, identity: str) -> str:

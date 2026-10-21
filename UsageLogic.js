@@ -787,6 +787,26 @@ function severityCrossings(previous, readings) {
   return { state: state, crossings: crossings }
 }
 
+// At most this many desktop notifications per check, the worst first; one more counts the rest, so a source whose
+// limits swing on every refresh cannot flood the desktop.
+var MAX_LIMIT_NOTIFICATIONS = 3
+
+// The notifications for one check's crossings (severityCrossings): { critical, title, body } each, body escaped.
+function limitNotifications(crossings) {
+  var ordered = listOrEmpty(crossings).slice().sort(function (a, b) {
+    return SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]
+  })
+  var shown = ordered.slice(0, MAX_LIMIT_NOTIFICATIONS).map(function (crossing) {
+    return { critical: crossing.severity === "critical", title: String(crossing.title),
+      body: notificationBody(crossing.body || alertText(crossing.severity, crossing.remaining, crossing.mode)) }
+  })
+  var rest = ordered.length - shown.length
+  if (rest > 0)
+    shown.push({ critical: false, title: "Quotatank",
+      body: notificationBody(rest + (rest === 1 ? " more limit" : " more limits") + " crossed a threshold.") })
+  return shown
+}
+
 function exportWindows(rows, nowSeconds) {
   var result = []
   var list = listOrEmpty(rows)
@@ -2107,9 +2127,10 @@ var OMP_LOG_LIMIT = 4096            // entries in the live request log
 var OMP_LINE_LIMIT = 65536          // characters in one live line
 var OMP_URL_PROBLEM = "Enter an HTTP or HTTPS address with a host name and, if needed, a port: no path, user name, query, or fragment."
 var OMP_HTTP_PROBLEM = "Use HTTPS, or plain HTTP only to this computer, a private network, or Tailscale."
-// The gateway's token can spend model quota, so it never goes over plain HTTP outside this computer and
-// Tailscale (the backend checks where a name leads before it sends anything).
-var OMP_GATEWAY_HTTP_PROBLEM = "Use HTTPS, or plain HTTP only to this computer or over Tailscale (a 100.x.y.z address or the computer's Tailscale name)."
+// A secret (the omp gateway token, the CLIProxyAPI management key, the Keeper password, a T3 token) never goes
+// over plain HTTP outside this computer and Tailscale (the backends check where a name leads, and on this
+// computer whose server it is, before they send anything).
+var SECRET_HTTP_PROBLEM = "Use HTTPS, or plain HTTP only to this computer or over Tailscale (a 100.x.y.z address or the computer's Tailscale name)."
 
 // The omp settings with their defaults. `local` reads omp on this computer unless turned off.
 function ompSettings(settings) {
@@ -2230,8 +2251,22 @@ function ompServerUrlProblem(text, gateway) {
   var address = ompSplitHost(match[2])
   if (!address) return OMP_URL_PROBLEM
   if (match[1].toLowerCase() === "https") return ""
-  if (gateway === true) return ompTailscaleHost(address.host) ? "" : OMP_GATEWAY_HTTP_PROBLEM
+  if (gateway === true) return ompTailscaleHost(address.host) ? "" : SECRET_HTTP_PROBLEM
   return ompPlainHttpHost(address.host) ? "" : OMP_HTTP_PROBLEM
+}
+
+// What is wrong with the URL of a server that receives a secret (CLIProxyAPI, CPA Usage Keeper, T3), or "":
+// an HTTP(S) address with an optional path, without credentials, query, fragment or "."/".." segments, `invalid`
+// otherwise; HTTPS anywhere, plain HTTP only to this computer or over Tailscale (secret_opener in
+// scripts/quotatank_common.py).
+function secretServerUrlProblem(text, invalid) {
+  var value = String(text === undefined || text === null ? "" : text).trim()
+  var match = /^(https?):\/\/([^\s\/?#@\\]+)(\/[^\s?#\\]*)?$/i.exec(value)
+  if (!match || /[\x00-\x1f\x7f]/.test(value) || /\/\.{1,2}(?:\/|$)/.test(match[3] || "")) return invalid
+  var address = ompSplitHost(match[2])
+  if (!address) return invalid
+  if (match[1].toLowerCase() === "https") return ""
+  return ompTailscaleHost(address.host) ? "" : SECRET_HTTP_PROBLEM
 }
 
 // The computer an omp server address names, for "omp stats on devbox": MagicDNS names drop the
@@ -2331,6 +2366,8 @@ function ompGatewayProblem(message, url) {
     return { summary: "not a gateway", text: "That address did not answer like omp's auth gateway. Check the URL, and update omp there if it is older." }
   if (/plain HTTP only to this computer or over Tailscale/.test(text))
     return { summary: "needs HTTPS or Tailscale", text: "The token goes over plain HTTP only to this computer or over Tailscale. Use an https:// address, or check that Tailscale is connected on both computers and that the address is that computer's Tailscale name or address." }
+  if (/belongs to another account/.test(text))
+    return { summary: "another account's port", text: "That port on this computer belongs to another account, so the token was not sent. Start omp auth-gateway or the SSH tunnel as yourself, or use an https:// address." }
   var sentences = text.split(/\.\s+/)
   var kept = []
   for (var i = 0; i < sentences.length; i++)

@@ -119,6 +119,14 @@ class ParseTests(unittest.TestCase):
         text = "1:" + "[" * 5000 + "\n" + REPLY
         self.assertEqual(usage.parse_typesafe_billing(text)["credits"]["remaining"], 4.98)
 
+    def test_script_tags_are_found_in_one_pass_over_a_hostile_page(self):
+        # 300,000 unclosed tags: a pattern that rescans from each one takes hours on a page under the size cap.
+        page = "<script " * 300_000 + PAGE + "<script " + "x" * 5000 + ' src="/_next/static/chunks/long.js">'
+        started = time.monotonic()
+        self.assertEqual(usage.script_sources(page), ["/_next/static/chunks/app.js"], "a tag over the length cap is skipped")
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(usage.script_sources('<SCRIPT async src="/a.js"></SCRIPT><script>inline()</script>'), ["/a.js"])
+
     def test_malformed_replies_are_rejected(self):
         cases = {
             "no result line": ('0:{"a":"$@1"}\n', "malformed"),

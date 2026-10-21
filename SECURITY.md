@@ -27,7 +27,11 @@ Quickshell process. Its Python helpers read provider-owned credentials for
 quota requests, apply explicitly confirmed banked resets, and scan local usage metadata. They do not need root
 access and should never be run with `sudo`.
 
-Direct provider requests reject HTTP redirects and verify HTTPS certificates.
+Direct provider requests reject HTTP redirects and verify HTTPS certificates. Every
+response body is read with a size cap and an overall deadline, so a server that
+drips its answer cannot hold a check past its timeout. Patterns that read provider
+text are bounded to the text they parse (Amp's usage lines, TypeSafe's script tags),
+so no answer under the size cap makes them backtrack for long.
 Unexpected collector errors use fixed display messages rather than raw exception
 details, which can contain credential or account data.
 
@@ -35,7 +39,9 @@ Text from providers, proxies, files, settings, and command output is untrusted.
 Every text item the plugin draws is `PlainText.qml` (`Text.PlainText`), so
 markup-shaped input such as `<img src=…>` is shown as characters and never makes
 the shell load a resource. Desktop notification bodies are escaped before
-`notify-send`, because Omarchy's notification server reads body markup.
+`notify-send`, because Omarchy's notification server reads body markup. A check
+sends at most three limit notifications, the worst first, and one more that counts
+the rest, so a source whose limits swing on every refresh cannot flood the desktop.
 Provider-supplied notice text is bounded to 300 characters with credentials
 redacted.
 
@@ -71,10 +77,30 @@ In CLIProxyAPI mode, the plugin reads a user-owned management key file with
 private permissions (default: `$XDG_CONFIG_HOME/omarchy/quotatank/cliproxy.key`,
 where `XDG_CONFIG_HOME` defaults to `~/.config`). This user-provided credential
 is separate from generated state. The key is sent only to the configured
-management server; redirects are rejected and HTTPS certificates are verified.
+management server, under the rule for secrets below; redirects are rejected.
 Upstream provider tokens stay on CLIProxyAPI, which substitutes `$TOKEN$` for
 quota calls and explicitly confirmed Codex banked-reset actions. Management responses and account checks are bounded.
 The backend never downloads auth files or stores their raw metadata. The backend does not request client API keys or the model catalog.
+
+Four secrets go to servers the user names: the CLIProxyAPI management key, the CPA
+Usage Keeper password and the session cookie it earns, T3 connection and access
+tokens, and the omp gateway token. Each goes over HTTPS with the server's certificate
+verified, or over plain HTTP only to this computer (a loopback address or `localhost`)
+or through Tailscale to the computer the address names (below, under omp). Environment
+proxies are ignored for them. Settings refuse other plain-HTTP addresses for these
+servers, and the helpers refuse them again before anything is sent.
+
+On this computer, any account can listen on a free port above 1023, for one while the
+server a secret is meant for is stopped. So a connection to a loopback address carries
+a secret only when the kernel says the server end of that connection belongs to this
+user or to root: after `connect()` and before the first byte, the helper finds the
+connection's other end in `/proc/net/tcp` or `/proc/net/tcp6` and reads its owner.
+The kernel records a socket's owner when the socket is made, and lists a connection
+not yet accepted under its listening socket's owner, so neither the port nor the
+program that holds it can claim another account. A server of another account, or
+one the kernel does not list within half a second, gets a closed connection and
+nothing else, and the widget says so. Root and this user are trusted anyway: they can
+read the secret's file. A server run as a separate service account needs HTTPS.
 
 In local mode, each provider reads only its own tool's credential (a CLI, app, or
 IDE sign-in, a key in its environment variable, or a key saved from settings), and
@@ -85,7 +111,9 @@ exchanged for a fresh one held in memory for that check only, using the installe
 client read from the Gemini CLI installed on this computer (none is shipped here),
 and Antigravity's language server is reached on `127.0.0.1` with its self-signed
 certificate accepted, using the session token read from that same user's process
-command line in `/proc`. `agy`, `gh auth token`, and `claude doctor` run without a
+command line in `/proc`, and only on a port whose server end is this user's (the
+loopback check above), since the port list is a moment old when the token is sent.
+`agy`, `gh auth token`, and `claude doctor` run without a
 shell, with a timeout and closed stdin; `agy` also gets browser launchers replaced by
 stubs that fail. `claude doctor` runs only when the saved Claude Code access token has
 expired, so that Claude Code renews and saves its own sign-in; Quotatank never sends
@@ -156,22 +184,22 @@ On another computer, Quotatank reads two services the user starts there. From an
 serves conversations, so the settings say to keep it on Tailscale or behind an SSH tunnel.
 From an omp auth gateway it requests only `/v1/usage`. The gateway token can also send
 model requests: it is saved like the management key (stdin to `management-key.py`, a
-`0600` file, only the path in settings) and goes over plain HTTP only to this computer,
-named by a loopback address or `localhost`, or through Tailscale to the computer the
-address names. An address in Tailscale's range is not enough, since other networks hand
+`0600` file, only the path in settings) and follows the rule for secrets above. Over
+Tailscale, an address in Tailscale's range is not enough, since other networks hand
 out `100.64.0.0/10` too: tailscaled, listening from the same network namespace, must say
 it is connected with its own TUN interface and that a computer it knows has the address
 (and, for a name, that MagicDNS name), and the connection is bound to that interface.
 Names that resolve to loopback are refused, so a DNS server cannot hand the token to a
 local program. Anything else needs HTTPS.
 
-This protects the token from the networks the computer joins: their addresses, DHCP,
-DNS and carrier-grade NAT. Like the rest of the plugin, it does not protect it from
-programs running as the same user or as root, which can read the token file, nor from
-the tailnet's administrators. One case remains: if the gateway's computer leaves the
-tailnet in the moment between the check and the connection while an exit node or a
-subnet route covers its address, Tailscale routes the connection there. Only a tailnet
-administrator can remove a computer, and only HTTPS pins the gateway's identity.
+This protects the secrets from the networks the computer joins (their addresses, DHCP,
+DNS and carrier-grade NAT) and from the other accounts on this computer. Like the rest
+of the plugin, it does not protect them from programs running as the same user or as
+root, which can read the secret files, nor from the tailnet's administrators. One case
+remains: if the server's computer leaves the tailnet in the moment between the check
+and the connection while an exit node or a subnet route covers its address, Tailscale
+routes the connection there. Only a tailnet administrator can remove a computer, and
+only HTTPS pins a remote server's identity.
 omp URLs are a scheme, a host and an optional port only, redirects are refused,
 environment proxies are ignored for these requests, and bodies and event lines are capped.
 

@@ -308,6 +308,16 @@ assert.equal(context.notificationBody('Running low: 3 <img src="http://127.0.0.1
   "Running low: 3 &lt;img src=\"http://127.0.0.1:9/x\"&gt; &amp; &lt;b&gt;more&lt;/b&gt; left",
   "a notification body's markup reaches the server escaped, ampersands first");
 assert.equal(context.notificationBody("&lt;"), "&amp;lt;", "an entity in provider text stays the characters it was");
+{
+  const crossing = (severity, name) => ({ severity, title: name, remaining: severity === "critical" ? 4 : 18, mode: "Remaining" });
+  const swings = ["warning", "critical", "warning", "critical", "critical", "warning"].map((severity, i) => crossing(severity, "Window " + i));
+  const sent = context.limitNotifications(swings);
+  assert.equal(sent.length, context.MAX_LIMIT_NOTIFICATIONS + 1, "a flood of crossings is a few notifications and a count");
+  assert.deepEqual(sent.slice(0, 3).map((n) => [n.title, n.critical]), [["Window 1", true], ["Window 3", true], ["Window 4", true]],
+    "the worst crossings are the ones shown");
+  assert.equal(sent[3].body, "3 more limits crossed a threshold.");
+  assert.equal(context.limitNotifications(swings.slice(0, 3)).length, 3, "up to the cap, every crossing has its own");
+}
 
 // Pace: the tick is elapsed time; the projection follows the recent rate for short limits and the
 // window's average blended with the last day for weekly and monthly ones.
@@ -1094,7 +1104,17 @@ console.log("Provider setup: passed");
     assert.equal(problem(tailnet, true), "", tailnet + " may carry the gateway token");
   for (const lan of ["http://192.168.1.20:4000", "http://10.0.0.2:4000", "http://172.16.0.1:4000", "http://[fd00::1]:4000",
     "http://example.com:4000", "http://100.128.0.1:4000"])
-    assert.equal(problem(lan, true), context.OMP_GATEWAY_HTTP_PROBLEM, lan + " would send the gateway token in the clear");
+    assert.equal(problem(lan, true), context.SECRET_HTTP_PROBLEM, lan + " would send the gateway token in the clear");
+  // The CLIProxyAPI key, the Keeper password and T3 tokens follow the gateway token's rule; their URLs may have a path.
+  const secret = (text) => context.secretServerUrlProblem(text, "invalid");
+  for (const kept of ["http://127.0.0.1:8317", "http://localhost:8317/", "http://[::1]:8317/keeper", "http://devbox:3773/base",
+    "http://100.101.102.103:8317", "https://proxy.example.com/keeper", "https://192.168.1.20:8317"])
+    assert.equal(secret(kept), "", kept + " may carry a secret");
+  for (const lan of ["http://192.168.1.20:8317", "http://10.0.0.2/keeper", "http://proxy.example.com:8317", "http://[fd00::1]:8317"])
+    assert.equal(secret(lan), context.SECRET_HTTP_PROBLEM, lan + " would send a secret in the clear");
+  for (const bad of ["http://user:secret@127.0.0.1:8317", "http://127.0.0.1:8317/?key=x", "http://127.0.0.1:8317/#x",
+    "http://127.0.0.1:8317/a/../b", "ftp://127.0.0.1", "http://127.0.0.1:99999", "127.0.0.1:8317"])
+    assert.equal(secret(bad), "invalid", bad + " is not a server URL");
   assert.equal(context.ompHost("http://devbox.tail1234.ts.net:3847"), "devbox", "MagicDNS names drop the tailnet");
   assert.equal(context.ompHost("http://Devbox:4000/"), "devbox");
   assert.equal(context.ompOnHost("http://127.0.0.1:3847"), "", "the end of a tunnel is not the computer's name");
@@ -1139,6 +1159,11 @@ console.log("Provider setup: passed");
   assert.equal(context.ompGatewaySummary(gateway, plainHttp), "devbox · needs HTTPS or Tailscale");
   assert.ok(context.ompGatewayProblem(plainHttp.message, "http://devbox:4000").text.indexOf("Tailscale is connected") > 0,
     "a refusal to send the token in the clear says what to do");
+  const foreign = { gateway: "error", message: "omp usage exited with status 1. The omp gateway's port on this computer belongs to "
+    + "another account, so the token was not sent." };
+  assert.equal(context.ompGatewaySummary({ ompGatewayUrl: "http://127.0.0.1:4000", ompGatewayKeyFile: "/private/key-1.key" }, foreign),
+    "SSH tunnel · another account's port", "a port another account holds is named as such, not as a local omp failure");
+  assert.equal(context.ompLocalMessage(foreign), "omp usage exited with status 1.");
 
   const usageReply = (omp, providers) => ({ schemaVersion: 1, generatedAt: "2030-01-15T12:00:00Z", providers: providers || [], omp });
   const ompAccount = (accountId) => ({ accountId, source: "omp usage report", origin: "omp", status: "ok" });

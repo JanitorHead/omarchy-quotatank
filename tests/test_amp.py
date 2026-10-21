@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -93,6 +94,18 @@ class ParseTests(unittest.TestCase):
         with self.assertRaises(usage.ProviderFailure) as raised:
             usage.parse_amp_display("Amp had a hiccup.\n", NOW)
         self.assertEqual(raised.exception.kind, "malformed")
+
+    def test_hostile_text_is_read_in_bounded_time(self):
+        # The patterns backtrack within a line: whitespace runs, long lines and many lines cannot multiply that.
+        for text in (" \n" * (1 << 20), "Amp " + " " * (2 << 20), ("Amp " + " " * 316 + "\n") * 10000,
+                     ("Subscription " + "x " * 150 + "\n") * 10000, ("Amp " + "a " * 150 + "Tier:\n") * 10000):
+            with self.subTest(text=text[:20]):
+                started = time.monotonic()
+                with self.assertRaises(usage.ProviderFailure):
+                    usage.parse_amp_display(text, NOW)
+                self.assertLess(time.monotonic() - started, 1.0)
+        windows, _, plan, _ = usage.parse_amp_display("x" * 400 + "\n" + TIER_TEXT, NOW)
+        self.assertEqual((len(windows), plan), (2, "Amp Pro"), "a line too long to be Amp's is skipped, not the text")
 
 
 class FetchTests(unittest.TestCase):
