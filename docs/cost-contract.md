@@ -11,25 +11,30 @@ only by quota account activity, through `scripts/keeper_client.py`.
 
 The `opencode` local source reads the OpenCode usage database
 (`OPENCODE_DB` / `OPENCODE_DATABASE`, otherwise the freshest `opencode*.db` —
-the write-ahead log is the clock — under `$XDG_DATA_HOME/opencode`). The Oh My
+the write-ahead log is the clock — under `$XDG_DATA_HOME/opencode`). OpenCode 2
+keeps its responses in `session_message`, with each session's project beside it,
+and repeats the older `message` table's ids; that newer table is read alone when
+it exists, and the older one otherwise. The Oh My
 Pi harness session transcripts (`${OMP_SESSIONS_DIR:-~/.omp/agent/sessions}`,
 one JSONL transcript per session) form a separate `omp` source. Each assistant
 message, and each background `model_usage` line (spend outside the conversation,
 such as cache warming), counts under the provider it was billed to: `opencode*` →
-OpenCode, `openai-codex` → Codex, `anthropic` → Claude; other providers are
-dropped. `model_usage` lines count toward the project and agent of their
+OpenCode, `openai-codex` → Codex, `anthropic` → Claude, `minimax*` → MiniMax
+Coding Plan, `xiaomi` and `mimo*` → Xiaomi MiMo, `xai` and `grok*` → Grok CLI;
+other providers are dropped. MiniMax Coding Plan, Xiaomi MiMo and Grok CLI keep
+no transcripts of their own, so these billings are reported even when no local
+source names them. `model_usage` lines count toward the project and agent of their
 transcript and are deduplicated by their line id like messages. A transcript's
 session is the `id` of its own `session` line, so subagent transcripts that share
 a file name (`Explore.jsonl`) stay separate sessions; without that line the
 parent folder and file name identify it.
-Assistant rows recorded by OpenCode's own
-providers are mapped to `uncached_input` (`input`), `cached_input` (cache
+Assistant rows from the CLI database are mapped to `uncached_input` (`input`), `cached_input` (cache
 read), `cache_creation` (cache write), and `output`. The CLI database reports
 reasoning beside output, so `output` plus `reasoning` is the output total; the
 harness reports reasoning inside output, so its `output` is used as-is and
 `reasoningTokens` stays informational. Rows are deduplicated by their message
 id, and the database is queried read-only with `query_only` set; no row content
-outside ids, model, timestamp, the working directory's folder name, and the
+outside ids, the model and the provider that billed it, timestamp, the working directory's folder name, and the
 token split leaves SQLite. OpenCode's own
 recorded cost is kept and used, because the CLI priced each response with the
 rates of the provider that served it — the only reliable rate for model IDs the

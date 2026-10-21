@@ -489,6 +489,50 @@ class PayloadTests(unittest.TestCase):
         self.assertNotIn(str(root), cache_text)
         self.assertNotIn("/home/user", json.dumps(payload))
 
+    def test_omp_subscriptions_are_kept_without_a_local_source(self):
+        records = [
+            usage(at("2030-01-15T10:00:00Z"), 1000, provider="minimax", model="MiniMax-M3", origin="omp"),
+            usage(at("2030-01-15T10:01:00Z"), 500, provider="mimo", model="mimo-v2.6-pro", origin="omp"),
+            usage(at("2030-01-15T10:02:00Z"), 250, provider="grok", model="grok-4.7", origin="omp"),
+            usage(at("2030-01-15T10:03:00Z"), 100, provider="claude", model="test-model", origin="omp"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            coverage = [{"id": "omp", "status": "ok", "message": ""}]
+            with mock.patch.object(costs, "scan_transcripts", return_value=(records, coverage)), \
+                    mock.patch.object(costs, "transcript_root", return_value=Path(directory)):
+                payload = costs.build_payload(["codex"], 7, 2, Path(directory) / "state", now_ms=NOW,
+                                              zone_name="UTC", rates_override=(RATES, PRICING))
+
+        providers = {row["id"] for row in payload["providers"]}
+        self.assertTrue({"minimax", "mimo", "grok"} <= providers,
+                        "a subscription with no local source still reports its omp usage")
+        self.assertNotIn("claude", providers,
+                         "a billing provider outside costLocalProviders stays out as before")
+        models = {(row["provider"], row["model"]) for row in payload["models"]}
+        self.assertEqual(models, {("minimax", "MiniMax-M3"), ("mimo", "mimo-v2.6-pro"), ("grok", "grok-4.7")})
+        self.assertIn("local-omp", {row["id"] for row in payload["sources"]})
+
+    def test_open_code_records_report_their_billing_provider_and_keep_their_cost(self):
+        records = [
+            costs.UsageRecord("minimax", at("2030-01-15T10:00:00Z"), "MiniMax-M3", "session", 1000,
+                              0, 0, 0, 0, 0.5, None, origin="opencode"),
+            costs.UsageRecord("grok", at("2030-01-15T10:01:00Z"), "grok-4.7", "session", 500,
+                              0, 0, 0, 0, None, None, origin="opencode"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            coverage = [{"id": "opencode", "status": "ok", "message": ""}]
+            with mock.patch.object(costs, "scan_transcripts", return_value=(records, coverage)), \
+                    mock.patch.object(costs, "transcript_root", return_value=Path(directory)):
+                payload = costs.build_payload(["opencode"], 7, 2, Path(directory) / "state", now_ms=NOW,
+                                              zone_name="UTC", rates_override=(RATES, PRICING))
+
+        self.assertEqual({row["id"] for row in payload["providers"]}, {"minimax", "grok"},
+                         "the database source reports each provider that billed it")
+        models = {(row["provider"], row["model"]): row for row in payload["models"]}
+        self.assertEqual(models[("minimax", "MiniMax-M3")]["costUsd"], 0.5,
+                         "the CLI's own price is kept and resolves IDs the public table cannot")
+        self.assertEqual(models[("minimax", "MiniMax-M3")]["costSource"], "providerReported")
+
     def test_backend_error_keeps_the_dimension_fields(self):
         output = io.StringIO()
         with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(output), \

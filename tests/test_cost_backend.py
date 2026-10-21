@@ -545,7 +545,7 @@ class OpenCodeSourceTests(unittest.TestCase):
 
         self.assertIsNotNone(records)
         assert records is not None
-        self.assertEqual(len(records), 2, "only OpenCode's own assistant rows are usage")
+        self.assertEqual(len(records), 3, "assistant rows are usage, each under the provider that billed it")
         record = records[0]
         self.assertEqual(record.provider, "opencode")
         self.assertEqual(record.model, "deepseek-v4.1-flash")
@@ -559,12 +559,100 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertEqual(record.total_tokens, 162)
         self.assertNotEqual(record.session_id, "s1", "session ids are hashed before storage")
         self.assertEqual(record.dedupe_key, costs.opaque_id("opencode:m1"))
+        self.assertEqual(record.origin, "opencode")
         # OpenCode prices each response with the vendor rate it used, which is
         # the only rate available for IDs the public table cannot disambiguate.
         self.assertEqual(record.reported_cost_usd, 0.00122625)
         # A zero cost means the CLI had no rate either; it is not a free claim.
         self.assertIsNone(records[1].reported_cost_usd)
         self.assertEqual(records[1].model, "free-model")
+        billed = records[2]
+        self.assertEqual((billed.provider, billed.model), ("claude", "claude-sonnet"),
+                         "a response the CLI billed to another vendor counts there")
+
+    @staticmethod
+    def write_open_code_2(path: Path, sessions, rows) -> None:
+        """OpenCode 2 keeps usage in `session_message` and the project beside the session, while
+        the older `message` table repeats the same ids."""
+        connection = sqlite3.connect(path)
+        connection.execute("CREATE TABLE session_v2 (id text PRIMARY KEY, directory text)")
+        connection.execute(
+            "CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL,"
+            " type text NOT NULL, seq integer NOT NULL, time_created integer NOT NULL,"
+            " time_updated integer NOT NULL, data text NOT NULL)"
+        )
+        connection.execute(
+            "CREATE TABLE message (id text PRIMARY KEY, session_id text NOT NULL,"
+            " time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL)"
+        )
+        connection.executemany("INSERT INTO session_v2 (id, directory) VALUES (?,?)", sessions)
+        connection.executemany(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)"
+            " VALUES (?,?,?,?,?,?,?)", rows,
+        )
+        connection.commit()
+        connection.close()
+
+    @staticmethod
+    def open_code_2_row(message_id: str, session: str, provider: str, model: str,
+                        cost: float = 0.004) -> tuple:
+        return (message_id, session, "assistant", 1, 1_800_000_000_000, 1_800_000_000_000,
+                json.dumps({"agent": "build", "model": {"providerID": provider, "id": model},
+                            "tokens": {"input": 100, "output": 20, "reasoning": 5,
+                                       "cache": {"read": 30, "write": 7}},
+                            "cost": cost}))
+
+    def test_open_code_2_messages_bill_to_their_provider(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "opencode.db"
+            self.write_open_code_2(
+                path,
+                [("ses1", "/home/user/dev/my-app"), ("ses2", "/tmp")],
+                [self.open_code_2_row("m1", "ses1", "mimo-tp", "mimo-v2.6-pro", cost=0),
+                 self.open_code_2_row("m2", "ses1", "minimax-cn", "MiniMax-M3"),
+                 self.open_code_2_row("m3", "ses2", "xai", "grok-4.7", cost=0.02),
+                 self.open_code_2_row("m4", "ses1", "some-vendor", "x"),
+                 ("u1", "ses1", "user", 0, 1_800_000_000_000, 1_800_000_000_000,
+                  json.dumps({"text": "hi"}))],
+            )
+            records = costs.parse_opencode_database(path, 0)
+
+        self.assertIsNotNone(records)
+        assert records is not None
+        self.assertEqual({r.provider: r.model for r in records},
+                         {"mimo": "mimo-v2.6-pro", "minimax": "MiniMax-M3", "grok": "grok-4.7"},
+                         "each response counts under the provider that billed it; unknown vendors are dropped")
+        by_model = {r.model: r for r in records}
+        self.assertEqual((by_model["mimo-v2.6-pro"].uncached_input, by_model["mimo-v2.6-pro"].cached_input,
+                          by_model["mimo-v2.6-pro"].cache_creation, by_model["mimo-v2.6-pro"].output),
+                         (100, 30, 7, 25))
+        # The CLI's own price is the only one that resolves `MiniMax-M3`; a zero is no
+        # claim at all, so the public table gets its turn.
+        self.assertEqual(by_model["MiniMax-M3"].reported_cost_usd, 0.004)
+        self.assertIsNone(by_model["mimo-v2.6-pro"].reported_cost_usd)
+        self.assertEqual(by_model["mimo-v2.6-pro"].project, "my-app")
+        self.assertEqual(by_model["grok-4.7"].project, "tmp")
+        self.assertEqual({r.origin for r in records}, {"opencode"})
+
+    def test_open_code_2_repeats_the_older_table_without_double_counting(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "opencode.db"
+            self.write_open_code_2(path, [("ses1", "/tmp")],
+                                   [self.open_code_2_row("m1", "ses1", "mimo-tp", "mimo-v2.6-pro")])
+            connection = sqlite3.connect(path)
+            connection.execute(
+                "INSERT INTO message VALUES (?,?,?,?,?)",
+                ("m1", "ses1", 1_800_000_000_000, 1_800_000_000_000,
+                 json.dumps({"role": "assistant", "providerID": "mimo-tp", "modelID": "mimo-v2.6-pro",
+                             "tokens": {"input": 100, "output": 20}})),
+            )
+            connection.commit()
+            connection.close()
+            records = costs.parse_opencode_database(path, 0)
+
+        self.assertIsNotNone(records)
+        assert records is not None
+        self.assertEqual(len(records), 1, "OpenCode 2 repeats the older ids; the newer table is read alone")
 
     def test_omp_harness_maps_tokens_models_and_sessions(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -655,6 +743,26 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertEqual({r.model for r in records if r.provider == "codex"}, {"gpt-5.6-luna"})
         self.assertEqual({r.model for r in records if r.provider == "claude"}, {"claude-haiku-5-5"})
         self.assertEqual({r.origin for r in records}, {"omp"})
+
+    def test_omp_subscription_messages_bill_to_their_own_provider(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sessions = root / "omp"
+            self.write_omp_session(sessions / "-tmp" / "minimax.jsonl", provider="minimax-code-cn", model="MiniMax-M3")
+            self.write_omp_session(sessions / "-tmp" / "mimo.jsonl", provider="xiaomi", model="mimo-v2.6-pro")
+            self.write_omp_session(sessions / "-tmp" / "grok.jsonl", provider="xai-oauth", model="grok-4.7")
+            self.write_omp_session(sessions / "-tmp" / "vendor.jsonl", provider="some-vendor", model="x")
+            with mock.patch.dict(os.environ, {"OMP_SESSIONS_DIR": str(sessions),
+                                              "CODEX_HOME": str(root / "codex")}, clear=False):
+                records, _ = costs.scan_transcripts(["codex"], root / "state", int(costs.time.time() * 1000))
+
+        self.assertEqual({record.provider for record in records}, {"minimax", "mimo", "grok"},
+                         "subscriptions bill to their own provider; unknown billing providers are dropped")
+        self.assertEqual({record.provider: record.model for record in records},
+                         {"minimax": "MiniMax-M3", "mimo": "mimo-v2.6-pro", "grok": "grok-4.7"})
+        for record in records:
+            self.assertEqual(costs.deserialize_record(costs.serialize_record(record)), record,
+                             "subscription records survive the scan cache")
 
     def test_unusable_database_is_not_a_partial_history(self):
         with tempfile.TemporaryDirectory() as temporary:
