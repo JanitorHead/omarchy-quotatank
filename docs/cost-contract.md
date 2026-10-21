@@ -13,8 +13,8 @@ The `opencode` local source reads the OpenCode usage database
 (`OPENCODE_DB` / `OPENCODE_DATABASE`, otherwise the freshest `opencode*.db` —
 the write-ahead log is the clock — under `$XDG_DATA_HOME/opencode`). OpenCode 2
 keeps its responses in `session_message`, with each session's project beside it,
-and repeats the older `message` table's ids; that newer table is read alone when
-it exists, and the older one otherwise. The Oh My
+and repeats the older `message` table's ids; the older table fills in only the
+rows the newer one does not repeat. The Oh My
 Pi harness session transcripts (`${OMP_SESSIONS_DIR:-~/.omp/agent/sessions}`,
 one JSONL transcript per session) form a separate `omp` source. Each assistant
 message, and each background `model_usage` line (spend outside the conversation,

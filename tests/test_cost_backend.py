@@ -640,19 +640,28 @@ class OpenCodeSourceTests(unittest.TestCase):
             self.write_open_code_2(path, [("ses1", "/tmp")],
                                    [self.open_code_2_row("m1", "ses1", "mimo-tp", "mimo-v2.6-pro")])
             connection = sqlite3.connect(path)
-            connection.execute(
-                "INSERT INTO message VALUES (?,?,?,?,?)",
+            connection.executemany("INSERT INTO message VALUES (?,?,?,?,?)", [
                 ("m1", "ses1", 1_800_000_000_000, 1_800_000_000_000,
                  json.dumps({"role": "assistant", "providerID": "mimo-tp", "modelID": "mimo-v2.6-pro",
                              "tokens": {"input": 100, "output": 20}})),
-            )
+                # The older table also holds rows the newer one never repeated, in
+                # the older shapes: `model.modelID`, and the project in the row.
+                ("m2", "ses1", 1_800_000_000_100, 1_800_000_000_100,
+                 json.dumps({"role": "assistant", "model": {"providerID": "minimax-cn", "modelID": "MiniMax-M3"},
+                             "tokens": {"input": 30, "output": 5}, "cost": 0.5,
+                             "path": {"cwd": "/home/user/dev/other"}})),
+            ])
             connection.commit()
             connection.close()
             records = costs.parse_opencode_database(path, 0)
 
         self.assertIsNotNone(records)
         assert records is not None
-        self.assertEqual(len(records), 1, "OpenCode 2 repeats the older ids; the newer table is read alone")
+        self.assertEqual(len(records), 2, "a repeated row is counted once, and the older table fills in the rest")
+        self.assertEqual(len([r for r in records if r.dedupe_key == costs.opaque_id("opencode:m1")]), 1)
+        older = next(r for r in records if r.dedupe_key == costs.opaque_id("opencode:m2"))
+        self.assertEqual((older.provider, older.model, older.project), ("minimax", "MiniMax-M3", "other"))
+        self.assertEqual(older.reported_cost_usd, 0.5)
 
     @staticmethod
     def write_grok_session(root: Path, project: str, session: str, turns) -> Path:
@@ -701,6 +710,27 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertEqual(fallback.model, "grok-4.7-build", "a turn without modelUsage falls back to its own totals")
         self.assertEqual(fallback.dedupe_key, costs.opaque_id("grok:sess-1:3:grok-4.7-build"))
         self.assertEqual(fallback.reported_cost_usd, 0.0012345678)
+
+    def test_a_grok_session_without_turns_reports_its_own_totals(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sessions"
+            folder = root / "%2Ftmp" / "sess-2"
+            folder.mkdir(parents=True)
+            totals = {"inputTokens": 50, "outputTokens": 5, "cachedReadTokens": 10,
+                      "cacheCreationTokens": 0, "reasoningTokens": 2, "costUsdTicks": 20_000_000}
+            (folder / "usage.json").write_text(json.dumps({
+                "sessionId": "sess-2", "updatedAt": "2030-01-15T10:00:00+00:00", "turns": [],
+                "session": {"primaryModelId": "grok-4.7-build", **totals,
+                            "modelUsage": {"grok-4.7-build": totals}},
+            }), encoding="utf-8")
+            with mock.patch.dict(os.environ, {"GROK_HOME": str(Path(temporary))}, clear=False):
+                records = costs.parse_grok_usage(folder / "usage.json", 0)
+
+        self.assertEqual(len(records or []), 1, "a session without a finished turn still reports its totals")
+        record = records[0]
+        self.assertEqual((record.uncached_input, record.cached_input, record.output), (40, 10, 5))
+        self.assertEqual(record.reported_cost_usd, 0.002)
+        self.assertEqual(record.project, "tmp")
 
     def test_omp_harness_maps_tokens_models_and_sessions(self):
         with tempfile.TemporaryDirectory() as temporary:

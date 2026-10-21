@@ -596,41 +596,33 @@ def parse_claude_file(path: Path, retention_start_ms: int, cursor: TranscriptCur
 #
 # OpenCode 2 writes `session_message` and names each session's project in
 # `session_v2`; earlier versions wrote `message` with the project in the row.
-# Both tables hold one JSON document per row, and the newer one repeats the
-# older ids, so it is read alone when it exists.
+# The newer table repeats the older ids, so it is read first and the older one
+# fills in only rows the newer one does not repeat. Rows name the model and its
+# billing provider in three shapes: `model.id`/`model.providerID`,
+# `model.modelID`, and the older top-level `modelID`/`providerID`.
 
-OPENCODE2_SQL = (
+OPENCODE_QUERY = (
     "SELECT id, session_id, time_created,"
-    " CAST(json_extract(data, '$.model.id') AS TEXT),"
-    " CAST(json_extract(data, '$.model.providerID') AS TEXT),"
+    " CAST(COALESCE(json_extract(data, '$.model.id'), json_extract(data, '$.model.modelID'),"
+    " json_extract(data, '$.modelID')) AS TEXT),"
+    " CAST(COALESCE(json_extract(data, '$.model.providerID'), json_extract(data, '$.providerID')) AS TEXT),"
     " CAST(COALESCE(json_extract(data, '$.tokens.input'), 0) AS INTEGER),"
     " CAST(COALESCE(json_extract(data, '$.tokens.output'), 0) AS INTEGER),"
     " CAST(COALESCE(json_extract(data, '$.tokens.reasoning'), 0) AS INTEGER),"
     " CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),"
     " CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),"
     " CAST(COALESCE(json_extract(data, '$.cost'), 0) AS REAL),"
-    " NULL"
-    " FROM session_message"
-    " WHERE type = 'assistant'"
-    " AND CASE WHEN json_valid(data) THEN json_extract(data, '$.model.providerID') END IS NOT NULL"
+    " {cwd}"
+    " FROM {table}"
+    " WHERE {condition}"
     " AND time_created >= ?"
 )
 
-OPENCODE_SQL = (
-    "SELECT id, session_id, time_created,"
-    " CAST(json_extract(data, '$.modelID') AS TEXT),"
-    " CAST(json_extract(data, '$.providerID') AS TEXT),"
-    " CAST(COALESCE(json_extract(data, '$.tokens.input'), 0) AS INTEGER),"
-    " CAST(COALESCE(json_extract(data, '$.tokens.output'), 0) AS INTEGER),"
-    " CAST(COALESCE(json_extract(data, '$.tokens.reasoning'), 0) AS INTEGER),"
-    " CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),"
-    " CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),"
-    " CAST(COALESCE(json_extract(data, '$.cost'), 0) AS REAL),"
-    " CASE WHEN json_type(data, '$.path.cwd') = 'text' THEN json_extract(data, '$.path.cwd') END"
-    " FROM message"
-    " WHERE data LIKE '%\"role\"%:%\"assistant\"%'"
-    " AND CASE WHEN json_valid(data) THEN json_extract(data, '$.role') END = 'assistant'"
-    " AND time_created >= ?"
+OPENCODE_TABLES = (
+    ("session_message", "type = 'assistant'", "NULL"),
+    ("message", "data LIKE '%\"role\"%:%\"assistant\"%'"
+                " AND CASE WHEN json_valid(data) THEN json_extract(data, '$.role') END = 'assistant'",
+     "CASE WHEN json_type(data, '$.path.cwd') = 'text' THEN json_extract(data, '$.path.cwd') END"),
 )
 
 
@@ -693,58 +685,62 @@ def parse_opencode_database(path: Path, retention_start_ms: int,
     try:
         connection.execute("PRAGMA query_only = ON")
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        open_code_2 = "session_message" in tables
-        table, query = ("session_message", OPENCODE2_SQL) if open_code_2 else ("message", OPENCODE_SQL)
-        newest = connection.execute(f"SELECT MAX(time_created) FROM {table}").fetchone()
-        unit = 1000 if newest and newest[0] is not None and int(newest[0]) < 1e12 else 1
-        projects = opencode_projects(connection, tables) if open_code_2 else {}
-        for row in connection.execute(query, (retention_start_ms // unit,)):
-            (raw_id, session, created, model, billed, inp, out, reasoning,
-             cache_read, cache_write, recorded, cwd) = row
-            if not isinstance(raw_id, str) or not raw_id or created is None:
+        projects = opencode_projects(connection, tables)
+        seen: set[str] = set()
+        for table, condition, cwd_column in OPENCODE_TABLES:
+            if table not in tables:
                 continue
-            # The CLI runs several subscriptions through one database; each response
-            # is counted under the provider that billed it, and an unsupported one is dropped.
-            provider = billed_provider(billed)
-            if provider is None:
-                continue
-            timestamp = parse_timestamp_ms(int(created) * unit)
-            if timestamp is None:
-                continue
-            uncached, output, reasoned, cached, cache_written = (
-                nonnegative_int(value) for value in (inp, out, reasoning, cache_read, cache_write)
-            )
-            # OpenCode prices each response with the rates of the provider that
-            # served it, which is the only way to price model IDs the public
-            # table cannot disambiguate. A zero is not a price: it means the CLI
-            # had no rate either, so the table gets its turn instead.
-            recorded_cost = finite_number(recorded)
-            if recorded_cost is not None and recorded_cost <= 0:
-                recorded_cost = None
-            if not isinstance(cwd, str) or not cwd:
-                cwd = projects.get(session, "") if isinstance(session, str) else ""
-            record = UsageRecord(
-                provider=provider,
-                timestamp_ms=timestamp,
-                model=bounded_model(model) or "<unattributed>",
-                session_id=opaque_id("opencode:" + session) if isinstance(session, str) and session else "",
-                uncached_input=uncached,
-                cached_input=cached,
-                cache_creation=cache_written,
-                # OpenCode reports reasoning beside output rather than inside
-                # it, so the output side carries both here.
-                output=output + reasoned,
-                reasoning=reasoned,
-                reported_cost_usd=recorded_cost,
-                dedupe_key=opaque_id("opencode:" + raw_id),
-                origin="opencode",
-                project=project_name(cwd),
-            )
-            if record.total_tokens <= 0 or record.timestamp_ms < retention_start_ms:
-                continue
-            if len(records) >= MAX_TRANSCRIPT_RECORDS_PER_FILE:
-                raise TranscriptLimitError("too many usage records in one database")
-            records.append(record)
+            newest = connection.execute(f"SELECT MAX(time_created) FROM {table}").fetchone()
+            unit = 1000 if newest and newest[0] is not None and int(newest[0]) < 1e12 else 1
+            query = OPENCODE_QUERY.format(table=table, condition=condition, cwd=cwd_column)
+            for row in connection.execute(query, (retention_start_ms // unit,)):
+                (raw_id, session, created, model, billed, inp, out, reasoning,
+                 cache_read, cache_write, recorded, cwd) = row
+                if not isinstance(raw_id, str) or not raw_id or created is None or raw_id in seen:
+                    continue
+                seen.add(raw_id)
+                # The CLI runs several subscriptions through one database; each response
+                # is counted under the provider that billed it, and an unsupported one is dropped.
+                provider = billed_provider(billed)
+                if provider is None:
+                    continue
+                timestamp = parse_timestamp_ms(int(created) * unit)
+                if timestamp is None:
+                    continue
+                uncached, output, reasoned, cached, cache_written = (
+                    nonnegative_int(value) for value in (inp, out, reasoning, cache_read, cache_write)
+                )
+                # OpenCode prices each response with the rates of the provider that
+                # served it, which is the only way to price model IDs the public
+                # table cannot disambiguate. A zero is not a price: it means the CLI
+                # had no rate either, so the table gets its turn instead.
+                recorded_cost = finite_number(recorded)
+                if recorded_cost is not None and recorded_cost <= 0:
+                    recorded_cost = None
+                if not isinstance(cwd, str) or not cwd:
+                    cwd = projects.get(session, "") if isinstance(session, str) else ""
+                record = UsageRecord(
+                    provider=provider,
+                    timestamp_ms=timestamp,
+                    model=bounded_model(model) or "<unattributed>",
+                    session_id=opaque_id("opencode:" + session) if isinstance(session, str) and session else "",
+                    uncached_input=uncached,
+                    cached_input=cached,
+                    cache_creation=cache_written,
+                    # OpenCode reports reasoning beside output rather than inside
+                    # it, so the output side carries both here.
+                    output=output + reasoned,
+                    reasoning=reasoned,
+                    reported_cost_usd=recorded_cost,
+                    dedupe_key=opaque_id("opencode:" + raw_id),
+                    origin="opencode",
+                    project=project_name(cwd),
+                )
+                if record.total_tokens <= 0 or record.timestamp_ms < retention_start_ms:
+                    continue
+                if len(records) >= MAX_TRANSCRIPT_RECORDS_PER_FILE:
+                    raise TranscriptLimitError("too many usage records in one database")
+                records.append(record)
     except (sqlite3.Error, ValueError, OverflowError, RecursionError):
         return None
     finally:
@@ -777,10 +773,12 @@ def parse_grok_usage(path: Path, retention_start_ms: int,
     records: list[UsageRecord] = []
     try:
         turns = document.get("turns")
-        for turn in turns if isinstance(turns, list) else []:
+        rows_by_turn = turns if isinstance(turns, list) and turns else [document.get("session")]
+        for turn in rows_by_turn:
             if not isinstance(turn, dict):
                 continue
-            timestamp = parse_timestamp_ms(turn.get("endedAt"))
+            # A session that never finished a turn reports its totals without one.
+            timestamp = parse_timestamp_ms(turn.get("endedAt") or document.get("updatedAt"))
             if timestamp is None or timestamp < retention_start_ms:
                 continue
             usage = turn.get("modelUsage")
