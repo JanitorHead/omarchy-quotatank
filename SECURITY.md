@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---|---|
-| 2.0.x | Yes |
-| 1.9.x and earlier | No; update to 2.0 |
+| 2.1.x | Yes |
+| 2.0.x and earlier | No; update to 2.1 |
 
 ## Reporting a vulnerability
 
