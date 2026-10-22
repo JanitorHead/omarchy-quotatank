@@ -248,7 +248,8 @@ counts as `other` ("Other providers"). Remote rows are not filtered by `--provid
   therefore add up to the remote totals. omp reports only a token total per bucket, so
   period cells gain `totalTokens` without the per-kind split.
 - `models` gains separate rows from `/api/stats/models`, marked `"origin": "omp-remote"`.
-  A model omp did not name is "Unknown model"; rows past 512 fold into "Other models".
+  A model omp did not name is "Unknown model"; rows past 512 fold into "Other models", and past the 48
+  costliest model rows overall, the rest fold into "Other models" per provider.
 - `projects` adds `/api/stats/folders`, named by the last segment of the omp folder
   name (`-dev-app` → `app`). omp writes `/` as `-`, so a hyphenated project name keeps
   only its last part; the home folder and unnamed folders count as "Other". Folder
@@ -315,6 +316,8 @@ Records from a trailing segment without its final newline are provisional: they 
 Resource use is bounded at every untrusted input boundary: 16 MiB per transcript line, 128 MiB per transcript file, 512 MiB of changed transcript input per scan, 20,000 usage records per file, and 50,000 records across a scan. Discovery is limited to 10,000 transcript files and 2,000 directories per provider without following symlinks. Scan-cache input is capped at 32 MiB, model names at 256 characters, project names at 255 characters, model output groups at 512 before remaining models are combined, and tracked projects at 512 before remaining ones join `other`. Files that cross a ceiling are skipped atomically and make coverage `partial` or `failed`; their partial records are never reported as complete data.
 
 `CostBackend.qml` streams backend stdout into a 4 MiB capped buffer and drains stderr without retaining it. Crossing the output ceiling terminates the process and preserves the last known-good cost document.
+
+The document's lists are bounded by count too, since Costs builds a row per item. After local and omp stats rows are merged (up to 512 groups each), `models` keeps its 48 costliest rows and folds the rest into one "Other models" row per provider; a folded row's totals are exact and its `sessions` is `null`, because one session can use several models. `CostBackend.qml` cuts the parsed document to at most 32 `providers` (also within each period), 64 `models`, 48 `periods`, 16 `projects`, 4 `agents`, 16 `sources` and 32 `coverage` rows (`boundCostPayload` in `UsageLogic.js`).
 
 The state directory uses mode `0700` and cache files use `0600`. Corrupt or foreign cache versions cause a cold rebuild, never a broken view. Rate refresh failures fall back to the last cached LiteLLM table; with no usable table, token totals remain available and model-priced costs stay `null`.
 

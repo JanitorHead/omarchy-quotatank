@@ -94,6 +94,7 @@ Item {
         message = "The server returned invalid reset details."
         return
       }
+      UsageLogic.boundField(result, "credits", UsageLogic.RESET_CREDIT_LIMIT)
       details = result
       selectedIndex = 0
       preparedAt = Date.now()

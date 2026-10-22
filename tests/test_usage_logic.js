@@ -722,7 +722,34 @@ assert.equal(context.orderProviders(sample, '["kimi","claude"]').map(p => p.id).
 assert.equal(context.orderProviders(sample, '["ghost","codex"]').map(p => p.id).join(","), "codex,claude,kimi,opencode", "ids that are not present are ignored");
 assert.equal(context.orderProviders(sample, "nope").map(p => p.id).join(","), "claude,codex,kimi,opencode", "unreadable order keeps the natural order");
 assert.equal(context.parseProviderOrder('["codex","codex","Bad Id",3]').join(","), "codex", "duplicates and invalid ids are dropped");
+assert.equal(context.parseProviderOrder(JSON.stringify(Array.from({ length: 5000 }, (_, i) => "p" + i))).length,
+  context.USAGE_LIST_LIMITS.providers, "a saved order keeps only as many ids as there can be providers");
 console.log("Provider order: passed");
+
+// What a helper prints is cut to the shell's item ceilings before anything builds a card, a row or a dot.
+{
+  const many = (count, make) => Array.from({ length: count }, (_, i) => make(i));
+  const windows = (count) => many(count, (i) => ({ id: "w" + i, used: 1 }));
+  const usage = context.boundUsagePayload({ schemaVersion: 1, providers: many(100, (i) => ({
+    id: "p" + i, windows: windows(5000), accounts: many(100, (j) => ({ accountId: "a" + j, windows: windows(20) })) })) });
+  const limits = context.USAGE_LIST_LIMITS;
+  assert.equal(usage.providers.length, limits.providers);
+  assert.ok(usage.providers.every((p) => p.windows.length === limits.windows && p.accounts.length === limits.accounts
+    && p.accounts.every((a) => a.windows.length === limits.windows)), "every provider and account is cut");
+  assert.equal(usage.providers[0].windows.map((w) => w.id).slice(0, 2).join(","), "w0,w1", "the helper's first items are kept");
+  const small = { providers: [{ id: "claude", windows: [{ id: "session" }], accounts: null }] };
+  assert.equal(JSON.stringify(context.boundUsagePayload(small)), JSON.stringify({ providers: [{ id: "claude", windows: [{ id: "session" }], accounts: null }] }),
+    "a reply within the ceilings is left as it is");
+  const cost = context.boundCostPayload({ providers: many(100, (i) => ({ id: "p" + i })), models: many(1000, (i) => ({ model: "m" + i })),
+    periods: many(500, () => ({ providers: many(100, (i) => ({ id: "p" + i })) })), projects: many(100, () => ({})) });
+  for (const field of ["providers", "models", "periods", "projects"])
+    assert.equal(cost[field].length, context.COST_LIST_LIMITS[field], "cost " + field);
+  assert.ok(cost.periods.every((period) => period.providers.length === context.COST_LIST_LIMITS.providers), "each period's providers");
+  const credits = { credits: many(1000, (i) => ({ id: "c" + i })) };
+  context.boundField(credits, "credits", context.RESET_CREDIT_LIMIT);
+  assert.equal(credits.credits.length, context.RESET_CREDIT_LIMIT);
+}
+console.log("Helper item ceilings: passed");
 
 // Reset restores exactly what a fresh install gets: the registry matches manifest.json.
 const manifestDefaults = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8")).barWidget.defaults;

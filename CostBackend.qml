@@ -149,7 +149,7 @@ Item {
         if (backendError !== "") {
           fetchError = backendError
         } else {
-          payload = parsed
+          payload = UsageLogic.boundCostPayload(parsed)
           fetchError = ""
           var generated = new Date(String(parsed.generatedAt || "")).getTime()
           lastSuccessAt = isFinite(generated) ? generated : Date.now()

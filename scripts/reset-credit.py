@@ -20,6 +20,7 @@ sys.modules[SPEC.name] = usage
 SPEC.loader.exec_module(usage)
 
 RESET_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+MAX_OFFERED_CREDITS = 8
 
 
 def identifier(value):
@@ -67,8 +68,9 @@ def normalize_details(payload, now=None):
                         "title": usage.clean_message(credit.get("title") or "Full reset"),
                         "description": usage.clean_message(credit.get("description") or "Reset your current Codex usage limits.")})
     credits.sort(key=lambda c: (c["expiresAt"] if c["expiresAt"] is not None else float("inf"), c["grantedAt"], c["id"]))
+    # Only the soonest to expire are offered: the confirmation lists each one, and the soonest is what gets used.
     return {"availableCount": available, "applicableAvailableCount": count(payload.get("applicable_available_count")),
-            "credits": credits if available > 0 else []}
+            "credits": credits[:MAX_OFFERED_CREDITS] if available > 0 else []}
 
 
 def resolve_account(client, account_id, remaining):

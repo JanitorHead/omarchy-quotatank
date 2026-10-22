@@ -539,5 +539,43 @@ class HistoryAndContractTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
 
 
+class PayloadCeilingTests(unittest.TestCase):
+    def test_one_answer_with_thousands_of_limits_and_logins_reaches_the_shell_bounded(self):
+        # Claude's structured limits: 5,000 distinct ones fit in a 2 MiB answer, and each would be a card.
+        windows, _credits = usage.parse_claude_usage({
+            "five_hour": {"utilization": 20}, "seven_day": {"utilization": 30},
+            "limits": [{"kind": "weekly", "percent": 5, "scope": {"model": f"m{index} " + "x" * 300}}
+                       for index in range(5000)]})
+        reading = {"id": "claude", "name": "Claude Code", "status": "ok", "windows": windows, "label": "y" * 500}
+        logins = [{**reading, "accountId": f"login-{index}"} for index in range(300)]
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(usage, "collect_providers", return_value=[{**reading, "accounts": logins}]), \
+                mock.patch.object(usage, "detected_providers", return_value=[]):
+            payload = usage.build_payload(["claude"], 1, Path(temporary))
+            history_bytes = (Path(temporary) / "history.json").stat().st_size
+        claude = payload["providers"][0]
+        self.assertEqual([row["id"] for row in claude["windows"][:2]], ["session", "weekly"],
+                         "the reader's main windows come first and are kept")
+        self.assertEqual(len(claude["windows"]), usage.MAX_READING_WINDOWS)
+        self.assertEqual(len(claude["accounts"]), usage.MAX_READING_ACCOUNTS)
+        for row in [claude, *claude["accounts"]]:
+            self.assertLessEqual(len(row["windows"]), usage.MAX_READING_WINDOWS)
+            self.assertLessEqual(len(row["label"]), usage.MAX_READING_TEXT_CHARS)
+            self.assertTrue(all(len(window["label"]) <= usage.MAX_WINDOW_TEXT_CHARS for window in row["windows"]))
+        # History records only what the shell is given.
+        self.assertLess(history_bytes, 1024 * 1024)
+
+    def test_registry_logins_and_extra_keys_are_read_only_up_to_their_ceilings(self):
+        registry = {"accounts": [{"id": f"login-{index}", "label": f"Login {index}", "home": ""} for index in range(500)]}
+        with mock.patch.object(usage, "registry_account",
+                               side_effect=lambda _provider, entry: {**entry, "primary": False}):
+            accounts = usage.omarchy_accounts("claude", registry)
+        self.assertEqual(len(accounts), usage.MAX_READING_ACCOUNTS)
+        self.assertEqual(accounts[0]["id"], usage.PRIMARY_ACCOUNT_ID, "the primary login always fits")
+        keys = usage.parse_extra_keys([f"deepseek=k-{index:08x}=/keys/{index}" for index in range(40)])
+        self.assertEqual([key for key, _path in keys["deepseek"]], [f"k-{index:08x}" for index in range(usage.MAX_EXTRA_KEYS)])
+
+
+
 if __name__ == "__main__":
     unittest.main()

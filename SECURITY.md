@@ -32,6 +32,13 @@ response body is read with a size cap and an overall deadline, so a server that
 drips its answer cannot hold a check past its timeout. Patterns that read provider
 text are bounded to the text they parse (Amp's usage lines, TypeSafe's script tags),
 so no answer under the size cap makes them backtrack for long.
+A byte cap alone still lets one answer carry thousands of items, and the shell builds a card,
+a row or a dot for each and scans its lists on the thread that draws the whole desktop. So
+every list a helper gives the shell has an item ceiling, applied in the helper and again where
+the shell reads it: 64 providers, 64 accounts per provider and 16 limits per account; in
+Costs, 48 models plus an "Other models" row per provider, 12 projects plus "Other", and the
+periods of the selected range; and the 8 banked Codex resets that expire soonest. A login
+registry or a list of extra keys is cut before anything is read (64 logins, 8 keys).
 Unexpected collector errors use fixed display messages rather than raw exception
 details, which can contain credential or account data.
 

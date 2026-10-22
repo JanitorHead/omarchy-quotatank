@@ -52,6 +52,42 @@ function firstItems(value, limit) {
   return result
 }
 
+// Item ceilings where the shell takes a helper's output. A reply fits in the shell's byte cap with
+// thousands of items; past these, nothing builds more cards, rows or dots, and no scan over a list
+// grows. The helpers keep to the same ceilings (bound_providers in usage-fetch.py, rank_models in
+// cost-fetch.py); these hold whatever a helper prints. Each list keeps its first items, in the
+// helper's order.
+var USAGE_LIST_LIMITS = { providers: 64, accounts: 64, windows: 16 }
+var COST_LIST_LIMITS = { providers: 32, models: 64, periods: 48, projects: 16, agents: 4, sources: 16, coverage: 32 }
+var RESET_CREDIT_LIMIT = 8
+
+// `object[field]` cut to `limit` items, in place, when it is a list.
+function boundField(object, field, limit) {
+  if (object && typeof object === "object" && isListLike(object[field]) && object[field].length > limit)
+    object[field] = firstItems(object[field], limit)
+}
+
+// A parsed limits reply (backend contract) with its lists within USAGE_LIST_LIMITS, in place.
+function boundUsagePayload(payload) {
+  boundField(payload, "providers", USAGE_LIST_LIMITS.providers)
+  var providers = listOrEmpty(payload && payload.providers)
+  for (var i = 0; i < providers.length; i++) {
+    boundField(providers[i], "windows", USAGE_LIST_LIMITS.windows)
+    boundField(providers[i], "accounts", USAGE_LIST_LIMITS.accounts)
+    var accounts = listOrEmpty(providers[i] && providers[i].accounts)
+    for (var j = 0; j < accounts.length; j++) boundField(accounts[j], "windows", USAGE_LIST_LIMITS.windows)
+  }
+  return payload
+}
+
+// A parsed cost reply (cost contract) with its lists within COST_LIST_LIMITS, in place.
+function boundCostPayload(payload) {
+  for (var field in COST_LIST_LIMITS) boundField(payload, field, COST_LIST_LIMITS[field])
+  var periods = listOrEmpty(payload && payload.periods)
+  for (var i = 0; i < periods.length; i++) boundField(periods[i], "providers", COST_LIST_LIMITS.providers)
+  return payload
+}
+
 function contains(value, needle) {
   var source = listOrEmpty(value)
   for (var i = 0; i < source.length; i++) {
@@ -271,7 +307,7 @@ function parseProviderOrder(text) {
   catch (error) { return [] }
   if (!Array.isArray(parsed)) return []
   var result = []
-  for (var i = 0; i < parsed.length; i++) {
+  for (var i = 0; i < parsed.length && result.length < USAGE_LIST_LIMITS.providers; i++) {
     var id = parsed[i]
     if (typeof id === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(id) && result.indexOf(id) === -1) result.push(id)
   }

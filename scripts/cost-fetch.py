@@ -78,6 +78,7 @@ MAX_SCAN_CACHE_BYTES = 32 * 1024 * 1024
 MAX_SCAN_CACHE_FILES = 10_000
 MAX_MODEL_NAME_CHARS = 256
 MAX_MODEL_GROUPS = 512
+MAX_MODEL_ROWS = 48
 MAX_PROJECT_NAME_CHARS = 255
 MAX_PROJECT_GROUPS = 512
 MAX_PROJECT_ROWS = 12
@@ -1639,6 +1640,34 @@ def rank_agents(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return [merged.get(kind, {"id": kind, "costUsd": 0.0, "totalTokens": 0, "records": 0}) for kind in AGENT_KINDS]
 
 
+def model_rank(row: dict[str, Any]) -> tuple[bool, float, int]:
+    return row["costUsd"] is not None, row["costUsd"] or 0, row["totalTokens"]
+
+
+def rank_models(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The MAX_MODEL_ROWS costliest model rows, then the rest folded into one "Other models" row per provider,
+    so totals stay exact and Costs never gets more rows than it lists (up to 512 local and 512 omp stats rows
+    reach here). A folded row counts no sessions: one session can use several models."""
+    if len(models) <= MAX_MODEL_ROWS:
+        return models
+    ranked = sorted(models, key=model_rank, reverse=True)
+    kept: list[dict[str, Any]] = []
+    folded: dict[str, dict[str, Any]] = {}
+    for row in ranked:
+        if len(kept) < MAX_MODEL_ROWS and row["model"] != "Other models":
+            kept.append(row)
+            continue
+        other = folded.get(row["provider"])
+        if other is None:
+            folded[row["provider"]] = {**row, "model": "Other models"}
+            continue
+        add_finished(other, row)
+        other["sessions"] = None
+        if other.get("origin") != row.get("origin"):
+            other.pop("origin", None)
+    return kept + sorted(folded.values(), key=model_rank, reverse=True)
+
+
 def period_window(days: int, now_ms: int, zone) -> tuple[dict[str, Any], list[str], Callable[[int], str | None]]:
     if days == 1:
         until_ms = now_ms
@@ -2136,6 +2165,7 @@ def build_payload(
     result["previous"] = aggregate_previous(local_history, previous_start, start, rates, overrides) if comparable else None
     remote_periods = (merge_omp_stats(result, omp_remote, bucket_for, (start, stamp), rates, overrides)
                       if omp_remote is not None else set())
+    result["models"] = rank_models(result["models"])
     coverage = []
     for provider in result["providers"]:
         relevant = [s for s in sources if s["status"] != "duplicate"

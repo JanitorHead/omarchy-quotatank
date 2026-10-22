@@ -289,6 +289,24 @@ ShellRoot {
       } else if (root.phase === 5 && root.widget.noticeEvent && root.widget.noticeEvent.accountId === "work") {
         root.check(root.widget.noticeText.indexOf("Omarchy moved new Claude sessions to Work at ") === 0
           && root.widget.noticeText.indexOf("Personal reached 96%") > 0, "Omarchy's own switch: " + root.widget.noticeText)
+        // One provider's answer with thousands of limits: the panel keeps a card's worth of them.
+        Quickshell.execDetached(["touch", root.markers + "/flood"])
+        root.waitTicks = 0
+        root.phase++
+      } else if (root.phase === 6) {
+        if (++root.waitTicks < 10) return
+        root.widget.refreshNow()
+        root.phase++
+      } else if (root.phase === 7) {
+        var flooded = root.widget.providers.filter(function(row) { return row.id === "kimi" })[0]
+        if (!flooded || UsageLogic.listOrEmpty(flooded.windows).length <= 2) return
+        root.check(flooded.windows.length === UsageLogic.USAGE_LIST_LIMITS.windows,
+          "the reading keeps " + UsageLogic.USAGE_LIST_LIMITS.windows + " of its 5000 limits: " + flooded.windows.length)
+        root.widget.selectProviderId("kimi")
+        root.phase++
+      } else if (root.phase === 8) {
+        root.check(root.widget.limitCards.count === UsageLogic.USAGE_LIST_LIMITS.windows,
+          "a card per kept limit: " + root.widget.limitCards.count)
         console.log("Limits QML contract: passed")
         Qt.quit()
       }

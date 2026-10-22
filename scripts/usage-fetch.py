@@ -8025,6 +8025,7 @@ PRIMARY_ACCOUNT_ID = "main"
 # `key_account_result`). Neither may name a second account, or two readings would share one id.
 RESERVED_ACCOUNT_IDS = frozenset({PRIMARY_ACCOUNT_ID, "primary"})
 EXTRA_KEY_ID = re.compile(r"k-[0-9a-f]{8}")
+MAX_EXTRA_KEYS = 8  # per provider, as Settings allows (EXTRA_KEY_LIMIT in UsageLogic.js)
 
 
 def accounts_root() -> Path:
@@ -8090,6 +8091,9 @@ def omarchy_accounts(provider_id: str, data: dict[str, Any] | None = None) -> li
     entries = data.get("accounts")
     accounts: list[dict[str, Any]] = []
     for entry in (entries if isinstance(entries, list) else []):
+        # One short of the ceiling, so a built-in primary login still fits (bound_providers).
+        if len(accounts) >= MAX_READING_ACCOUNTS - 1:
+            break
         account = registry_account(provider_id, entry)
         if account is None or any(known["id"] == account["id"] for known in accounts):
             continue
@@ -8198,7 +8202,7 @@ def parse_extra_keys(values: list[str]) -> dict[str, list[tuple[str, Path]]]:
         if not EXTRA_KEY_ID.fullmatch(key_id):
             continue
         entries = extra_keys.setdefault(provider_id, [])
-        if any(known == key_id for known, _path in entries):
+        if len(entries) >= MAX_EXTRA_KEYS or any(known == key_id for known, _path in entries):
             continue
         entries.append((key_id, Path(path).expanduser()))
     return extra_keys
@@ -8714,6 +8718,53 @@ def parse_key_files(values: list[str]) -> dict[str, Path]:
     return key_files
 
 
+# How much of one reading the shell is given (backend contract, "Resource ceilings"). Every result passes through
+# bound_providers after omp is merged and before history is recorded, so no provider answer, omp report or login
+# registry can make the shell build more limit cards, account rows or bar dots than this, however many items fit
+# in the 2 MiB it reads. The readers' own order decides what is kept: they list their main windows first.
+MAX_PROVIDER_RESULTS = 64
+MAX_READING_ACCOUNTS = 64
+MAX_READING_WINDOWS = 16
+MAX_WINDOW_TEXT_CHARS = 80
+MAX_READING_TEXT_CHARS = 120
+READING_TEXT_FIELDS = ("name", "plan", "account", "label", "source")
+
+
+def bound_reading(reading: dict[str, Any]) -> dict[str, Any]:
+    """`reading` (a provider result or one of its accounts) with at most MAX_READING_WINDOWS windows and short
+    text, in place."""
+    for field in READING_TEXT_FIELDS:
+        if isinstance(reading.get(field), str):
+            reading[field] = reading[field][:MAX_READING_TEXT_CHARS]
+    windows = reading.get("windows")
+    if isinstance(windows, list):
+        kept = []
+        for window in windows[:MAX_READING_WINDOWS]:
+            if isinstance(window, dict):
+                for field in ("id", "label"):
+                    if isinstance(window.get(field), str):
+                        window[field] = window[field][:MAX_WINDOW_TEXT_CHARS]
+            kept.append(window)
+        reading["windows"] = kept
+    return reading
+
+
+def bound_providers(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """At most MAX_PROVIDER_RESULTS results, each with at most MAX_READING_ACCOUNTS accounts, all bounded."""
+    kept = []
+    for provider in providers[:MAX_PROVIDER_RESULTS]:
+        if not isinstance(provider, dict):
+            continue
+        bound_reading(provider)
+        accounts = provider.get("accounts")
+        if isinstance(accounts, list):
+            provider["accounts"] = [bound_reading(account) for account in accounts[:MAX_READING_ACCOUNTS]
+                                    if isinstance(account, dict)]
+        kept.append(provider)
+    return kept
+
+
+
 def build_payload(
     provider_ids: list[str], timeout: float, state_dir: Path | None,
     source: str = "direct", cliproxy_url: str = "http://127.0.0.1:8317",
@@ -8754,6 +8805,7 @@ def build_payload(
     providers, merged, reads = merge_omp_safely(providers, provider_ids, {"local": local_read, "gateway": gateway_read},
                                                 source == "cliproxy")
     local_read, gateway_read = reads["local"], reads["gateway"]
+    providers = bound_providers(providers)
     if not omp_only:
         update_and_attach_history(providers, state_dir)
     omp_summary = {

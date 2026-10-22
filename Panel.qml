@@ -290,21 +290,27 @@ Ui.Panel {
     return detailKey + "|" + String(row && (row.id || row.label) || index)
   }
 
+  // The rows of the cards, by key, rebuilt once per reading so each card finds its row without a scan.
+  property var detailWindowRows: ({})
+
   function detailWindowFor(key) {
-    var rows = detail ? UsageLogic.listOrEmpty(detail.windows) : []
-    for (var i = 0; i < rows.length; i++)
-      if (detailWindowKey(rows[i], i) === key) return rows[i]
-    return null
+    return detailWindowRows[key] || null
   }
 
   function syncLimitCards() {
-    var rows = detail && detail.status === "ok" ? UsageLogic.orderedWindows(detail.windows) : []
     var all = detail ? UsageLogic.listOrEmpty(detail.windows) : []
+    var byRow = new Map()
+    for (var i = 0; i < all.length; i++) if (!byRow.has(all[i])) byRow.set(all[i], i)
+    var rows = detail && detail.status === "ok" ? UsageLogic.orderedWindows(all) : []
+    var keyed = {}
     var keys = []
-    for (var i = 0; i < rows.length; i++) {
-      var key = detailWindowKey(rows[i], Array.prototype.indexOf.call(all, rows[i]))
-      if (keys.indexOf(key) < 0) keys.push(key)
+    for (var j = 0; j < rows.length; j++) {
+      var key = detailWindowKey(rows[j], byRow.get(rows[j]))
+      if (Object.prototype.hasOwnProperty.call(keyed, key)) continue
+      keyed[key] = rows[j]
+      keys.push(key)
     }
+    detailWindowRows = keyed
     UsageLogic.syncKeyedOrder({
       count: function() { return limitCardModel.count },
       keyAt: function(index) { return limitCardModel.get(index).cardKey },

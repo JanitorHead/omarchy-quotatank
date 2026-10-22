@@ -137,6 +137,7 @@ Item {
         if (backendError !== "") {
           fetchError = backendError
         } else {
+          UsageLogic.boundUsagePayload(parsed)
           payload = usageSource === "cliproxy" ? UsageLogic.preserveProxyReadings(payload, parsed) : parsed
           fetchError = ""
           var generated = new Date(String(parsed.generatedAt || "")).getTime()
