@@ -1,7 +1,7 @@
 # Estimated-cost contract
 
 `scripts/cost-fetch.py` writes schema-v1 JSON. Costs combines local Codex/Claude
-history selected by `--providers claude,codex,opencode` with enabled servers in
+history selected by `--providers claude,codex,opencode,grok` with enabled servers in
 `--t3-servers` and, optionally, one omp stats server in `--omp-stats-url` (see
 [Remote omp stats](#remote-omp-stats)). `--t3-servers` is a JSON array of at most four objects:
 `{"id":"home","name":"Home T3","url":"https://t3.example","tokenFile":"/private/token","enabled":true}`.
@@ -11,33 +11,46 @@ only by quota account activity, through `scripts/keeper_client.py`.
 
 The `opencode` local source reads the OpenCode usage database
 (`OPENCODE_DB` / `OPENCODE_DATABASE`, otherwise the freshest `opencode*.db` —
-the write-ahead log is the clock — under `$XDG_DATA_HOME/opencode`). The Oh My
+the write-ahead log is the clock — under `$XDG_DATA_HOME/opencode`). OpenCode 2
+keeps its responses in `session_message`, with each session's project beside it,
+and repeats the older `message` table's ids; the older table fills in only the
+rows the newer one does not repeat. The Oh My
 Pi harness session transcripts (`${OMP_SESSIONS_DIR:-~/.omp/agent/sessions}`,
 one JSONL transcript per session) form a separate `omp` source. Each assistant
 message, and each background `model_usage` line (spend outside the conversation,
 such as cache warming), counts under the provider it was billed to: `opencode*` →
-OpenCode, `openai-codex` → Codex, `anthropic` → Claude; other providers are
-dropped. `model_usage` lines count toward the project and agent of their
+OpenCode, `openai-codex` → Codex, `anthropic` → Claude, `minimax*` → MiniMax
+Coding Plan, `xiaomi` and `mimo*` → Xiaomi MiMo, `xai` and `grok*` → Grok CLI;
+other providers are dropped. MiniMax Coding Plan, Xiaomi MiMo and Grok CLI keep
+no transcripts of their own, so these billings are reported even when no local
+source names them. `model_usage` lines count toward the project and agent of their
 transcript and are deduplicated by their line id like messages. A transcript's
 session is the `id` of its own `session` line, so subagent transcripts that share
 a file name (`Explore.jsonl`) stay separate sessions; without that line the
 parent folder and file name identify it.
-Assistant rows recorded by OpenCode's own
-providers are mapped to `uncached_input` (`input`), `cached_input` (cache
+Assistant rows from the CLI database are mapped to `uncached_input` (`input`), `cached_input` (cache
 read), `cache_creation` (cache write), and `output`. The CLI database reports
 reasoning beside output, so `output` plus `reasoning` is the output total; the
 harness reports reasoning inside output, so its `output` is used as-is and
 `reasoningTokens` stays informational. Rows are deduplicated by their message
 id, and the database is queried read-only with `query_only` set; no row content
-outside ids, model, timestamp, the working directory's folder name, and the
-token split leaves SQLite. OpenCode's own
-recorded cost is kept and used, because the CLI priced each response with the
+outside ids, the model and the provider that billed it, timestamp, the working directory's folder name, and the
+token split leaves SQLite. OpenCode's and the grok CLI's own
+recorded costs are kept and used, because each priced every response with the
 rates of the provider that served it — the only reliable rate for model IDs the
 public table cannot disambiguate (`deepseek-v4.1-flash`, for instance, exists
 there under two vendors with different prices, so the bare id stays
 unresolvable). A custom price still wins over the recorded cost, and a recorded
 zero is treated as "no rate" rather than as a free model, so unknown pricing
 never becomes a `$0.00` claim.
+
+The `grok` local source reads the grok CLI's own session history: one
+`usage.json` per session under `${GROK_HOME:-~/.grok}/sessions`, inside a
+percent-encoded project folder. Each turn is one record per model it used, with
+the CLI's own token split (cache reads sit inside its input tokens, reasoning
+inside its output tokens) and its recorded price, `costUsdTicks` in 10^10 ticks
+per USD. A turn without usage is skipped, and only the project folder name,
+ids, the model, the timestamp, and the token split are read.
 
 `CostBackend.qml` scans on demand, retains same-source results on process failure,
 and clears results when the selected folders or server configuration changes.
