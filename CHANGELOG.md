@@ -4,6 +4,13 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.1.4
+
+### Fixed
+
+- **One provider's answer could stall the whole desktop.** A limits reply is capped at 2 MiB, but that holds about 5,000 limits, and Claude's structured limits were taken however many there were. The panel built a card for each and every card searched the whole list for its own row, all on the thread that draws the Omarchy shell: against a test reply with 5,000 limits, opening that provider froze the shell for 40 seconds. Every list now has an item ceiling, applied by the helper and again where the shell reads its output: 64 providers, 64 accounts each and 16 limits per account, the reader's main windows first. The same reply now shows 16 cards in under 0.1 seconds, and each card finds its row directly. Reported by @HANCORE-linux during the marketplace review.
+- **The same held for the other lists the shell reads.** Costs keeps its 48 costliest models and folds the rest into "Other models" per provider, with exact totals; local and omp stats models could reach 1,024 rows before. Omarchy's login registry is read for at most 64 logins and extra keys for at most 8 per provider, before anything is read; the banked Codex reset confirmation offers the 8 that expire soonest instead of up to 1,024; and a saved provider order keeps at most 64 ids.
+
 ## 2.1.3
 
 ### Fixed
