@@ -41,7 +41,10 @@ Item {
   readonly property var ompArguments: usageSource === "cliproxy" ? [] : UsageLogic.ompUsageArguments(settings)
   // What the backend found of omp: { local, gateway, message, accounts, ... }, or null before it says.
   readonly property var ompStatus: payload && payload.omp && typeof payload.omp === "object" ? payload.omp : null
-  readonly property var providers: payload ? UsageLogic.listOrEmpty(payload.providers) : []
+  // Every reading as the backend gave it; Settings lists hidden accounts from these.
+  readonly property var allProviders: payload ? UsageLogic.listOrEmpty(payload.providers) : []
+  // What Limits, the menu bar and the notices show: the readings without the accounts hidden in Settings.
+  readonly property var providers: UsageLogic.withoutHiddenAccounts(allProviders, setting("hiddenAccounts", "{}"))
   // Providers set up on this computer, monitored or not; Settings offers the ones not monitored yet.
   readonly property var detected: payload ? UsageLogic.listOrEmpty(payload.detected) : []
   // Providers whose CLI is on PATH, or null before a payload says: Settings offers Sign in for these

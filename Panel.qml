@@ -235,6 +235,23 @@ Ui.Panel {
     return false
   }
 
+  // The detail's banked reset (the provider, or the selected account): the same confirmation.
+  function resetDetail() {
+    if (!detail) return false
+    if (accountOverview) return resetAccount(detail.accountId)
+    return resetBackend.begin(detail, String(detail.name || detail.id || ""))
+  }
+
+  // Under the banked-reset count: when the next one expires, and why it cannot be applied from here, if so.
+  function bankedResetDetail(reading) {
+    var parts = []
+    var expires = reading && reading.credits ? Number(reading.credits.resetCreditsExpiresAt) : NaN
+    if (isFinite(expires) && expires > 0) parts.push("Expires " + clockText(expires))
+    var note = UsageLogic.accountResetNote(reading, proxyMode)
+    if (note !== "") parts.push(note)
+    return parts.join(" · ")
+  }
+
   // Up/down walks the rows in their shown order; past either end the panel scrolls instead.
   function moveAccountSelection(step) {
     var order = accountOrderIndexes
@@ -741,19 +758,20 @@ Ui.Panel {
     return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
   }
 
-  function creditsPrimary(credits) {
+  // `showResets` false leaves the banked-reset count out, when the banked-reset card shows it.
+  function creditsPrimary(credits, showResets) {
     if (!credits) return ""
     if (credits.remaining !== null && credits.remaining !== undefined)
       return UsageLogic.formatMoney(credits.remaining, credits.currency) + " remaining"
     if (credits.unlimited) return "Unlimited"
     if (credits.used !== null && credits.used !== undefined)
       return UsageLogic.formatMoney(credits.used, credits.currency) + " used"
-    if (credits.resetCreditsAvailable !== null && credits.resetCreditsAvailable !== undefined)
+    if (showResets !== false && credits.resetCreditsAvailable !== null && credits.resetCreditsAvailable !== undefined)
       return credits.resetCreditsAvailable + " reset credit" + (credits.resetCreditsAvailable === 1 ? "" : "s")
     return "Available"
   }
 
-  function creditsDetail(credits) {
+  function creditsDetail(credits, showResets) {
     if (!credits) return ""
     var parts = []
     if (credits.used !== null && credits.used !== undefined) {
@@ -765,7 +783,7 @@ Ui.Panel {
       parts.push("No monthly spending cap")
     if (credits.total !== null && credits.total !== undefined)
       parts.push(UsageLogic.formatMoney(credits.total, credits.currency) + " funded")
-    if (credits.resetCreditsAvailable !== null && credits.resetCreditsAvailable !== undefined)
+    if (showResets !== false && credits.resetCreditsAvailable !== null && credits.resetCreditsAvailable !== undefined)
       parts.push(credits.resetCreditsAvailable + " rate-limit reset credit" + (credits.resetCreditsAvailable === 1 ? "" : "s"))
     return parts.join(" · ")
   }
@@ -1764,7 +1782,7 @@ Ui.Panel {
             surface: root.surface
             fontFamily: root.fontFamily
             accountDetails: root.accountTooltip(root.provider)
-            proxyProviders: root.proxyMode ? backend.providers : []
+            proxyProviders: root.proxyMode ? backend.allProviders : []
             usagePayload: root.proxyMode ? null : backend.payload
             usageLoading: backend.loading
             costSources: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sources) : []
@@ -1811,7 +1829,7 @@ Ui.Panel {
               nowSeconds: root.nowSeconds
               events: root.accountEvents.eventLog
               proxyMode: root.proxyMode
-              resetsActionable: root.proxyMode && !resetBackend.active && !resetBackend.busy
+              resetsActionable: !resetBackend.active && !resetBackend.busy
               useBusyId: root.accountEvents.useBusyId
               headerText: UsageLogic.accountModeText(root.provider, root.accountMode, root.proxyMode)
               quotaMode: root.selectedQuotaMode
@@ -2098,9 +2116,85 @@ Ui.Panel {
               motion: root.motion
             }
 
+            // The detail's banked resets outside CLIProxyAPI mode (whose rows carry them): what is left, when
+            // the next one expires, and the button that opens the confirmation.
+            Ui.BorderSurface {
+              id: resetCard
+              objectName: "bankedResetCard"
+              readonly property var reading: root.detail
+              readonly property bool actionable: UsageLogic.accountResetActionable(reading, root.proxyMode)
+              visible: !root.proxyMode && !!reading && UsageLogic.accountResetShown(reading, root.proxyMode)
+                && UsageLogic.accountResetCount(reading) > 0
+              width: parent.width
+              implicitHeight: resetCardContent.implicitHeight + contentTopInset + contentBottomInset
+              color: Style.normalFillFor(root.foreground, Commons.Color.accent, root.urgent)
+              borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent, root.urgent)
+              padding: Style.spacing.xxl
+              radius: root.usageCardRadius
+
+              Item {
+                id: resetCardContent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.leftMargin: resetCard.contentLeftInset
+                anchors.rightMargin: resetCard.contentRightInset
+                anchors.topMargin: resetCard.contentTopInset
+                implicitHeight: Math.max(resetCardText.implicitHeight, resetApply.visible ? resetApply.implicitHeight : 0)
+
+                Column {
+                  id: resetCardText
+                  anchors.left: parent.left
+                  anchors.right: resetApply.visible ? resetApply.left : parent.right
+                  anchors.rightMargin: resetApply.visible ? Style.spacing.lg : 0
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.spacing.xs
+
+                  PlainText {
+                    objectName: "bankedResetLabel"
+                    width: parent.width
+                    text: UsageLogic.accountResetLabel(resetCard.reading)
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                    elide: Text.ElideRight
+                  }
+
+                  PlainText {
+                    objectName: "bankedResetDetail"
+                    visible: text !== ""
+                    width: parent.width
+                    text: root.bankedResetDetail(resetCard.reading)
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                  }
+                }
+
+                Ui.Button {
+                  id: resetApply
+                  objectName: "bankedResetApply"
+                  visible: resetCard.actionable
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Apply…"
+                  bordered: true
+                  focusable: true
+                  enabled: !resetBackend.active && !resetBackend.busy
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  tooltipText: "Review the reset before it is spent"
+                  onClicked: root.resetDetail()
+                }
+              }
+            }
+
             Column {
               id: creditsSection
               visible: !!root.detail && root.detail.status === "ok" && !!root.detail.credits && !balanceCard.visible
+                && (UsageLogic.creditsHaveFunds(root.detail.credits) || !resetCard.visible)
               width: parent.width
               spacing: Style.spacing.lg
 
@@ -2116,6 +2210,7 @@ Ui.Panel {
               CreditsCard {
                 width: parent.width
                 credits: root.detail ? root.detail.credits : null
+                showResets: !resetCard.visible
                 visible: creditsToggle.checked
               }
             }
@@ -2374,6 +2469,7 @@ Ui.Panel {
   component CreditsCard: Ui.BorderSurface {
     id: creditsCard
     property var credits: null
+    property bool showResets: true
     readonly property bool hasMeter: !!credits
       && credits.used !== null && credits.used !== undefined
       && credits.limit !== null && credits.limit !== undefined
@@ -2397,7 +2493,7 @@ Ui.Panel {
 
       PlainText {
         width: parent.width
-        text: root.creditsPrimary(creditsCard.credits)
+        text: root.creditsPrimary(creditsCard.credits, creditsCard.showResets)
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
@@ -2432,7 +2528,7 @@ Ui.Panel {
       PlainText {
         visible: text !== ""
         width: parent.width
-        text: root.creditsDetail(creditsCard.credits)
+        text: root.creditsDetail(creditsCard.credits, creditsCard.showResets)
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption

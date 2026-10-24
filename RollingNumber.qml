@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // Drop-in replacement for a value Text whose digits roll when the value changes (DESIGN §2.3). Each digit
 // is a clipped 0–9 column moved on y; only digits that changed move, up when the value rises and down when
@@ -12,7 +13,7 @@ Item {
   id: root
 
   property string text: ""
-  property color color: Color.foreground
+  property color color: Commons.Color.foreground
   property font font
   property var motion: null
   property int horizontalAlignment: Text.AlignLeft

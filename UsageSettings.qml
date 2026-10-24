@@ -632,7 +632,11 @@ Column {
         readonly property bool dragging: providerList.draggingId === providerId
         // This provider's accounts in the last reading (Omarchy sign-ins, extra keys, omp, a proxy).
         readonly property var accountReading: root.proxyMode ? UsageLogic.readingFor(root.proxyProviders, providerId) : reading
-        readonly property int accountCount: accountReading ? UsageLogic.listOrEmpty(accountReading.accounts).length : 0
+        readonly property var accountList: accountReading ? UsageLogic.listOrEmpty(accountReading.accounts) : []
+        readonly property int accountCount: accountList.length
+        readonly property var hiddenIds: UsageLogic.parseHiddenAccounts(root.value("hiddenAccounts", "{}"))[providerId] || []
+        readonly property int shownAccountCount: Array.prototype.filter.call(accountList, function (account) {
+          return hiddenIds.indexOf(String(account && account.accountId || "")) < 0 }).length
         // Key editor and Customize line up with the name, under the grip and the mark.
         readonly property real indent: grip.width + mark.width + Style.spacing.sm * 2
         width: providerList.width
@@ -869,6 +873,32 @@ Column {
               Hint {
                 visible: providerRow.accountCount >= 2
                 text: "Automatically: together while omp or a proxy spreads requests over the accounts, or when two of them spend within the same hour; otherwise one at a time."
+              }
+              // Each account shown or hidden. A hidden one keeps its sign-in or key; the last one shown stays.
+              Label {
+                visible: providerRow.accountCount >= 2
+                text: "Accounts shown"
+              }
+              Repeater {
+                model: providerRow.accountCount >= 2 ? providerRow.accountList : []
+                delegate: SwitchRow {
+                  id: accountSwitch
+                  required property var modelData
+                  required property int index
+                  readonly property string accountId: String(modelData && modelData.accountId || "")
+                  readonly property bool hidden: providerRow.hiddenIds.indexOf(accountId) >= 0
+                  objectName: "showAccount-" + providerRow.providerId + "-" + index
+                  label: UsageLogic.accountSettingsLabel(modelData, root.value("extraKeys", "{}"),
+                    root.value("hideAccountEmails", true) !== false, index)
+                  checked: !hidden
+                  enabled: accountId !== "" && (hidden || providerRow.shownAccountCount > 1)
+                  onToggled: if (enabled) root.set("hiddenAccounts", UsageLogic.setAccountHidden(
+                    root.value("hiddenAccounts", "{}"), providerRow.providerId, accountId, !hidden))
+                }
+              }
+              Hint {
+                visible: providerRow.accountCount >= 2
+                text: "A hidden account stays signed in and keeps its key. Limits, the menu bar and the notices leave it out; one account always stays shown."
               }
               Hint { text: "Default follows the choices under Menu bar and Display." }
             }
@@ -3188,6 +3218,8 @@ Column {
     if (bottom !== "default") parts.push("+ " + (bottom === "none" ? "none" : UsageLogic.windowSelectorLabel(bottom)))
     var accounts = UsageLogic.parseAccountModes(value("accountModes", "{}"))[providerId]
     if (accounts) parts.push(UsageLogic.accountModeLabel(accounts))
+    var hidden = (UsageLogic.parseHiddenAccounts(value("hiddenAccounts", "{}"))[providerId] || []).length
+    if (hidden) parts.push(hidden + " hidden")
     return parts.length ? parts.join(" · ") : "Default"
   }
 
@@ -3199,6 +3231,8 @@ Column {
     for (var other in limits) ids[other] = true
     var accountModes = UsageLogic.parseAccountModes(value("accountModes", "{}"))
     for (var accountId in accountModes) ids[accountId] = true
+    var hidden = UsageLogic.parseHiddenAccounts(value("hiddenAccounts", "{}"))
+    for (var hiddenId in hidden) ids[hiddenId] = true
     return Object.keys(ids).length
   }
 

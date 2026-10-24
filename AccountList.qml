@@ -176,7 +176,6 @@ Column {
         readonly property string accountId: accountData ? String(accountData.accountId || "") : ""
         readonly property var status: UsageLogic.accountStatusLine(accountData, spending, root.nowSeconds,
           root.events[root.providerId + "@" + accountId] || null, root.proxyMode)
-        readonly property var resetCredits: accountData && accountData.credits ? accountData.credits.resetCreditsAvailable : null
 
         objectName: "accountRow-" + accountId
         width: list.width
@@ -193,9 +192,9 @@ Column {
         inUse: !!root.accountState && root.accountState.inUse[accountIndex] === true
         canUse: UsageLogic.accountCanUse(accountData, root.mode, root.proxyMode)
         useBusy: root.useBusyId !== "" && root.useBusyId === accountId
-        // Banked resets apply through the proxy, so only its accounts show them.
-        resetCount: root.proxyMode && UsageLogic.accountResetLabel(accountData) !== "" ? Number(resetCredits) : -1
-        resetEnabled: root.resetsActionable && !!accountData && accountData.status === "ok" && Number(resetCredits) > 0
+        // Proxy rows carry their banked resets; elsewhere the selected account's detail does, beside Use.
+        resetCount: root.proxyMode && UsageLogic.accountResetShown(accountData, true) ? UsageLogic.accountResetCount(accountData) : -1
+        resetEnabled: root.resetsActionable && UsageLogic.accountResetActionable(accountData, root.proxyMode)
         quotaMode: root.quotaMode
         warningThreshold: root.warningThreshold
         criticalThreshold: root.criticalThreshold

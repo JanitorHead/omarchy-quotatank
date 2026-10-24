@@ -1221,7 +1221,8 @@ var DEFAULT_SETTINGS = {
   ompLocal: true,
   barAccountMode: "dots",
   motion: "system",
-  accountModes: "{}"
+  accountModes: "{}",
+  hiddenAccounts: "{}"
 }
 
 // Quotatank 2 keeps its private files in omarchy/quotatank; 1.x kept them in omarchy/model-usage, and the
@@ -1426,7 +1427,8 @@ function extraKeyArguments(raw, providerIds) {
 
 // The name on an account card. Omarchy subscription accounts carry the name chosen when they were
 // added (`label`); a provider's extra keys use the names saved in Settings; proxy and unnamed accounts
-// fall back to the email, or "Account N" while account emails are hidden.
+// fall back to the email, or "Account N" while account emails are hidden: N is the account's place among
+// all of the provider's accounts (`accountNumber` once some are hidden, so the others keep theirs).
 function accountName(account, extraRaw, hideEmails, index) {
   if (!account) return ""
   var named = String(account.label || "")
@@ -1438,7 +1440,7 @@ function accountName(account, extraRaw, hideEmails, index) {
   }
   var email = String(account.account || "")
   if (named) return named + (account.label && account.active ? " · in use" : "") + (!hideEmails && email ? " · " + email : "")
-  return hideEmails || !email ? "Account " + index : email
+  return hideEmails || !email ? "Account " + (account.accountNumber || index) : email
 }
 
 // `list` with `id` present or absent, in `order`; ids that `order` does not know are dropped.
@@ -1697,11 +1699,55 @@ function accountPlanLabel(account) {
   return String(account.plan || account.name || account.id || "Account")
 }
 
+// Banked resets (backend contract, `credits`). Codex reports its count, zero included; Claude reports one only
+// while the account has a reset, with when the next one expires and whether Claude lets it be spent now.
+var RESET_PROVIDER_IDS = ["codex", "claude"]
+var CLAUDE_RESET_NOTES = {
+  cooldown: "Claude asks to wait before the next reset.",
+  paused: "Claude has paused this reset.",
+  limit: "Usable once you reach a limit.",
+  unavailable: "Claude is not offering it right now."
+}
+
+function accountResetCount(account) {
+  var count = account && account.credits ? account.credits.resetCreditsAvailable : null
+  return typeof count === "number" && isFinite(count) && count >= 0 && Math.floor(count) === count ? count : null
+}
+
 function accountResetLabel(account) {
-  if (!account || account.id !== "codex" || account.status !== "ok") return ""
-  var count = account.credits && account.credits.resetCreditsAvailable
-  if (typeof count !== "number" || !isFinite(count) || count < 0 || Math.floor(count) !== count) return ""
+  if (!account || !contains(RESET_PROVIDER_IDS, account.id) || account.status !== "ok") return ""
+  var count = accountResetCount(account)
+  if (count === null || (account.id === "claude" && count === 0)) return ""
   return count + " banked reset" + (count === 1 ? "" : "s")
+}
+
+// Whether the account's resets are shown: Claude's wherever it is read, Codex's in CLIProxyAPI mode, where they
+// can be applied.
+function accountResetShown(account, proxyMode) {
+  return accountResetLabel(account) !== "" && (account.id === "claude" || !!proxyMode)
+}
+
+// Whether this widget can apply one of the account's resets: Codex through CLIProxyAPI, Claude with its own
+// sign-in or through CLIProxyAPI when Claude lets the next one be spent now. An account read only through omp
+// keeps its sign-in in omp, so its reset is applied there.
+function accountResetActionable(account, proxyMode) {
+  if (!accountResetShown(account, proxyMode) || !(accountResetCount(account) > 0) || account.origin === "omp") return false
+  return account.id === "codex" || account.credits.resetCreditsUsable === true
+}
+
+// Why a reset the account has cannot be applied from here; "" when it can, or when it has none.
+function accountResetNote(account, proxyMode) {
+  if (!accountResetShown(account, proxyMode) || !(accountResetCount(account) > 0) || accountResetActionable(account, proxyMode))
+    return ""
+  if (account.origin === "omp") return "Apply it in omp: omp usage reset."
+  return CLAUDE_RESET_NOTES[String(account.credits.resetCreditsReason || "")] || CLAUDE_RESET_NOTES.unavailable
+}
+
+// Whether `credits` carries money (a balance, spending or a cap) beside any banked-reset count.
+function creditsHaveFunds(credits) {
+  if (!credits) return false
+  return ["remaining", "used", "limit", "total"].some(function(key) { return credits[key] !== null && credits[key] !== undefined })
+    || credits.unlimited === true
 }
 
 function accountWindows(account, expanded) {
@@ -2735,6 +2781,99 @@ function setAccountMode(raw, providerId, mode) {
 
 function accountModeLabel(mode) {
   return mode === "single" ? "One at a time" : mode === "together" ? "Together" : "Automatic"
+}
+
+// Accounts hidden under Settings → Providers → Customize (`hiddenAccounts`, a JSON object of provider id →
+// account ids, as text or already parsed). A hidden account stays signed in and keeps its key; it is only
+// left out of Limits, the menu bar and the notices. The one reading of the setting.
+var HIDDEN_ACCOUNT_LIMIT = 32
+
+function parseHiddenAccounts(raw) {
+  var parsed = raw
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw === "string") {
+    if (raw.length > 65536) return {}
+    try { parsed = JSON.parse(raw) } catch (error) { return {} }
+  }
+  if (!parsed || typeof parsed !== "object" || isListLike(parsed)) return {}
+  var result = {}
+  var providerIds = Object.keys(parsed)
+  for (var i = 0; i < providerIds.length; i++) {
+    var rows = parsed[providerIds[i]]
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(providerIds[i]) || !isListLike(rows)) continue
+    var ids = []
+    for (var j = 0; j < rows.length && ids.length < HIDDEN_ACCOUNT_LIMIT; j++)
+      if (typeof rows[j] === "string" && rows[j] !== "" && rows[j].length <= 128 && ids.indexOf(rows[j]) < 0) ids.push(rows[j])
+    if (ids.length) result[providerIds[i]] = ids
+  }
+  return result
+}
+
+function setAccountHidden(raw, providerId, accountId, hidden) {
+  var all = parseHiddenAccounts(raw)
+  var id = String(accountId)
+  var ids = (all[providerId] || []).filter(function (known) { return known !== id })
+  if (hidden && ids.length < HIDDEN_ACCOUNT_LIMIT) ids.push(id)
+  if (ids.length) all[providerId] = ids
+  else delete all[providerId]
+  return JSON.stringify(all)
+}
+
+function accountHidden(raw, providerId, accountId) {
+  return (parseHiddenAccounts(raw)[String(providerId)] || []).indexOf(String(accountId)) >= 0
+}
+
+// A provider's reading without its hidden accounts. Its provider-level fields describe the active account
+// that is left (else the first that read fine, else the first), and a single account left is the reading
+// on its own, without `accounts`. Hiding every account changes nothing: turning the provider off does that.
+function visibleAccountsReading(provider, hiddenIds) {
+  var accounts = listOrEmpty(provider && provider.accounts)
+  var hidden = listOrEmpty(hiddenIds)
+  if (!hidden.length || accounts.length < 2) return provider
+  var kept = accounts.filter(function (account) { return hidden.indexOf(String(account && account.accountId || "")) < 0 })
+  if (kept.length === accounts.length || kept.length === 0) return provider
+  var lead = -1
+  for (var i = 0; i < kept.length && lead < 0; i++) if (kept[i].active === true) lead = i
+  for (var j = 0; j < kept.length && lead < 0; j++) if (kept[j].status === "ok") lead = j
+  if (lead < 0) lead = 0
+  // Fields no account carries (omp's pool, Omarchy's account switch) belong to the provider and stay.
+  var accountKeys = {}
+  accounts.forEach(function (account) { Object.keys(account || {}).forEach(function (key) { accountKeys[key] = true }) })
+  var summary = Object.assign({}, kept[lead])
+  Object.keys(provider).forEach(function (key) { if (!accountKeys[key] && key !== "accounts") summary[key] = provider[key] })
+  if (kept.length < 2) {
+    delete summary.accounts
+    delete summary.accountCount
+    return summary
+  }
+  // Unnamed accounts keep the number they had before others were hidden ("Account 3" stays Account 3).
+  summary.accounts = kept.map(function (account) {
+    return Object.assign({}, account, { accountCount: kept.length, accountNumber: accounts.indexOf(account) + 1 })
+  })
+  summary.accountCount = kept.length
+  return summary
+}
+
+function withoutHiddenAccounts(providers, raw) {
+  var list = listOrEmpty(providers)
+  var hidden = parseHiddenAccounts(raw)
+  if (!Object.keys(hidden).length) return list
+  return Array.prototype.map.call(list, function (provider) {
+    return provider && hidden[provider.id] ? visibleAccountsReading(provider, hidden[provider.id]) : provider
+  })
+}
+
+var ACCOUNT_ORIGIN_TEXT = { omarchy: "Omarchy login", signin: "sign-in", key: "API key", proxy: "CLIProxyAPI", omp: "omp" }
+
+// An account's line in Settings → Customize: its name and where it is read from ("Account 2 · omp",
+// "Work · Omarchy login + omp"), so two readings of one account tell apart.
+function accountSettingsLabel(account, extraRaw, hideEmails, index) {
+  if (!account) return ""
+  var name = String(accountName(account, extraRaw, hideEmails, index + 1)).replace(/ · in use(?= · |$)/, "")
+  var origins = listOrEmpty(account.origins).length ? listOrEmpty(account.origins) : [account.origin]
+  var where = Array.prototype.map.call(origins, function (origin) { return ACCOUNT_ORIGIN_TEXT[origin] || "" })
+    .filter(function (text) { return text !== "" })
+  return where.length ? name + " · " + where.join(" + ") : name
 }
 
 // ---- 1.9 QmlLimits ----

@@ -37,7 +37,7 @@ a row or a dot for each and scans its lists on the thread that draws the whole d
 every list a helper gives the shell has an item ceiling, applied in the helper and again where
 the shell reads it: 64 providers, 64 accounts per provider and 16 limits per account; in
 Costs, 48 models plus an "Other models" row per provider, 12 projects plus "Other", and the
-periods of the selected range; and the 8 banked Codex resets that expire soonest. A login
+periods of the selected range; the 8 banked Codex resets that expire soonest, and 16 of Claude's reset grants. A login
 registry or a list of extra keys is cut before anything is read (64 logins, 8 keys).
 Unexpected collector errors use fixed display messages rather than raw exception
 details, which can contain credential or account data.
@@ -86,7 +86,7 @@ where `XDG_CONFIG_HOME` defaults to `~/.config`). This user-provided credential
 is separate from generated state. The key is sent only to the configured
 management server, under the rule for secrets below; redirects are rejected.
 Upstream provider tokens stay on CLIProxyAPI, which substitutes `$TOKEN$` for
-quota calls and explicitly confirmed Codex banked-reset actions. Management responses and account checks are bounded.
+quota calls and explicitly confirmed Codex and Claude banked-reset actions. Management responses and account checks are bounded.
 The backend never downloads auth files or stores their raw metadata. The backend does not request client API keys or the model catalog.
 
 Four secrets go to servers the user names: the CLIProxyAPI management key, the CPA
@@ -216,10 +216,16 @@ no credential is touched), **Copy** beside a setup command runs `wl-copy` with t
 command as its argument, and the motion setting reads `hyprctl -j getoption
 animations:enabled`. None goes through a shell.
 
-Banked resets use fixed upstream URLs and explicit managed account selection.
-The account identity is checked again before consumption. Each logical reset
-attempt has a UUID reused for retries; automatic polling cannot consume a reset.
-Reset credit IDs and pending retry state are held in memory, not quota history.
+Banked resets use fixed upstream URLs and explicit account selection: a managed
+CLIProxyAPI account, or for Claude a Claude Code sign-in on this computer. Accounts
+read only through omp are not offered; omp holds their sign-in. The account identity
+is checked again before consumption. Each logical reset attempt has a UUID reused for
+retries; automatic polling cannot consume a reset, and the usage reader only lists
+Claude's resets (a GET). Reset credit IDs and pending retry state are held in memory,
+not quota history. Claude lists its banked resets only to Claude Code, so Claude's
+usage, profile and reset requests send Claude Code's User-Agent
+(`claude-cli/<version> (external, cli)`), as omp does; no other client detail is
+imitated, and the token is still sent only to `api.anthropic.com`.
 
 Account usernames and emails are hidden by default in the UI via `hideAccountEmails`.
 The setting affects display only; account labels remain in the in-memory backend

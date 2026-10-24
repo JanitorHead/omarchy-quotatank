@@ -28,6 +28,9 @@ import subprocess
 import sys
 import tempfile
 
+# Nothing may be written beside the scripts: Omarchy reloads every plugin when a file in a plugin's folder changes.
+sys.dont_write_bytecode = True
+
 from quotatank_common import config_folder, open_private_directory
 
 

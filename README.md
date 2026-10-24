@@ -85,17 +85,19 @@ Every source of a second account shows the same way:
 - **Claude Code, Codex, and Grok accounts added with Omarchy** (`omarchy agent account add claude work`). The account new sessions start with is marked **in use**; **Use** on another runs `omarchy agent account use` for you. The header shows Omarchy's rule: `switches at 95%` or `notifies at 95%`.
 - **Several API keys for one provider.** Under **Settings → Providers**, a provider with a saved key offers **Add another key…**: name it and save it, and it is read on its own.
 - **omp's accounts**, on this computer or through omp's gateway on another. An account you also use directly appears once.
-- **CLIProxyAPI accounts**, each with its plan and its banked Codex resets behind a confirmation.
+- **CLIProxyAPI accounts**, each with its plan and its banked Codex and Claude resets behind a confirmation.
 
 In the menu bar, a dot per account sits beside the chip: filled for the account counted, a ring coloured by each other account's state. Hover the chip for every account's 5-hour and weekly use and its trend. In Limits, each row says what matters now (`spending now`, `used up · back 18:02`, `switched 16:27`) next to a 24-hour trend you can read with the pointer; pick a row for its full detail.
 
-**One at a time or together.** Omarchy accounts are used one at a time, so the chip follows the one in use. Accounts that omp or a proxy spend at once are counted together: the chip shows the one closest to its limit among those spending, rows sort by headroom and slide into place as that changes, and with omp a pool line says how much of the window is left across all of them. **Customize** fixes either mode per provider.
+**One at a time or together.** Omarchy accounts are used one at a time, so the chip follows the one in use. Accounts that omp or a proxy spend at once are counted together: the chip shows the one closest to its limit among those spending, rows sort by headroom and slide into place as that changes, and with omp a pool line says how much of the window is left across all of them. **Customize** fixes either mode per provider, and hides an account you do not want to see.
 
 **Runway.** A card under the limits shows how long each account lasts until the 5-hour reset: one taking over from the other, or all running down side by side, and the gap with nothing left when they run out first.
 
 ## Limits and pace
 
 Every limit card has a meter, a pace tick, and a forecast. The tick marks where even use would be by now, so blocks past it are use ahead of pace. A dashed stretch after the fill shows where the current pace takes the limit before it resets, red when it runs out first; faint marks show your warning and critical levels. Hover the meter for the time it reaches that level at this pace, or when it passed it. A 5-hour limit projects from its recent rate, newest samples weighing most; weekly and monthly limits blend this window's average with the last 24 hours, so one busy hour does not predict a weekly run-out. Hover a card's status line for how the tick and the projection work.
+
+**Banked resets.** When Anthropic grants Claude a reset of its 5-hour and weekly limits (a launch reset, say), a card under the limits counts it and says when it expires. **Apply…** spends it after a confirmation; when Claude holds it back, the card says why.
 
 <details>
 <summary>Every status line</summary>
@@ -196,7 +198,7 @@ Privacy:
 - **Sign in** and **Install and sign in** only run when you press them, in a terminal you can see, with the provider's own sign-in command.
 - Antigravity is read from its own running language server on `127.0.0.1`, using the session token that process was started with, or from `agy`'s usage report. GitHub Copilot can fall back to `gh auth token`. Both commands run without a shell, with a timeout and no browser.
 - Claude Code access tokens last about eight hours. When the saved one has expired, Quotatank runs `claude doctor`, which renews and saves Claude Code's own sign-in without a prompt or a model request, so a computer where you rarely open Claude Code stays signed in. Quotatank never uses Claude's refresh token itself.
-- Applying a banked Codex reset is a separate action in CLIProxyAPI mode, and it asks for confirmation first.
+- Applying a banked reset is a separate action that asks for confirmation first: Codex resets in CLIProxyAPI mode, Claude resets with a Claude Code sign-in or through CLIProxyAPI. Claude lists these resets only to Claude Code, so Claude's usage requests identify as Claude Code (`claude-cli`), as omp does.
 - omp runs only where it is already set up, with fixed arguments, a timeout, and no secrets; it never outlives Quotatank's helper. Its sessions are read for numbers only: provider, model, tokens, cost, and time, never prompts or output.
 - The omp gateway token, the CLIProxyAPI management key, the Keeper password, and T3 tokens go over HTTPS, or over plain HTTP only through Tailscale or to this computer, and there only to a server that runs as you (or root): a port another account on the computer holds gets nothing. Antigravity's session token gets the same check on `127.0.0.1`.
 - **Use** runs `omarchy agent account use`, which changes which login new sessions start with; no credential is touched.

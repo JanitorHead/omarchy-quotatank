@@ -4,6 +4,18 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **Claude's banked resets.** When Anthropic grants a Claude account a reset of its 5-hour and weekly limits (the Claude Opus 5.5 launch gave Pro and Max one), a card under the limits counts it and says when it expires, and **Apply…** spends it after the same confirmation Codex resets use, on a Claude Code sign-in or an Omarchy login; in CLIProxyAPI mode a Claude account's row badge does. The confirmation offers the reset Claude spends next; when Claude holds it back (until a limit is reached, during a cooldown, or paused), the card says why and has no button. An uncertain outcome keeps **Retry same reset** with the same request id. Accounts read only through omp show the count and are applied in omp, which holds their sign-in. Claude lists these resets only to Claude Code, so Claude's usage, profile and reset requests now identify as Claude Code, as omp does.
+- **Hide an account.** **Settings → Providers → Customize → Accounts shown** lists a provider's accounts, each with where it is read from (`sign-in`, `Omarchy login`, `API key`, `omp`, `CLIProxyAPI`), and a switch that leaves one out of Limits, the menu bar and the notices. The account stays signed in and keeps its key, and one always stays shown.
+
+### Fixed
+
+- **Opening Costs reloaded the whole bar.** Python saved compiled copies of the helper scripts in `scripts/__pycache__`, inside the plugin's folder, the first time a script ran after an update. Omarchy reloads every plugin when a file in a plugin's folder changes, so the bar flashed as if just installed. The helpers no longer write anything beside themselves.
+- **An omp API key showed its account twice.** omp names an account by its email, and an API key (OpenCode Go's, for one) has none, so the account omp read with a key sat beside the same account Quotatank reads itself. Such an account is now recognised by its limits: when every one resets at the same second as one of Quotatank's own, and one of those resets is off the hour, it is the same account and shows once.
+
 ## 2.1.4
 
 ### Fixed

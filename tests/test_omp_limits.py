@@ -653,6 +653,41 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(providers[0]["origins"], ["key", "omp"])
         self.assertEqual(providers[0]["ompAccountId"], omp_id("zai", "zai@example.com"))
 
+    def test_an_api_key_without_email_is_the_native_reading_when_its_resets_match(self):
+        # omp reads OpenCode Go with an API key, which names no email: the resets tell it is the same account.
+        def opencode(resets: tuple[int, int]) -> dict:
+            reading = usage.base_provider("opencode")
+            reading.update(account="dev@example.com", source="Native reader", windows=[
+                usage.make_window("session", "5-hour limit", 1, resets[0], 18000),
+                usage.make_window("monthly", "Monthly limit", 2, resets[1], 2592000)])
+            return reading
+
+        providers = [opencode((1893474000, 1895000001))]
+        self.assertEqual(self.merge(providers, ["opencode"]), 1)
+        self.assertNotIn("accounts", providers[0])
+        self.assertEqual((providers[0]["origins"], providers[0]["source"]), (["signin", "omp"], "Native reader"))
+        # The key names no account, so its id comes from its place among omp's reports.
+        self.assertEqual(providers[0]["ompAccountId"], omp_id("opencode-go", "3"))
+        # A 5-hour window nobody has started resets five hours after each reading, so the two differ by the
+        # time between the readings; the monthly reset still tells.
+        idle = opencode((0, 1895000001))
+        idle["windows"][0]["resetsAt"] = usage.utc_timestamp(idle["fetchedAt"]) + 18000
+        providers = [idle]
+        self.merge(providers, ["opencode"])
+        self.assertEqual((providers[0].get("accounts"), providers[0]["origins"]), (None, ["signin", "omp"]))
+        # Resets that are all on the hour can be a boundary every account shares; a different reset is another account.
+        on_the_hour = fixture()
+        for report in on_the_hour["reports"]:
+            for limit in report["limits"]:
+                if limit["id"] == "monthly":
+                    limit["window"]["resetsAt"] = 1895000400000
+        for document in (on_the_hour, fixture()):
+            with self.subTest(monthly=document["reports"][3]["limits"][1]["window"]["resetsAt"]):
+                providers = [opencode((1893474000, 1895000400))]
+                usage.merge_omp(providers, ["opencode"], [document], None, False)
+                self.assertEqual([account["origin"] for account in providers[0]["accounts"]], ["signin", "omp"])
+                self.assertNotIn("origins", providers[0])
+
     def test_omarchy_logins_stay_first_and_gain_omps_other_accounts(self):
         logins = [dict(native("claude", "dev@example.com"), accountId="main", label="Main", primary=True, active=True),
                   dict(native("claude", "second@example.com"), accountId="work", label="Work", primary=False, active=False)]

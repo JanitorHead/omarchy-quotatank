@@ -53,7 +53,7 @@ class ProjectContractTests(unittest.TestCase):
             "warningThreshold", "criticalThreshold",
             "usageSource", "cliproxyUrl", "cliproxyKeyFile", "hideAccountEmails", "squareUsageCards", "providerColors", "notifyLimitThresholds", "costPriceOverrides",
             "costLocalProviders", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers", "extraKeys",
-            "ompLocal", "ompGatewayUrl", "ompGatewayKeyFile", "ompStatsUrl", "barAccountMode", "motion", "accountModes",
+            "ompLocal", "ompGatewayUrl", "ompGatewayKeyFile", "ompStatsUrl", "barAccountMode", "motion", "accountModes", "hiddenAccounts",
             "creditWarningUsd", "creditCriticalUsd", "hideExhaustedProviders", "barMaxChips", "providerQuotaModes", "providerOrder", "dismissedProviders",
         } | key_files)
         self.assertEqual(set(manifest["barWidget"]["defaults"]), keys, "every setting has a default")

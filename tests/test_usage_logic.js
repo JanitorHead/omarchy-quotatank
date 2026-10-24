@@ -154,13 +154,42 @@ assert.equal(context.accountResetLabel({ ...resetAccount, credits: { resetCredit
 for (const count of [undefined, null, -1, 1.5, true, "2", NaN, Infinity])
   assert.equal(context.accountResetLabel({ ...resetAccount, credits: { resetCreditsAvailable: count } }), "");
 assert.equal(context.accountResetLabel({ ...resetAccount, credits: null }), "");
-assert.equal(context.accountResetLabel({ ...resetAccount, id: "claude" }), "");
+assert.equal(context.accountResetLabel({ ...resetAccount, id: "claude" }), "2 banked resets");
+assert.equal(context.accountResetLabel({ ...resetAccount, id: "claude", credits: { resetCreditsAvailable: 0 } }), "",
+  "Claude shows its banked resets only while it has one");
+assert.equal(context.accountResetLabel({ ...resetAccount, id: "kimi" }), "");
 assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }), "");
 const resetFailure = { ...resetAccount, status: "error", credits: null, message: "Timeout" };
 const resetStale = context.preserveProxyReadings({ source: "cliproxy", providers: [{ ...resetAccount, accounts: [resetAccount] }] },
   { source: "cliproxy", providers: [{ ...resetFailure, accounts: [resetFailure] }] });
 assert.equal(context.accountResetLabel(resetStale.providers[0].accounts[0]), "2 banked resets");
 assert.equal(resetStale.providers[0].accounts[0].stale, true);
+
+// Where a banked reset can be applied from: Codex through the proxy only; Claude with its own sign-in or the
+// proxy, when Claude lets the next one be spent now; never an account whose sign-in lives in omp.
+{
+  const claude = (credits, extra) => ({ ...provider("claude", 40), credits: { resetCreditsAvailable: 1, ...credits }, ...extra });
+  const usable = claude({ resetCreditsUsable: true, resetCreditsReason: "" });
+  assert.equal(context.accountResetShown(usable, false), true);
+  assert.equal(context.accountResetActionable(usable, false), true, "a Claude Code sign-in applies its own reset");
+  assert.equal(context.accountResetActionable(usable, true), true);
+  assert.equal(context.accountResetNote(usable, false), "");
+  const waiting = claude({ resetCreditsUsable: false, resetCreditsReason: "limit" });
+  assert.equal(context.accountResetActionable(waiting, false), false);
+  assert.equal(context.accountResetNote(waiting, false), "Usable once you reach a limit.");
+  assert.equal(context.accountResetNote(claude({ resetCreditsUsable: false, resetCreditsReason: "surprise" }), false),
+    "Claude is not offering it right now.", "an unknown reason reads as not offered");
+  const viaOmp = claude({ resetCreditsUsable: true }, { origin: "omp" });
+  assert.equal(context.accountResetActionable(viaOmp, false), false, "omp keeps that sign-in");
+  assert.equal(context.accountResetNote(viaOmp, false), "Apply it in omp: omp usage reset.");
+  assert.equal(context.accountResetActionable(claude({}), false), false, "a count from omp alone is not usable here");
+  assert.equal(context.accountResetShown(resetAccount, false), false, "Codex resets show in CLIProxyAPI mode");
+  assert.equal(context.accountResetActionable(resetAccount, true), true);
+  assert.equal(context.accountResetActionable({ ...resetAccount, origin: "omp" }, true), false);
+  assert.equal(context.accountResetActionable({ ...resetAccount, credits: { resetCreditsAvailable: 0 } }, true), false);
+  assert.equal(context.creditsHaveFunds(usable.credits), false);
+  assert.equal(context.creditsHaveFunds({ used: 4, limit: 50, resetCreditsAvailable: 1 }), true);
+}
 
 const customRows = [{model: " vendor/Model[1m] ", inputCostPerMillionTokens: "2",
   outputCostPerMillionTokens: "8", cacheReadCostPerMillionTokens: "0", cacheWriteCostPerMillionTokens: ""}];
@@ -1316,6 +1345,45 @@ console.log("Provider setup: passed");
   assert.equal(context.setAccountMode('{"claude":"together"}', "claude", "auto"), "{}", "Automatic removes the override");
   assert.equal(context.accountModeLabel("single") + "/" + context.accountModeLabel("together") + "/" + context.accountModeLabel(undefined),
     "One at a time/Together/Automatic");
+
+  // Hidden accounts: Limits, the bar and the notices read the provider without them.
+  const withOmp = {
+    id: "opencode", status: "ok", accountId: "main", active: true, account: "dev@example.com", windows: [{ id: "session", used: 10 }],
+    pool: { source: "omp", windows: [] }, accountCount: 3,
+    accounts: [
+      { id: "opencode", status: "ok", accountId: "main", active: true, origin: "signin", account: "dev@example.com", windows: [{ id: "session", used: 10 }], accountCount: 3 },
+      { id: "opencode", status: "error", accountId: "omp-aaaaaaaaaaaa", active: false, origin: "omp", windows: [], accountCount: 3 },
+      { id: "opencode", status: "ok", accountId: "omp-bbbbbbbbbbbb", active: false, origin: "omp", windows: [{ id: "session", used: 70 }], accountCount: 3 },
+    ],
+  };
+  const hideOne = context.setAccountHidden("{}", "opencode", "omp-aaaaaaaaaaaa", true);
+  assert.equal(hideOne, '{"opencode":["omp-aaaaaaaaaaaa"]}');
+  const twoLeft = context.withoutHiddenAccounts([withOmp], hideOne)[0];
+  assert.deepEqual(plain(twoLeft.accounts.map((account) => [account.accountId, account.accountCount])),
+    [["main", 2], ["omp-bbbbbbbbbbbb", 2]]);
+  assert.equal(twoLeft.accountCount, 2);
+  assert.equal(withOmp.accounts.length, 3, "the backend's reading is left as it was, for Settings to list");
+  assert.equal(context.accountName(twoLeft.accounts[1], "{}", true, 2), "Account 3", "an unnamed account keeps its number");
+  // One account left is the reading on its own, as a provider with one account reads; omp's pool stays.
+  const single = context.withoutHiddenAccounts([withOmp],
+    context.setAccountHidden(hideOne, "opencode", "omp-bbbbbbbbbbbb", true))[0];
+  assert.equal(single.accounts, undefined);
+  assert.equal(single.accountCount, undefined);
+  assert.deepEqual([single.accountId, single.windows[0].used, single.pool.source], ["main", 10, "omp"]);
+  // Hiding the active account hands the summary to the first other one that read fine.
+  const leadHidden = context.withoutHiddenAccounts([withOmp], '{"opencode":["main"]}')[0];
+  assert.deepEqual([leadHidden.accountId, leadHidden.windows[0].used, leadHidden.account], ["omp-bbbbbbbbbbbb", 70, undefined],
+    "the hidden account's fields do not linger in the summary");
+  // Hiding every account changes nothing (turning the provider off does that), and so does an unknown id.
+  const all = '{"opencode":["main","omp-aaaaaaaaaaaa","omp-bbbbbbbbbbbb"]}';
+  assert.equal(context.withoutHiddenAccounts([withOmp], all)[0], withOmp);
+  assert.equal(context.withoutHiddenAccounts([withOmp], '{"opencode":["k-00000000"]}')[0], withOmp);
+  assert.equal(context.setAccountHidden(hideOne, "opencode", "omp-aaaaaaaaaaaa", false), "{}", "showing the last hidden one forgets the provider");
+  assert.deepEqual(plain(context.parseHiddenAccounts('{"opencode":["main","main",7,""],"Bad Id":["main"],"codex":"main"}')),
+    { opencode: ["main"] });
+  assert.equal(context.accountSettingsLabel(withOmp.accounts[2], "{}", true, 2), "Account 3 · omp");
+  assert.equal(context.accountSettingsLabel({ ...withOmp.accounts[0], origins: ["signin", "omp"] }, "{}", false, 0),
+    "dev@example.com · sign-in + omp");
 
   // The 1.7.3 clipboard rule: an editable TextInput (what TextField is built on) fetches every clipboard
   // change, so the only text input in the widget is SettingsField's read-only secret field.

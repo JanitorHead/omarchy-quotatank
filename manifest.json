@@ -169,7 +169,8 @@
       "ompStatsUrl": "",
       "barAccountMode": "dots",
       "motion": "system",
-      "accountModes": "{}"
+      "accountModes": "{}",
+      "hiddenAccounts": "{}"
     },
     "schema": [
       {
@@ -1463,6 +1464,13 @@
         "label": "Account use per provider",
         "defaultValue": "{}",
         "description": "Managed by Settings → Providers → Customize. Per provider, whether its accounts are used one at a time or together; absent means automatic."
+      },
+      {
+        "key": "hiddenAccounts",
+        "type": "string",
+        "label": "Hidden accounts per provider",
+        "defaultValue": "{}",
+        "description": "Managed by Settings → Providers → Customize. Per provider, the accounts left out of Limits, the menu bar and the notices; they stay signed in."
       }
     ]
   }

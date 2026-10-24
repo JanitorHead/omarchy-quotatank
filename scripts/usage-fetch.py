@@ -42,6 +42,9 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 from xml.etree import ElementTree
 
+# Nothing may be written beside the scripts: Omarchy reloads every plugin when a file in a plugin's folder changes.
+sys.dont_write_bytecode = True
+
 from quotatank_common import (
     FOREIGN_LOCAL_SERVER, OMP_PROVIDERS, PLAIN_HTTP_SECRET, SECRET_LOOKUP_SECONDS, CheckedAddresses,
     ForeignLocalServer, atomic_write_json, clean_message, config_folder, foreign_local_server, omp_account_id,
@@ -482,6 +485,89 @@ def claude_scope_name(entry: dict[str, Any]) -> str:
     return ""
 
 
+# Banked resets: resets of the 5-hour and weekly limits that Anthropic grants (for a launch, say) and that the
+# account spends when it chooses. Its `cedar_ember` program lists them in the usage answer asked with
+# `cedar_ember=1`, and only to Claude Code: to another User-Agent the account reads `eligible: false` with
+# `ineligible_reason: "surface"`, so this reader identifies as Claude Code does, as omp does too. omp also adds
+# `skip_spend=1`, which would drop the extra-usage figures this reader shows, so it is left out.
+CLAUDE_CODE_USER_AGENT = "claude-cli/2.1.302 (external, cli)"
+CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
+CLAUDE_RESET_PROGRAM = "cedar_ember"
+CLAUDE_GRANT_ID = re.compile(r"[a-z0-9_-]{1,80}")
+MAX_CLAUDE_GRANTS = 16
+
+
+def claude_headers(access_token: str) -> dict[str, str]:
+    return {"Authorization": "Bearer " + access_token, "anthropic-beta": "oauth-2025-04-20",
+            "Accept": "application/json", "User-Agent": CLAUDE_CODE_USER_AGENT}
+
+
+def claude_grant(raw: Any) -> dict[str, Any] | None:
+    """One banked-reset grant, or None when any field it is spent by is malformed."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not CLAUDE_GRANT_ID.fullmatch(raw["id"]):
+        return None
+    left = raw.get("resets_left")
+    clears = raw.get("clears", [])
+    if type(left) is not int or left < 0 or not isinstance(clears, list) or not all(isinstance(scope, str) for scope in clears):
+        return None
+    flags = {name: raw.get(name, default) for name, default in
+             (("paused", False), ("usable_now", False), ("use_requires_limit", True))}
+    if not all(isinstance(value, bool) for value in flags.values()):
+        return None
+    label = raw.get("label")
+    return {"id": raw["id"], "label": clean_message(label) if isinstance(label, str) else "", "left": left,
+            "grantedAt": epoch_seconds(raw.get("starts_at")), "expiresAt": epoch_seconds(raw.get("ends_at")),
+            "clears": clears[:8], "paused": flags["paused"], "usableNow": flags["usable_now"],
+            "requiresLimit": flags["use_requires_limit"]}
+
+
+def claude_banked_resets(payload: Any, now: float | None = None) -> dict[str, Any] | None:
+    """The banked resets in a usage answer asked with `cedar_ember=1`, or None when it has none to tell (no such
+    program for the account, a client Claude does not offer them to, or a malformed list).
+
+    `available` counts the resets left in grants that have not expired. Claude spends one grant at a time,
+    `next_grant_id`: `next` is that grant, `usable` whether it can be spent now (as omp decides: the account is
+    eligible, no cooldown runs, and the grant is usable now, not paused, not expired and not used up) and
+    `reason` why not: "ineligible", "cooldown", "paused", "limit" (it waits for a limit to be reached) or
+    "unavailable"."""
+    status = payload.get(CLAUDE_RESET_PROGRAM) if isinstance(payload, dict) else None
+    if not isinstance(status, dict) or not isinstance(status.get("eligible"), bool) or not status["eligible"]:
+        return None
+    raw_grants = status.get("grants") if status.get("grants") is not None else []
+    if not isinstance(raw_grants, list):
+        return None
+    now = time.time() if now is None else now
+    grants = [grant for grant in map(claude_grant, raw_grants[:MAX_CLAUDE_GRANTS]) if grant is not None]
+    live = [grant for grant in grants if grant["expiresAt"] is None or grant["expiresAt"] > now]
+    following = next((grant for grant in live if grant["id"] == status.get("next_grant_id")), None)
+    cooldown = epoch_seconds(status.get("cooldown_until"))
+    if following is None or following["left"] == 0:
+        reason = "unavailable"
+    elif cooldown is not None and cooldown > now:
+        reason = "cooldown"
+    elif following["paused"]:
+        reason = "paused"
+    elif not following["usableNow"]:
+        reason = "limit" if following["requiresLimit"] and status.get("at_limit") is not True else "unavailable"
+    else:
+        reason = ""
+    return {"available": sum(grant["left"] for grant in live), "next": following, "usable": reason == "",
+            "reason": reason}
+
+
+def claude_reset_credits(resets: dict[str, Any] | None, credits: dict[str, Any] | None) -> dict[str, Any] | None:
+    """`credits` with the banked-reset fields of `resets` (backend contract, `credits`): only while the account
+    has a reset to spend, so an account without one shows nothing new."""
+    if resets is None or resets["available"] <= 0:
+        return credits
+    following = resets["next"]
+    credits = credits or {"label": "Banked resets", "currency": "", "used": None, "limit": None, "remaining": None,
+                          "total": None, "unlimited": False}
+    return {**credits, "resetCreditsAvailable": resets["available"],
+            "resetCreditsExpiresAt": following["expiresAt"] if following else None,
+            "resetCreditsUsable": resets["usable"], "resetCreditsReason": resets["reason"]}
+
+
 def parse_claude_usage(payload: Any) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     if not isinstance(payload, dict):
         raise ProviderFailure("malformed", "Claude returned an unexpected usage payload.")
@@ -568,7 +654,7 @@ def parse_claude_usage(payload: Any) -> tuple[list[dict[str, Any]], dict[str, An
             "unlimited": unlimited,
             "resetCreditsAvailable": None,
         }
-    return windows, credits
+    return windows, claude_reset_credits(claude_banked_resets(payload), credits)
 
 
 def claude_config_dir() -> Path:
@@ -620,15 +706,7 @@ def renew_claude_login(timeout: float, home: Path | None = None) -> None:
 
 
 def request_claude_usage(login: dict[str, Any], timeout: float) -> Any:
-    return http_json(
-        "https://api.anthropic.com/api/oauth/usage",
-        {
-            "Authorization": "Bearer " + login["accessToken"],
-            "anthropic-beta": "oauth-2025-04-20",
-            "Accept": "application/json",
-        },
-        timeout,
-    )
+    return http_json(CLAUDE_USAGE_URL, claude_headers(login["accessToken"]), timeout)
 
 
 def claude_signed_in_email(home: Path | None) -> str:
@@ -7604,8 +7682,8 @@ def fetch_cliproxy_account(provider_id: str, entry: dict[str, Any], client: CliP
         return result
     try:
         if provider_id == "claude":
-            payload = client.usage(entry, "https://api.anthropic.com/api/oauth/usage",
-                                   {"anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code/2.1.0 (external, cli)"}, timeout)
+            payload = client.usage(entry, CLAUDE_USAGE_URL,
+                                   {"anthropic-beta": "oauth-2025-04-20", "User-Agent": CLAUDE_CODE_USER_AGENT}, timeout)
             windows, credits = parse_claude_usage(payload)
             plan = claude_plan(entry)
         elif provider_id == "codex":
@@ -8566,6 +8644,36 @@ def stand_in_omp_reading(native: dict[str, Any], entry: dict[str, Any]) -> None:
     native["notice"] = failure or entry["notice"]
 
 
+def anchored_resets(reading: dict[str, Any]) -> list[dict[str, Any]]:
+    """The reading's windows whose reset belongs to the account. A rolling window nobody has started yet resets one
+    window length after the moment it was read, so its reset says when the reading was taken, not whose it is."""
+    fetched = utc_timestamp(reading.get("fetchedAt"))
+    return [window for window in dict_list(reading.get("windows")) if isinstance(window.get("resetsAt"), int)
+            and not (fetched and window.get("windowSeconds")
+                     and abs(window["resetsAt"] - fetched - window["windowSeconds"]) <= 2)]
+
+
+def same_limits(native: dict[str, Any], entry: dict[str, Any]) -> bool:
+    """Whether an omp account that names no email (an API key) is the native reading itself.
+
+    Both read fine, every limit omp reports resets within a second of a native limit of the same length, and at
+    least one of those resets is off the hour: a reset on the hour can be a calendar boundary that every account
+    shares, while one at an odd second is anchored to this account's own use. Rolling windows not started yet on
+    either side are left out (anchored_resets)."""
+    if native.get("status") != "ok" or entry.get("status") != "ok":
+        return False
+    ours = anchored_resets(native)
+    own_reset = False
+    for window in anchored_resets(entry):
+        twin = next((mine for mine in ours if abs(mine["resetsAt"] - window["resetsAt"]) <= 1
+                     and (not mine.get("windowSeconds") or not window.get("windowSeconds")
+                          or mine["windowSeconds"] == window["windowSeconds"])), None)
+        if twin is None:
+            return False
+        own_reset = own_reset or twin["resetsAt"] % 3600 != 0
+    return own_reset
+
+
 def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
                        accounts: list[tuple[OmpIdentity, dict[str, Any]]], cliproxy: bool) -> dict[str, Any] | None:
     """The provider's result with its omp accounts merged in (backend contract, "omp accounts")."""
@@ -8581,7 +8689,13 @@ def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
     for (email, _account, _org), entry in accounts:
         # A native reading of the same account is the more reliable one and stays. It lists both origins, and
         # keeps the id the omp account would have had, which live omp requests name (scripts/omp-live.py).
+        # An omp account without an email (an API key) is matched by its resets instead.
         matches = [native for native in natives if email and str(native.get("account") or "").strip().lower() == email]
+        if not email:
+            twin = next((native for native in natives if same_limits(native, entry)), None)
+            # The provider-level reading and its entry under `accounts` are one account: both note omp.
+            matches = [native for native in natives if twin is not None and (native is twin or (
+                twin.get("accountId") and native.get("accountId") == twin.get("accountId")))]
         for native in matches:
             native["origins"] = [native_origin(provider, native, cliproxy), "omp"]
             native.setdefault("ompAccountId", entry["accountId"])

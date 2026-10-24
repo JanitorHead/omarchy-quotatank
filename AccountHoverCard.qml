@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 
 // Hover card of a menu bar chip whose provider has two or more accounts (DESIGN §2.4), drawn from
@@ -19,9 +20,9 @@ Ui.BorderSurface {
   property string quotaMode: "Used"
   property int warningThreshold: 25
   property int criticalThreshold: 10
-  property color foreground: Color.popups.text
-  property color urgent: Color.urgent
-  property color accent: Color.accent
+  property color foreground: Commons.Color.popups.text
+  property color urgent: Commons.Color.urgent
+  property color accent: Commons.Color.accent
   property color dim: Qt.darker(foreground, 1.55)
   property string fontFamily: Style.font.family
   property string clockFormat: "HH:mm"
@@ -43,8 +44,8 @@ Ui.BorderSurface {
 
   implicitWidth: contentWidth + contentLeftInset + contentRightInset
   implicitHeight: body.implicitHeight + contentTopInset + contentBottomInset
-  color: Color.popups.background
-  borderSpec: Border.localOrSurfaceSpec("popups", "border", Color.popups.border, Color.popups.border, Math.max(1, Style.space(2)))
+  color: Commons.Color.popups.background
+  borderSpec: Border.localOrSurfaceSpec("popups", "border", Commons.Color.popups.border, Commons.Color.popups.border, Math.max(1, Style.space(2)))
   padding: Style.spacing.popupPadding
   radius: Style.cornerRadius
   transformOrigin: barPosition === "bottom" ? Item.Bottom : Item.Top

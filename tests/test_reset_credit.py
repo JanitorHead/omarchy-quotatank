@@ -145,7 +145,7 @@ class ResetTests(unittest.TestCase):
                 key = Path(temporary) / "key"
                 key.write_text("synthetic-management-key")
                 key.chmod(0o600)
-                command = [sys.executable, str(SCRIPT), "--account-id", self.account_id,
+                command = [sys.executable, str(SCRIPT), "--provider", "codex", "--source", "cliproxy", "--account-id", self.account_id,
                            "--cliproxy-url", f"http://127.0.0.1:{server.server_port}", "--cliproxy-key-file", str(key)]
                 details = json.loads(subprocess.check_output(command + ["--action", "prepare"]))
                 consume = command + ["--action", "consume", "--target", details["target"],

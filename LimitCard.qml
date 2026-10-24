@@ -35,12 +35,12 @@ Ui.BorderSurface {
     ? UsageLogic.windowRemaining(root.window)
     : UsageLogic.windowUsed(root.window)
   readonly property bool known: shown !== null && shown !== undefined
-  readonly property alias meter: meter
-  readonly property string scrubText: !meter.scrubbing ? ""
-    : meter.scrubOnTick && UsageLogic.paceShowsMark(root.pace)
+  readonly property alias meter: blockMeter
+  readonly property string scrubText: !blockMeter.scrubbing ? ""
+    : blockMeter.scrubOnTick && UsageLogic.paceShowsMark(root.pace)
       ? "now " + root.clock(root.nowSeconds) + " · " + UsageLogic.expectedText(root.pace, root.quotaMode)
         + " · " + UsageLogic.paceBadgeText(root.pace)
-      : UsageLogic.scrubText(UsageLogic.meterScrub(root.window, meter.scrubFraction * 100, root.quotaMode, root.nowSeconds),
+      : UsageLogic.scrubText(UsageLogic.meterScrub(root.window, blockMeter.scrubFraction * 100, root.quotaMode, root.nowSeconds),
         root.quotaMode, root.clock)
 
   readonly property bool stressed: severity === "warning" || severity === "critical"
@@ -134,7 +134,7 @@ Ui.BorderSurface {
     }
 
     BlockMeter {
-      id: meter
+      id: blockMeter
       objectName: "limitMeter"
       visible: UsageLogic.meterFill(root.window, root.quotaMode) !== null
       width: parent.width
@@ -231,11 +231,11 @@ Ui.BorderSurface {
   Ui.BorderSurface {
     id: scrubChip
     objectName: "limitScrubReadout"
-    readonly property real anchorX: meter.x + limitContent.x + meter.scrubX
+    readonly property real anchorX: blockMeter.x + limitContent.x + blockMeter.scrubX
     visible: root.scrubText !== ""
     z: 2
     x: Math.round(Math.max(0, Math.min(root.width - width, anchorX - width / 2)))
-    y: Math.round(limitContent.y + meter.y - height - Style.spacing.md - meter.tickOvershoot * 2)
+    y: Math.round(limitContent.y + blockMeter.y - height - Style.spacing.md - blockMeter.tickOvershoot * 2)
     implicitWidth: scrubLabel.implicitWidth + contentLeftInset + contentRightInset
     implicitHeight: scrubLabel.implicitHeight + contentTopInset + contentBottomInset
     width: implicitWidth
