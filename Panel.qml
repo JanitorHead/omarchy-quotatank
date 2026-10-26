@@ -891,7 +891,7 @@ Ui.Panel {
     return "Next reading in " + Math.ceil(seconds / 60) + " min"
   }
 
-  visible: true
+  visible: UsageLogic.onScreen(setting("barScreens", "[]"), QsWindow.window ? QsWindow.window.screen : null)
   implicitWidth: percentageMode ? percentageGroup.implicitWidth : iconButton.implicitWidth
   implicitHeight: percentageMode ? percentageGroup.implicitHeight : iconButton.implicitHeight
   // Bar draws the open-panel mark at this width (otherwise it falls back to

@@ -44,6 +44,22 @@ function listOrEmpty(value) {
   return isListLike(value) ? value : []
 }
 
+// barScreens entries match a screen's connector name, model or serial number (Hyprland passes no serial); an empty list means every screen.
+function onScreen(screens, screen) {
+  var wanted = screens
+  if (typeof wanted === "string") {
+    try { wanted = JSON.parse(wanted) } catch (error) { wanted = [] }
+  }
+  wanted = listOrEmpty(wanted)
+  if (Number(wanted.length) === 0) return true
+  if (!screen) return false
+  var names = [screen.name, screen.model, screen.serialNumber].map(function(value) { return String(value || "") })
+  for (var i = 0; i < wanted.length; i++) {
+    if (String(wanted[i]) !== "" && names.indexOf(String(wanted[i])) !== -1) return true
+  }
+  return false
+}
+
 function firstItems(value, limit) {
   var source = listOrEmpty(value)
   var count = Math.max(0, Math.min(Number(source.length), Math.floor(Number(limit) || 0)))
@@ -1208,6 +1224,7 @@ var DEFAULT_SETTINGS = {
   providerQuotaModes: "{}",
   barProviderLimits: "{}",
   barDisplayMode: "Percentages",
+  barScreens: "[]",
   barWindow: "auto",
   barWindowSecondary: "none",
   barShowResets: false,
