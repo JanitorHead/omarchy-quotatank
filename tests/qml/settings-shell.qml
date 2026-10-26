@@ -286,6 +286,15 @@ ShellRoot {
       check(saved.hiddenAccounts === "{}" && shown("showAccount-claude-0").enabled, "turning it back on forgets it")
       check(!find(form, "showAccount-codex-0"), "a provider with one account lists none")
       check(form.providersSummary().indexOf("· omp") > 0, "the index says omp adds accounts")
+      formPhase = 7
+    } else if (formPhase === 7) {
+      form.page = "bar"
+      check(shown("barShowPeriodsToggle").checked, "chips show their limit period by default")
+      shown("barShowPeriodsToggleSwitch").toggled()
+      check(saved.barShowPeriods === false && !shown("barShowPeriodsToggle").checked, "Show limit period turns the tag off")
+      shown("barShowPeriodsToggleSwitch").toggled()
+      check(saved.barShowPeriods === true, "and back on")
+      form.page = "providers"
       formPhase = 99
     }
   }

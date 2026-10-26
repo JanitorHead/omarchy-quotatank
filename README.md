@@ -128,7 +128,7 @@ When something is wrong, the panel says what and what to do: a used-up limit nam
 
 ![The menu bar chip in eight states: two accounts with the one in use filled; spending now with a soft halo; near the limit with an arrow to Personal; every account used up with a clock to the reset; five accounts as three dots and a count; two accounts used together; an old reading faded with dashed rings; and one chip per account](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/menu-bar.png)
 
-- **Limit shown** picks the window every chip shows. The default is each provider's most constrained limit; 5-hour, 7-day, and monthly pin one window. Every line is tagged with its period (`7d 91%`).
+- **Limit shown** picks the window every chip shows. The default is each provider's most constrained limit; 5-hour, 7-day, and monthly pin one window. Every line is tagged with its period (`7d 91%`); turn off **Show limit period** for narrower chips without the tag.
 - **Second limit below** stacks a second limit under the first; **Show when limits reset** appends when each line resets.
 - **Accounts** keeps one chip per provider with a dot per account, or gives each account its own chip.
 - **Hide providers that are used up** takes a provider out of the bar until its weekly or monthly limit resets.
@@ -183,7 +183,7 @@ The gear opens an index of six pages, and each row already says what the page is
 | Page | What lives there |
 |---|---|
 | **Providers** | The source (local sign-ins or a CLIProxyAPI server). **Found on this computer** offers sign-ins Quotatank detected but is not monitoring, with **Monitor** and **Ignore**. **Monitored** gives each provider in use its own card with its mark: what the last check found (`Connected · Claude Max 20x`, `Sign-in expired`, `No key saved`) and, when signed out, a **Sign in** or **Install and sign in** button; a grip to drag it into the order tiles and chips follow; **Monitor** and **Menu bar** switches; its key editor when it takes an API key; and **Customize** to read it as used or left and pin the limits its chip shows. **More providers** folds away everything else, filterable by name, with the same buttons, a link to get each tool, and a link to each provider's key page. Last, **omp**: read its accounts here, or through its gateway on another computer |
-| **Menu bar** | Chips or the widget icon, the limit each chip shows, a second limit, reset times and formats, one chip per provider or per account, how many chips the bar holds, hiding used-up providers |
+| **Menu bar** | Chips or the widget icon, the limit each chip shows, a second limit, the period tag, reset times and formats, one chip per provider or per account, how many chips the bar holds, hiding used-up providers |
 | **Alerts** | Desktop notifications, the percentage thresholds, and the low-balance amounts |
 | **Display** | Used or left, provider colors, square cards, hidden account emails, motion |
 | **Costs** | Local history, T3 servers, omp on another computer, custom prices, and the last scan |

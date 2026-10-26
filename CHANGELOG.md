@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **Chips without the period tag.** **Settings → Menu bar → Show limit period** (`barShowPeriods`, on by default) can drop the `5h`, `7d` and `30d` tags from the chips, which then take only the room their figures need.
+
 ## 2.2.0
 
 ### Added

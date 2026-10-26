@@ -790,6 +790,8 @@ for (const kept of ["usageSource", "cliproxyUrl", "cliproxyKeyFile", ...keyFileS
 assert.equal(context.changedFromDefaults({}).length, 0, "missing keys already read as defaults");
 assert.equal(context.changedFromDefaults({ quotaMode: "Remaining", barWindow: "auto", usageSource: "cliproxy" }).join(","), "quotaMode",
   "only preferences that differ count; connections never do");
+assert.equal(context.DEFAULT_SETTINGS.barShowPeriods, true, "chips show their limit period by default");
+assert.equal(context.changedFromDefaults({ barShowPeriods: false }).join(","), "barShowPeriods", "hiding the period is a preference Reset restores");
 console.log("Reset defaults: passed");
 
 // 2.0 moved the private folder: saved 1.x paths follow it, JSON settings included; nothing else changes.

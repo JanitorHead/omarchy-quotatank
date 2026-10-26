@@ -145,6 +145,7 @@
       "barWindowSecondary": "none",
       "barProviderLimits": "{}",
       "barShowResets": false,
+      "barShowPeriods": true,
       "hideExhaustedProviders": false,
       "barMaxChips": 4,
       "barResetTimeFormat": "24h",
@@ -996,6 +997,13 @@
         ],
         "defaultValue": "none",
         "description": "Optional second limit stacked under the first in each menu bar chip. none keeps a single line."
+      },
+      {
+        "key": "barShowPeriods",
+        "type": "boolean",
+        "label": "Menu bar: show limit period",
+        "description": "Tags each chip line with the period of the limit it shows (5h, 7d, 30d). Off, chips show only the figure and take less room.",
+        "defaultValue": true
       },
       {
         "key": "barShowResets",

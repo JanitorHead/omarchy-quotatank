@@ -1203,6 +1203,7 @@ var DEFAULT_SETTINGS = {
   barWindow: "auto",
   barWindowSecondary: "none",
   barShowResets: false,
+  barShowPeriods: true,
   barResetTimeFormat: "24h",
   barResetDateFormat: "DD/MM",
   hideExhaustedProviders: false,
