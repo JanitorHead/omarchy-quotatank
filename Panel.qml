@@ -75,13 +75,14 @@ Ui.Panel {
   readonly property bool barShowResets: setting("barShowResets", false) === true
   // Clock format for the pace tick's "Now" time: the same reset time setting as the bar.
   readonly property string tickTimeFormat: UsageLogic.barResetFormat("time", setting("barResetTimeFormat", "24h"), setting("barResetDateFormat", "DD/MM"))
-  // Optionally drop providers whose weekly or monthly limit is used up: they cannot be used until it
-  // resets. Limits still shows them, marked used up, with the reset time.
+  // Optionally drop accounts whose weekly or monthly limit is used up, and a provider once all of them
+  // are: they cannot be used until it resets. Limits still shows them, marked used up, with the reset time.
   readonly property bool hideUsedUpProviders: setting("hideExhaustedProviders", false) === true
   readonly property var barCandidates: UsageLogic.barProviders(
     UsageLogic.selectedProviders(providers, setting("barProviders", UsageLogic.DEFAULT_SETTINGS.barProviders)),
     function (provider) { return barLimitsFor(provider.id).top })
-    .filter(function (provider) { return !hideUsedUpProviders || UsageLogic.usedUpLongWindow(provider) === null })
+    .map(function (provider) { return hideUsedUpProviders ? UsageLogic.withoutUsedUpAccounts(provider) : provider })
+    .filter(function (provider) { return provider !== null })
   // With many providers the bar keeps the ones closest to a limit (failures first) and folds the
   // rest into one "+N" chip, so the bar never pushes into the clock. The cap counts chips: under "One
   // chip per account" a provider takes one chip per account it shows.

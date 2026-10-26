@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **Hide providers that are used up hid every account.** With several accounts, the provider left the bar as soon as the account its figures came from was used up, even with another account still free. Now only used-up accounts leave the bar, the chip shows an account with room, and the provider goes once every account is used up.
+
 ## 2.2.0
 
 ### Added

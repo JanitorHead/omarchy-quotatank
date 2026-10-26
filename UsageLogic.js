@@ -156,6 +156,19 @@ function usedUpLongWindow(provider) {
   return found
 }
 
+// The provider as the bar shows it once used-up chips are hidden: without its used-up accounts, its
+// figures taken from the first account left when its own are used up, or null when nothing is left.
+function withoutUsedUpAccounts(provider) {
+  var accounts = listOrEmpty(provider && provider.accounts)
+  if (accounts.length < 2) return usedUpLongWindow(provider) === null ? provider : null
+  var left = accounts.filter(function (account) { return usedUpLongWindow(account) === null })
+  if (left.length === 0) return null
+  if (left.length === accounts.length) return provider
+  var shown = Object.assign({}, provider, { accounts: left })
+  if (usedUpLongWindow(provider) !== null) shown.windows = left[0].windows
+  return shown
+}
+
 function severity(provider, warningThreshold, criticalThreshold, remaining) {
   var value = (remaining === undefined || remaining === null)
     ? minRemaining(provider) : Number(remaining)
