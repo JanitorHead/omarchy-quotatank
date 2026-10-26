@@ -2388,7 +2388,7 @@ Column {
     property string label: ""
     property alias checked: switchControl.checked
     signal toggled()
-    width: parent.width
+    width: parent ? parent.width : 0
     Label { width: parent.width - switchControl.width; text: switchRow.label; anchors.verticalCenter: parent.verticalCenter }
     Toggle {
       id: switchControl
