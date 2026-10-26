@@ -107,9 +107,15 @@ ShellRoot {
       if (motion.probe.running || waited < 2) return false
       check(!motion.systemReduced && !motion.reduced, "Hyprland with animations on keeps motion")
       check(motion.duration(motion.row) === 260 && motion.duration(motion.ping) === 700, "tokens pass through")
-      motion.applyOption('{"option":"animations:enabled","int":0,"set":true}')
-      check(motion.reduced && motion.duration(motion.digit) === 0, "Hyprland animations off reduce motion")
-      motion.applyOption('{"option":"animations:enabled","int":1,"set":true}')
+      var styleMotion = motion.styleReduceMotion !== undefined
+      var animations = styleMotion ? Qt.createQmlObject('import QtQuick; import qs.Commons; QtObject { '
+        + 'function set(on) { Style.reduceMotion = !on } }', root, "styleMotion")
+        : { set: function (on) { motion.applyOption('{"option":"animations:enabled","int":' + (on ? 1 : 0) + ',"set":true}') } }
+      animations.set(false)
+      check(motion.reduced && motion.duration(motion.digit) === 0,
+        styleMotion ? "Omarchy's reduced motion reduces motion" : "Hyprland animations off reduce motion")
+      animations.set(true)
+      check(!motion.reduced, "motion comes back with the animations")
       motion.preference = "reduced"
       var tokens = [motion.micro, motion.row, motion.morph, motion.digit, motion.popIn, motion.popOut, motion.flash, motion.ping]
       for (var i = 0; i < tokens.length; i++) check(motion.duration(tokens[i]) === 0, "reduced motion zeroes token " + tokens[i])
