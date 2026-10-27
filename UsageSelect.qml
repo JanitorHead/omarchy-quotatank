@@ -19,7 +19,14 @@ Controls.ComboBox {
   property bool alignPopupRight: false
   // Shown, dimmed, while `value` is none of the options.
   property string placeholder: ""
-  readonly property bool showingPlaceholder: currentIndex < 0 && placeholder !== ""
+  // The option `value` names, or -1. The label is drawn from it rather than from the
+  // ComboBox's own index, which moves to the first option when the value is not listed.
+  readonly property int valueIndex: {
+    for (var i = 0; i < options.length; i++)
+      if (options[i].value === value) return i
+    return -1
+  }
+  readonly property bool showingPlaceholder: valueIndex < 0 && placeholder !== ""
   readonly property bool menuOpen: popup.visible
 
   signal changed(string value)
@@ -37,17 +44,13 @@ Controls.ComboBox {
   model: options
   textRole: "label"
   valueRole: "value"
-  currentIndex: {
-    for (var i = 0; i < options.length; i++)
-      if (options[i].value === value) return i
-    return -1
-  }
-  Accessible.name: label + ": " + currentText
+  currentIndex: valueIndex
+  Accessible.name: label + ": " + selectedLabel.text
   onActivated: changed(String(currentValue))
 
   contentItem: PlainText {
     id: selectedLabel
-    text: root.showingPlaceholder ? root.placeholder : root.displayText
+    text: root.valueIndex >= 0 ? String(root.options[root.valueIndex].label) : root.placeholder
     color: root.showingPlaceholder ? Qt.darker(root.foreground, 1.5) : root.foreground
     font.family: root.fontFamily
     font.pixelSize: Style.font.bodySmall

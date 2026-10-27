@@ -287,9 +287,12 @@ ShellRoot {
         var choices = root.form.priceEditor.modelChoices
         root.check(JSON.stringify(choices.map(function(choice) { return choice.label })) === '["free-model · no price","vendor/Example[2m]"]',
           "the picker offers each model once, unpriced first, and not the view's own groups: " + JSON.stringify(choices))
-        root.check(root.find(root.form, "costModelPick-1").showingPlaceholder, "a row whose model is not listed says what the picker is for")
-        root.find(root.form, "costModelPick-1").changed("vendor/Example[2m]")
+        var pick = root.find(root.form, "costModelPick-1")
+        root.check(pick.showingPlaceholder && pick.contentItem.text === "Pick a model from your costs…",
+          "a row whose model is not listed says what the picker is for, not the first model: " + pick.contentItem.text)
+        pick.changed("vendor/Example[2m]")
         root.check(root.find(root.form, "costModel-1").text === "vendor/Example[2m]", "picking a model fills its exact id")
+        root.check(!pick.showingPlaceholder && pick.contentItem.text === "vendor/Example[2m]", "the picker then names that model")
         root.edit("costModel-1", "free-model")
         root.edit("costRate-1-inputCostPerMillionTokens", "0")
         var inputRate = root.find(root.form, "costRate-1-inputCostPerMillionTokens")
