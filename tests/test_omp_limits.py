@@ -428,9 +428,10 @@ class GatewayAddressTests(unittest.TestCase):
             def close(self):
                 events.append(("close",))
 
-        with mock.patch.object(socket, "socket", Socket):
-            tailscale = usage.CheckedAddressConnection("omp-box", port=4000, timeout=5,
-                                                       routes=[(IP("fd7a:115c:a1e0::5"), "tailscale0")])
+        with mock.patch.object(socket, "socket", Socket), \
+                mock.patch.object(common, "check_local_server", lambda sock: events.append(("owner checked",))):
+            tailscale = common.CheckedAddressConnection("omp-box", port=4000, timeout=5,
+                                                        routes=[(IP("fd7a:115c:a1e0::5"), "tailscale0")])
             with self.assertRaises(OSError):
                 tailscale.connect()
             self.assertEqual(events, [("socket", socket.AF_INET6),
@@ -438,8 +439,46 @@ class GatewayAddressTests(unittest.TestCase):
                                       ("connect", ("fd7a:115c:a1e0::5", 4000)), ("close",)],
                              "a failed connection through Tailscale is never retried another way")
             events.clear()
-            usage.CheckedAddressConnection("localhost", port=4000, timeout=5, routes=[(IP("127.0.0.1"), None)]).connect()
-            self.assertEqual(events, [("socket", socket.AF_INET), ("connect", ("127.0.0.1", 4000))])
+            common.CheckedAddressConnection("localhost", port=4000, timeout=5, routes=[(IP("127.0.0.1"), None)]).connect()
+            self.assertEqual(events, [("socket", socket.AF_INET), ("connect", ("127.0.0.1", 4000)), ("owner checked",)])
+
+
+class LocalServerOwnerTests(unittest.TestCase):
+    """Any account can listen on a free port above 1023 of this computer, for one while the server a secret is
+    meant for is stopped: a loopback connection carries a secret only to a server that is this user's or root's."""
+
+    @unittest.skipUnless(sys.byteorder == "little", "the rows below are as a little-endian kernel prints them")
+    def test_the_kernels_socket_table_rows_read_as_addresses_and_ports(self):
+        for text, expected in (("0100007F:1F90", (IP("127.0.0.1"), 8080)),
+                               ("00000000000000000000000001000000:0CEA", (IP("::1"), 3306)),
+                               ("0000000000000000FFFF00000100007F:C350", (IP("127.0.0.1"), 50000))):
+            with self.subTest(text=text):
+                self.assertEqual(common.proc_net_endpoint(text), expected)
+
+    def test_the_kernel_names_this_user_as_the_owner_of_a_server_this_user_runs(self):
+        for family, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+            with self.subTest(host=host), socket.socket(family, socket.SOCK_STREAM) as listener:
+                try:
+                    listener.bind((host, 0))
+                except OSError:
+                    self.skipTest(f"{host} is not available here")
+                listener.listen()
+                with common.open_tcp(IP(host), listener.getsockname()[1], 5, None) as sock:
+                    self.assertEqual(common.local_server_owner(sock), os.getuid())
+
+    def test_a_server_of_another_account_or_one_the_kernel_does_not_list_gets_no_token(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        key = write_private(Path(folder.name) / "gateway.key", TOKEN)
+        for owner in (os.getuid() + 1, None):
+            with self.subTest(owner=owner), gateway(body={"reports": []}) as (address, calls), \
+                    mock.patch.object(common, "local_server_owner", return_value=owner):
+                result = usage.read_omp_gateway(address, key, 5)
+            self.assertEqual((result, calls), (("error", usage.OMP_GATEWAY_FAILURES["foreign"], None), []))
+        with gateway(body={"reports": []}) as (address, calls), \
+                mock.patch.object(common, "local_server_owner", return_value=0):
+            self.assertEqual(usage.read_omp_gateway(address, key, 5), ("ok", "", {"reports": []}))
+        self.assertEqual(calls, [("/v1/usage", "Bearer " + TOKEN)], "root's server may have it: root can read it anyway")
 
 
 class ReportMappingTests(unittest.TestCase):
@@ -613,6 +652,41 @@ class MergeTests(unittest.TestCase):
         self.merge(providers, ["zai"])
         self.assertEqual(providers[0]["origins"], ["key", "omp"])
         self.assertEqual(providers[0]["ompAccountId"], omp_id("zai", "zai@example.com"))
+
+    def test_an_api_key_without_email_is_the_native_reading_when_its_resets_match(self):
+        # omp reads OpenCode Go with an API key, which names no email: the resets tell it is the same account.
+        def opencode(resets: tuple[int, int]) -> dict:
+            reading = usage.base_provider("opencode")
+            reading.update(account="dev@example.com", source="Native reader", windows=[
+                usage.make_window("session", "5-hour limit", 1, resets[0], 18000),
+                usage.make_window("monthly", "Monthly limit", 2, resets[1], 2592000)])
+            return reading
+
+        providers = [opencode((1893474000, 1895000001))]
+        self.assertEqual(self.merge(providers, ["opencode"]), 1)
+        self.assertNotIn("accounts", providers[0])
+        self.assertEqual((providers[0]["origins"], providers[0]["source"]), (["signin", "omp"], "Native reader"))
+        # The key names no account, so its id comes from its place among omp's reports.
+        self.assertEqual(providers[0]["ompAccountId"], omp_id("opencode-go", "3"))
+        # A 5-hour window nobody has started resets five hours after each reading, so the two differ by the
+        # time between the readings; the monthly reset still tells.
+        idle = opencode((0, 1895000001))
+        idle["windows"][0]["resetsAt"] = usage.utc_timestamp(idle["fetchedAt"]) + 18000
+        providers = [idle]
+        self.merge(providers, ["opencode"])
+        self.assertEqual((providers[0].get("accounts"), providers[0]["origins"]), (None, ["signin", "omp"]))
+        # Resets that are all on the hour can be a boundary every account shares; a different reset is another account.
+        on_the_hour = fixture()
+        for report in on_the_hour["reports"]:
+            for limit in report["limits"]:
+                if limit["id"] == "monthly":
+                    limit["window"]["resetsAt"] = 1895000400000
+        for document in (on_the_hour, fixture()):
+            with self.subTest(monthly=document["reports"][3]["limits"][1]["window"]["resetsAt"]):
+                providers = [opencode((1893474000, 1895000400))]
+                usage.merge_omp(providers, ["opencode"], [document], None, False)
+                self.assertEqual([account["origin"] for account in providers[0]["accounts"]], ["signin", "omp"])
+                self.assertNotIn("origins", providers[0])
 
     def test_omarchy_logins_stay_first_and_gain_omps_other_accounts(self):
         logins = [dict(native("claude", "dev@example.com"), accountId="main", label="Main", primary=True, active=True),

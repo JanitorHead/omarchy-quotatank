@@ -5,6 +5,7 @@ stand in for Omarchy's registry, so every reading shows what Omarchy did, howeve
 - none: Work is in use and spending fast; Personal is 40% used.
 - `used-personal` (the test's Use command made it): Personal is in use.
 - `omarchy-switched`: Work is in use again; Omarchy moved new sessions back when Personal reached 96%.
+- `flood`: Kimi answers with 5,000 limits, about 1 MiB, under the 2 MiB the panel reads.
 """
 from __future__ import annotations
 
@@ -67,6 +68,9 @@ kimi = {"id": "kimi", "name": "Kimi Code", "status": "ok", "errorKind": "", "mes
         "windows": [window("weekly", "Weekly limit", 40, 4 * 86400, WEEK),
                     window("limit-0", "5-hour limit", 12, 9000, SESSION)],
         "history": {"h24": []}}
+if (markers / "flood").exists():
+    kimi["windows"] = [{"id": f"limit-{index}", "label": f"Limit {index}", "used": index % 100, "remaining": 100 - index % 100,
+                        "resetsAt": now + 9000, "windowSeconds": None, "detail": ""} for index in range(5000)]
 selected = {value for value in args.providers.split(",") if value}
 payload = {"schemaVersion": 1, "generatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
            "providers": [row for row in (claude, kimi) if row["id"] in selected]}

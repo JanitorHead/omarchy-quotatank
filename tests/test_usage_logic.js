@@ -154,13 +154,42 @@ assert.equal(context.accountResetLabel({ ...resetAccount, credits: { resetCredit
 for (const count of [undefined, null, -1, 1.5, true, "2", NaN, Infinity])
   assert.equal(context.accountResetLabel({ ...resetAccount, credits: { resetCreditsAvailable: count } }), "");
 assert.equal(context.accountResetLabel({ ...resetAccount, credits: null }), "");
-assert.equal(context.accountResetLabel({ ...resetAccount, id: "claude" }), "");
+assert.equal(context.accountResetLabel({ ...resetAccount, id: "claude" }), "2 banked resets");
+assert.equal(context.accountResetLabel({ ...resetAccount, id: "claude", credits: { resetCreditsAvailable: 0 } }), "",
+  "Claude shows its banked resets only while it has one");
+assert.equal(context.accountResetLabel({ ...resetAccount, id: "kimi" }), "");
 assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }), "");
 const resetFailure = { ...resetAccount, status: "error", credits: null, message: "Timeout" };
 const resetStale = context.preserveProxyReadings({ source: "cliproxy", providers: [{ ...resetAccount, accounts: [resetAccount] }] },
   { source: "cliproxy", providers: [{ ...resetFailure, accounts: [resetFailure] }] });
 assert.equal(context.accountResetLabel(resetStale.providers[0].accounts[0]), "2 banked resets");
 assert.equal(resetStale.providers[0].accounts[0].stale, true);
+
+// Where a banked reset can be applied from: Codex through the proxy only; Claude with its own sign-in or the
+// proxy, when Claude lets the next one be spent now; never an account whose sign-in lives in omp.
+{
+  const claude = (credits, extra) => ({ ...provider("claude", 40), credits: { resetCreditsAvailable: 1, ...credits }, ...extra });
+  const usable = claude({ resetCreditsUsable: true, resetCreditsReason: "" });
+  assert.equal(context.accountResetShown(usable, false), true);
+  assert.equal(context.accountResetActionable(usable, false), true, "a Claude Code sign-in applies its own reset");
+  assert.equal(context.accountResetActionable(usable, true), true);
+  assert.equal(context.accountResetNote(usable, false), "");
+  const waiting = claude({ resetCreditsUsable: false, resetCreditsReason: "limit" });
+  assert.equal(context.accountResetActionable(waiting, false), false);
+  assert.equal(context.accountResetNote(waiting, false), "Usable once you reach a limit.");
+  assert.equal(context.accountResetNote(claude({ resetCreditsUsable: false, resetCreditsReason: "surprise" }), false),
+    "Claude is not offering it right now.", "an unknown reason reads as not offered");
+  const viaOmp = claude({ resetCreditsUsable: true }, { origin: "omp" });
+  assert.equal(context.accountResetActionable(viaOmp, false), false, "omp keeps that sign-in");
+  assert.equal(context.accountResetNote(viaOmp, false), "Apply it in omp: omp usage reset.");
+  assert.equal(context.accountResetActionable(claude({}), false), false, "a count from omp alone is not usable here");
+  assert.equal(context.accountResetShown(resetAccount, false), false, "Codex resets show in CLIProxyAPI mode");
+  assert.equal(context.accountResetActionable(resetAccount, true), true);
+  assert.equal(context.accountResetActionable({ ...resetAccount, origin: "omp" }, true), false);
+  assert.equal(context.accountResetActionable({ ...resetAccount, credits: { resetCreditsAvailable: 0 } }, true), false);
+  assert.equal(context.creditsHaveFunds(usable.credits), false);
+  assert.equal(context.creditsHaveFunds({ used: 4, limit: 50, resetCreditsAvailable: 1 }), true);
+}
 
 const customRows = [{model: " vendor/Model[1m] ", inputCostPerMillionTokens: "2",
   outputCostPerMillionTokens: "8", cacheReadCostPerMillionTokens: "0", cacheWriteCostPerMillionTokens: ""}];
@@ -308,6 +337,16 @@ assert.equal(context.notificationBody('Running low: 3 <img src="http://127.0.0.1
   "Running low: 3 &lt;img src=\"http://127.0.0.1:9/x\"&gt; &amp; &lt;b&gt;more&lt;/b&gt; left",
   "a notification body's markup reaches the server escaped, ampersands first");
 assert.equal(context.notificationBody("&lt;"), "&amp;lt;", "an entity in provider text stays the characters it was");
+{
+  const crossing = (severity, name) => ({ severity, title: name, remaining: severity === "critical" ? 4 : 18, mode: "Remaining" });
+  const swings = ["warning", "critical", "warning", "critical", "critical", "warning"].map((severity, i) => crossing(severity, "Window " + i));
+  const sent = context.limitNotifications(swings);
+  assert.equal(sent.length, context.MAX_LIMIT_NOTIFICATIONS + 1, "a flood of crossings is a few notifications and a count");
+  assert.deepEqual(sent.slice(0, 3).map((n) => [n.title, n.critical]), [["Window 1", true], ["Window 3", true], ["Window 4", true]],
+    "the worst crossings are the ones shown");
+  assert.equal(sent[3].body, "3 more limits crossed a threshold.");
+  assert.equal(context.limitNotifications(swings.slice(0, 3)).length, 3, "up to the cap, every crossing has its own");
+}
 
 // Pace: the tick is elapsed time; the projection follows the recent rate for short limits and the
 // window's average blended with the last day for weekly and monthly ones.
@@ -712,7 +751,34 @@ assert.equal(context.orderProviders(sample, '["kimi","claude"]').map(p => p.id).
 assert.equal(context.orderProviders(sample, '["ghost","codex"]').map(p => p.id).join(","), "codex,claude,kimi,opencode", "ids that are not present are ignored");
 assert.equal(context.orderProviders(sample, "nope").map(p => p.id).join(","), "claude,codex,kimi,opencode", "unreadable order keeps the natural order");
 assert.equal(context.parseProviderOrder('["codex","codex","Bad Id",3]').join(","), "codex", "duplicates and invalid ids are dropped");
+assert.equal(context.parseProviderOrder(JSON.stringify(Array.from({ length: 5000 }, (_, i) => "p" + i))).length,
+  context.USAGE_LIST_LIMITS.providers, "a saved order keeps only as many ids as there can be providers");
 console.log("Provider order: passed");
+
+// What a helper prints is cut to the shell's item ceilings before anything builds a card, a row or a dot.
+{
+  const many = (count, make) => Array.from({ length: count }, (_, i) => make(i));
+  const windows = (count) => many(count, (i) => ({ id: "w" + i, used: 1 }));
+  const usage = context.boundUsagePayload({ schemaVersion: 1, providers: many(100, (i) => ({
+    id: "p" + i, windows: windows(5000), accounts: many(100, (j) => ({ accountId: "a" + j, windows: windows(20) })) })) });
+  const limits = context.USAGE_LIST_LIMITS;
+  assert.equal(usage.providers.length, limits.providers);
+  assert.ok(usage.providers.every((p) => p.windows.length === limits.windows && p.accounts.length === limits.accounts
+    && p.accounts.every((a) => a.windows.length === limits.windows)), "every provider and account is cut");
+  assert.equal(usage.providers[0].windows.map((w) => w.id).slice(0, 2).join(","), "w0,w1", "the helper's first items are kept");
+  const small = { providers: [{ id: "claude", windows: [{ id: "session" }], accounts: null }] };
+  assert.equal(JSON.stringify(context.boundUsagePayload(small)), JSON.stringify({ providers: [{ id: "claude", windows: [{ id: "session" }], accounts: null }] }),
+    "a reply within the ceilings is left as it is");
+  const cost = context.boundCostPayload({ providers: many(100, (i) => ({ id: "p" + i })), models: many(1000, (i) => ({ model: "m" + i })),
+    periods: many(500, () => ({ providers: many(100, (i) => ({ id: "p" + i })) })), projects: many(100, () => ({})) });
+  for (const field of ["providers", "models", "periods", "projects"])
+    assert.equal(cost[field].length, context.COST_LIST_LIMITS[field], "cost " + field);
+  assert.ok(cost.periods.every((period) => period.providers.length === context.COST_LIST_LIMITS.providers), "each period's providers");
+  const credits = { credits: many(1000, (i) => ({ id: "c" + i })) };
+  context.boundField(credits, "credits", context.RESET_CREDIT_LIMIT);
+  assert.equal(credits.credits.length, context.RESET_CREDIT_LIMIT);
+}
+console.log("Helper item ceilings: passed");
 
 // Reset restores exactly what a fresh install gets: the registry matches manifest.json.
 const manifestDefaults = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8")).barWidget.defaults;
@@ -1094,7 +1160,17 @@ console.log("Provider setup: passed");
     assert.equal(problem(tailnet, true), "", tailnet + " may carry the gateway token");
   for (const lan of ["http://192.168.1.20:4000", "http://10.0.0.2:4000", "http://172.16.0.1:4000", "http://[fd00::1]:4000",
     "http://example.com:4000", "http://100.128.0.1:4000"])
-    assert.equal(problem(lan, true), context.OMP_GATEWAY_HTTP_PROBLEM, lan + " would send the gateway token in the clear");
+    assert.equal(problem(lan, true), context.SECRET_HTTP_PROBLEM, lan + " would send the gateway token in the clear");
+  // The CLIProxyAPI key, the Keeper password and T3 tokens follow the gateway token's rule; their URLs may have a path.
+  const secret = (text) => context.secretServerUrlProblem(text, "invalid");
+  for (const kept of ["http://127.0.0.1:8317", "http://localhost:8317/", "http://[::1]:8317/keeper", "http://devbox:3773/base",
+    "http://100.101.102.103:8317", "https://proxy.example.com/keeper", "https://192.168.1.20:8317"])
+    assert.equal(secret(kept), "", kept + " may carry a secret");
+  for (const lan of ["http://192.168.1.20:8317", "http://10.0.0.2/keeper", "http://proxy.example.com:8317", "http://[fd00::1]:8317"])
+    assert.equal(secret(lan), context.SECRET_HTTP_PROBLEM, lan + " would send a secret in the clear");
+  for (const bad of ["http://user:secret@127.0.0.1:8317", "http://127.0.0.1:8317/?key=x", "http://127.0.0.1:8317/#x",
+    "http://127.0.0.1:8317/a/../b", "ftp://127.0.0.1", "http://127.0.0.1:99999", "127.0.0.1:8317"])
+    assert.equal(secret(bad), "invalid", bad + " is not a server URL");
   assert.equal(context.ompHost("http://devbox.tail1234.ts.net:3847"), "devbox", "MagicDNS names drop the tailnet");
   assert.equal(context.ompHost("http://Devbox:4000/"), "devbox");
   assert.equal(context.ompOnHost("http://127.0.0.1:3847"), "", "the end of a tunnel is not the computer's name");
@@ -1139,6 +1215,11 @@ console.log("Provider setup: passed");
   assert.equal(context.ompGatewaySummary(gateway, plainHttp), "devbox · needs HTTPS or Tailscale");
   assert.ok(context.ompGatewayProblem(plainHttp.message, "http://devbox:4000").text.indexOf("Tailscale is connected") > 0,
     "a refusal to send the token in the clear says what to do");
+  const foreign = { gateway: "error", message: "omp usage exited with status 1. The omp gateway's port on this computer belongs to "
+    + "another account, so the token was not sent." };
+  assert.equal(context.ompGatewaySummary({ ompGatewayUrl: "http://127.0.0.1:4000", ompGatewayKeyFile: "/private/key-1.key" }, foreign),
+    "SSH tunnel · another account's port", "a port another account holds is named as such, not as a local omp failure");
+  assert.equal(context.ompLocalMessage(foreign), "omp usage exited with status 1.");
 
   const usageReply = (omp, providers) => ({ schemaVersion: 1, generatedAt: "2030-01-15T12:00:00Z", providers: providers || [], omp });
   const ompAccount = (accountId) => ({ accountId, source: "omp usage report", origin: "omp", status: "ok" });
@@ -1264,6 +1345,45 @@ console.log("Provider setup: passed");
   assert.equal(context.setAccountMode('{"claude":"together"}', "claude", "auto"), "{}", "Automatic removes the override");
   assert.equal(context.accountModeLabel("single") + "/" + context.accountModeLabel("together") + "/" + context.accountModeLabel(undefined),
     "One at a time/Together/Automatic");
+
+  // Hidden accounts: Limits, the bar and the notices read the provider without them.
+  const withOmp = {
+    id: "opencode", status: "ok", accountId: "main", active: true, account: "dev@example.com", windows: [{ id: "session", used: 10 }],
+    pool: { source: "omp", windows: [] }, accountCount: 3,
+    accounts: [
+      { id: "opencode", status: "ok", accountId: "main", active: true, origin: "signin", account: "dev@example.com", windows: [{ id: "session", used: 10 }], accountCount: 3 },
+      { id: "opencode", status: "error", accountId: "omp-aaaaaaaaaaaa", active: false, origin: "omp", windows: [], accountCount: 3 },
+      { id: "opencode", status: "ok", accountId: "omp-bbbbbbbbbbbb", active: false, origin: "omp", windows: [{ id: "session", used: 70 }], accountCount: 3 },
+    ],
+  };
+  const hideOne = context.setAccountHidden("{}", "opencode", "omp-aaaaaaaaaaaa", true);
+  assert.equal(hideOne, '{"opencode":["omp-aaaaaaaaaaaa"]}');
+  const twoLeft = context.withoutHiddenAccounts([withOmp], hideOne)[0];
+  assert.deepEqual(plain(twoLeft.accounts.map((account) => [account.accountId, account.accountCount])),
+    [["main", 2], ["omp-bbbbbbbbbbbb", 2]]);
+  assert.equal(twoLeft.accountCount, 2);
+  assert.equal(withOmp.accounts.length, 3, "the backend's reading is left as it was, for Settings to list");
+  assert.equal(context.accountName(twoLeft.accounts[1], "{}", true, 2), "Account 3", "an unnamed account keeps its number");
+  // One account left is the reading on its own, as a provider with one account reads; omp's pool stays.
+  const single = context.withoutHiddenAccounts([withOmp],
+    context.setAccountHidden(hideOne, "opencode", "omp-bbbbbbbbbbbb", true))[0];
+  assert.equal(single.accounts, undefined);
+  assert.equal(single.accountCount, undefined);
+  assert.deepEqual([single.accountId, single.windows[0].used, single.pool.source], ["main", 10, "omp"]);
+  // Hiding the active account hands the summary to the first other one that read fine.
+  const leadHidden = context.withoutHiddenAccounts([withOmp], '{"opencode":["main"]}')[0];
+  assert.deepEqual([leadHidden.accountId, leadHidden.windows[0].used, leadHidden.account], ["omp-bbbbbbbbbbbb", 70, undefined],
+    "the hidden account's fields do not linger in the summary");
+  // Hiding every account changes nothing (turning the provider off does that), and so does an unknown id.
+  const all = '{"opencode":["main","omp-aaaaaaaaaaaa","omp-bbbbbbbbbbbb"]}';
+  assert.equal(context.withoutHiddenAccounts([withOmp], all)[0], withOmp);
+  assert.equal(context.withoutHiddenAccounts([withOmp], '{"opencode":["k-00000000"]}')[0], withOmp);
+  assert.equal(context.setAccountHidden(hideOne, "opencode", "omp-aaaaaaaaaaaa", false), "{}", "showing the last hidden one forgets the provider");
+  assert.deepEqual(plain(context.parseHiddenAccounts('{"opencode":["main","main",7,""],"Bad Id":["main"],"codex":"main"}')),
+    { opencode: ["main"] });
+  assert.equal(context.accountSettingsLabel(withOmp.accounts[2], "{}", true, 2), "Account 3 · omp");
+  assert.equal(context.accountSettingsLabel({ ...withOmp.accounts[0], origins: ["signin", "omp"] }, "{}", false, 0),
+    "dev@example.com · sign-in + omp");
 
   // The 1.7.3 clipboard rule: an editable TextInput (what TextField is built on) fetches every clipboard
   // change, so the only text input in the widget is SettingsField's read-only secret field.

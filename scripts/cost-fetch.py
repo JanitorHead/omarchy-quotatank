@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -27,7 +28,12 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from quotatank_common import atomic_write_json, clean_message, move_legacy_folders, opencode_database_path, state_folder
+# Nothing may be written beside the scripts: Omarchy reloads every plugin when a file in a plugin's folder changes.
+sys.dont_write_bytecode = True
+
+from quotatank_common import (
+    atomic_write_json, clean_message, move_legacy_folders, opencode_database_path, read_capped, state_folder,
+)
 import omp_stats
 import t3_costs
 
@@ -81,6 +87,7 @@ MAX_SCAN_CACHE_BYTES = 32 * 1024 * 1024
 MAX_SCAN_CACHE_FILES = 10_000
 MAX_MODEL_NAME_CHARS = 256
 MAX_MODEL_GROUPS = 512
+MAX_MODEL_ROWS = 48
 MAX_PROJECT_NAME_CHARS = 255
 MAX_PROJECT_GROUPS = 512
 MAX_PROJECT_ROWS = 12
@@ -1523,8 +1530,9 @@ def fetch_rate_document(timeout: float) -> Any:
         LITELLM_RATES_URL,
         headers={"Accept": "application/json", "User-Agent": "quotatank/2"},
     )
+    deadline = time.monotonic() + timeout
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = response.read(MAX_RATE_BYTES + 1)
+        body = read_capped(response, MAX_RATE_BYTES, deadline)
     if len(body) > MAX_RATE_BYTES:
         raise ValueError("pricing table is unexpectedly large")
     return json.loads(body)
@@ -1784,6 +1792,34 @@ def rank_agents(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     if not merged:
         return []
     return [merged.get(kind, {"id": kind, "costUsd": 0.0, "totalTokens": 0, "records": 0}) for kind in AGENT_KINDS]
+
+
+def model_rank(row: dict[str, Any]) -> tuple[bool, float, int]:
+    return row["costUsd"] is not None, row["costUsd"] or 0, row["totalTokens"]
+
+
+def rank_models(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The MAX_MODEL_ROWS costliest model rows, then the rest folded into one "Other models" row per provider,
+    so totals stay exact and Costs never gets more rows than it lists (up to 512 local and 512 omp stats rows
+    reach here). A folded row counts no sessions: one session can use several models."""
+    if len(models) <= MAX_MODEL_ROWS:
+        return models
+    ranked = sorted(models, key=model_rank, reverse=True)
+    kept: list[dict[str, Any]] = []
+    folded: dict[str, dict[str, Any]] = {}
+    for row in ranked:
+        if len(kept) < MAX_MODEL_ROWS and row["model"] != "Other models":
+            kept.append(row)
+            continue
+        other = folded.get(row["provider"])
+        if other is None:
+            folded[row["provider"]] = {**row, "model": "Other models"}
+            continue
+        add_finished(other, row)
+        other["sessions"] = None
+        if other.get("origin") != row.get("origin"):
+            other.pop("origin", None)
+    return kept + sorted(folded.values(), key=model_rank, reverse=True)
 
 
 def period_window(days: int, now_ms: int, zone) -> tuple[dict[str, Any], list[str], Callable[[int], str | None]]:
@@ -2296,6 +2332,7 @@ def build_payload(
     result["previous"] = aggregate_previous(local_history, previous_start, start, rates, overrides) if comparable else None
     remote_periods = (merge_omp_stats(result, omp_remote, bucket_for, (start, stamp), rates, overrides)
                       if omp_remote is not None else set())
+    result["models"] = rank_models(result["models"])
     coverage = []
     for provider in result["providers"]:
         relevant = [s for s in sources if s["status"] != "duplicate"

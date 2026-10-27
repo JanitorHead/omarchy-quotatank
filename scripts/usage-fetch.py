@@ -18,6 +18,7 @@ import ctypes
 import functools
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 import re
@@ -41,10 +42,14 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 from xml.etree import ElementTree
 
+# Nothing may be written beside the scripts: Omarchy reloads every plugin when a file in a plugin's folder changes.
+sys.dont_write_bytecode = True
+
 from quotatank_common import (
-    OMP_PROVIDERS, atomic_write_json, clean_message, config_folder, omp_account_id, open_private_directory,
-    move_legacy_folders, opencode_data_root, opencode_database_path, plain_http_token_routes, resolve_host,
-    split_server_url, state_folder,
+    FOREIGN_LOCAL_SERVER, OMP_PROVIDERS, PLAIN_HTTP_SECRET, SECRET_LOOKUP_SECONDS, CheckedAddresses,
+    ForeignLocalServer, atomic_write_json, clean_message, config_folder, foreign_local_server, omp_account_id,
+    open_private_directory, open_tcp, move_legacy_folders, opencode_data_root, opencode_database_path,
+    plain_http_token_routes, read_capped, resolve_host, secret_opener, split_server_url, state_folder,
 )
 
 SCHEMA_VERSION = 1
@@ -399,9 +404,10 @@ def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = Non
     if data is not None and not any(name.lower() == "content-type" for name in headers):
         headers = {**headers, "Content-Type": "application/json"}
     request = urllib.request.Request(url, data=data, headers=headers, method="GET" if data is None else "POST")
+    deadline = time.monotonic() + timeout
     try:
         with (opener or urllib.request.build_opener(NoRedirects())).open(request, timeout=timeout) as response:
-            raw = response.read(MAX_HTTP_RESPONSE_BYTES + 1)
+            raw = read_capped(response, MAX_HTTP_RESPONSE_BYTES, deadline)
             if len(raw) > MAX_HTTP_RESPONSE_BYTES:
                 raise ProviderFailure(
                     "malformed", "The provider returned unexpectedly large usage data."
@@ -417,6 +423,8 @@ def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = Non
         failure.http_status = exc.code
         raise failure from None
     except (TimeoutError, urllib.error.URLError, OSError) as exc:
+        if foreign_local_server(exc):
+            raise ProviderFailure("foreign", FOREIGN_LOCAL_SERVER) from None
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
             raise ProviderFailure("timeout", "The usage request timed out.") from None
@@ -475,6 +483,89 @@ def claude_scope_name(entry: dict[str, Any]) -> str:
         if isinstance(label, str) and label.strip():
             return label.strip()
     return ""
+
+
+# Banked resets: resets of the 5-hour and weekly limits that Anthropic grants (for a launch, say) and that the
+# account spends when it chooses. Its `cedar_ember` program lists them in the usage answer asked with
+# `cedar_ember=1`, and only to Claude Code: to another User-Agent the account reads `eligible: false` with
+# `ineligible_reason: "surface"`, so this reader identifies as Claude Code does, as omp does too. omp also adds
+# `skip_spend=1`, which would drop the extra-usage figures this reader shows, so it is left out.
+CLAUDE_CODE_USER_AGENT = "claude-cli/2.1.302 (external, cli)"
+CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
+CLAUDE_RESET_PROGRAM = "cedar_ember"
+CLAUDE_GRANT_ID = re.compile(r"[a-z0-9_-]{1,80}")
+MAX_CLAUDE_GRANTS = 16
+
+
+def claude_headers(access_token: str) -> dict[str, str]:
+    return {"Authorization": "Bearer " + access_token, "anthropic-beta": "oauth-2025-04-20",
+            "Accept": "application/json", "User-Agent": CLAUDE_CODE_USER_AGENT}
+
+
+def claude_grant(raw: Any) -> dict[str, Any] | None:
+    """One banked-reset grant, or None when any field it is spent by is malformed."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not CLAUDE_GRANT_ID.fullmatch(raw["id"]):
+        return None
+    left = raw.get("resets_left")
+    clears = raw.get("clears", [])
+    if type(left) is not int or left < 0 or not isinstance(clears, list) or not all(isinstance(scope, str) for scope in clears):
+        return None
+    flags = {name: raw.get(name, default) for name, default in
+             (("paused", False), ("usable_now", False), ("use_requires_limit", True))}
+    if not all(isinstance(value, bool) for value in flags.values()):
+        return None
+    label = raw.get("label")
+    return {"id": raw["id"], "label": clean_message(label) if isinstance(label, str) else "", "left": left,
+            "grantedAt": epoch_seconds(raw.get("starts_at")), "expiresAt": epoch_seconds(raw.get("ends_at")),
+            "clears": clears[:8], "paused": flags["paused"], "usableNow": flags["usable_now"],
+            "requiresLimit": flags["use_requires_limit"]}
+
+
+def claude_banked_resets(payload: Any, now: float | None = None) -> dict[str, Any] | None:
+    """The banked resets in a usage answer asked with `cedar_ember=1`, or None when it has none to tell (no such
+    program for the account, a client Claude does not offer them to, or a malformed list).
+
+    `available` counts the resets left in grants that have not expired. Claude spends one grant at a time,
+    `next_grant_id`: `next` is that grant, `usable` whether it can be spent now (as omp decides: the account is
+    eligible, no cooldown runs, and the grant is usable now, not paused, not expired and not used up) and
+    `reason` why not: "ineligible", "cooldown", "paused", "limit" (it waits for a limit to be reached) or
+    "unavailable"."""
+    status = payload.get(CLAUDE_RESET_PROGRAM) if isinstance(payload, dict) else None
+    if not isinstance(status, dict) or not isinstance(status.get("eligible"), bool) or not status["eligible"]:
+        return None
+    raw_grants = status.get("grants") if status.get("grants") is not None else []
+    if not isinstance(raw_grants, list):
+        return None
+    now = time.time() if now is None else now
+    grants = [grant for grant in map(claude_grant, raw_grants[:MAX_CLAUDE_GRANTS]) if grant is not None]
+    live = [grant for grant in grants if grant["expiresAt"] is None or grant["expiresAt"] > now]
+    following = next((grant for grant in live if grant["id"] == status.get("next_grant_id")), None)
+    cooldown = epoch_seconds(status.get("cooldown_until"))
+    if following is None or following["left"] == 0:
+        reason = "unavailable"
+    elif cooldown is not None and cooldown > now:
+        reason = "cooldown"
+    elif following["paused"]:
+        reason = "paused"
+    elif not following["usableNow"]:
+        reason = "limit" if following["requiresLimit"] and status.get("at_limit") is not True else "unavailable"
+    else:
+        reason = ""
+    return {"available": sum(grant["left"] for grant in live), "next": following, "usable": reason == "",
+            "reason": reason}
+
+
+def claude_reset_credits(resets: dict[str, Any] | None, credits: dict[str, Any] | None) -> dict[str, Any] | None:
+    """`credits` with the banked-reset fields of `resets` (backend contract, `credits`): only while the account
+    has a reset to spend, so an account without one shows nothing new."""
+    if resets is None or resets["available"] <= 0:
+        return credits
+    following = resets["next"]
+    credits = credits or {"label": "Banked resets", "currency": "", "used": None, "limit": None, "remaining": None,
+                          "total": None, "unlimited": False}
+    return {**credits, "resetCreditsAvailable": resets["available"],
+            "resetCreditsExpiresAt": following["expiresAt"] if following else None,
+            "resetCreditsUsable": resets["usable"], "resetCreditsReason": resets["reason"]}
 
 
 def parse_claude_usage(payload: Any) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
@@ -563,7 +654,7 @@ def parse_claude_usage(payload: Any) -> tuple[list[dict[str, Any]], dict[str, An
             "unlimited": unlimited,
             "resetCreditsAvailable": None,
         }
-    return windows, credits
+    return windows, claude_reset_credits(claude_banked_resets(payload), credits)
 
 
 def claude_config_dir() -> Path:
@@ -615,15 +706,7 @@ def renew_claude_login(timeout: float, home: Path | None = None) -> None:
 
 
 def request_claude_usage(login: dict[str, Any], timeout: float) -> Any:
-    return http_json(
-        "https://api.anthropic.com/api/oauth/usage",
-        {
-            "Authorization": "Bearer " + login["accessToken"],
-            "anthropic-beta": "oauth-2025-04-20",
-            "Accept": "application/json",
-        },
-        timeout,
-    )
+    return http_json(CLAUDE_USAGE_URL, claude_headers(login["accessToken"]), timeout)
 
 
 def claude_signed_in_email(home: Path | None) -> str:
@@ -1872,24 +1955,34 @@ def antigravity_rpc(scheme: str, port: int, csrf: str, method: str, body: dict[s
                     timeout: float) -> dict[str, Any]:
     """One Connect call to a language server port on 127.0.0.1.
 
-    http.client rather than urllib, so that no proxy from the environment ever sees the token.
-    The server's certificate is self-signed for loopback; verification is off for this pinned
+    The connection is made by open_tcp, which refuses a port whose server end belongs to another account:
+    the scan in listening_ports is a moment old, and another account can take a port the language server left,
+    or hold 127.0.0.1 while the server listens on ::1 alone. Only then does the token go out, and never through
+    a proxy. The server's certificate is self-signed for loopback; verification is off for this pinned
     address only."""
-    if scheme == "https":
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        connection: http.client.HTTPConnection = http.client.HTTPSConnection(
-            "127.0.0.1", port, timeout=timeout, context=context)
-    else:
-        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    deadline = time.monotonic() + timeout
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
     try:
+        sock = open_tcp(ipaddress.ip_address("127.0.0.1"), port, timeout, None)
+        if scheme == "https":
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            try:
+                sock = context.wrap_socket(sock)
+            except BaseException:
+                sock.close()
+                raise
+        connection.sock = sock
         connection.request("POST", ANTIGRAVITY_RPC_PATH + method,
                            body=json.dumps(body, separators=(",", ":")).encode("utf-8"),
                            headers={"Content-Type": "application/json", "Connect-Protocol-Version": "1",
                                     "X-Codeium-Csrf-Token": csrf})
         response = connection.getresponse()
-        status, raw = response.status, response.read(MAX_HTTP_RESPONSE_BYTES + 1)
+        status, raw = response.status, read_capped(response, MAX_HTTP_RESPONSE_BYTES, deadline)
+    except ForeignLocalServer:
+        raise ProviderFailure("config", "A port Antigravity's language server listed belongs to another account "
+                                        "on this computer, so its session token was not sent.") from None
     except (OSError, http.client.HTTPException) as exc:
         kind = "timeout" if isinstance(exc, TimeoutError) else "network"
         raise ProviderFailure(kind, "Antigravity's language server did not answer.") from None
@@ -2140,9 +2233,10 @@ def http_form_json(url: str, fields: dict[str, str], timeout: float) -> Any:
     request = urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode("ascii"), method="POST",
                                      headers={"Content-Type": "application/x-www-form-urlencoded",
                                               "Accept": "application/json"})
+    deadline = time.monotonic() + timeout
     try:
         with urllib.request.build_opener(NoRedirects()).open(request, timeout=timeout) as response:
-            raw = response.read(MAX_HTTP_RESPONSE_BYTES + 1)
+            raw = read_capped(response, MAX_HTTP_RESPONSE_BYTES, deadline)
     except urllib.error.HTTPError as exc:
         exc.close()
         failure = ProviderFailure("rate_limited" if exc.code == 429 else "http",
@@ -3324,19 +3418,23 @@ AMP_USAGE_URL = "https://ampcode.com/api/internal?userDisplayBalanceInfo"
 AMP_SECRETS_KEY = "apiKey@https://ampcode.com/"
 AMP_AMOUNT = r"([0-9][0-9,]*(?:\.[0-9]+)?)"
 AMP_RENEWAL = r"resets\s+upon\s+renewal\s+in\s+([0-9][0-9,]*)\s+(days?|months?)"
-AMP_IDENTITY = re.compile(r"(?im)^\s*Signed in as\s+([^\s(]+)(?:\s+\(([^\r\n)]+)\))?\s*$")
-AMP_FREE = re.compile(r"(?im)^\s*Amp Free:\s*\$?" + AMP_AMOUNT + r"\s*/\s*\$?" + AMP_AMOUNT
+AMP_IDENTITY = re.compile(r"(?im)^[ \t]*Signed in as\s+([^\s(]+)(?:\s+\(([^\r\n)]+)\))?\s*$")
+AMP_FREE = re.compile(r"(?im)^[ \t]*Amp Free:\s*\$?" + AMP_AMOUNT + r"\s*/\s*\$?" + AMP_AMOUNT
                       + r"\s+remaining(?:\s*\(replenishes\s*\+\$?" + AMP_AMOUNT + r"\s*/\s*hour\))?")
-AMP_FREE_SHARE = re.compile(r"(?im)^\s*Amp Free:\s*" + AMP_AMOUNT + r"\s*%\s+remaining")
-AMP_TIER = re.compile(r"(?im)^\s*Amp\s+([^\r\n]+?)\s+Tier:\s*agent\s+usage\s+\$" + AMP_AMOUNT + r"\s+of\s+\$"
+AMP_FREE_SHARE = re.compile(r"(?im)^[ \t]*Amp Free:\s*" + AMP_AMOUNT + r"\s*%\s+remaining")
+AMP_TIER = re.compile(r"(?im)^[ \t]*Amp[ \t]+(\S[^\r\n]*?)\s+Tier:\s*agent\s+usage\s+\$" + AMP_AMOUNT + r"\s+of\s+\$"
                       + AMP_AMOUNT + r"\s+remaining\b([^\r\n]*?)" + AMP_RENEWAL + r"\b")
-AMP_SUBSCRIPTION = re.compile(r"(?im)^\s*(?:Subscription\s+(.+?)|Amp\s+(.+?)\s+Subscription):\s*" + AMP_AMOUNT
+AMP_SUBSCRIPTION = re.compile(r"(?im)^[ \t]*(?:Subscription[ \t]+(\S.*?)|Amp[ \t]+(\S.*?)\s+Subscription):\s*" + AMP_AMOUNT
                               + r"\s*%\s+other\s+usage\s+and\s+" + AMP_AMOUNT
                               + r"\s*%\s+orb\s+usage\s+remaining\s*-\s*" + AMP_RENEWAL)
 AMP_ORB = re.compile(r"(?i)\borb\s+usage\s+" + AMP_AMOUNT + r"h\s+of\s+" + AMP_AMOUNT
                      + r"h\s+a1\.small\s+orb\s+hours\s+remaining\b")
 AMP_PERIOD = re.compile(r"\bperiod\s+(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})\b")
-AMP_CREDITS = re.compile(r"(?im)^\s*Individual credits:\s*\$?" + AMP_AMOUNT + r"\s+remaining")
+AMP_CREDITS = re.compile(r"(?im)^[ \t]*Individual credits:\s*\$?" + AMP_AMOUNT + r"\s+remaining")
+# Amp's usage text is a few short lines. The patterns above backtrack within a line, so only that much of the
+# text is read, and a longer line is no line of it: the time they take stays a few milliseconds whatever comes.
+AMP_MAX_LINES = 64
+AMP_MAX_LINE = 320
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
@@ -3366,7 +3464,8 @@ def amp_credits(balance: float) -> dict[str, Any]:
 
 def parse_amp_display(text: str, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str, str]:
     """Windows, prepaid credits, plan, and account from Amp's usage text."""
-    text = ANSI_ESCAPE.sub("", text).replace("**", "")
+    text = ANSI_ESCAPE.sub("", text[:AMP_MAX_LINES * (AMP_MAX_LINE + 1) * 2]).replace("**", "")
+    text = "\n".join(line for line in text.splitlines()[:AMP_MAX_LINES] if len(line) <= AMP_MAX_LINE)
     identity = AMP_IDENTITY.search(text)
     windows, plan = [], ""
     tier, subscription = AMP_TIER.search(text), AMP_SUBSCRIPTION.search(text)
@@ -6955,7 +7054,11 @@ TYPESAFE_CHUNK_CAP_SECONDS = 2.0
 TYPESAFE_ACTION_CAP_SECONDS = 6.0
 TYPESAFE_SESSION_EXPIRED = "TypeSafe session expired."
 TYPESAFE_LOGIN_RE = re.compile(r'\\?"\(auth\)\\?",\{\\?"children\\?":\[\\?"login\\?"')
-TYPESAFE_SCRIPT_RE = re.compile(r"""<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>""", re.IGNORECASE)
+# A <script> tag and its src. The tags are found by script_sources in one pass over the page; the src pattern only
+# ever reads one tag of at most TYPESAFE_MAX_TAG characters, so no page makes it backtrack across the page.
+TYPESAFE_SCRIPT_TAG_RE = re.compile(r"<script\b", re.IGNORECASE)
+TYPESAFE_SCRIPT_SRC_RE = re.compile(r"""<script\b[^>]*?\bsrc=["']([^"']+)["']""", re.IGNORECASE)
+TYPESAFE_MAX_TAG = 4096
 TYPESAFE_CHUNK_RE = re.compile(r"\.js(?:$|\?)", re.IGNORECASE)
 TYPESAFE_ACTION_RE = re.compile(r'"([0-9a-f]{40,})"[^)]{0,150}"getBillingOverviewResult"', re.IGNORECASE)
 TYPESAFE_ACTION_ID_RE = re.compile(r"[0-9a-fA-F]{40,}")
@@ -6967,13 +7070,14 @@ def typesafe_request(
     """One request with redirects refused. Error statuses are returned, so callers can classify them."""
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     response: Any = None
+    deadline = time.monotonic() + timeout
     try:
         try:
             response = urllib.request.build_opener(NoRedirects()).open(request, timeout=timeout)
             status = response.status
         except urllib.error.HTTPError as exc:
             response, status = exc, exc.code
-        raw = response.read(MAX_HTTP_RESPONSE_BYTES + 1)
+        raw = read_capped(response, MAX_HTTP_RESPONSE_BYTES, deadline)
         reply_headers = {name.lower(): value for name, value in response.headers.items()}
     except (TimeoutError, urllib.error.URLError, OSError, http.client.HTTPException) as exc:
         reason = getattr(exc, "reason", exc)
@@ -6988,6 +7092,21 @@ def typesafe_request(
     if len(raw) > MAX_HTTP_RESPONSE_BYTES:
         raise ProviderFailure("malformed", "The provider returned unexpectedly large usage data.")
     return status, reply_headers, raw.decode("utf-8", errors="replace")
+
+
+def script_sources(page: str) -> list[str]:
+    """The src of each <script> tag in `page`, which runs to the next ">"; longer tags are skipped. The search
+    resumes after that ">", so the page is read once however many tags it leaves unclosed."""
+    sources: list[str] = []
+    position = 0
+    while (tag := TYPESAFE_SCRIPT_TAG_RE.search(page, position)) is not None:
+        end = page.find(">", tag.start())
+        if end < 0:
+            break
+        if end + 1 - tag.start() <= TYPESAFE_MAX_TAG and (match := TYPESAFE_SCRIPT_SRC_RE.match(page, tag.start(), end + 1)):
+            sources.append(match.group(1))
+        position = end + 1
+    return sources
 
 
 def typesafe_check(status: int, text: str) -> None:
@@ -7013,7 +7132,7 @@ def discover_typesafe_action(cookie: str, deadline: float) -> str:
     )
     typesafe_check(status, page)
     chunks: list[str] = []
-    for source in TYPESAFE_SCRIPT_RE.findall(page):
+    for source in script_sources(page):
         if source.startswith("/"):
             source = TYPESAFE_ORIGIN + source
         if source.startswith(TYPESAFE_ORIGIN + "/") and TYPESAFE_CHUNK_RE.search(source):
@@ -7372,6 +7491,16 @@ class CliProxyClient:
     def __init__(self, address: str, key: str):
         self.base_url = normalize_cliproxy_url(address)
         self.key = key
+        self.opener: urllib.request.OpenerDirector | None = None
+
+    def key_opener(self) -> urllib.request.OpenerDirector:
+        """One opener for this client's requests (secret_opener): the management key reaches HTTPS with a verified
+        certificate, or plain HTTP only on this computer or through Tailscale."""
+        if self.opener is None:
+            self.opener = secret_opener(self.base_url, SECRET_LOOKUP_SECONDS, NoRedirects())
+            if self.opener is None:
+                raise ProviderFailure("config", "The proxy management key goes over " + PLAIN_HTTP_SECRET)
+        return self.opener
 
     def request(self, path: str, timeout: float, payload: dict[str, Any] | None = None) -> Any:
         headers = {"Authorization": "Bearer " + self.key, "Accept": "application/json"}
@@ -7380,10 +7509,11 @@ class CliProxyClient:
             headers["Content-Type"] = "application/json"
             body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(self.base_url + "/v0/management/" + path, data=body, headers=headers)
+        opener = self.key_opener()
+        deadline = time.monotonic() + timeout
         try:
-            opener = urllib.request.build_opener(NoRedirects())
             with opener.open(request, timeout=timeout) as response:
-                raw = response.read(MAX_HTTP_RESPONSE_BYTES + 1)
+                raw = read_capped(response, MAX_HTTP_RESPONSE_BYTES, deadline)
         except urllib.error.HTTPError as exc:
             exc.close()
             if exc.code in (401, 403):
@@ -7392,6 +7522,8 @@ class CliProxyClient:
                 raise ProviderFailure("rate_limited", "CLIProxyAPI is rate limiting management requests.") from None
             raise ProviderFailure("http", f"CLIProxyAPI management endpoint returned HTTP {exc.code}.") from None
         except (TimeoutError, urllib.error.URLError, OSError) as exc:
+            if foreign_local_server(exc):
+                raise ProviderFailure("config", FOREIGN_LOCAL_SERVER) from None
             reason = getattr(exc, "reason", exc)
             if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
                 raise ProviderFailure("timeout", "CLIProxyAPI usage request timed out.") from None
@@ -7550,8 +7682,8 @@ def fetch_cliproxy_account(provider_id: str, entry: dict[str, Any], client: CliP
         return result
     try:
         if provider_id == "claude":
-            payload = client.usage(entry, "https://api.anthropic.com/api/oauth/usage",
-                                   {"anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code/2.1.0 (external, cli)"}, timeout)
+            payload = client.usage(entry, CLAUDE_USAGE_URL,
+                                   {"anthropic-beta": "oauth-2025-04-20", "User-Agent": CLAUDE_CODE_USER_AGENT}, timeout)
             windows, credits = parse_claude_usage(payload)
             plan = claude_plan(entry)
         elif provider_id == "codex":
@@ -7971,6 +8103,7 @@ PRIMARY_ACCOUNT_ID = "main"
 # `key_account_result`). Neither may name a second account, or two readings would share one id.
 RESERVED_ACCOUNT_IDS = frozenset({PRIMARY_ACCOUNT_ID, "primary"})
 EXTRA_KEY_ID = re.compile(r"k-[0-9a-f]{8}")
+MAX_EXTRA_KEYS = 8  # per provider, as Settings allows (EXTRA_KEY_LIMIT in UsageLogic.js)
 
 
 def accounts_root() -> Path:
@@ -8036,6 +8169,9 @@ def omarchy_accounts(provider_id: str, data: dict[str, Any] | None = None) -> li
     entries = data.get("accounts")
     accounts: list[dict[str, Any]] = []
     for entry in (entries if isinstance(entries, list) else []):
+        # One short of the ceiling, so a built-in primary login still fits (bound_providers).
+        if len(accounts) >= MAX_READING_ACCOUNTS - 1:
+            break
         account = registry_account(provider_id, entry)
         if account is None or any(known["id"] == account["id"] for known in accounts):
             continue
@@ -8144,7 +8280,7 @@ def parse_extra_keys(values: list[str]) -> dict[str, list[tuple[str, Path]]]:
         if not EXTRA_KEY_ID.fullmatch(key_id):
             continue
         entries = extra_keys.setdefault(provider_id, [])
-        if any(known == key_id for known, _path in entries):
+        if len(entries) >= MAX_EXTRA_KEYS or any(known == key_id for known, _path in entries):
             continue
         entries.append((key_id, Path(path).expanduser()))
     return extra_keys
@@ -8179,15 +8315,14 @@ OMP_SIGN_IN_AGAIN = "omp can't renew this sign-in. Sign in again in omp."
 OMP_NOT_SET_UP = "omp is installed but not set up on this computer."
 OMP_GATEWAY_URL_RULE = ("The omp gateway URL must be the gateway's address alone, https://host:port or plain HTTP to "
                         "this computer or a Tailscale address, without a path, user name, query or fragment.")
-OMP_GATEWAY_PLAIN_HTTP = ("The omp gateway token goes over plain HTTP only to this computer or over Tailscale. "
-                          "Use an https:// address, or check that Tailscale is connected and that the address is "
-                          "that computer's Tailscale name or address.")
+OMP_GATEWAY_PLAIN_HTTP = "The omp gateway token goes over " + PLAIN_HTTP_SECRET
 OMP_GATEWAY_FAILURES = {
     "expired": "The omp gateway refused the token.",
     "rate_limited": "The omp gateway is rate limiting usage checks.",
     "timeout": "The omp gateway did not answer in time.",
     "network": "Could not reach the omp gateway. Check its URL, the network and its TLS certificate.",
     "malformed": "The omp gateway returned unreadable usage data.",
+    "foreign": "The omp gateway's port on this computer belongs to another account, so the token was not sent.",
 }
 # What each source reports when the merge cannot take its data (merge_omp_safely).
 OMP_UNREADABLE = {"local": "omp usage returned unreadable data.", "gateway": OMP_GATEWAY_FAILURES["malformed"]}
@@ -8271,56 +8406,12 @@ def read_omp_local(omp: str, state_dir: Path | None = None) -> OmpRead:
         return "error", "omp usage could not be read.", None
 
 
-class CheckedAddresses(urllib.request.HTTPHandler):
-    """Plain HTTP that connects only to `routes`, which the caller checked, in order, instead of looking the
-    host up again: a second answer could name another computer. The Host header still names the host."""
-
-    def __init__(self, routes: list[tuple[Any, str | None]]):
-        super().__init__()
-        self.routes = routes
-
-    def http_open(self, req: urllib.request.Request) -> Any:
-        return self.do_open(functools.partial(CheckedAddressConnection, routes=self.routes), req)
-
-
-class CheckedAddressConnection(http.client.HTTPConnection):
-    def __init__(self, host: str, *, routes: list[tuple[Any, str | None]], **kwargs: Any):
-        super().__init__(host, **kwargs)
-        self.routes = routes
-
-    def connect(self) -> None:
-        failure: OSError = ConnectionRefusedError()
-        for address, interface in self.routes:
-            try:
-                self.sock = open_tcp(address, self.port, self.timeout, interface)
-                return
-            except OSError as exc:
-                failure = exc
-        raise failure
-
-
-def open_tcp(address: Any, port: int, timeout: Any, interface: str | None) -> socket.socket:
-    """A TCP connection to `address`. With `interface`, the socket is bound to it first (SO_BINDTODEVICE), so
-    the connection goes out that interface or not at all."""
-    sock = socket.socket(socket.AF_INET6 if address.version == 6 else socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        if isinstance(timeout, (int, float)):
-            sock.settimeout(timeout)
-        if interface is not None:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode())
-        sock.connect((str(address), port))
-    except BaseException:
-        sock.close()
-        raise
-    return sock
-
-
 def read_omp_gateway(address: str, key_file: Path | None, timeout: float) -> OmpRead:
     """("ok", "", document) from an omp gateway's `GET /v1/usage`, else ("error", message, None).
 
     The token goes over HTTPS, or over plain HTTP only to this computer or through Tailscale to the computer
-    the address names (plain_http_token_routes), and then only along the routes checked. Proxy settings are
-    ignored."""
+    the address names (plain_http_token_routes), and then only along the routes checked; on this computer, only
+    to a server that belongs to this user or root (open_tcp). Proxy settings are ignored."""
     try:
         parts = split_server_url(address)
     except ValueError:
@@ -8553,6 +8644,36 @@ def stand_in_omp_reading(native: dict[str, Any], entry: dict[str, Any]) -> None:
     native["notice"] = failure or entry["notice"]
 
 
+def anchored_resets(reading: dict[str, Any]) -> list[dict[str, Any]]:
+    """The reading's windows whose reset belongs to the account. A rolling window nobody has started yet resets one
+    window length after the moment it was read, so its reset says when the reading was taken, not whose it is."""
+    fetched = utc_timestamp(reading.get("fetchedAt"))
+    return [window for window in dict_list(reading.get("windows")) if isinstance(window.get("resetsAt"), int)
+            and not (fetched and window.get("windowSeconds")
+                     and abs(window["resetsAt"] - fetched - window["windowSeconds"]) <= 2)]
+
+
+def same_limits(native: dict[str, Any], entry: dict[str, Any]) -> bool:
+    """Whether an omp account that names no email (an API key) is the native reading itself.
+
+    Both read fine, every limit omp reports resets within a second of a native limit of the same length, and at
+    least one of those resets is off the hour: a reset on the hour can be a calendar boundary that every account
+    shares, while one at an odd second is anchored to this account's own use. Rolling windows not started yet on
+    either side are left out (anchored_resets)."""
+    if native.get("status") != "ok" or entry.get("status") != "ok":
+        return False
+    ours = anchored_resets(native)
+    own_reset = False
+    for window in anchored_resets(entry):
+        twin = next((mine for mine in ours if abs(mine["resetsAt"] - window["resetsAt"]) <= 1
+                     and (not mine.get("windowSeconds") or not window.get("windowSeconds")
+                          or mine["windowSeconds"] == window["windowSeconds"])), None)
+        if twin is None:
+            return False
+        own_reset = own_reset or twin["resetsAt"] % 3600 != 0
+    return own_reset
+
+
 def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
                        accounts: list[tuple[OmpIdentity, dict[str, Any]]], cliproxy: bool) -> dict[str, Any] | None:
     """The provider's result with its omp accounts merged in (backend contract, "omp accounts")."""
@@ -8568,7 +8689,13 @@ def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
     for (email, _account, _org), entry in accounts:
         # A native reading of the same account is the more reliable one and stays. It lists both origins, and
         # keeps the id the omp account would have had, which live omp requests name (scripts/omp-live.py).
+        # An omp account without an email (an API key) is matched by its resets instead.
         matches = [native for native in natives if email and str(native.get("account") or "").strip().lower() == email]
+        if not email:
+            twin = next((native for native in natives if same_limits(native, entry)), None)
+            # The provider-level reading and its entry under `accounts` are one account: both note omp.
+            matches = [native for native in natives if twin is not None and (native is twin or (
+                twin.get("accountId") and native.get("accountId") == twin.get("accountId")))]
         for native in matches:
             native["origins"] = [native_origin(provider, native, cliproxy), "omp"]
             native.setdefault("ompAccountId", entry["accountId"])
@@ -8705,6 +8832,53 @@ def parse_key_files(values: list[str]) -> dict[str, Path]:
     return key_files
 
 
+# How much of one reading the shell is given (backend contract, "Resource ceilings"). Every result passes through
+# bound_providers after omp is merged and before history is recorded, so no provider answer, omp report or login
+# registry can make the shell build more limit cards, account rows or bar dots than this, however many items fit
+# in the 2 MiB it reads. The readers' own order decides what is kept: they list their main windows first.
+MAX_PROVIDER_RESULTS = 64
+MAX_READING_ACCOUNTS = 64
+MAX_READING_WINDOWS = 16
+MAX_WINDOW_TEXT_CHARS = 80
+MAX_READING_TEXT_CHARS = 120
+READING_TEXT_FIELDS = ("name", "plan", "account", "label", "source")
+
+
+def bound_reading(reading: dict[str, Any]) -> dict[str, Any]:
+    """`reading` (a provider result or one of its accounts) with at most MAX_READING_WINDOWS windows and short
+    text, in place."""
+    for field in READING_TEXT_FIELDS:
+        if isinstance(reading.get(field), str):
+            reading[field] = reading[field][:MAX_READING_TEXT_CHARS]
+    windows = reading.get("windows")
+    if isinstance(windows, list):
+        kept = []
+        for window in windows[:MAX_READING_WINDOWS]:
+            if isinstance(window, dict):
+                for field in ("id", "label"):
+                    if isinstance(window.get(field), str):
+                        window[field] = window[field][:MAX_WINDOW_TEXT_CHARS]
+            kept.append(window)
+        reading["windows"] = kept
+    return reading
+
+
+def bound_providers(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """At most MAX_PROVIDER_RESULTS results, each with at most MAX_READING_ACCOUNTS accounts, all bounded."""
+    kept = []
+    for provider in providers[:MAX_PROVIDER_RESULTS]:
+        if not isinstance(provider, dict):
+            continue
+        bound_reading(provider)
+        accounts = provider.get("accounts")
+        if isinstance(accounts, list):
+            provider["accounts"] = [bound_reading(account) for account in accounts[:MAX_READING_ACCOUNTS]
+                                    if isinstance(account, dict)]
+        kept.append(provider)
+    return kept
+
+
+
 def build_payload(
     provider_ids: list[str], timeout: float, state_dir: Path | None,
     source: str = "direct", cliproxy_url: str = "http://127.0.0.1:8317",
@@ -8745,6 +8919,7 @@ def build_payload(
     providers, merged, reads = merge_omp_safely(providers, provider_ids, {"local": local_read, "gateway": gateway_read},
                                                 source == "cliproxy")
     local_read, gateway_read = reads["local"], reads["gateway"]
+    providers = bound_providers(providers)
     if not omp_only:
         update_and_attach_history(providers, state_dir)
     omp_summary = {

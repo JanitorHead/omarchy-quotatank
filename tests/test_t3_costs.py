@@ -173,6 +173,11 @@ class WireTests(unittest.TestCase):
                 self.assertTrue(error)
                 self.assertNotIn(self.config["url"], error)
 
+    def test_a_token_crosses_a_network_only_over_https_or_tailscale(self):
+        self.assertEqual(self.collect(url="http://192.168.1.20:3773/base"), (None, "unavailable", t3.PLAIN_HTTP_REFUSED))
+        self.assertEqual(self.requests, [], "nothing reached any server")
+        self.assertEqual(self.collect()[1], "fresh", "this computer's own server still answers")
+
 
 class ValidationTests(unittest.TestCase):
     def test_invalid_contract_counter_zone_and_duplicate_bucket(self):

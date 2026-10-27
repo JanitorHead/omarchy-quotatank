@@ -51,6 +51,13 @@ class ResetTests(unittest.TestCase):
         self.assertEqual(details["applicableAvailableCount"], 0)
         self.assertEqual(details["availableCount"], 5)
 
+    def test_only_the_soonest_expiring_credits_are_offered(self):
+        details = reset.normalize_details({"available_count": 1000, "credits": [
+            credit(f"c{minute:03d}", f"2031-01-01T{minute // 60:02d}:{minute % 60:02d}:00Z") for minute in reversed(range(1000))]},
+            now=1800000000)
+        self.assertEqual([c["id"] for c in details["credits"]], [f"c{minute:03d}" for minute in range(reset.MAX_OFFERED_CREDITS)])
+        self.assertEqual(details["availableCount"], 1000, "the balance still counts every credit")
+
     def test_malformed_details_fail_closed(self):
         for payload in (None, {}, {"available_count": True, "credits": []},
                         {"available_count": 1, "credits": [credit(expiry="bad")]},
@@ -138,7 +145,7 @@ class ResetTests(unittest.TestCase):
                 key = Path(temporary) / "key"
                 key.write_text("synthetic-management-key")
                 key.chmod(0o600)
-                command = [sys.executable, str(SCRIPT), "--account-id", self.account_id,
+                command = [sys.executable, str(SCRIPT), "--provider", "codex", "--source", "cliproxy", "--account-id", self.account_id,
                            "--cliproxy-url", f"http://127.0.0.1:{server.server_port}", "--cliproxy-key-file", str(key)]
                 details = json.loads(subprocess.check_output(command + ["--action", "prepare"]))
                 consume = command + ["--action", "consume", "--target", details["target"],

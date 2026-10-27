@@ -42,9 +42,9 @@ QtObject {
   }
 
   function refresh() {
-    if (styleReduceMotion !== undefined || probe.running) return
-    probe.body = ""
-    probe.running = true
+    if (styleReduceMotion !== undefined || probeProcess.running) return
+    probeProcess.body = ""
+    probeProcess.running = true
   }
 
   function applyOption(text) {
@@ -60,25 +60,25 @@ QtObject {
 
   // hyprctl answers with one short JSON object; anything past 4 KiB is not that answer.
   property Process probe: Process {
-    id: probe
+    id: probeProcess
     property string body: ""
     command: ["hyprctl", "-j", "getoption", "animations:enabled"]
     stdout: SplitParser {
       splitMarker: ""
       onRead: function(data) {
-        if (probe.body.length < 4096) probe.body += String(data).slice(0, 4096 - probe.body.length)
+        if (probeProcess.body.length < 4096) probeProcess.body += String(data).slice(0, 4096 - probeProcess.body.length)
       }
     }
     onExited: function(exitCode) {
-      if (exitCode === 0) root.applyOption(probe.body)
-      probe.body = ""
+      if (exitCode === 0) root.applyOption(probeProcess.body)
+      probeProcess.body = ""
     }
   }
 
   // A compositor that does not answer must not leave the probe running.
   property Timer probeTimeout: Timer {
     interval: 3000
-    running: probe.running
-    onTriggered: probe.running = false
+    running: probeProcess.running
+    onTriggered: probeProcess.running = false
   }
 }

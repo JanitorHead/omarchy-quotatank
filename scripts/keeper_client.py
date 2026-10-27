@@ -12,6 +12,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from quotatank_common import FOREIGN_LOCAL_SERVER, PLAIN_HTTP_SECRET, SECRET_LOOKUP_SECONDS, foreign_local_server, secret_opener
+
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 
 
@@ -65,8 +67,12 @@ class Client:
     def __init__(self, url: str, timeout: float):
         self.url = normalize_url(url)
         self.deadline = time.monotonic() + timeout
-        self.opener = urllib.request.build_opener(
-            NoRedirects(), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        # The login password and the session cookie it earns reach HTTPS with a verified certificate, or plain
+        # HTTP only on this computer (to this user's or root's server) or through Tailscale; never a proxy.
+        self.opener = secret_opener(self.url, SECRET_LOOKUP_SECONDS,
+                                    NoRedirects(), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        if self.opener is None:
+            raise KeeperError("The Keeper login goes over " + PLAIN_HTTP_SECRET)
 
     def request(self, path: str, payload=None, limit=MAX_RESPONSE_BYTES):
         remaining = self.deadline - time.monotonic()
@@ -103,7 +109,9 @@ class Client:
             if code == 404:
                 raise KeeperError("Keeper activity endpoint was not found. Use the Keeper URL, not the CLIProxyAPI URL.") from None
             raise KeeperError(f"Keeper activity returned HTTP {code}.") from None
-        except (urllib.error.URLError, OSError, TimeoutError, http.client.HTTPException):
+        except (urllib.error.URLError, OSError, TimeoutError, http.client.HTTPException) as exc:
+            if foreign_local_server(exc):
+                raise KeeperError(FOREIGN_LOCAL_SERVER) from None
             raise KeeperError("Could not reach CPA Usage Keeper. Check the URL, connection, and certificate.") from None
         except (UnicodeError, json.JSONDecodeError):
             raise KeeperError("Keeper returned incomplete or unreadable history.") from None

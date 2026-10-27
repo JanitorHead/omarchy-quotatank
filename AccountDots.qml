@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Shapes
 import qs.Commons
+import qs.Commons as Commons
 
 // The account dots and hint of a menu bar chip (DESIGN §2.1–2.2), drawn from UsageLogic.barAccountStrip().
 // A filled dot is an account the chip counts; a hollow ring is another account, coloured by its state;
@@ -17,9 +18,9 @@ Item {
   property string mode: "single"
   property bool stale: false
   property var motion: null
-  property color foreground: Color.foreground
-  property color urgent: Color.urgent
-  property color accent: Color.accent
+  property color foreground: Commons.Color.foreground
+  property color urgent: Commons.Color.urgent
+  property color accent: Commons.Color.accent
   property color dim: Qt.darker(foreground, 1.55)
   property string fontFamily: Style.font.family
   property int fontSize: Style.font.bodySmall

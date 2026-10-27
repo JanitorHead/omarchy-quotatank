@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import stat
@@ -72,7 +73,7 @@ def fake_connection(status, body, created, *, name="Connection"):
             self.sent = (method, path, body, headers)
 
         def getresponse(self):
-            return types.SimpleNamespace(status=status, read=lambda limit: body)
+            return types.SimpleNamespace(status=status, read1=io.BytesIO(body).read1)
 
         def close(self):
             pass
@@ -317,6 +318,12 @@ class ProcessDiscoveryTests(unittest.TestCase):
 
 
 class RpcTests(unittest.TestCase):
+    def setUp(self):
+        # The connection itself is open_tcp's (tested in test_omp_limits); these tests see what goes over it.
+        self.sock = mock.Mock(name="socket")
+        self.open_tcp = mock.patch.object(usage, "open_tcp", return_value=self.sock).start()
+        self.addCleanup(mock.patch.stopall)
+
     def test_refused_token_is_expired_and_body_error_code_is_http(self):
         created = []
         with mock.patch.object(usage.http.client, "HTTPConnection", fake_connection(401, b"", created)):
@@ -331,16 +338,27 @@ class RpcTests(unittest.TestCase):
 
     def test_token_travels_in_a_header_to_loopback_only(self):
         created = []
-        with mock.patch.object(usage.http.client, "HTTPSConnection",
-                               fake_connection(200, b'{"userStatus": {}}', created, name="HTTPS")):
+        wrapped = mock.Mock(name="tls")
+        with mock.patch.object(usage.http.client, "HTTPConnection", fake_connection(200, b'{"userStatus": {}}', created)), \
+                mock.patch.object(usage.ssl.SSLContext, "wrap_socket", return_value=wrapped) as wrap:
             payload = usage.antigravity_rpc("https", 8443, "tok-app", "GetUserStatus", {"a": 1}, 1)
+        self.open_tcp.assert_called_once_with(usage.ipaddress.ip_address("127.0.0.1"), 8443, 1, None)
+        wrap.assert_called_once_with(self.sock)
         connection = created[0]
-        self.assertEqual((connection.host, connection.port), ("127.0.0.1", 8443))
-        self.assertIsNotNone(connection.context)
+        self.assertEqual((connection.host, connection.port, connection.sock), ("127.0.0.1", 8443, wrapped))
         method, path, _, headers = connection.sent
         self.assertEqual((method, path), ("POST", usage.ANTIGRAVITY_RPC_PATH + "GetUserStatus"))
         self.assertEqual(headers["X-Codeium-Csrf-Token"], "tok-app")
         self.assertEqual(payload, {"userStatus": {}})
+
+    def test_a_port_another_account_holds_never_gets_the_token(self):
+        self.open_tcp.side_effect = usage.ForeignLocalServer
+        created = []
+        with mock.patch.object(usage.http.client, "HTTPConnection", fake_connection(200, b"{}", created)):
+            with self.assertRaises(usage.ProviderFailure) as refused:
+                usage.antigravity_rpc("http", 8080, "tok", "GetUserStatus", {}, 1)
+        self.assertEqual(refused.exception.kind, "config")
+        self.assertIsNone(created[0].sent)
 
     def test_refusal_outranks_plain_failures_across_endpoints(self):
         endpoints = [("https", 1, "tok"), ("http", 2, "tok")]

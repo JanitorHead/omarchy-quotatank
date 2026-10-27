@@ -53,7 +53,7 @@ class ProjectContractTests(unittest.TestCase):
             "warningThreshold", "criticalThreshold",
             "usageSource", "cliproxyUrl", "cliproxyKeyFile", "hideAccountEmails", "squareUsageCards", "providerColors", "notifyLimitThresholds", "costPriceOverrides",
             "costLocalProviders", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers", "extraKeys",
-            "ompLocal", "ompGatewayUrl", "ompGatewayKeyFile", "ompStatsUrl", "barAccountMode", "motion", "accountModes",
+            "ompLocal", "ompGatewayUrl", "ompGatewayKeyFile", "ompStatsUrl", "barAccountMode", "motion", "accountModes", "hiddenAccounts",
             "creditWarningUsd", "creditCriticalUsd", "hideExhaustedProviders", "barMaxChips", "providerQuotaModes", "providerOrder", "dismissedProviders",
         } | key_files)
         self.assertEqual(set(manifest["barWidget"]["defaults"]), keys, "every setting has a default")
@@ -176,7 +176,6 @@ class ProjectContractTests(unittest.TestCase):
 
         collector = (ROOT / "scripts" / "usage-fetch.py").read_text()
         self.assertIn('[codex, "-s", "read-only", "-a", "never", "app-server"]', collector)
-        self.assertIn("MAX_HTTP_RESPONSE_BYTES + 1", collector)
         self.assertIn("class CodexRpcStream", collector)
         self.assertNotIn("process.stdout.readline", collector)
 

@@ -49,7 +49,13 @@ Column {
   PlainText {
     width: parent.width
     visible: root.backend.state === "ready"
-    text: "Use 1 of " + root.backend.details.availableCount + " available resets. The reset expiring soonest is selected first."
+    text: {
+      var available = Number(root.backend.details.availableCount)
+      var resets = available + " banked reset" + (available === 1 ? "" : "s")
+      return root.backend.providerId === "claude"
+        ? "Spends 1 of " + resets + " now; it cannot be undone. Claude spends the one it offers next."
+        : "Use 1 of " + root.backend.details.availableCount + " available resets. The reset expiring soonest is selected first."
+    }
     color: root.foreground
     font.family: root.fontFamily
     font.pixelSize: Style.font.bodySmall

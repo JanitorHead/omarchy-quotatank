@@ -52,6 +52,42 @@ function firstItems(value, limit) {
   return result
 }
 
+// Item ceilings where the shell takes a helper's output. A reply fits in the shell's byte cap with
+// thousands of items; past these, nothing builds more cards, rows or dots, and no scan over a list
+// grows. The helpers keep to the same ceilings (bound_providers in usage-fetch.py, rank_models in
+// cost-fetch.py); these hold whatever a helper prints. Each list keeps its first items, in the
+// helper's order.
+var USAGE_LIST_LIMITS = { providers: 64, accounts: 64, windows: 16 }
+var COST_LIST_LIMITS = { providers: 32, models: 64, periods: 48, projects: 16, agents: 4, sources: 16, coverage: 32 }
+var RESET_CREDIT_LIMIT = 8
+
+// `object[field]` cut to `limit` items, in place, when it is a list.
+function boundField(object, field, limit) {
+  if (object && typeof object === "object" && isListLike(object[field]) && object[field].length > limit)
+    object[field] = firstItems(object[field], limit)
+}
+
+// A parsed limits reply (backend contract) with its lists within USAGE_LIST_LIMITS, in place.
+function boundUsagePayload(payload) {
+  boundField(payload, "providers", USAGE_LIST_LIMITS.providers)
+  var providers = listOrEmpty(payload && payload.providers)
+  for (var i = 0; i < providers.length; i++) {
+    boundField(providers[i], "windows", USAGE_LIST_LIMITS.windows)
+    boundField(providers[i], "accounts", USAGE_LIST_LIMITS.accounts)
+    var accounts = listOrEmpty(providers[i] && providers[i].accounts)
+    for (var j = 0; j < accounts.length; j++) boundField(accounts[j], "windows", USAGE_LIST_LIMITS.windows)
+  }
+  return payload
+}
+
+// A parsed cost reply (cost contract) with its lists within COST_LIST_LIMITS, in place.
+function boundCostPayload(payload) {
+  for (var field in COST_LIST_LIMITS) boundField(payload, field, COST_LIST_LIMITS[field])
+  var periods = listOrEmpty(payload && payload.periods)
+  for (var i = 0; i < periods.length; i++) boundField(periods[i], "providers", COST_LIST_LIMITS.providers)
+  return payload
+}
+
 function contains(value, needle) {
   var source = listOrEmpty(value)
   for (var i = 0; i < source.length; i++) {
@@ -271,7 +307,7 @@ function parseProviderOrder(text) {
   catch (error) { return [] }
   if (!Array.isArray(parsed)) return []
   var result = []
-  for (var i = 0; i < parsed.length; i++) {
+  for (var i = 0; i < parsed.length && result.length < USAGE_LIST_LIMITS.providers; i++) {
     var id = parsed[i]
     if (typeof id === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(id) && result.indexOf(id) === -1) result.push(id)
   }
@@ -787,6 +823,26 @@ function severityCrossings(previous, readings) {
   return { state: state, crossings: crossings }
 }
 
+// At most this many desktop notifications per check, the worst first; one more counts the rest, so a source whose
+// limits swing on every refresh cannot flood the desktop.
+var MAX_LIMIT_NOTIFICATIONS = 3
+
+// The notifications for one check's crossings (severityCrossings): { critical, title, body } each, body escaped.
+function limitNotifications(crossings) {
+  var ordered = listOrEmpty(crossings).slice().sort(function (a, b) {
+    return SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]
+  })
+  var shown = ordered.slice(0, MAX_LIMIT_NOTIFICATIONS).map(function (crossing) {
+    return { critical: crossing.severity === "critical", title: String(crossing.title),
+      body: notificationBody(crossing.body || alertText(crossing.severity, crossing.remaining, crossing.mode)) }
+  })
+  var rest = ordered.length - shown.length
+  if (rest > 0)
+    shown.push({ critical: false, title: "Quotatank",
+      body: notificationBody(rest + (rest === 1 ? " more limit" : " more limits") + " crossed a threshold.") })
+  return shown
+}
+
 function exportWindows(rows, nowSeconds) {
   var result = []
   var list = listOrEmpty(rows)
@@ -1165,7 +1221,8 @@ var DEFAULT_SETTINGS = {
   ompLocal: true,
   barAccountMode: "dots",
   motion: "system",
-  accountModes: "{}"
+  accountModes: "{}",
+  hiddenAccounts: "{}"
 }
 
 // Quotatank 2 keeps its private files in omarchy/quotatank; 1.x kept them in omarchy/model-usage, and the
@@ -1370,7 +1427,8 @@ function extraKeyArguments(raw, providerIds) {
 
 // The name on an account card. Omarchy subscription accounts carry the name chosen when they were
 // added (`label`); a provider's extra keys use the names saved in Settings; proxy and unnamed accounts
-// fall back to the email, or "Account N" while account emails are hidden.
+// fall back to the email, or "Account N" while account emails are hidden: N is the account's place among
+// all of the provider's accounts (`accountNumber` once some are hidden, so the others keep theirs).
 function accountName(account, extraRaw, hideEmails, index) {
   if (!account) return ""
   var named = String(account.label || "")
@@ -1382,7 +1440,7 @@ function accountName(account, extraRaw, hideEmails, index) {
   }
   var email = String(account.account || "")
   if (named) return named + (account.label && account.active ? " · in use" : "") + (!hideEmails && email ? " · " + email : "")
-  return hideEmails || !email ? "Account " + index : email
+  return hideEmails || !email ? "Account " + (account.accountNumber || index) : email
 }
 
 // `list` with `id` present or absent, in `order`; ids that `order` does not know are dropped.
@@ -1641,11 +1699,55 @@ function accountPlanLabel(account) {
   return String(account.plan || account.name || account.id || "Account")
 }
 
+// Banked resets (backend contract, `credits`). Codex reports its count, zero included; Claude reports one only
+// while the account has a reset, with when the next one expires and whether Claude lets it be spent now.
+var RESET_PROVIDER_IDS = ["codex", "claude"]
+var CLAUDE_RESET_NOTES = {
+  cooldown: "Claude asks to wait before the next reset.",
+  paused: "Claude has paused this reset.",
+  limit: "Usable once you reach a limit.",
+  unavailable: "Claude is not offering it right now."
+}
+
+function accountResetCount(account) {
+  var count = account && account.credits ? account.credits.resetCreditsAvailable : null
+  return typeof count === "number" && isFinite(count) && count >= 0 && Math.floor(count) === count ? count : null
+}
+
 function accountResetLabel(account) {
-  if (!account || account.id !== "codex" || account.status !== "ok") return ""
-  var count = account.credits && account.credits.resetCreditsAvailable
-  if (typeof count !== "number" || !isFinite(count) || count < 0 || Math.floor(count) !== count) return ""
+  if (!account || !contains(RESET_PROVIDER_IDS, account.id) || account.status !== "ok") return ""
+  var count = accountResetCount(account)
+  if (count === null || (account.id === "claude" && count === 0)) return ""
   return count + " banked reset" + (count === 1 ? "" : "s")
+}
+
+// Whether the account's resets are shown: Claude's wherever it is read, Codex's in CLIProxyAPI mode, where they
+// can be applied.
+function accountResetShown(account, proxyMode) {
+  return accountResetLabel(account) !== "" && (account.id === "claude" || !!proxyMode)
+}
+
+// Whether this widget can apply one of the account's resets: Codex through CLIProxyAPI, Claude with its own
+// sign-in or through CLIProxyAPI when Claude lets the next one be spent now. An account read only through omp
+// keeps its sign-in in omp, so its reset is applied there.
+function accountResetActionable(account, proxyMode) {
+  if (!accountResetShown(account, proxyMode) || !(accountResetCount(account) > 0) || account.origin === "omp") return false
+  return account.id === "codex" || account.credits.resetCreditsUsable === true
+}
+
+// Why a reset the account has cannot be applied from here; "" when it can, or when it has none.
+function accountResetNote(account, proxyMode) {
+  if (!accountResetShown(account, proxyMode) || !(accountResetCount(account) > 0) || accountResetActionable(account, proxyMode))
+    return ""
+  if (account.origin === "omp") return "Apply it in omp: omp usage reset."
+  return CLAUDE_RESET_NOTES[String(account.credits.resetCreditsReason || "")] || CLAUDE_RESET_NOTES.unavailable
+}
+
+// Whether `credits` carries money (a balance, spending or a cap) beside any banked-reset count.
+function creditsHaveFunds(credits) {
+  if (!credits) return false
+  return ["remaining", "used", "limit", "total"].some(function(key) { return credits[key] !== null && credits[key] !== undefined })
+    || credits.unlimited === true
 }
 
 function accountWindows(account, expanded) {
@@ -2107,9 +2209,10 @@ var OMP_LOG_LIMIT = 4096            // entries in the live request log
 var OMP_LINE_LIMIT = 65536          // characters in one live line
 var OMP_URL_PROBLEM = "Enter an HTTP or HTTPS address with a host name and, if needed, a port: no path, user name, query, or fragment."
 var OMP_HTTP_PROBLEM = "Use HTTPS, or plain HTTP only to this computer, a private network, or Tailscale."
-// The gateway's token can spend model quota, so it never goes over plain HTTP outside this computer and
-// Tailscale (the backend checks where a name leads before it sends anything).
-var OMP_GATEWAY_HTTP_PROBLEM = "Use HTTPS, or plain HTTP only to this computer or over Tailscale (a 100.x.y.z address or the computer's Tailscale name)."
+// A secret (the omp gateway token, the CLIProxyAPI management key, the Keeper password, a T3 token) never goes
+// over plain HTTP outside this computer and Tailscale (the backends check where a name leads, and on this
+// computer whose server it is, before they send anything).
+var SECRET_HTTP_PROBLEM = "Use HTTPS, or plain HTTP only to this computer or over Tailscale (a 100.x.y.z address or the computer's Tailscale name)."
 
 // The omp settings with their defaults. `local` reads omp on this computer unless turned off.
 function ompSettings(settings) {
@@ -2230,8 +2333,22 @@ function ompServerUrlProblem(text, gateway) {
   var address = ompSplitHost(match[2])
   if (!address) return OMP_URL_PROBLEM
   if (match[1].toLowerCase() === "https") return ""
-  if (gateway === true) return ompTailscaleHost(address.host) ? "" : OMP_GATEWAY_HTTP_PROBLEM
+  if (gateway === true) return ompTailscaleHost(address.host) ? "" : SECRET_HTTP_PROBLEM
   return ompPlainHttpHost(address.host) ? "" : OMP_HTTP_PROBLEM
+}
+
+// What is wrong with the URL of a server that receives a secret (CLIProxyAPI, CPA Usage Keeper, T3), or "":
+// an HTTP(S) address with an optional path, without credentials, query, fragment or "."/".." segments, `invalid`
+// otherwise; HTTPS anywhere, plain HTTP only to this computer or over Tailscale (secret_opener in
+// scripts/quotatank_common.py).
+function secretServerUrlProblem(text, invalid) {
+  var value = String(text === undefined || text === null ? "" : text).trim()
+  var match = /^(https?):\/\/([^\s\/?#@\\]+)(\/[^\s?#\\]*)?$/i.exec(value)
+  if (!match || /[\x00-\x1f\x7f]/.test(value) || /\/\.{1,2}(?:\/|$)/.test(match[3] || "")) return invalid
+  var address = ompSplitHost(match[2])
+  if (!address) return invalid
+  if (match[1].toLowerCase() === "https") return ""
+  return ompTailscaleHost(address.host) ? "" : SECRET_HTTP_PROBLEM
 }
 
 // The computer an omp server address names, for "omp stats on devbox": MagicDNS names drop the
@@ -2331,6 +2448,8 @@ function ompGatewayProblem(message, url) {
     return { summary: "not a gateway", text: "That address did not answer like omp's auth gateway. Check the URL, and update omp there if it is older." }
   if (/plain HTTP only to this computer or over Tailscale/.test(text))
     return { summary: "needs HTTPS or Tailscale", text: "The token goes over plain HTTP only to this computer or over Tailscale. Use an https:// address, or check that Tailscale is connected on both computers and that the address is that computer's Tailscale name or address." }
+  if (/belongs to another account/.test(text))
+    return { summary: "another account's port", text: "That port on this computer belongs to another account, so the token was not sent. Start omp auth-gateway or the SSH tunnel as yourself, or use an https:// address." }
   var sentences = text.split(/\.\s+/)
   var kept = []
   for (var i = 0; i < sentences.length; i++)
@@ -2662,6 +2781,99 @@ function setAccountMode(raw, providerId, mode) {
 
 function accountModeLabel(mode) {
   return mode === "single" ? "One at a time" : mode === "together" ? "Together" : "Automatic"
+}
+
+// Accounts hidden under Settings → Providers → Customize (`hiddenAccounts`, a JSON object of provider id →
+// account ids, as text or already parsed). A hidden account stays signed in and keeps its key; it is only
+// left out of Limits, the menu bar and the notices. The one reading of the setting.
+var HIDDEN_ACCOUNT_LIMIT = 32
+
+function parseHiddenAccounts(raw) {
+  var parsed = raw
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw === "string") {
+    if (raw.length > 65536) return {}
+    try { parsed = JSON.parse(raw) } catch (error) { return {} }
+  }
+  if (!parsed || typeof parsed !== "object" || isListLike(parsed)) return {}
+  var result = {}
+  var providerIds = Object.keys(parsed)
+  for (var i = 0; i < providerIds.length; i++) {
+    var rows = parsed[providerIds[i]]
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(providerIds[i]) || !isListLike(rows)) continue
+    var ids = []
+    for (var j = 0; j < rows.length && ids.length < HIDDEN_ACCOUNT_LIMIT; j++)
+      if (typeof rows[j] === "string" && rows[j] !== "" && rows[j].length <= 128 && ids.indexOf(rows[j]) < 0) ids.push(rows[j])
+    if (ids.length) result[providerIds[i]] = ids
+  }
+  return result
+}
+
+function setAccountHidden(raw, providerId, accountId, hidden) {
+  var all = parseHiddenAccounts(raw)
+  var id = String(accountId)
+  var ids = (all[providerId] || []).filter(function (known) { return known !== id })
+  if (hidden && ids.length < HIDDEN_ACCOUNT_LIMIT) ids.push(id)
+  if (ids.length) all[providerId] = ids
+  else delete all[providerId]
+  return JSON.stringify(all)
+}
+
+function accountHidden(raw, providerId, accountId) {
+  return (parseHiddenAccounts(raw)[String(providerId)] || []).indexOf(String(accountId)) >= 0
+}
+
+// A provider's reading without its hidden accounts. Its provider-level fields describe the active account
+// that is left (else the first that read fine, else the first), and a single account left is the reading
+// on its own, without `accounts`. Hiding every account changes nothing: turning the provider off does that.
+function visibleAccountsReading(provider, hiddenIds) {
+  var accounts = listOrEmpty(provider && provider.accounts)
+  var hidden = listOrEmpty(hiddenIds)
+  if (!hidden.length || accounts.length < 2) return provider
+  var kept = accounts.filter(function (account) { return hidden.indexOf(String(account && account.accountId || "")) < 0 })
+  if (kept.length === accounts.length || kept.length === 0) return provider
+  var lead = -1
+  for (var i = 0; i < kept.length && lead < 0; i++) if (kept[i].active === true) lead = i
+  for (var j = 0; j < kept.length && lead < 0; j++) if (kept[j].status === "ok") lead = j
+  if (lead < 0) lead = 0
+  // Fields no account carries (omp's pool, Omarchy's account switch) belong to the provider and stay.
+  var accountKeys = {}
+  accounts.forEach(function (account) { Object.keys(account || {}).forEach(function (key) { accountKeys[key] = true }) })
+  var summary = Object.assign({}, kept[lead])
+  Object.keys(provider).forEach(function (key) { if (!accountKeys[key] && key !== "accounts") summary[key] = provider[key] })
+  if (kept.length < 2) {
+    delete summary.accounts
+    delete summary.accountCount
+    return summary
+  }
+  // Unnamed accounts keep the number they had before others were hidden ("Account 3" stays Account 3).
+  summary.accounts = kept.map(function (account) {
+    return Object.assign({}, account, { accountCount: kept.length, accountNumber: accounts.indexOf(account) + 1 })
+  })
+  summary.accountCount = kept.length
+  return summary
+}
+
+function withoutHiddenAccounts(providers, raw) {
+  var list = listOrEmpty(providers)
+  var hidden = parseHiddenAccounts(raw)
+  if (!Object.keys(hidden).length) return list
+  return Array.prototype.map.call(list, function (provider) {
+    return provider && hidden[provider.id] ? visibleAccountsReading(provider, hidden[provider.id]) : provider
+  })
+}
+
+var ACCOUNT_ORIGIN_TEXT = { omarchy: "Omarchy login", signin: "sign-in", key: "API key", proxy: "CLIProxyAPI", omp: "omp" }
+
+// An account's line in Settings → Customize: its name and where it is read from ("Account 2 · omp",
+// "Work · Omarchy login + omp"), so two readings of one account tell apart.
+function accountSettingsLabel(account, extraRaw, hideEmails, index) {
+  if (!account) return ""
+  var name = String(accountName(account, extraRaw, hideEmails, index + 1)).replace(/ · in use(?= · |$)/, "")
+  var origins = listOrEmpty(account.origins).length ? listOrEmpty(account.origins) : [account.origin]
+  var where = Array.prototype.map.call(origins, function (origin) { return ACCOUNT_ORIGIN_TEXT[origin] || "" })
+    .filter(function (text) { return text !== "" })
+  return where.length ? name + " · " + where.join(" + ") : name
 }
 
 // ---- 1.9 QmlLimits ----

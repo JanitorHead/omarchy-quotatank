@@ -277,6 +277,14 @@ ShellRoot {
       check(saved.accountModes === '{"claude":"together"}' && form.overrideSummary("claude") === "Together", "Accounts are used: Together")
       shown("accountMode-claude").changed("auto")
       check(saved.accountModes === "{}", "Automatically forgets the override")
+      check(shown("showAccount-claude-1").label === "Account 2 · omp", "each account says where it is read from: " + shown("showAccount-claude-1").label)
+      shown("showAccount-claude-1Switch").toggled()
+      check(saved.hiddenAccounts === '{"claude":["omp-0123456789ab"]}' && form.overrideSummary("claude") === "1 hidden",
+        "Accounts shown: turning one off hides it")
+      check(!shown("showAccount-claude-0").enabled, "the last account shown cannot be hidden")
+      shown("showAccount-claude-1Switch").toggled()
+      check(saved.hiddenAccounts === "{}" && shown("showAccount-claude-0").enabled, "turning it back on forgets it")
+      check(!find(form, "showAccount-codex-0"), "a provider with one account lists none")
       check(form.providersSummary().indexOf("· omp") > 0, "the index says omp adds accounts")
       formPhase = 99
     }

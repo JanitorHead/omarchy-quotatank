@@ -29,6 +29,9 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
+# Nothing may be written beside the scripts: Omarchy reloads every plugin when a file in a plugin's folder changes.
+sys.dont_write_bytecode = True
+
 from quotatank_common import OMP_PROVIDERS, move_legacy_folders, normalize_server_url, omp_account_id
 
 SPEC = importlib.util.spec_from_file_location("omp_live_usage", Path(__file__).with_name("usage-fetch.py"))

@@ -11,6 +11,9 @@ ShellRoot {
   property int finishes: 0
   readonly property var account: ({ id: "codex", accountId: "account", status: "ok",
     credits: { resetCreditsAvailable: 2 }, planType: "pro" })
+  // A single Claude Code sign-in (no accountId) holding one reset Claude lets it spend now.
+  readonly property var claude: ({ id: "claude", name: "Claude Code", status: "ok", plan: "Max",
+    credits: { label: "Banked resets", resetCreditsAvailable: 1, resetCreditsUsable: true, resetCreditsReason: "" } })
 
   QtObject {
     id: usage
@@ -47,6 +50,9 @@ ShellRoot {
     backend.finished.connect(function() { root.finishes++ })
     usage.usageSource = "direct"
     check(!backend.begin(account, "Account 1"), "direct mode is not actionable")
+    check(!backend.begin(Object.assign({}, claude, { credits: Object.assign({}, claude.credits,
+      { resetCreditsUsable: false, resetCreditsReason: "limit" }) }), "Claude Code"), "a reset Claude holds back is not actionable")
+    check(!backend.begin(Object.assign({}, claude, { origin: "omp" }), "Claude Code"), "omp keeps that sign-in")
     usage.usageSource = "cliproxy"
     check(!backend.begin(Object.assign({}, account, { credits: {} }), "Account 1"), "unknown count is not actionable")
     check(backend.begin(account, "Account 1"), "begin fresh lookup")
@@ -101,6 +107,20 @@ ShellRoot {
         b.preparedAt = Date.now() - 180000
         b.apply()
         root.check(b.state === "error" && !b.busy, "stale confirmation cannot submit")
+        b.cancel()
+        usage.usageSource = "direct"
+        root.check(b.begin(root.claude, "Claude Code"), "a Claude Code sign-in applies its own reset")
+        root.check(b.providerId === "claude" && b.accountId === "main", "the single sign-in is main")
+        root.phase++
+      } else if (root.phase === 6 && b.state === "ready") {
+        root.check(b.selectedCredit.id === "launch-reset", "Claude's offered reset is selected")
+        root.check(b.details.availableCount === 1, "Claude's count reaches the confirmation")
+        b.apply()
+        root.phase++
+      } else if (root.phase === 7 && b.state === "result") {
+        root.check(root.finishes === 3, "a Claude reset refreshes usage")
+        b.cancel()
+        usage.usageSource = "cliproxy"
         if (Quickshell.env("QT_QPA_PLATFORM") === "offscreen") {
           console.log("Reset QML contract: passed")
           Qt.quit()
@@ -111,10 +131,10 @@ ShellRoot {
             cliproxyKeyFile: "/private/proxy key", enabledProviders: [], refreshIntervalSec: 3600 } })
         root.widget.resetAction.scriptPath = Quickshell.env("QUOTATANK_FAKE_RESET")
         root.phase++
-      } else if (root.phase === 6 && root.widget.providers.length > 0) {
+      } else if (root.phase === 8 && root.widget.providers.length > 0) {
         root.widget.selectProviderId("codex")
         root.phase++
-      } else if (root.phase === 7 && root.widget.accountList.view.count > 0) {
+      } else if (root.phase === 9 && root.widget.accountList.view.count > 0) {
         // Rows follow the accounts once the list has synced its model.
         root.check(root.widget.accountList.view.count === 3, "account badge integration fixture loaded")
         var zero = root.namedChild(root.widget.accountList.rowFor("0"), "accountResetAction")
@@ -125,7 +145,7 @@ ShellRoot {
         root.check(root.widget.resetAction.accountId === "1", "badge targets the clicked account")
         root.check(root.widget.resetAction.accountLabel === "Account 2", "badge preserves email privacy")
         root.phase++
-      } else if (root.phase === 8 && root.widget.resetAction.state === "ready") {
+      } else if (root.phase === 10 && root.widget.resetAction.state === "ready") {
         root.check(!root.widget.resetAction.busy, "badge click only prepares confirmation")
         root.widget.resetAction.cancel()
         root.check(!root.widget.resetAction.active, "panel confirmation cancels without consuming")

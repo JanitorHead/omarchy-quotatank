@@ -4,6 +4,35 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.2.0
+
+### Added
+
+- **Claude's banked resets.** When Anthropic grants a Claude account a reset of its 5-hour and weekly limits (the Claude Opus 5.5 launch gave Pro and Max one), a card under the limits counts it and says when it expires, and **Apply…** spends it after the same confirmation Codex resets use, on a Claude Code sign-in or an Omarchy login; in CLIProxyAPI mode a Claude account's row badge does. The confirmation offers the reset Claude spends next; when Claude holds it back (until a limit is reached, during a cooldown, or paused), the card says why and has no button. An uncertain outcome keeps **Retry same reset** with the same request id. Accounts read only through omp show the count and are applied in omp, which holds their sign-in. Claude lists these resets only to Claude Code, so Claude's usage, profile and reset requests now identify as Claude Code, as omp does.
+- **Hide an account.** **Settings → Providers → Customize → Accounts shown** lists a provider's accounts, each with where it is read from (`sign-in`, `Omarchy login`, `API key`, `omp`, `CLIProxyAPI`), and a switch that leaves one out of Limits, the menu bar and the notices. The account stays signed in and keeps its key, and one always stays shown.
+
+### Fixed
+
+- **Opening Costs reloaded the whole bar.** Python saved compiled copies of the helper scripts in `scripts/__pycache__`, inside the plugin's folder, the first time a script ran after an update. Omarchy reloads every plugin when a file in a plugin's folder changes, so the bar flashed as if just installed. The helpers no longer write anything beside themselves.
+- **An omp API key showed its account twice.** omp names an account by its email, and an API key (OpenCode Go's, for one) has none, so the account omp read with a key sat beside the same account Quotatank reads itself. Such an account is now recognised by its limits: when every one resets at the same second as one of Quotatank's own, and one of those resets is off the hour, it is the same account and shows once.
+
+## 2.1.4
+
+### Fixed
+
+- **One provider's answer could stall the whole desktop.** A limits reply is capped at 2 MiB, but that holds about 5,000 limits, and Claude's structured limits were taken however many there were. The panel built a card for each and every card searched the whole list for its own row, all on the thread that draws the Omarchy shell: against a test reply with 5,000 limits, opening that provider froze the shell for 40 seconds. Every list now has an item ceiling, applied by the helper and again where the shell reads its output: 64 providers, 64 accounts each and 16 limits per account, the reader's main windows first. The same reply now shows 16 cards in under 0.1 seconds, and each card finds its row directly. Reported by @HANCORE-linux during the marketplace review.
+- **The same held for the other lists the shell reads.** Costs keeps its 48 costliest models and folds the rest into "Other models" per provider, with exact totals; local and omp stats models could reach 1,024 rows before. Omarchy's login registry is read for at most 64 logins and extra keys for at most 8 per provider, before anything is read; the banked Codex reset confirmation offers the 8 that expire soonest instead of up to 1,024; and a saved provider order keeps at most 64 ids.
+
+## 2.1.3
+
+### Fixed
+
+- **Another account on the computer could catch a secret sent to this computer.** The omp gateway token, the CLIProxyAPI management key (by default `http://127.0.0.1:8317`), the Keeper password and T3 tokens went over plain HTTP to a loopback port without checking whose server listened there, so while that server was stopped any local account could listen on its port and receive the next poll's secret. Antigravity's session token had the same gap on `127.0.0.1`. A loopback connection now carries a secret only when the kernel lists its server end as yours or root's; otherwise the connection is closed before a byte is sent, and the widget says the port belongs to another account. Reproduced with a listener run as `nobody`: it received the gateway token, the management key and the Keeper password before, and nothing after. Reported by @HANCORE-linux during the marketplace review (omp gateway).
+- **The CLIProxyAPI key, the Keeper password and T3 tokens could cross a network in the clear.** Their server URLs took plain HTTP to any host and followed environment proxies. They now follow the omp gateway token's rule: HTTPS with a verified certificate, or plain HTTP only to this computer or through Tailscale to the computer the address names; proxies are ignored. Settings refuses other plain-HTTP addresses for these servers.
+- **A slow server could hold a check past its timeout.** The timeout applied to each read, so a server that sent a byte at a time kept a request open indefinitely and the whole check then timed out. Every response now also has an overall deadline.
+- **Two patterns could run for hours on a hostile answer.** Amp's usage text and TypeSafe's billing page were matched with patterns that backtrack across the text (about an hour for a 2 MiB page). Amp's text is now read as its own short lines and TypeSafe's script tags in one pass; both stay in milliseconds.
+- **Limit notifications are capped.** A check sends at most three, the worst first, and one that counts the rest, so a source whose limits swing on every refresh cannot flood the desktop.
+
 ## 2.1.2
 
 ### Fixed

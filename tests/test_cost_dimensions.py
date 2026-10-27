@@ -390,6 +390,23 @@ class DimensionAggregationTests(unittest.TestCase):
         only_subagent = costs.rank_agents([{"id": "subagent", "costUsd": None, "totalTokens": 9, "records": 1}])
         self.assertEqual(only_subagent[0], {"id": "main", "costUsd": 0.0, "totalTokens": 0, "records": 0})
 
+    def test_models_keep_the_costliest_rows_and_fold_the_rest_per_provider(self):
+        rates = {f"m{index:03d}": RATES["test-model"] for index in range(200)}
+        records = [usage(NOW - HOUR, 1000 + index, model=f"m{index:03d}", key=f"r{index}",
+                         provider="codex" if index % 2 else "claude") for index in range(200)]
+        models = costs.aggregate_usage(records, ["claude", "codex"], 7, NOW, rates, "UTC")["models"]
+        ranked = costs.rank_models(models)
+        self.assertEqual([row["model"] for row in ranked[:costs.MAX_MODEL_ROWS]],
+                         [f"m{index:03d}" for index in range(199, 199 - costs.MAX_MODEL_ROWS, -1)])
+        others = ranked[costs.MAX_MODEL_ROWS:]
+        self.assertEqual(sorted((row["provider"], row["model"]) for row in others),
+                         [("claude", "Other models"), ("codex", "Other models")])
+        self.assertTrue(all(row["sessions"] is None for row in others), "sessions cannot be summed across models")
+        for field in ("records", "totalTokens", "pricedRecords"):
+            self.assertEqual(sum(row[field] for row in ranked), sum(row[field] for row in models), field)
+        self.assertAlmostEqual(sum(row["costUsd"] for row in ranked), sum(row["costUsd"] for row in models), places=8)
+        self.assertEqual(costs.rank_models(models[:10]), models[:10], "a short list is left as it is")
+
 
 class HeatmapTests(unittest.TestCase):
     def test_heatmap_places_activity_by_local_day_and_hour(self):

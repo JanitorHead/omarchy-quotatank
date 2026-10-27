@@ -108,7 +108,7 @@ DeepSeek's platform is prepaid, so it is measured in money only. Turn on its **M
 
 Open the Quotatank popup, click the **gear**, and open **Providers**. Select **CLIProxyAPI** under **Source** to discover all providers and accounts managed by [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). Local CLI sign-ins are not needed for this source. The default `direct` source retains the existing behavior. The source applies as soon as it is chosen; the server URL saves when you finish editing it, and the management key when you press its **Save**.
 
-Set **CLIProxyAPI server URL** to your server address (default `http://127.0.0.1:8317`). Dashboard URLs ending in `/management.html`, management API URLs ending in `/v0/management` or `/v0/management/auth-files`, and reverse-proxy path prefixes are accepted. HTTPS certificates are verified; redirects are rejected.
+Set **CLIProxyAPI server URL** to your server address (default `http://127.0.0.1:8317`). Dashboard URLs ending in `/management.html`, management API URLs ending in `/v0/management` or `/v0/management/auth-files`, and reverse-proxy path prefixes are accepted. HTTPS certificates are verified; redirects are rejected. Plain HTTP carries the management key only to this computer or over Tailscale, as for the omp gateway; on this computer, CLIProxyAPI must run as you (or root, as Docker's port forwarding does), and a server another account runs gets nothing. A proxy on another network needs HTTPS.
 
 Enter the server's **Management API key** in the masked settings field and click **Save**. Use the plaintext key accepted by the management panel, not a client API key or a bcrypt hash from the server configuration. The widget stores it automatically in a private file with permissions `0600`; you do not need to create or choose a file. Leave the field blank to keep your existing key. The saved key is never loaded back into the form, and Cancel discards an entered key.
 
@@ -133,6 +133,8 @@ The collector lists managed accounts and asks CLIProxyAPI to make read-only upst
 
 In CLIProxyAPI mode, click a nonzero **banked resets** badge to review that account's current reset credits. The confirmation shows each reset's effect and expiry, selects the earliest expiry first (non-expiring credits last), and lets you choose another credit before clicking **Apply reset**. Account labels respect **Hide account emails**. The action spends one selected credit only on that account, then refreshes usage. Confirmations expire after two minutes and are dismissed when the configured connection changes. If the outcome is uncertain, **Retry same reset** reuses the original request identifier; closing the popup preserves that retry while the widget remains loaded. The upstream reset endpoints are internal ChatGPT APIs and may change.
 
+Claude's banked resets (resets of the 5-hour and weekly limits that Anthropic grants, such as a launch reset) show only while the account has one: on its row badge in CLIProxyAPI mode, and otherwise in a **banked reset** card under the limits, with when the next one expires. **Apply…** opens the same confirmation; it offers the reset Claude spends next, and **Apply reset** spends it on that account only. When Claude holds the reset back, the card says why (`Usable once you reach a limit.`, a cooldown, a pause) and has no button. Accounts read only through omp show the count but are applied in omp (`omp usage reset`), which holds their sign-in. Claude offers these resets only to Claude Code, so its usage, profile and reset requests identify as Claude Code. The reset endpoints are internal Anthropic APIs and may change.
+
 Provider buttons wrap to fit the panel. Failed refreshes preserve the last known reading in memory with a stale-data notice; switching servers clears those readings. At most 32 accounts per provider are checked, with four concurrent checks per provider and a shared deadline. In **Percentages** menubar mode, each provider shows only its icon and the quota figure chosen under **Show limits as**; account names appear in the tooltip. When the last-used account is known, the percentage belongs to that account. Account activity refreshes every 15 seconds through the configured CPA Usage Keeper, independently of quota refreshes and the Costs source. Configure the Keeper URL and password in settings for the same proxy. Hover for the last recorded request time. Round-robin and concurrent requests can use different accounts, so this identifies the most recently recorded request, not a guaranteed account for the next request. Without matching activity, or when account timestamps are tied, the bar still shows the best-capacity account’s quota. The tooltip identifies this pool summary and explains that the last-used account is unknown. Failed activity refreshes retain the last-known account with a tooltip notice. Icon mode includes last-used details in its tooltip.
 
 **Hide account emails** is enabled by default. Account cards and menubar tooltips use numbered labels (Account 1, Account 2, …), and account identities are omitted from the settings details. Turn it off under **Settings → Display** to show usernames/email addresses. This is a display preference; quota collection continues normally.
@@ -151,7 +153,9 @@ token, then **Save**. Up to four enabled servers are included automatically in
 server with usage contract version 4 or 5. Tokens are stored in private files;
 blank token fields preserve saved credentials. T3 may exchange a connection
 token for an access token; rejected or expired credentials produce a reconnect
-notice. Use a fresh connection token when prompted by the source status.
+notice. Use a fresh connection token when prompted by the source status. Tokens
+go over HTTPS, or over plain HTTP only to this computer (to a T3 server running as
+you) or over Tailscale; a T3 server on another network needs HTTPS.
 
 T3 scans Codex and Claude transcripts readable on its server, **including
 sessions started outside T3**. Another computer contributes only when its
@@ -235,6 +239,7 @@ In **Settings → Costs → Custom prices**, add the exact model ID and its inpu
 | `barAccountMode` | `"dots"` | `dots`: one chip per provider with a dot per account; `chips`: one chip per account, counted against `barMaxChips` |
 | `motion` | `"system"` | `system` follows Hyprland's animation setting; `reduced` turns animation off |
 | `accountModes` | `"{}"` | Per provider, `single` (one account at a time) or `together` (accounts spent at once); absent means automatic |
+| `hiddenAccounts` | `"{}"` | Per provider, the `accountId`s left out of Limits, the menu bar and the notices (Settings → Providers → Customize → Accounts shown); a hidden account stays signed in, and one account always stays shown |
 | `costKeeperPasswordFile` | empty | Private Keeper password for quota account activity (legacy setting name) |
 
 Examples:
@@ -272,11 +277,13 @@ Refresh intervals above one hour mark short limits `No recent data`, because the
 
 **One at a time or together.** Accounts are counted one at a time when new sessions use one account (Omarchy logins): the chip shows the account in use. They are counted together when several are spent at once, by a proxy, by omp's pool, or when two accounts rose within the last hour: the chip shows the account closest to its limit among those spending, and Limits sorts by headroom. **Settings → Providers → Customize → Accounts are used** can fix either mode per provider.
 
+**Hiding an account.** **Settings → Providers → Customize → Accounts shown** lists a provider's accounts, each with where it is read from (`sign-in`, `Omarchy login`, `API key`, `omp`, `CLIProxyAPI`). Turning one off leaves it out of Limits, the menu bar and the notices; it stays signed in and keeps its key, and turning it back on shows it again. One account always stays shown: to hide a provider, turn off **Monitor**.
+
 **Spending now.** An account is marked spending when its reading rose in the last 15 minutes, or when omp or the proxy reports a request for it in the last two. Readings arrive every refresh interval, so a light request may only show once it moves a percentage; omp's live feed shows it at once.
 
 ## omp (Oh My Pi)
 
-**On this computer.** With `ompLocal` on and omp set up (its `~/.omp/agent/agent.db` exists), Quotatank runs `omp usage --json` with each refresh and merges omp's accounts into the providers it already reads: an account you also use directly appears once. omp's session files feed the live activity and Costs (projects, main sessions and subagents).
+**On this computer.** With `ompLocal` on and omp set up (its `~/.omp/agent/agent.db` exists), Quotatank runs `omp usage --json` with each refresh and merges omp's accounts into the providers it already reads: an account you also use directly appears once. omp names an account by its email; an API key in omp (OpenCode Go's, for one) names none, so it is recognised by its limits instead, when they reset at the same second as the reading Quotatank makes itself. omp's session files feed the live activity and Costs (projects, main sessions and subagents).
 
 **On another computer.** In **Settings → Costs → omp on another computer**, enter the address of an `omp stats` dashboard started there (`omp stats --host <Tailscale address> --port 3847`, or reached through `ssh -N -L 3847:127.0.0.1:3847 <host>`). Quotatank reads its totals, providers, models and folders, and its event feed for live activity. The dashboard has no password and also serves conversations: keep it on Tailscale or behind SSH. For limits, **Settings → Providers → omp → On another computer** takes an omp auth gateway address and its token; Quotatank asks it only for `/v1/usage`.
 

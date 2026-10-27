@@ -12,6 +12,7 @@ Item {
   readonly property bool active: state !== "idle"
   readonly property bool busy: process.running
   property string accountId: ""
+  property string providerId: ""
   property string accountLabel: ""
   property string planLabel: ""
   property var details: ({ credits: [] })
@@ -23,12 +24,14 @@ Item {
     && selectedIndex < details.credits.length ? details.credits[selectedIndex] : null
   signal finished()
 
+  // `account` is a provider reading or one of its accounts; a single Claude Code sign-in has no accountId and is
+  // read as `main`.
   function begin(account, label) {
-    if (active || busy || usageBackend.usageSource !== "cliproxy" || !account
-        || account.id !== "codex" || account.status !== "ok"
-        || !(Number(account.credits && account.credits.resetCreditsAvailable) > 0)
-        || !account.accountId) return false
-    accountId = String(account.accountId)
+    var proxy = usageBackend.usageSource === "cliproxy"
+    if (active || busy || !UsageLogic.accountResetActionable(account, proxy)) return false
+    providerId = String(account.id)
+    accountId = String(account.accountId || (proxy ? "" : "main"))
+    if (accountId === "") return false
     accountLabel = label
     planLabel = UsageLogic.accountPlanLabel(account)
     details = ({ credits: [] })
@@ -61,9 +64,11 @@ Item {
   }
 
   function launch(action) {
-    var command = ["python3", scriptPath, "--action", action, "--account-id", accountId,
-      "--cliproxy-url", usageBackend.cliproxyUrl]
-    if (usageBackend.cliproxyKeyFile.trim() !== "")
+    var proxy = usageBackend.usageSource === "cliproxy"
+    var command = ["python3", scriptPath, "--action", action, "--provider", providerId,
+      "--source", proxy ? "cliproxy" : "direct", "--account-id", accountId]
+    if (proxy) command.push("--cliproxy-url", usageBackend.cliproxyUrl)
+    if (proxy && usageBackend.cliproxyKeyFile.trim() !== "")
       command.push("--cliproxy-key-file", usageBackend.cliproxyKeyFile)
     if (action === "consume") command.push("--target", details.target,
       "--credit-id", selectedCredit.id, "--request-id", details.requestId)
@@ -94,11 +99,12 @@ Item {
         message = "The server returned invalid reset details."
         return
       }
+      UsageLogic.boundField(result, "credits", UsageLogic.RESET_CREDIT_LIMIT)
       details = result
       selectedIndex = 0
       preparedAt = Date.now()
       state = result.credits.length > 0 ? "ready" : "error"
-      if (state === "error") message = "No available Codex resets were found for this account."
+      if (state === "error") message = "No banked reset can be applied to this account right now."
     } else {
       var messages = {
         reset: "Banked reset applied. Refreshing account usage…",

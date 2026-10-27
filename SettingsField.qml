@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 
 // A settings text box that never lets the shell fetch clipboard text on its own. In Qt 6.11 and
@@ -21,7 +22,7 @@ FocusScope {
   property bool password: false
   property int inputMethodHints: Qt.ImhNone
   property bool selectByMouse: true
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property font font
   readonly property alias pasting: clipboardReader.pending
   readonly property int pasteByteLimit: 65536
@@ -158,7 +159,7 @@ FocusScope {
     FocusScope {
       id: box
       readonly property alias readOnly: edit.readOnly
-      readonly property var spec: Border.controlSpec(edit.activeFocus ? "focus" : hover.hovered ? "hover-cursor" : "normal", root.foreground, Color.accent)
+      readonly property var spec: Border.controlSpec(edit.activeFocus ? "focus" : hover.hovered ? "hover-cursor" : "normal", root.foreground, Commons.Color.accent)
       readonly property real padX: Style.spacing.controlPaddingX
       readonly property real padY: Style.spacing.inputPaddingY
       property real scrollX: 0
@@ -169,7 +170,7 @@ FocusScope {
 
       Ui.BorderSurface {
         anchors.fill: parent
-        color: Style.controlFill(edit.activeFocus, hover.hovered, root.foreground, Color.accent)
+        color: Style.controlFill(edit.activeFocus, hover.hovered, root.foreground, Commons.Color.accent)
         borderSpec: box.spec
         radius: Style.space(6)
       }
@@ -211,7 +212,7 @@ FocusScope {
           persistentSelection: false
           inputMethodHints: root.inputMethodHints
           color: root.foreground
-          selectionColor: Style.selectionFillFor(root.foreground, Color.accent)
+          selectionColor: Style.selectionFillFor(root.foreground, Commons.Color.accent)
           selectedTextColor: root.foreground
           font: root.font
           Accessible.name: root.Accessible.name

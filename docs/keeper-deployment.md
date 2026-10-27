@@ -24,7 +24,8 @@ Keeper-only setup when CLIProxyAPI already runs. For the widget:
 - Enable `usage-statistics-enabled` in the CLIProxyAPI configuration.
 - Keep Keeper's login protection on and set a login password.
 - If the desktop reaches Keeper over a network, serve it over HTTPS with a
-  trusted certificate.
+  trusted certificate. The widget sends the password over plain HTTP only to
+  this computer, where Keeper must run as you (or root), or over Tailscale.
 
 ## Configure the widget
 

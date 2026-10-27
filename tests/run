@@ -42,9 +42,12 @@ if [[ -n $qml_lint && -d "$quattro_root/shell/Ui" ]]; then
   ln -s "$quattro_root/shell/Ui" "$lint_root/qs/Ui"
   ln -s "$quattro_root/shell/Commons" "$lint_root/qs/Commons"
   lint_log="$lint_root/qmllint.log"
-  if ! "$qml_lint" -W 0 --missing-property disable --signal-handler-parameters disable \
-    -I "$lint_root" \
-    "$repo_root"/*.qml >"$lint_log" 2>&1; then
+  lint_flags=(-W 0 --missing-property disable --signal-handler-parameters disable)
+  # The widget's JavaScript declares with `var` throughout, on purpose; Qt 6.12 added a warning for it.
+  if "$qml_lint" --help 2>/dev/null | grep -q -- '--block-scope-var-declaration'; then
+    lint_flags+=(--block-scope-var-declaration disable)
+  fi
+  if ! "$qml_lint" "${lint_flags[@]}" -I "$lint_root" "$repo_root"/*.qml >"$lint_log" 2>&1; then
     sed -n '1,240p' "$lint_log"
     exit 1
   fi
@@ -198,10 +201,17 @@ PY
 import json
 import pathlib
 import sys
-requests = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
+calls = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
+requests = [call for call in calls if call["action"] == "consume" and call["provider"] == "codex"]
 assert len(requests) == 2, "double clicks, cancellation and stale confirmations must not consume"
 assert requests[0] == requests[1], "retry must reuse the same account, credit and request ID"
 assert requests[0]["credit_id"] == "second", "the selected credit must be consumed"
+assert all(call["source"] == "cliproxy" and call["cliproxy_url"] for call in calls if call["provider"] == "codex"), calls
+claude = [call for call in calls if call["provider"] == "claude"]
+assert [call["action"] for call in claude] == ["prepare", "consume"], claude
+assert all(call["source"] == "direct" and call["account_id"] == "main" and call["cliproxy_url"] is None
+           and call["cliproxy_key_file"] is None for call in claude), claude
+assert (claude[1]["target"], claude[1]["credit_id"], claude[1]["request_id"]) == ("claude-target", "launch-reset", "claude-request")
 PY
   echo "Reset QML contract: passed (synthetic backend, no popup windows)"
 
