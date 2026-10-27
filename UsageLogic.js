@@ -3206,7 +3206,9 @@ function accountStatusLine(account, spending, nowSeconds, event) {
     return { kind: event.kind, text: event.kind === "switch" ? "switched" : "reset", at: eventAt, tone: "accent" }
   if (account.standIn && account.standIn.name)
     return { kind: "standin", text: (readingProxy(account) ? "read through " : "read on ") + account.standIn.name, at: null, tone: "dim" }
-  var where = account.computer && account.computer.name ? "on " + account.computer.name : ""
+  // "via proxy", not the proxy's name: beside a plan, "through CLIProxyAPI" does not fit a row.
+  var where = account.computer && account.computer.name ? "on " + account.computer.name
+    : readingProxy(account) ? "via proxy" : ""
   if (account.plan || account.planType)
     return { kind: "plan", text: accountPlanLabel(account) + (where ? " · " + where : ""), at: null, tone: "dim" }
   return { kind: "source", text: where || accountSourceLabel(accountSourceKind(account)), at: null, tone: "dim" }

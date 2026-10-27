@@ -1248,6 +1248,10 @@ console.log("Provider setup: passed");
   const staleLine = context.accountStatusLine({ ...remoteAccount, stale: true, readAt: "2030-01-15T12:00:00Z" }, false, 0, null);
   assert.equal(staleLine.text + " " + clock(staleLine.at), "devbox not answering since 12:00");
   assert.equal(context.accountStatusLine({ id: "claude", status: "ok", windows: [], standIn: { id: "c-00000001", name: "devbox" } }, false, 0, null).text, "read on devbox");
+  const proxyAccount = { id: "claude", accountId: "auth-1", status: "ok", windows: [], plan: "max", origin: "proxy",
+    proxy: { id: "p-00000001", name: "CLIProxyAPI" } };
+  assert.equal(context.accountStatusLine(proxyAccount, false, 0, null).text, context.accountPlanLabel(proxyAccount) + " · via proxy",
+    "a plan does not hide that the account was read through a proxy");
   assert.equal(context.accountLiveAt({ id: "claude", accountId: "main", liveIds: ["c-00000001/omp-0123456789ab"] },
     { "claude@c-00000001/omp-0123456789ab": 1800000000 }), 1800000000, "a request on devbox counts for the same account here");
   assert.equal(context.costSourceSummary([{ kind: "local", included: true }, { kind: "computer", name: "devbox", status: "stale", included: true }], false),
