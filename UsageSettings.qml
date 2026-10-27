@@ -1824,6 +1824,9 @@ Column {
     try {
       var json = prices.serialize()
       priceError = ""
+      // The write is ours: record it before it comes back through
+      // onSettingsChanged, or every keystroke rebuilds the rows under the cursor.
+      lastPricesJson = json
       set("costPriceOverrides", json)
     } catch (error) {
       priceError = String(error.message || error)

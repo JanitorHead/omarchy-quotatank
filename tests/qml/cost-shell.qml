@@ -272,9 +272,20 @@ ShellRoot {
         root.check(root.find(root.form, "costSource-remote").text.indexOf("Unavailable") >= 0, "source diagnostics are available in Costs settings")
         var before = root.saves
         root.check(root.form.priceError !== "" && root.saves === root.savesBeforeBlankRow, "a blank added row is explained and not saved")
+        // Editing is saved as it happens, so typing must neither steal focus to
+        // the field the row still owes nor rebuild the rows under the cursor.
+        var blankRow = root.find(root.form, "costModel-1")
+        root.edit("costModel-1", "m")
+        root.edit("costModel-1", "mi")
+        root.edit("costModel-1", "mini")
+        root.check(root.find(root.form, "costModel-1") === blankRow, "an edit keeps the same field object")
+        root.check(root.find(root.form, "costModel-1").text === "mini", "typing a model ID keeps every keystroke")
         root.edit("costModel-1", "free-model")
         root.edit("costRate-1-inputCostPerMillionTokens", "0")
+        var inputRate = root.find(root.form, "costRate-1-inputCostPerMillionTokens")
         root.edit("costRate-1-outputCostPerMillionTokens", "0")
+        root.check(root.find(root.form, "costRate-1-inputCostPerMillionTokens") === inputRate,
+          "saving a complete row does not rebuild the editor")
         root.check(root.form.priceError === "" && root.saves > before, "explicit zero prices save once the row is complete")
         root.check(JSON.parse(root.saved.costPriceOverrides)["free-model"].outputCostPerMillionTokens === 0,
           "zero survives settings serialization")
