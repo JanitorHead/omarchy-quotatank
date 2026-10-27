@@ -44,7 +44,8 @@ if [[ -n $qml_lint && -d "$quattro_root/shell/Ui" ]]; then
   lint_log="$lint_root/qmllint.log"
   lint_flags=(-W 0 --missing-property disable --signal-handler-parameters disable)
   # The widget's JavaScript declares with `var` throughout, on purpose; Qt 6.12 added a warning for it.
-  if "$qml_lint" --help 2>/dev/null | grep -q -- '--block-scope-var-declaration'; then
+  lint_help=$("$qml_lint" --help 2>/dev/null || true)
+  if [[ $lint_help == *--block-scope-var-declaration* ]]; then
     lint_flags+=(--block-scope-var-declaration disable)
   fi
   if ! "$qml_lint" "${lint_flags[@]}" -I "$lint_root" "$repo_root"/*.qml >"$lint_log" 2>&1; then
