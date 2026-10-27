@@ -7435,8 +7435,9 @@ def cliproxy_key_path() -> Path:
     return config_folder() / "cliproxy.key"
 
 
-def read_private_key(path: Path, name: str = "Proxy management key") -> str:
-    """One ASCII secret from a regular 0600 file owned by the user; the error names `name`, never the secret."""
+def read_private_key(path: Path, name: str, page: str = "Providers") -> str:
+    """One ASCII secret from a regular 0600 file owned by the user; the error names `name` and the Settings `page`
+    that saves it, never the secret."""
     try:
         # NONBLOCK also prevents a misconfigured FIFO from stalling the poll.
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -7448,7 +7449,7 @@ def read_private_key(path: Path, name: str = "Proxy management key") -> str:
         finally:
             os.close(fd)
     except OSError:
-        raise ProviderFailure("config", f"{name} could not be read. Enter it again under Settings → Providers.") from None
+        raise ProviderFailure("config", f"{name} could not be read. Enter it again under Settings → {page}.") from None
     try:
         key = raw.decode("utf-8").strip()
     except UnicodeDecodeError:
@@ -7459,7 +7460,7 @@ def read_private_key(path: Path, name: str = "Proxy management key") -> str:
 
 
 def read_cliproxy_key(path: Path) -> str:
-    return read_private_key(path, "Proxy management key")
+    return read_private_key(path, "Proxy management key", "Sources")
 
 
 def normalize_cliproxy_url(address: str) -> str:
@@ -7674,9 +7675,6 @@ def fetch_cliproxy_account(provider_id: str, entry: dict[str, Any], client: CliP
     if entry.get("disabled") is True or entry.get("status") == "disabled":
         result.update(status="disabled", notice="This account is paused in CLIProxyAPI.")
         return result
-    if provider_id not in CLIPROXY_QUOTA_PROVIDERS:
-        result.update(status="unsupported", notice="This provider does not expose a supported quota lookup.")
-        return result
     try:
         if provider_id == "claude":
             payload = client.usage(entry, CLAUDE_USAGE_URL,
@@ -7717,35 +7715,34 @@ def fetch_cliproxy_account(provider_id: str, entry: dict[str, Any], client: CliP
     return result
 
 
+def proxy_provider_id(entry: dict[str, Any]) -> str:
+    """The provider of a proxy account; the ones whose limits a proxy reads (CLIPROXY_QUOTA_PROVIDERS) have
+    Quotatank's ids already."""
+    return str(entry.get("provider") or entry.get("type") or "").strip().lower()
+
+
+def proxy_entry_enabled(entry: dict[str, Any]) -> bool:
+    return entry.get("disabled") is not True and entry.get("status") != "disabled"
+
+
 def collect_cliproxy(provider_ids: list[str], timeout: float, address: str, key_path: Path,
-                     discover: bool = False) -> list[dict[str, Any]]:
-    if not provider_ids and not discover:
-        return []
-    overall_deadline = time.monotonic() + timeout if discover else None
-    try:
-        client = CliProxyClient(address, read_cliproxy_key(key_path))
-        entries = client.auth_files(timeout)
-    except ProviderFailure as exc:
-        if discover:
-            provider_ids = ["cliproxy"]
-        return [dict(error_provider(provider_id, exc.kind, exc.message),
-                     source="CLIProxyAPI management API", authCommand="") for provider_id in provider_ids]
+                     healthy: dict[str, set[str]] | None = None) -> tuple[list[dict[str, Any]], list[str]]:
+    """The proxy's accounts for `provider_ids` (one result per provider it has accounts for, each listed under
+    `accounts`) and the providers it has a working account for. An account `healthy` names (provider id → emails
+    read fine from another source this refresh) is not queried again. Raises ProviderFailure when the proxy
+    cannot be listed."""
+    deadline = time.monotonic() + timeout
+    client = CliProxyClient(address, read_cliproxy_key(key_path))
+    entries = [entry for entry in client.auth_files(timeout) if isinstance(entry, dict)]
+    found = sorted({provider_id for entry in entries if proxy_entry_enabled(entry)
+                    and (provider_id := proxy_provider_id(entry)) in CLIPROXY_QUOTA_PROVIDERS})
+    skip = healthy or {}
 
-    if discover:
-        discovered = {str(entry.get("provider") or entry.get("type") or "unknown").lower() for entry in entries}
-        provider_ids = sorted(provider for provider in discovered if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", provider))
-        if len(provider_ids) > MAX_CLIPROXY_PROVIDERS:
-            provider_ids = provider_ids[:MAX_CLIPROXY_PROVIDERS]
-    discovery_deadline = overall_deadline if discover else None
-
-    def fetch(provider_id: str) -> dict[str, Any]:
-        matching = [entry for entry in entries
-                    if str(entry.get("provider") or entry.get("type") or "").lower() == provider_id
-                    and (discover or (entry.get("disabled") is not True and entry.get("status") != "disabled"))]
+    def fetch(provider_id: str) -> dict[str, Any] | None:
+        matching = [entry for entry in entries if proxy_provider_id(entry) == provider_id
+                    and account_email({"account": entry.get("email")}) not in skip.get(provider_id, set())]
         if not matching:
-            return dict(error_provider(provider_id, "no_credentials", "No enabled account was found. Add a sign-in through CLIProxyAPI, then refresh."),
-                        source="CLIProxyAPI management API", authCommand="")
-        deadline = discovery_deadline if discover else time.monotonic() + timeout
+            return None
 
         def account(entry: dict[str, Any]) -> dict[str, Any]:
             remaining = deadline - time.monotonic()
@@ -7761,25 +7758,21 @@ def collect_cliproxy(provider_ids: list[str], timeout: float, address: str, key_
         # Select by the binding window, never sum unrelated percentages.
         active = [reading for reading in readings if reading["status"] != "disabled"]
         best = dict(max(successful, key=lambda reading: 100 - used if (used := dynamic_window_used(reading)) is not None else -1) if successful else (active or readings)[0])
-        if discover:
-            best["accounts"] = readings
+        best["accounts"] = readings
         best["accountCount"] = len(matching)
         best["availableCount"] = len(successful)
         notes = [best["notice"]] if best["notice"] else []
-        if len(matching) > 1 and best["status"] not in ("disabled", "unsupported"):
-            notes.append(f"{len(successful)} of {len(matching)} accounts checked successfully. Showing the account with the most remaining quota." if successful
-                         else f"None of {len(matching)} accounts could be checked.")
         if len(matching) > MAX_CLIPROXY_ACCOUNTS:
             notes.append(f"Only the first {MAX_CLIPROXY_ACCOUNTS} accounts were checked.")
         best["notice"] = " ".join(notes)
-        if best["status"] == "error" and len(matching) > 1:
-            best["message"] += f" All {len(readings)} checked accounts failed."
         return best
 
-    if not provider_ids:
-        return []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(provider_ids))) as pool:
-        return list(pool.map(fetch, provider_ids))
+    wanted = [provider_id for provider_id in provider_ids if provider_id in CLIPROXY_QUOTA_PROVIDERS]
+    if not wanted:
+        return [], found
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(wanted))) as pool:
+        results = list(pool.map(fetch, wanted))
+    return [result for result in results if result is not None], found
 
 
 # --------------------------------------------------------------- History
@@ -8571,12 +8564,10 @@ def omp_pool(capacity: Any, provider_id: str) -> dict[str, Any] | None:
     return {"source": "omp", "windows": windows} if windows else None
 
 
-def native_origin(provider: dict[str, Any], reading: dict[str, Any], cliproxy: bool) -> str:
+def native_origin(provider: dict[str, Any], reading: dict[str, Any]) -> str:
     """The `origin` of a native reading: its own, else the kind of reading the provider made."""
     if reading.get("origin"):
         return reading["origin"]
-    if cliproxy:
-        return "proxy"
     if provider["id"] in KEYED_FETCHERS:
         return "key"
     return "omarchy" if "accounts" in provider else "signin"
@@ -8624,7 +8615,7 @@ def same_limits(native: dict[str, Any], entry: dict[str, Any]) -> bool:
 
 
 def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
-                       accounts: list[tuple[OmpIdentity, dict[str, Any]]], cliproxy: bool) -> dict[str, Any] | None:
+                       accounts: list[tuple[OmpIdentity, dict[str, Any]]]) -> dict[str, Any] | None:
     """The provider's result with its omp accounts merged in (backend contract, "omp accounts")."""
     entries = [entry for _identity, entry in accounts]
     if provider is None or (provider.get("errorKind") in OMP_UNREAD_KINDS and "accounts" not in provider):
@@ -8646,22 +8637,21 @@ def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
             matches = [native for native in natives if twin is not None and (native is twin or (
                 twin.get("accountId") and native.get("accountId") == twin.get("accountId")))]
         for native in matches:
-            native["origins"] = [native_origin(provider, native, cliproxy), "omp"]
+            native["origins"] = [native_origin(provider, native), "omp"]
             native.setdefault("ompAccountId", entry["accountId"])
             if native["status"] != "ok" and entry["status"] == "ok":
                 stand_in_omp_reading(native, entry)
         if not matches:
             added.append(entry)
-    return add_accounts(provider, provider_id, added, cliproxy) if added else provider
+    return add_accounts(provider, provider_id, added) if added else provider
 
 
-def add_accounts(provider: dict[str, Any], provider_id: str, added: list[dict[str, Any]],
-                 cliproxy: bool) -> dict[str, Any]:
+def add_accounts(provider: dict[str, Any], provider_id: str, added: list[dict[str, Any]]) -> dict[str, Any]:
     """`provider` with the readings of other accounts listed after its own, in place where it can be."""
     single_native = "accounts" not in provider
     if single_native:
         provider.update(accountId="primary" if provider_id in KEYED_FETCHERS else PRIMARY_ACCOUNT_ID,
-                        active=True, primary=True, origin=native_origin(provider, provider, cliproxy))
+                        active=True, primary=True, origin=native_origin(provider, provider))
         provider["accounts"] = [copy.deepcopy(provider)]
     provider["accounts"].extend(added)
     healthy = next((position for position, entry in enumerate(provider["accounts"]) if entry["status"] == "ok"), None)
@@ -8677,14 +8667,14 @@ def add_accounts(provider: dict[str, Any], provider_id: str, added: list[dict[st
 
 
 def merge_omp(providers: list[dict[str, Any]], provider_ids: list[str], documents: list[dict[str, Any]],
-              capacity: Any, cliproxy: bool) -> int:
+              capacity: Any) -> int:
     """Merge omp's accounts and pools into the requested providers, in place; returns how many accounts merged.
-    A requested provider without a result of its own (proxy mode) is made of its omp accounts."""
+    A requested provider without a result of its own is made of its omp accounts."""
     accounts = omp_accounts(documents, provider_ids)
     for provider_id in provider_ids:
         position = next((index for index, provider in enumerate(providers) if provider.get("id") == provider_id), None)
         mine = [(identity, entry) for owner, identity, entry in accounts if owner == provider_id]
-        merged = merge_omp_provider(providers[position] if position is not None else None, provider_id, mine, cliproxy)
+        merged = merge_omp_provider(providers[position] if position is not None else None, provider_id, mine)
         if merged is None:
             continue
         pool = omp_pool(capacity, provider_id)
@@ -8697,8 +8687,8 @@ def merge_omp(providers: list[dict[str, Any]], provider_ids: list[str], document
     return len(accounts)
 
 
-def merge_omp_safely(providers: list[dict[str, Any]], provider_ids: list[str], read: OmpRead,
-                     cliproxy: bool) -> tuple[list[dict[str, Any]], int, OmpRead]:
+def merge_omp_safely(providers: list[dict[str, Any]], provider_ids: list[str],
+                     read: OmpRead) -> tuple[list[dict[str, Any]], int, OmpRead]:
     """merge_omp on a copy of `providers`, so that omp data the merge cannot take never costs a native reading.
 
     `read` is omp's (status, message, document). When the merge fails, the read becomes an error: omp's data was
@@ -8708,7 +8698,7 @@ def merge_omp_safely(providers: list[dict[str, Any]], provider_ids: list[str], r
         return providers, 0, read
     candidate = copy.deepcopy(providers)
     try:
-        count = merge_omp(candidate, provider_ids, [document], document.get("capacity"), cliproxy)
+        count = merge_omp(candidate, provider_ids, [document], document.get("capacity"))
     except Exception:
         return providers, 0, ("error", OMP_UNREADABLE, None)
     return candidate, count, read
@@ -8720,6 +8710,8 @@ def merge_omp_safely(providers: list[dict[str, Any]], provider_ids: list[str], r
 # answer is kept, so one that stops answering shows its last readings as stale instead of an error.
 COMPUTER_ID = re.compile(r"c-[0-9a-f]{8}")
 MAX_COMPUTERS = 16
+PROXY_ID = re.compile(r"p-[0-9a-f]{8}")
+MAX_PROXIES = 4
 NOT_SET_UP_KINDS = frozenset({"no_credentials", "cli_unavailable"})
 READING_FIELDS = ("status", "errorKind", "message", "windows", "credits", "source", "fetchedAt", "plan")
 
@@ -8786,16 +8778,20 @@ def readings_of(provider: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def mark_computer(provider: dict[str, Any], computer: dict[str, Any]) -> dict[str, Any]:
-    """Name the computer on every reading of `provider` and give its accounts ids no other computer shares."""
+    """Name the source on every reading of `provider`: another computer (`computer`), whose accounts get ids no
+    other computer shares, or a proxy (`proxy`, ids from "p-"), whose account ids are its own already."""
+    proxy = computer["id"].startswith("p-")
     single = "accounts" not in provider
     for reading in [provider, *([] if single else readings_of(provider))]:
-        reading["computer"] = {"id": computer["id"], "name": computer["host"]}
+        reading["proxy" if proxy else "computer"] = {"id": computer["id"], "name": computer["host"]}
         if computer["status"] == "stale":
             reading.update(stale=True, readAt=computer["readAt"])
+        if proxy:
+            continue
         for key in ("accountId", "ompAccountId"):
             if isinstance(reading.get(key), str) and reading[key]:
                 reading[key] = computer["id"] + "/" + reading[key]
-    if single:
+    if single and not proxy:
         provider["accountId"] = computer["id"] + "/" + (
             "primary" if provider["id"] in KEYED_FETCHERS else PRIMARY_ACCOUNT_ID)
     return provider
@@ -8815,6 +8811,19 @@ def same_account(native: dict[str, Any], entry: dict[str, Any]) -> bool:
         plans = {str(reading.get("plan") or "").strip().lower() for reading in (native, entry)}
         return email == other and (len(plans) == 1 or "" in plans)
     return same_limits(native, entry) or same_key_reading(native, entry)
+
+
+def account_email(reading: dict[str, Any]) -> str:
+    """The reading's email, lowercased; "" when its account names no email (a label, a key)."""
+    account = str(reading.get("account") or "").strip().lower()
+    return account if "@" in account else ""
+
+
+def same_proxy_account(native: dict[str, Any], entry: dict[str, Any]) -> bool:
+    """A proxy's reading of an account read elsewhere: the same email (a proxy names plans its own way), else,
+    without an email, the same limits."""
+    email = account_email(entry)
+    return account_email(native) == email if email else same_limits(native, entry)
 
 
 def same_key_reading(native: dict[str, Any], entry: dict[str, Any]) -> bool:
@@ -8841,7 +8850,8 @@ def stand_in(native: dict[str, Any], entry: dict[str, Any]) -> None:
             native[key] = copy.deepcopy(entry[key])
         elif key != "plan":
             native.pop(key, None)
-    native["standIn"] = dict(entry["computer"])
+    # The source, and its id for the account: a reset through a proxy names the account that way.
+    native["standIn"] = {**(entry.get("computer") or entry["proxy"]), "accountId": str(entry.get("accountId") or "")}
     native["notice"] = failure or entry.get("notice") or ""
     for key in ("stale", "readAt"):
         if key in entry:
@@ -8851,7 +8861,8 @@ def stand_in(native: dict[str, Any], entry: dict[str, Any]) -> None:
 
 
 def merge_computer_provider(ours: dict[str, Any] | None, theirs: dict[str, Any]) -> dict[str, Any]:
-    """This side's result for one provider with another computer's merged in. This side is preferred."""
+    """This side's result for one provider with another source's (a computer's or a proxy's) merged in. This
+    side is preferred."""
     if not_set_up(theirs):
         return ours if ours is not None else theirs
     if ours is None or not_set_up(ours):
@@ -8859,19 +8870,24 @@ def merge_computer_provider(ours: dict[str, Any] | None, theirs: dict[str, Any])
     natives = readings_of(ours)
     added = []
     stood_in = False
+    match_rule = same_proxy_account if "proxy" in theirs else same_account
     for entry in readings_of(theirs):
-        match = next((native for native in natives if same_account(native, entry)), None)
+        match = next((native for native in natives if match_rule(native, entry)), None)
         if match is None:
             entry["active"] = False
             added.append(entry)
             continue
-        # Live omp requests on that computer name the account by its ids there.
+        # Live requests there (omp on that computer, the proxy's activity) name the account by its ids there.
         aliases = match.setdefault("liveIds", [])
         aliases += [entry[key] for key in ("accountId", "ompAccountId")
                     if isinstance(entry.get(key), str) and entry[key] and entry[key] not in aliases][:4]
         if unusable(match) and entry.get("status") == "ok" and not (entry.get("stale") and match.get("stale")):
             stand_in(match, entry)
             stood_in = True
+        elif "proxy" in entry and entry.get("status") == "error" and not unusable(match):
+            # Read fine elsewhere: the proxy's failure is a note, not the account's state.
+            note = "CLIProxyAPI could not read it: " + str(entry.get("message") or "no answer.")
+            match["notice"] = " ".join(part for part in (str(match.get("notice") or ""), note) if part)
     if stood_in and "accounts" in ours:
         # The summary is a copy of the leading account: it follows that account's stand-in.
         lead = next((entry for entry in ours["accounts"] if entry.get("active")), ours["accounts"][0])
@@ -8880,11 +8896,11 @@ def merge_computer_provider(ours: dict[str, Any] | None, theirs: dict[str, Any])
                 ours[key] = copy.deepcopy(lead[key])
             else:
                 ours.pop(key, None)
-    return add_accounts(ours, ours["id"], added, False) if added else ours
+    return add_accounts(ours, ours["id"], added) if added else ours
 
 
 def merge_computers(providers: list[dict[str, Any]], provider_ids: list[str], computers: list[dict[str, Any]]) -> None:
-    """Merge every computer's readings into `providers`, in place, in the computers' order."""
+    """Merge every other source's readings into `providers`, in place, in order: computers, then proxies."""
     for computer in computers:
         for theirs in computer["providers"]:
             if theirs["id"] not in provider_ids:
@@ -8902,6 +8918,78 @@ def computer_state(computer: dict[str, Any]) -> dict[str, Any]:
     """What the payload says about a computer (`computers` in the backend contract)."""
     keys = ("id", "host", "status", "readAt", "kind", "message", "fix", "installed", "detected", "omp")
     return {key: computer[key] for key in keys if key in computer}
+
+
+def parse_proxies(urls: list[str], key_files: list[str]) -> list[tuple[str, str, Path | None]]:
+    """`--proxy ID=URL` and `--proxy-key-file ID=PATH` as (id, url, key file), in order; malformed or repeated
+    ids are ignored."""
+    keys: dict[str, Path] = {}
+    for value in key_files:
+        proxy_id, separator, path = str(value).partition("=")
+        if separator and PROXY_ID.fullmatch(proxy_id) and path.strip():
+            keys[proxy_id] = Path(path.strip()).expanduser()
+    proxies: list[tuple[str, str, Path | None]] = []
+    for value in urls:
+        proxy_id, separator, url = str(value).partition("=")
+        if separator and PROXY_ID.fullmatch(proxy_id) and url.strip() and all(known != proxy_id for known, *_ in proxies):
+            proxies.append((proxy_id, url.strip(), keys.get(proxy_id)))
+    return proxies[:MAX_PROXIES]
+
+
+def proxy_cache_path(state_dir: Path | None, proxy_id: str) -> Path:
+    return (state_dir or state_folder()) / "proxies" / f"{proxy_id}.json"
+
+
+def proxy_answer(saved: Any, provider_ids: list[str]) -> dict[str, Any]:
+    if not isinstance(saved, dict) or not isinstance(saved.get("providers"), list):
+        raise ValueError("not a saved proxy answer")
+    wanted = set(provider_ids)
+    return {"providers": [provider for provider in saved["providers"] if isinstance(provider, dict)
+                          and provider.get("id") in wanted and isinstance(provider.get("status"), str)],
+            "detected": [item for item in saved.get("detected") or [] if item in CLIPROXY_QUOTA_PROVIDERS]}
+
+
+def read_proxy(proxy_id: str, url: str, key_file: Path | None, provider_ids: list[str], timeout: float,
+               healthy: dict[str, set[str]], state_dir: Path | None) -> dict[str, Any]:
+    """One proxy's answer, shaped like another computer's: fresh, else its last good one marked stale, else the
+    failure alone. Accounts `healthy` names are read elsewhere already and are not queried."""
+    path = proxy_cache_path(state_dir, proxy_id)
+    state = {"id": proxy_id, "host": "CLIProxyAPI", "kind": "proxy"}
+    try:
+        providers, found = collect_cliproxy(provider_ids, timeout, url, key_file or cliproxy_key_path(), healthy)
+    except Exception as exc:
+        failure = exc if isinstance(exc, ProviderFailure) else ProviderFailure("internal", "Could not read CLIProxyAPI's accounts.")
+        state.update(status="error", errorKind=failure.kind, message=failure.message)
+        try:
+            saved = json.loads(path.read_text("utf-8"))
+            answer = proxy_answer(saved["answer"], provider_ids)
+            state.update(status="stale", readAt=str(saved["readAt"]))
+        except (OSError, ValueError, KeyError, TypeError):
+            return {**state, "providers": [], "detected": []}
+        return {**state, **answer}
+    read_at = now_iso()
+    answer = {"providers": providers, "detected": found}
+    try:
+        atomic_write_json(path, {"readAt": read_at, "answer": answer})
+    except OSError:
+        pass  # Without a saved copy the proxy is only an error the next time it does not answer.
+    return {**state, "status": "ok", "readAt": read_at, **answer}
+
+
+def healthy_accounts(providers: list[dict[str, Any]]) -> dict[str, set[str]]:
+    """Provider id → emails of the accounts read fine: a proxy need not query them again."""
+    healthy: dict[str, set[str]] = {}
+    for provider in providers:
+        for reading in readings_of(provider):
+            if reading.get("status") == "ok" and not reading.get("stale") and (email := account_email(reading)):
+                healthy.setdefault(str(provider.get("id")), set()).add(email)
+    return healthy
+
+
+def proxy_state(proxy: dict[str, Any]) -> dict[str, Any]:
+    """What the payload says about a proxy (`proxies` in the backend contract)."""
+    keys = ("id", "status", "readAt", "errorKind", "message", "detected")
+    return {key: proxy[key] for key in keys if key in proxy}
 
 
 # --------------------------------------------------------------- Orchestration
@@ -9009,31 +9097,27 @@ def bound_providers(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def build_payload(
     provider_ids: list[str], timeout: float, state_dir: Path | None,
-    source: str = "direct", cliproxy_url: str = "http://127.0.0.1:8317",
-    key_file: Path | None = None, key_files: dict[str, Path] | None = None,
+    key_files: dict[str, Path] | None = None,
     extra_keys: dict[str, list[tuple[str, Path]]] | None = None,
     omp_local: bool = False, computers: list[tuple[str, str]] | None = None, reader: bool = False,
+    proxies: list[tuple[str, str, Path | None]] | None = None,
 ) -> dict[str, Any]:
     omp = omp_executable()
     reads_local = omp_local and omp is not None and omp_set_up()
     computers = [] if reader else (computers or [])
+    proxies = [] if reader else (proxies or [])
     base_state = history_path(state_dir).parent
-    # omp and other computers take longer than most providers, so they are read while the providers are.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2 + len(computers)) as pool:
+    # omp and other computers take longer than most providers, so they are read while the providers are. A
+    # proxy is read once this computer's providers are, so it skips the accounts read fine here.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2 + len(computers) + len(proxies)) as pool:
         local = pool.submit(read_omp_local, omp, state_dir) if reads_local else None
         version = pool.submit(omp_version, omp, state_dir) if reads_local else None
         remote = [pool.submit(read_computer, computer_id, host, provider_ids, timeout, omp_local, base_state)
                   for computer_id, host in computers]
-        if source == "cliproxy":
-            providers = collect_cliproxy(provider_ids, timeout, cliproxy_url, key_file or cliproxy_key_path(), discover=True)
-            try:
-                server = normalize_cliproxy_url(cliproxy_url)
-            except ProviderFailure:
-                server = "invalid"
-            server_id = hashlib.sha256(server.encode("utf-8")).hexdigest()[:16]
-            state_dir = history_path(state_dir).parent / ("cliproxy-" + server_id)
-        else:
-            providers = collect_providers(provider_ids, timeout, key_files, extra_keys)
+        providers = collect_providers(provider_ids, timeout, key_files, extra_keys)
+        healthy = healthy_accounts(providers)
+        proxied = [pool.submit(read_proxy, proxy_id, url, key_file, provider_ids, timeout, healthy, base_state)
+                   for proxy_id, url, key_file in proxies]
         if local:
             local_read = local.result()
         elif not omp_local:
@@ -9044,8 +9128,10 @@ def build_payload(
             local_read = ("unused", OMP_NOT_SET_UP, None)
         omp_release = version.result() if version else ""
         answers = [future.result() for future in remote]
-    providers, merged, local_read = merge_omp_safely(providers, provider_ids, local_read, source == "cliproxy")
-    merge_computers(providers, provider_ids, answers)
+        proxy_answers = [future.result() for future in proxied]
+    providers, merged, local_read = merge_omp_safely(providers, provider_ids, local_read)
+    # Proxies are the least preferred source.
+    merge_computers(providers, provider_ids, [*answers, *proxy_answers])
     providers = bound_providers(providers)
     if not reader:
         update_and_attach_history(providers, state_dir)
@@ -9059,13 +9145,15 @@ def build_payload(
         "schemaVersion": SCHEMA_VERSION,
         "generatedAt": now_iso(),
         "providers": providers,
-        "source": source,
-        "detected": list(dict.fromkeys([*detected_providers(), *(item for answer in answers for item in answer["detected"])])),
+        "detected": list(dict.fromkeys([*detected_providers(),
+                                        *(item for answer in [*answers, *proxy_answers] for item in answer["detected"])])),
         "installed": installed_providers(),
         "omp": omp_summary,
     }
     if computers:
         payload["computers"] = [computer_state(answer) for answer in answers]
+    if proxies:
+        payload["proxies"] = [proxy_state(answer) for answer in proxy_answers]
     return payload
 
 
@@ -9074,9 +9162,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--providers", default=",".join(PROVIDER_ORDER))
     parser.add_argument("--timeout", type=float, default=12.0)
     parser.add_argument("--state-dir", type=Path)
-    parser.add_argument("--source", choices=("direct", "cliproxy"), default="direct")
-    parser.add_argument("--cliproxy-url", default=os.environ.get("CLIPROXY_API_URL") or "http://127.0.0.1:8317")
-    parser.add_argument("--cliproxy-key-file", type=lambda value: Path(value).expanduser())
+    parser.add_argument("--proxy", action="append", default=[], metavar="ID=URL",
+                        help="A CLIProxyAPI server whose accounts are read too (p- and eight hex digits, then its URL).")
+    parser.add_argument("--proxy-key-file", action="append", default=[], metavar="ID=PATH",
+                        help="The file holding that proxy's management key.")
     parser.add_argument("--key-file", action="append", default=[], metavar="PROVIDER=PATH",
                         help="Private key file saved from widget settings for an API-key provider.")
     parser.add_argument("--extra-key", action="append", default=[], metavar="PROVIDER=KEYID=PATH",
@@ -9095,9 +9184,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         key_files = parse_key_files(args.key_file)
         extra_keys = parse_extra_keys(args.extra_key)
-        payload = build_payload(provider_ids, timeout, args.state_dir, args.source, args.cliproxy_url,
-                                args.cliproxy_key_file, key_files, extra_keys, omp_local=args.omp == "local",
-                                computers=parse_computers(args.computer), reader=args.reader)
+        payload = build_payload(provider_ids, timeout, args.state_dir, key_files, extra_keys, omp_local=args.omp == "local",
+                                computers=parse_computers(args.computer), reader=args.reader,
+                                proxies=parse_proxies(args.proxy, args.proxy_key_file))
     except Exception as exc:
         payload = {
             "schemaVersion": SCHEMA_VERSION,

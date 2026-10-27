@@ -445,11 +445,12 @@ ShellRoot {
     function () {
       check(widget.selectedAccount.accountId === "personal", "choosing the provider again shows the counted account")
       widget.settings = Object.assign({}, widget.settings, { sources: JSON.stringify([{ id: "p-1a2b3c4d", kind: "proxy",
-        url: "https://proxy.test/prefix", keyFile: "/private/proxy key" }]) })
+        url: "https://proxy.test/prefix", keyFile: "/private/proxy key", on: true }]) })
       return true
     },
     function () {
-      if (!widget.proxyMode || widget.providers.length < 2 || accountCount(widget, "codex") < 3)
+      var codex = widget.providers.filter(function (provider) { return provider.id === "codex" })[0]
+      if (!codex || !codex.proxy || widget.providers.length < 2 || accountCount(widget, "codex") < 3)
         return waited < 150 ? false : check(false, "the proxy's accounts load")
       widget.selectProviderId("codex")
       return true

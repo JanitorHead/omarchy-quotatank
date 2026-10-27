@@ -3,7 +3,7 @@ import "UsageLogic.js" as UsageLogic
 
 // omp's live activity for one panel: each request as it happens, with the account behind it once omp's
 // credential map names it, and the log of recent requests that Costs adds to its last scan. It follows omp
-// only while omp is set up here (found and signed in) and never through a proxy, and omp on each other
+// only while omp is set up here (found and signed in), and omp on each other
 // computer under Settings → Sources where the last refresh found it set up; the panels on every monitor share
 // one helper process per computer (OmpLiveConnection.qml).
 QtObject {
@@ -15,17 +15,15 @@ QtObject {
   property var status: null
   // The usage backend's `computers`: the other computers and what was found of omp there.
   property var computers: []
-  // Limits read through a proxy: its accounts are the proxy's and omp is not read, so nothing runs.
-  property bool proxyMode: false
   property string scriptPath: decodeURIComponent(String(Qt.resolvedUrl("scripts/omp-live.py")).replace(/^file:\/\//, ""))
   property string checkPath: decodeURIComponent(String(Qt.resolvedUrl("scripts/computer-check.py")).replace(/^file:\/\//, ""))
 
   property var knownStatus: null
   property var knownComputers: []
-  readonly property var flags: UsageLogic.ompLiveArguments(settings, knownStatus, proxyMode)
+  readonly property var flags: UsageLogic.ompLiveArguments(settings, knownStatus)
   readonly property string wantedKey: flags.length > 0 ? "omp-live:" + JSON.stringify([scriptPath, flags]) : ""
   // [{ key, host, prefix }] for each computer to follow.
-  readonly property var wantedComputers: UsageLogic.ompLiveComputers(settings, knownComputers, proxyMode).map(function(entry) {
+  readonly property var wantedComputers: UsageLogic.ompLiveComputers(settings, knownComputers).map(function(entry) {
     return { key: "omp-live:" + JSON.stringify([checkPath, entry.id, entry.host]), host: entry.host, prefix: entry.id + "/" }
   })
   property var connection: null

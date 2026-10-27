@@ -12,6 +12,8 @@ Item {
   readonly property bool active: state !== "idle"
   readonly property bool busy: process.running
   property string accountId: ""
+  // The proxy the reset goes through (Settings → Sources entry), or null for this computer's own sign-in.
+  property var proxy: null
   property string providerId: ""
   property string accountLabel: ""
   property string planLabel: ""
@@ -25,12 +27,15 @@ Item {
   signal finished()
 
   // `account` is a provider reading or one of its accounts; a single Claude Code sign-in has no accountId and is
-  // read as `main`.
+  // read as `main`. A reading from a proxy, or standing in from one, is reset through that proxy, under the
+  // proxy's id for the account.
   function begin(account, label) {
-    var proxy = usageBackend.usageSource === "cliproxy"
-    if (active || busy || !UsageLogic.accountResetActionable(account, proxy)) return false
+    if (active || busy || !UsageLogic.accountResetActionable(account)) return false
+    var through = UsageLogic.readingProxy(account)
+    proxy = through ? UsageLogic.proxyById(usageBackend.settings, String(through.id || "")) : null
+    if (through && !proxy) return false
     providerId = String(account.id)
-    accountId = String(account.accountId || (proxy ? "" : "main"))
+    accountId = String(through ? (account.proxy ? account.accountId : through.accountId) || "" : account.accountId || "main")
     if (accountId === "") return false
     accountLabel = label
     planLabel = UsageLogic.accountPlanLabel(account)
@@ -64,12 +69,10 @@ Item {
   }
 
   function launch(action) {
-    var proxy = usageBackend.usageSource === "cliproxy"
     var command = ["python3", scriptPath, "--action", action, "--provider", providerId,
       "--source", proxy ? "cliproxy" : "direct", "--account-id", accountId]
-    if (proxy) command.push("--cliproxy-url", usageBackend.cliproxyUrl)
-    if (proxy && usageBackend.cliproxyKeyFile.trim() !== "")
-      command.push("--cliproxy-key-file", usageBackend.cliproxyKeyFile)
+    if (proxy) command.push("--cliproxy-url", proxy.url)
+    if (proxy && proxy.keyFile !== "") command.push("--cliproxy-key-file", proxy.keyFile)
     if (action === "consume") command.push("--target", details.target,
       "--credit-id", selectedCredit.id, "--request-id", details.requestId)
     process.action = action

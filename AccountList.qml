@@ -28,7 +28,6 @@ Column {
   property real nowSeconds: 0
   // Newest switch or reset per "<provider>@<accountId>".
   property var events: ({})
-  property bool proxyMode: false
   property bool resetsActionable: false
   property string useBusyId: ""
   property string headerText: ""
@@ -175,7 +174,7 @@ Column {
         readonly property var accountData: accountIndex >= 0 ? root.accounts[accountIndex] : null
         readonly property string accountId: accountData ? String(accountData.accountId || "") : ""
         readonly property var status: UsageLogic.accountStatusLine(accountData, spending, root.nowSeconds,
-          root.events[root.providerId + "@" + accountId] || null, root.proxyMode)
+          root.events[root.providerId + "@" + accountId] || null)
 
         objectName: "accountRow-" + accountId
         width: list.width
@@ -190,11 +189,11 @@ Column {
         sparkValues: accountData && accountData.history ? UsageLogic.listOrEmpty(accountData.history.h24) : []
         sparkEnd: root.readingEnd(accountData)
         inUse: !!root.accountState && root.accountState.inUse[accountIndex] === true
-        canUse: UsageLogic.accountCanUse(accountData, root.mode, root.proxyMode)
+        canUse: UsageLogic.accountCanUse(accountData, root.mode)
         useBusy: root.useBusyId !== "" && root.useBusyId === accountId
-        // Proxy rows carry their banked resets; elsewhere the selected account's detail does, beside Use.
-        resetCount: root.proxyMode && UsageLogic.accountResetShown(accountData, true) ? UsageLogic.accountResetCount(accountData) : -1
-        resetEnabled: root.resetsActionable && UsageLogic.accountResetActionable(accountData, root.proxyMode)
+        // Rows read through a proxy carry their banked resets; elsewhere the selected account's detail does, beside Use.
+        resetCount: UsageLogic.readingProxy(accountData) && UsageLogic.accountResetShown(accountData) ? UsageLogic.accountResetCount(accountData) : -1
+        resetEnabled: root.resetsActionable && UsageLogic.accountResetActionable(accountData)
         quotaMode: root.quotaMode
         warningThreshold: root.warningThreshold
         criticalThreshold: root.criticalThreshold

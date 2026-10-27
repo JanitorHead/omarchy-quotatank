@@ -107,7 +107,7 @@ ShellRoot {
 
   function stateOf(mode) {
     return UsageLogic.accountState({ id: "claude", status: "ok", accounts: accounts }, { modes: JSON.stringify({ claude: mode }),
-      proxyMode: false, nowSeconds: now, recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 })
+      nowSeconds: now, recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 })
   }
 
   Component.onCompleted: {

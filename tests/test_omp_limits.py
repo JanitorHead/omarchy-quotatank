@@ -286,8 +286,8 @@ class AccountIdTests(unittest.TestCase):
 
 
 class MergeTests(unittest.TestCase):
-    def merge(self, providers: list[dict], provider_ids: list[str], *, capacity=None, cliproxy=False) -> int:
-        return usage.merge_omp(providers, provider_ids, [fixture()], capacity, cliproxy)
+    def merge(self, providers: list[dict], provider_ids: list[str], *, capacity=None) -> int:
+        return usage.merge_omp(providers, provider_ids, [fixture()], capacity)
 
     def test_the_same_email_keeps_the_native_reading_and_notes_omp(self):
         providers = [native("codex", "WORK@example.com")]
@@ -384,7 +384,7 @@ class MergeTests(unittest.TestCase):
         for document in (on_the_hour, fixture()):
             with self.subTest(monthly=document["reports"][3]["limits"][1]["window"]["resetsAt"]):
                 providers = [opencode((1893474000, 1895000400))]
-                usage.merge_omp(providers, ["opencode"], [document], None, False)
+                usage.merge_omp(providers, ["opencode"], [document], None)
                 self.assertEqual([account["origin"] for account in providers[0]["accounts"]], ["signin", "omp"])
                 self.assertNotIn("origins", providers[0])
 
@@ -419,7 +419,7 @@ class MergeTests(unittest.TestCase):
                 self.assertEqual(claude["accountCount"], 3)
         providers = [usage.error_provider("claude", "no_credentials", "No Claude Code sign-in was found.")]
         disabled_only = {"reports": [], "disabledCredentials": fixture()["disabledCredentials"]}
-        usage.merge_omp(providers, ["claude"], [disabled_only], None, False)
+        usage.merge_omp(providers, ["claude"], [disabled_only], None)
         self.assertEqual((providers[0]["errorKind"], providers[0]["account"]), ("expired", "old@example.com"))
 
     def test_omps_capacity_becomes_the_providers_pool(self):
@@ -440,14 +440,6 @@ class MergeTests(unittest.TestCase):
         self.merge(providers, ["claude", "codex", "grok"])
         self.assertEqual([provider["id"] for provider in providers], ["claude", "codex"])
         self.assertEqual([provider["origin"] for provider in providers], ["omp", "omp"])
-
-    def test_proxy_accounts_are_the_native_origin_in_proxy_mode(self):
-        proxy = usage.cliproxy_account_record("codex", {"id": "codex.json", "email": "work@example.com"})
-        providers = [dict(copy.deepcopy(proxy), accounts=[proxy], accountCount=1)]
-        self.merge(providers, ["codex"], cliproxy=True)
-        self.assertEqual(providers[0]["accounts"][0]["origins"], ["proxy", "omp"])
-        self.assertEqual(providers[0]["accounts"][0]["ompAccountId"], omp_id("openai-codex", "work@example.com"))
-        self.assertEqual(providers[0]["accountCount"], 1)
 
 
 class OmpTestCase(unittest.TestCase):

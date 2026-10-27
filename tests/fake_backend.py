@@ -12,9 +12,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--providers", default="claude,codex,kimi")
 parser.add_argument("--timeout")
 parser.add_argument("--state-dir")
-parser.add_argument("--source", default="direct")
-parser.add_argument("--cliproxy-url")
-parser.add_argument("--cliproxy-key-file")
+parser.add_argument("--proxy", action="append", default=[])
+parser.add_argument("--proxy-key-file", action="append", default=[])
 parser.add_argument("--key-file", action="append", default=[])
 # omp is read on this computer by default (Settings → Providers → omp), so every direct refresh passes it.
 parser.add_argument("--omp", choices=("local",))
@@ -29,12 +28,19 @@ if args.providers == "kimi":
 payload = json.loads(Path(os.environ["QUOTATANK_NORMALIZED_FIXTURE"]).read_text())
 now = int(time.time())
 payload["generatedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+proxy = None
+if args.proxy:
+    proxy_id, _, url = args.proxy[0].partition("=")
+    keys = dict(value.partition("=")[::2] for value in args.proxy_key_file)
+    if url != "https://proxy.test/prefix" or keys.get(proxy_id) != "/private/proxy key":
+        raise SystemExit("CLIProxyAPI settings were not forwarded intact")
+    proxy = {"id": proxy_id, "name": "CLIProxyAPI"}
+    payload["proxies"] = [{"id": proxy_id, "status": "ok", "readAt": payload["generatedAt"], "detected": ["codex"]}]
 for provider in payload["providers"]:
-    if args.source == "cliproxy":
-        if args.cliproxy_url != "https://proxy.test/prefix" or args.cliproxy_key_file != "/private/proxy key":
-            raise SystemExit("CLIProxyAPI settings were not forwarded intact")
-        provider.update(source="CLIProxyAPI management API", authCommand="", accountCount=3, availableCount=2)
-        provider["notice"] = "2 of 3 accounts checked successfully. Showing the account with the most remaining quota."
+    if proxy:
+        # Read only through the proxy here: this computer has no sign-in of its own.
+        provider.update(source="CLIProxyAPI management API", authCommand="", accountCount=3, availableCount=2,
+                        origin="proxy", proxy=proxy)
         provider["accounts"] = [dict(provider, accountId="first", account="first@example.invalid"),
                                 dict(provider, accountId="second", account="second@example.invalid", windows=[], status="disabled")]
     provider["fetchedAt"] = payload["generatedAt"]
@@ -50,10 +56,7 @@ for provider in payload["providers"]:
             reset_offset = (index + 2) * 86400
         window["resetsAt"] = now + reset_offset
 selected = {value for value in args.providers.split(",") if value}
-if args.source == "cliproxy":
-    payload["source"] = "cliproxy"
-    payload["providers"].append({"id": "gemini", "name": "Gemini", "status": "unsupported", "windows": [],
-                                 "notice": "Quota lookup unavailable", "accounts": []})
+if proxy:
     codex = next(row for row in payload["providers"] if row["id"] == "codex")
     template = {key: value for key, value in codex.items() if key != "accounts"}
     codex["accounts"] = []
@@ -67,7 +70,5 @@ if args.source == "cliproxy":
             else:
                 window.update(remaining=99, used=1)
         codex["accounts"].append(account)
-
-else:
-    payload["providers"] = [row for row in payload["providers"] if row["id"] in selected]
+payload["providers"] = [row for row in payload["providers"] if row["id"] in selected]
 print(json.dumps(payload, separators=(",", ":")))

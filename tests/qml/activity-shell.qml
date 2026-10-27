@@ -15,19 +15,15 @@ ShellRoot {
   QtObject {
     id: usage
     property var proxy: root.proxyWith("http://synthetic.invalid/old")
-    readonly property string usageSource: proxy ? "cliproxy" : "direct"
-    readonly property string cliproxyUrl: proxy ? proxy.url : ""
-    readonly property string cliproxyKeyFile: proxy ? proxy.keyFile : ""
-    readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl])
+    readonly property var settings: ({ sources: JSON.stringify(proxy ? [proxy] : []) })
+    readonly property string connectionId: JSON.stringify([proxy ? proxy.url : ""])
     function localPath(url) { return String(url).replace("file://", "") }
   }
   QtObject {
     id: probeUsage
     property var proxy: root.proxyWith("http://synthetic.invalid/old")
-    readonly property string usageSource: "cliproxy"
-    readonly property string cliproxyUrl: "http://synthetic.invalid"
-    readonly property string cliproxyKeyFile: ""
-    readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl])
+    readonly property var settings: ({ sources: JSON.stringify(proxy ? [proxy] : []) })
+    readonly property string connectionId: JSON.stringify(["http://synthetic.invalid"])
     function localPath(url) { return String(url).replace("file://", "") }
   }
   Item { id: host }

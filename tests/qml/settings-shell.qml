@@ -106,10 +106,6 @@ ShellRoot {
     var unused = create("OmpActivity.qml", { scriptPath: fakeLive, settings: {}, status: { local: "unused", installed: true } })
     check(unused.connection === null && unused.state === "off", "omp installed but not signed in: nothing to follow")
     unused.destroy()
-    var proxied = create("OmpActivity.qml", { scriptPath: fakeLive, settings: { ompLocal: true },
-      status: { local: "ok" }, proxyMode: true })
-    check(proxied.connection === null && proxied.state === "off", "a proxy source runs no omp helper")
-    proxied.destroy()
   }
 
   Timer {
@@ -279,9 +275,9 @@ ShellRoot {
         keyFile: "/private/cliproxy.key", keeperUrl: "", keeperPasswordFile: "", on: true }]) })
       check(usage.connectionId !== connection, "a switched-on proxy source is a new connection")
       usagePhase = 2
-    } else if (usagePhase === 2 && args && args.indexOf("--cliproxy-url") >= 0) {
-      check(hasPair(args, "--cliproxy-url", "https://proxy.example") && hasPair(args, "--cliproxy-key-file", "/private/cliproxy.key")
-        && args.indexOf("--omp") < 0, "a proxy source is read instead of omp: " + JSON.stringify(args))
+    } else if (usagePhase === 2 && args && args.indexOf("--proxy") >= 0) {
+      check(hasPair(args, "--proxy", "p-1a2b3c4d=https://proxy.example") && hasPair(args, "--proxy-key-file", "p-1a2b3c4d=/private/cliproxy.key")
+        && hasPair(args, "--omp", "local"), "a proxy is read with this computer and its omp: " + JSON.stringify(args))
       usagePhase = 99
     }
   }

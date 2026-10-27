@@ -22,14 +22,13 @@ Ui.Panel {
   readonly property color surface: Commons.Color.popups.background
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
-  readonly property bool proxyMode: backend.usageSource === "cliproxy"
   // The saved order drives tiles, chips, and provider cycling alike.
   readonly property string providerOrder: String(setting("providerOrder", "[]"))
-  readonly property var providers: UsageLogic.orderProviders(UsageLogic.availableProviders(proxyMode
-    ? backend.providers : UsageLogic.selectedProviders(backend.providers, backend.enabledProviderIds)), providerOrder)
+  readonly property var providers: UsageLogic.orderProviders(UsageLogic.availableProviders(
+    UsageLogic.selectedProviders(backend.providers, backend.enabledProviderIds)), providerOrder)
   // Providers set up on this computer that are neither monitored nor dismissed. Limits points to
   // them in one quiet line until each is monitored or ignored under Settings → Providers.
-  readonly property var foundProviders: proxyMode ? [] : UsageLogic.foundProviders(backend.detected,
+  readonly property var foundProviders: UsageLogic.foundProviders(backend.detected,
     backend.enabledProviderIds, UsageLogic.listOrEmpty(setting("dismissedProviders", UsageLogic.DEFAULT_SETTINGS.dismissedProviders)))
   property string selectedProviderId: ""
   property string viewMode: "limits"
@@ -117,9 +116,9 @@ Ui.Panel {
   readonly property var providerSummary: providers.length > 0 ? providers[providerIndex] : null
   readonly property var provider: providerSummary
   readonly property var proxyAccounts: UsageLogic.listOrEmpty(providerSummary && providerSummary.accounts)
-  // A proxy always shows its accounts; locally a provider lists them once it has more than one
-  // (Omarchy subscription accounts, extra API keys, accounts omp reads).
-  readonly property bool accountOverview: proxyAccounts.length > (proxyMode ? 0 : 1)
+  // A provider read only through a proxy always shows its accounts; otherwise it lists them once it has more
+  // than one (Omarchy subscription accounts, extra API keys, accounts omp, other computers or a proxy read).
+  readonly property bool accountOverview: proxyAccounts.length > (UsageLogic.proxyPool(providerSummary) ? 0 : 1)
   property alias accountList: accountListView
   property alias limitCards: limitCards
   readonly property var providerOptions: {
@@ -136,13 +135,12 @@ Ui.Panel {
   // omp's live feed (OmpActivity.qml): requests as they happen, with their accounts. Tests put a
   // stand-in with the same signals and properties here.
   property QtObject ompActivity: ompActivityHelper
-  // The latest sign of use per account: live omp requests and, through a proxy, each account's last
+  // The latest sign of use per account: live omp requests and, through a proxy's Keeper, each account's last
   // request; the newest wins (UsageLogic.mergeRecentActivity).
   readonly property var recentByAccount: UsageLogic.mergeRecentActivity(
-    ompActivity && ompActivity.recentByAccount ? ompActivity.recentByAccount : null,
-    proxyMode ? activityBackend.providers : [])
+    ompActivity && ompActivity.recentByAccount ? ompActivity.recentByAccount : null, activityBackend.providers)
   readonly property var accountModeChoices: UsageLogic.parseAccountModes(setting("accountModes", "{}"))
-  readonly property var accountStateOptions: ({ modes: accountModeChoices, proxyMode: proxyMode, nowSeconds: nowSeconds,
+  readonly property var accountStateOptions: ({ modes: accountModeChoices, nowSeconds: nowSeconds,
     recentByAccount: recentByAccount, warningThreshold: warningThreshold, criticalThreshold: criticalThreshold })
   readonly property var accountStates: {
     var states = {}
@@ -258,7 +256,7 @@ Ui.Panel {
     var parts = []
     var expires = reading && reading.credits ? Number(reading.credits.resetCreditsExpiresAt) : NaN
     if (isFinite(expires) && expires > 0) parts.push("Expires " + clockText(expires))
-    var note = UsageLogic.accountResetNote(reading, proxyMode)
+    var note = UsageLogic.accountResetNote(reading)
     if (note !== "") parts.push(note)
     return parts.join(" · ")
   }
@@ -278,7 +276,7 @@ Ui.Panel {
     if (!provider) return false
     for (var i = 0; i < proxyAccounts.length; i++)
       if (String(proxyAccounts[i].accountId) === String(accountId))
-        return accountEventsTracker.use(provider.id, proxyAccounts[i], accountMode, proxyMode)
+        return accountEventsTracker.use(provider.id, proxyAccounts[i], accountMode)
     return false
   }
 
@@ -927,7 +925,6 @@ Ui.Panel {
     settings: root.settings
     status: backend.ompStatus
     computers: backend.computers
-    proxyMode: root.proxyMode
   }
 
   // A first open with nothing read yet shows placeholder blocks, but only once reading takes over a
@@ -1205,7 +1202,7 @@ Ui.Panel {
     text: "󱚣"
     active: root.alarming
     tooltipText: root.provider ? "Quotatank · " + root.provider.name
-      + (root.proxyMode ? "\n" + root.lastAccountTooltip(root.lastAccount(root.provider)) : "") : "Quotatank"
+      + (UsageLogic.proxyPool(root.provider) ? "\n" + root.lastAccountTooltip(root.lastAccount(root.provider)) : "") : "Quotatank"
     onPressed: function(buttonCode) { root.handleBarPress(buttonCode) }
   }
 
@@ -1249,15 +1246,17 @@ Ui.Panel {
           readonly property bool countedAccount: accountChip && counted.indexOf(accountIndex) !== -1
 
           readonly property var lastAccount: root.lastAccount(modelData)
+          // Every account read through a proxy, which rotates them.
+          readonly property bool throughProxy: UsageLogic.proxyPool(modelData)
           // A proxy provider with one account shows the pool's summary when its last request is unknown.
-          readonly property bool usingPoolQuota: root.proxyMode && !multiAccount && !lastAccount.reading
+          readonly property bool usingPoolQuota: throughProxy && !multiAccount && !lastAccount.reading
           // The account whose figure the chip shows: its own on a per-account chip, else the counted
           // account with the least headroom on the chip's window; -1 shows the provider's own reading.
           readonly property int valueIndex: accountChip ? accountIndex
             : !multiAccount ? -1
             : UsageLogic.barValueIndex(modelData, counted, limits.top)
           readonly property var reading: valueIndex >= 0 ? accounts[valueIndex]
-            : root.proxyMode && lastAccount.reading ? lastAccount.reading : modelData
+            : throughProxy && lastAccount.reading ? lastAccount.reading : modelData
           readonly property var limits: root.barLimitsFor(modelData.id)
           readonly property string quotaMode: root.quotaModeFor(modelData.id)
           readonly property var failure: accountChip ? reading : modelData
@@ -1282,7 +1281,7 @@ Ui.Panel {
             ? remainingValue : UsageLogic.usedForWindow(reading, topWindow)
           readonly property bool stacked: windowStacked || (moneyChip && shownValue !== null)
           readonly property string shownText: shownValue === null
-            ? (root.proxyMode ? "—" : "") : UsageLogic.formatPercent(shownValue) + "%"
+            ? (throughProxy ? "—" : "") : UsageLogic.formatPercent(shownValue) + "%"
           readonly property string severity: UsageLogic.severity(
             reading, root.warningThreshold, root.criticalThreshold, remainingValue)
           readonly property string moneySeverity: moneyChip ? root.moneySeverityOf(reading) : "none"
@@ -1334,7 +1333,7 @@ Ui.Panel {
           // built only while this chip's card shows.
           readonly property bool hoverCardEligible: multiAccount
           readonly property var hoverModel: root.hoverChip === providerChip && multiAccount && root.hoverCardShown
-            ? UsageLogic.barHoverModel(modelData, accountState, { proxyMode: root.proxyMode, nowSeconds: root.nowSeconds,
+            ? UsageLogic.barHoverModel(modelData, accountState, { nowSeconds: root.nowSeconds,
               extraKeys: root.setting("extraKeys", "{}"), readAtSeconds: root.readingSeconds(modelData), stale: stale,
               formatClock: root.clockText })
             : null
@@ -1350,7 +1349,7 @@ Ui.Panel {
               + (secondaryRemaining === null ? ": not reported"
                 : ": " + UsageLogic.quotaText(providerChip.quotaMode === "Remaining"
                   ? secondaryRemaining : UsageLogic.usedFromRemaining(secondaryRemaining), providerChip.quotaMode)) : "")
-            + (root.proxyMode ? "\n" + root.lastAccountTooltip(lastAccount) : "")
+            + (throughProxy ? "\n" + root.lastAccountTooltip(lastAccount) : "")
             + (usingPoolQuota ? "\nQuota shown: account with the most remaining capacity." : "")
 
           // One-shot flash: the same account's window moved to a worse severity, or it reset (the rule
@@ -1781,8 +1780,7 @@ Ui.Panel {
             surface: root.surface
             fontFamily: root.fontFamily
             accountDetails: root.accountTooltip(root.provider)
-            proxyProviders: root.proxyMode ? backend.allProviders : []
-            usagePayload: root.proxyMode ? null : backend.payload
+            usagePayload: backend.payload
             usageLoading: backend.loading
             costSources: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sources) : []
             ompActivity: root.ompActivity
@@ -1846,10 +1844,9 @@ Ui.Panel {
               selectedId: root.selectedAccount ? String(root.selectedAccount.accountId) : ""
               nowSeconds: root.nowSeconds
               events: root.accountEvents.eventLog
-              proxyMode: root.proxyMode
               resetsActionable: !resetBackend.active && !resetBackend.busy
               useBusyId: root.accountEvents.useBusyId
-              headerText: UsageLogic.accountModeText(root.provider, root.accountMode, root.proxyMode)
+              headerText: UsageLogic.accountModeText(root.provider, root.accountMode)
               quotaMode: root.selectedQuotaMode
               warningThreshold: root.warningThreshold
               criticalThreshold: root.criticalThreshold
@@ -1892,7 +1889,6 @@ Ui.Panel {
             bottomPadding: root.skeletonDue ? 0 : Style.spacing.huge
             text: backend.loading
               ? "Reading your limits…"
-              : root.proxyMode ? "No enabled managed accounts found. Check the accounts configured in CLIProxyAPI."
               : "Nothing to show yet. Sign in to a provider's CLI or app, or turn one on under Settings → Providers."
             color: root.dim
             font.family: root.fontFamily
@@ -1965,10 +1961,12 @@ Ui.Panel {
                     var plan = account.plan || account.planType ? UsageLogic.accountPlanLabel(account) : ""
                     if (plan !== "" && plan !== detailName.text) parts.push(plan)
                     if (root.providerState && root.providerState.inUse[root.selectedAccountIndex] === true) parts.push("in use")
-                    var kind = UsageLogic.accountSourceKind(account, root.proxyMode)
+                    var kind = UsageLogic.accountSourceKind(account)
                     if (kind === "omp") parts.push("from omp")
                     else if (kind === "computer") parts.push("on " + String(account.computer.name || ""))
-                    else if (account.standIn && account.standIn.name) parts.push("read on " + String(account.standIn.name))
+                    else if (kind === "proxy") parts.push("through " + String(account.proxy.name || "CLIProxyAPI"))
+                    else if (account.standIn && account.standIn.name)
+                      parts.push((UsageLogic.readingProxy(account) ? "read through " : "read on ") + String(account.standIn.name))
                     return parts.length > 0 ? " · " + parts.join(" · ") : ""
                   }
                   color: root.dim
@@ -2035,7 +2033,7 @@ Ui.Panel {
                 Ui.Button {
                   id: errorSetupButton
                   objectName: "errorSetupButton"
-                  readonly property var entry: root.proxyMode || root.accountOverview || !root.provider ? null : UsageLogic.localProvider(root.provider.id)
+                  readonly property var entry: root.accountOverview || !root.provider ? null : UsageLogic.localProvider(root.provider.id)
                   readonly property var action: UsageLogic.setupActionFor(entry, root.provider, backend.payload, backend.mainComputer)
                   visible: action.kind === "signin" || action.kind === "install"
                   text: root.setupWatchId !== "" && entry && root.setupWatchId === entry.id ? "Waiting for the sign-in…" : action.label
@@ -2143,8 +2141,9 @@ Ui.Panel {
               id: resetCard
               objectName: "bankedResetCard"
               readonly property var reading: root.detail
-              readonly property bool actionable: UsageLogic.accountResetActionable(reading, root.proxyMode)
-              visible: !root.proxyMode && !!reading && UsageLogic.accountResetShown(reading, root.proxyMode)
+              readonly property bool actionable: UsageLogic.accountResetActionable(reading)
+              // A reading through a proxy carries its resets on its row instead.
+              visible: !!reading && !UsageLogic.readingProxy(reading) && UsageLogic.accountResetShown(reading)
                 && UsageLogic.accountResetCount(reading) > 0
               width: parent.width
               implicitHeight: resetCardContent.implicitHeight + contentTopInset + contentBottomInset

@@ -20,7 +20,6 @@ Column {
   property color surface: Commons.Color.popups.background
   property string fontFamily: Style.font.family
   property string accountDetails: ""
-  property var proxyProviders: []
   // The local backend's latest payload ({ providers, detected, generatedAt }) and whether a refresh
   // is running: Settings → Providers shows each provider's state from them.
   property var usagePayload: null
@@ -38,7 +37,6 @@ Column {
     for (var i = 0; i < sourceEntries.length; i++) if (sourceEntries[i].kind === "proxy") return sourceEntries[i]
     return null
   }
-  readonly property bool proxyMode: UsageLogic.activeProxy(settings) !== null
   // Other computers (Settings → Sources → Other computers) and where Sign in and Install open a terminal.
   readonly property var computerEntries: UsageLogic.sourcesOf(settings, "computer")
   readonly property var mainComputer: UsageLogic.mainComputer(settings)
@@ -56,19 +54,13 @@ Column {
   readonly property var dismissedProviders: UsageLogic.listOrEmpty(value("dismissedProviders", UsageLogic.DEFAULT_SETTINGS.dismissedProviders))
   readonly property var moneyProviderNames: {
     var names = []
-    if (proxyMode) return names
     for (var i = 0; i < UsageLogic.LOCAL_PROVIDERS.length; i++)
       if (UsageLogic.LOCAL_PROVIDERS[i].money && monitored(UsageLogic.LOCAL_PROVIDERS[i].id)) names.push(UsageLogic.LOCAL_PROVIDERS[i].name)
     return names
   }
   readonly property bool moneyMonitored: moneyProviderNames.length > 0
-  readonly property var providerOptions: UsageLogic.orderProviders(proxyMode ? UsageLogic.listOrEmpty(proxyProviders) : UsageLogic.LOCAL_PROVIDERS, value("providerOrder", "[]"))
-  readonly property var allProviderIds: {
-    var ids = UsageLogic.LOCAL_PROVIDER_IDS.slice()
-    for (var i = 0; i < proxyProviders.length; i++)
-      if (!UsageLogic.contains(ids, proxyProviders[i].id)) ids.push(proxyProviders[i].id)
-    return ids
-  }
+  readonly property var providerOptions: UsageLogic.orderProviders(UsageLogic.LOCAL_PROVIDERS, value("providerOrder", "[]"))
+  readonly property var allProviderIds: UsageLogic.LOCAL_PROVIDER_IDS.slice()
   // Saving a key clears the backend's payload until the next refresh; placing providers from the last
   // payload that arrived keeps the rows from jumping in the meantime.
   property var lastPayload: null
@@ -81,10 +73,10 @@ Column {
     var reading = UsageLogic.readingFor(shownReadings, pendingSetup)
     if (pendingSetup !== "" && reading && reading.status === "ok") pendingSetup = ""
   }
-  readonly property var sections: UsageLogic.providerSections(proxyMode ? [] : providerOptions,
+  readonly property var sections: UsageLogic.providerSections(providerOptions,
     enabledProviders, dismissedProviders, shownReadings, shownDetected, settings)
-  // The draggable rows: every proxy provider, or the local providers in use.
-  readonly property var providerRows: proxyMode ? providerOptions : sections.listed
+  // The draggable rows: the providers in use.
+  readonly property var providerRows: sections.listed
   property string providerFilter: ""
   readonly property int moreCount: sections.moreSignIns.length + sections.moreKeys.length
   readonly property var moreSignIns: UsageLogic.filterProviders(sections.moreSignIns, providerFilter)
@@ -137,7 +129,7 @@ Column {
   }
 
   function monitored(id) {
-    return proxyMode || UsageLogic.contains(enabledProviders, id)
+    return UsageLogic.contains(enabledProviders, id)
   }
 
   function set(key, next) {
@@ -602,11 +594,7 @@ Column {
       spacing: Style.spacing.xxs
       Label { text: "This computer"; font.bold: true }
       StatusLine { objectName: "sourceThisComputerOmp"; line: root.ompLocalLine }
-      Hint {
-        text: root.proxyMode
-          ? "While the proxy below is on, Limits shows its accounts; Costs still reads this computer's history."
-          : "Its sign-ins, API keys and agent history. Providers lists what was found here."
-      }
+      Hint { text: "Its sign-ins, API keys and agent history. Providers lists what was found here." }
     }
     Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
 
@@ -758,7 +746,10 @@ Column {
       fontFamily: root.fontFamily
       onRevealRequested: function(item) { root.revealRequested(item) }
 
-      Hint { text: "Reads every account a " + root.proxyName + " server holds. While it is on, Limits shows the proxy's accounts instead of this computer's sign-ins." }
+      Hint {
+        text: "Reads the Claude, Codex, Kimi and Antigravity accounts a " + root.proxyName + " server holds, beside this "
+          + "computer's and the other computers'. An account already read fine elsewhere is not asked for again."
+      }
       Ui.Button {
         objectName: "addProxy"
         visible: !root.proxyEntry
@@ -780,6 +771,11 @@ Column {
           label: "Read accounts from " + root.proxyName
           checked: !!root.proxyEntry && root.proxyEntry.on
           onToggled: root.updateSource(root.proxyEntry, "on", !checked)
+        }
+        StatusLine {
+          objectName: "proxyStatus"
+          line: UsageLogic.computerLine(root.proxyEntry, UsageLogic.proxyState(root.lastPayload, root.proxyEntry ? root.proxyEntry.id : ""),
+            root.clockText)
         }
         TextRow {
           id: proxyUrlField
@@ -948,21 +944,21 @@ Column {
 
     Hint {
       objectName: "providersSourceHint"
-      text: root.proxyMode ? "Limits come from every account on your " + root.proxyName + " server. Change it under Sources."
-        : "Limits come from the CLIs, apps, and IDEs you are signed in to on this computer, plus API keys saved here or set in the environment."
+      text: "Limits come from the CLIs, apps, and IDEs you are signed in to, API keys saved here or set in the environment, "
+        + "and the other computers and proxy under Sources."
     }
     Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
 
     // One click to monitor what is already set up here; Ignore stops suggesting it.
     Column {
       objectName: "foundProviders"
-      visible: !root.proxyMode && root.sections.found.length > 0
+      visible: root.sections.found.length > 0
       width: parent.width
       spacing: Style.spacing.md
 
-      Label { text: "Found on this computer"; font.bold: true }
+      Label { text: "Found"; font.bold: true }
       Repeater {
-        model: root.proxyMode ? [] : root.sections.found
+        model: root.sections.found
         delegate: Row {
           id: foundRow
           required property var modelData
@@ -1013,12 +1009,12 @@ Column {
       width: parent.width
       leftPadding: root.providerCardInset
       rightPadding: root.providerCardInset
-      Label { width: parent.width - parent.leftPadding - parent.rightPadding - monitorHeading.width - barHeading.width; text: root.proxyMode ? "Provider" : "Monitored"; font.bold: true }
-      Label { id: monitorHeading; visible: !root.proxyMode; width: visible ? Style.space(82) : 0; text: "Monitor"; horizontalAlignment: Text.AlignHCenter }
+      Label { width: parent.width - parent.leftPadding - parent.rightPadding - monitorHeading.width - barHeading.width; text: "Monitored"; font.bold: true }
+      Label { id: monitorHeading; width: Style.space(82); text: "Monitor"; horizontalAlignment: Text.AlignHCenter }
       Label { id: barHeading; visible: root.percentageDisplay; width: visible ? Style.space(82) : 0; text: "Menu bar"; horizontalAlignment: Text.AlignHCenter }
     }
     Hint {
-      visible: !root.proxyMode && root.providerRows.length === 0
+      visible: root.providerRows.length === 0
       text: "Nothing monitored is set up yet. Sign in to a provider's CLI or app, or turn one on below."
     }
 
@@ -1043,8 +1039,8 @@ Column {
         required property string name
         required property bool money
         required property int index
-        readonly property bool on: root.proxyMode || UsageLogic.contains(root.enabledProviders, providerId)
-        readonly property var entry: root.proxyMode ? null : UsageLogic.localProvider(providerId)
+        readonly property bool on: UsageLogic.contains(root.enabledProviders, providerId)
+        readonly property var entry: UsageLogic.localProvider(providerId)
         readonly property bool hasKey: UsageLogic.keySaved(root.settings, providerId)
         readonly property var reading: UsageLogic.readingFor(root.shownReadings, providerId)
         readonly property var setup: reading ? UsageLogic.setupActionFor(entry, reading, root.lastPayload, root.mainComputer) : UsageLogic.setupAction(null, null, null)
@@ -1056,7 +1052,7 @@ Column {
           && (entry.auth === "key" || hasKey || !reading || reading.status !== "ok")
         readonly property bool dragging: providerList.draggingId === providerId
         // This provider's accounts in the last reading (Omarchy sign-ins, extra keys, omp, a proxy).
-        readonly property var accountReading: root.proxyMode ? UsageLogic.readingFor(root.proxyProviders, providerId) : reading
+        readonly property var accountReading: reading
         readonly property var accountList: accountReading ? UsageLogic.listOrEmpty(accountReading.accounts) : []
         readonly property int accountCount: accountList.length
         readonly property var hiddenIds: UsageLogic.parseHiddenAccounts(root.value("hiddenAccounts", "{}"))[providerId] || []
@@ -1172,7 +1168,6 @@ Column {
             }
             Toggle {
               id: monitorSwitch
-              visible: !root.proxyMode
               width: visible ? Style.space(82) : 0
               anchors.top: parent.top
               anchors.topMargin: (providerHeader.band - implicitHeight) / 2
@@ -1333,7 +1328,7 @@ Column {
     }
     Hint {
       visible: root.providerRows.length > 0
-      text: root.proxyMode ? "Every provider on the server is monitored. Choose which ones get a menu bar chip, and open Customize to read one differently." : "Monitor reads a provider and shows it in Limits. Menu bar adds its chip to the bar. Customize overrides the defaults for one provider."
+      text: "Monitor reads a provider and shows it in Limits. Menu bar adds its chip to the bar. Customize overrides the defaults for one provider."
     }
 
     // Monitored sign-ins that are not signed in: they appear on their own once they are, so they
@@ -1341,7 +1336,7 @@ Column {
     SettingsSection {
       id: waitingSection
       objectName: "waitingProviders"
-      visible: !root.proxyMode && root.sections.waiting.length > 0
+      visible: root.sections.waiting.length > 0
       width: parent.width
       title: "Waiting for a sign-in"
       summary: String(root.sections.waiting.length)
@@ -1351,7 +1346,7 @@ Column {
 
       Hint { text: "Monitored, and shown in Limits as soon as you sign in. Turn off the ones you do not use." }
       Repeater {
-        model: root.proxyMode ? [] : root.sections.waiting
+        model: root.sections.waiting
         delegate: ProviderOption {
           id: waitingOption
           readonly property var setup: UsageLogic.setupActionFor(waitingOption.modelData,
@@ -1367,7 +1362,7 @@ Column {
     SettingsSection {
       id: moreSection
       objectName: "moreProviders"
-      visible: !root.proxyMode && root.moreCount > 0
+      visible: root.moreCount > 0
       width: parent.width
       title: "More providers"
       summary: String(root.moreCount)
@@ -1390,12 +1385,12 @@ Column {
       }
       Label { visible: root.moreSignIns.length > 0; text: "Sign-ins"; font.bold: true }
       Repeater {
-        model: root.proxyMode ? [] : root.moreSignIns
+        model: root.moreSignIns
         delegate: ProviderOption {}
       }
       Label { visible: root.moreKeys.length > 0; text: "API keys"; font.bold: true; topPadding: Style.spacing.md }
       Repeater {
-        model: root.proxyMode ? [] : root.moreKeys
+        model: root.moreKeys
         delegate: ProviderOption {}
       }
       Hint {
@@ -1406,11 +1401,10 @@ Column {
 
     // omp (Oh My Pi) signs in to accounts of its own. Read here, they join the providers above. It comes
     // after the providers it adds to, so Monitored opens the page.
-    Ui.PanelSeparator { visible: !root.proxyMode; width: parent.width; foreground: root.foreground }
+    Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
     Column {
       id: ompSource
       objectName: "ompSource"
-      visible: !root.proxyMode
       width: parent.width
       spacing: Style.spacing.md
 
@@ -3101,7 +3095,7 @@ Column {
     readonly property var action: needsReading && !reading
       ? UsageLogic.setupAction(null, null, null) : UsageLogic.setupActionFor(entry, reading, root.lastPayload, root.mainComputer)
     readonly property bool pending: !!entry && root.pendingSetup === entry.id
-    visible: !root.proxyMode && action.kind !== ""
+    visible: action.kind !== ""
     spacing: Style.spacing.sm
 
     Ui.Button {
@@ -3267,7 +3261,7 @@ Column {
 
   // ---- index summaries: what each page is set to, so the index already answers most questions
   function providersSummary() {
-    var rows = proxyMode ? providerOptions : sections.listed
+    var rows = sections.listed
     var names = []
     var shown = 0
     for (var i = 0; i < rows.length; i++) {
@@ -3276,14 +3270,14 @@ Column {
       names.push(UsageLogic.providerShortName(rows[i]))
       if (UsageLogic.contains(barProviders, id)) shown++
     }
-    var found = proxyMode ? 0 : sections.found.length
+    var found = sections.found.length
     if (names.length === 0)
-      return proxyMode ? proxyName + " · no providers yet" : found > 0 ? found + " found on this computer" : "Nothing set up yet"
+      return found > 0 ? found + " found" : "Nothing set up yet"
     var list = names.length <= 3 ? names.join(", ") : names.slice(0, 2).join(", ") + " +" + (names.length - 2)
     var customized = customizedCount()
-    // omp counts once it adds accounts: read here, or through its gateway.
-    var ompAdds = !proxyMode && ompStatus && (ompStatus.local === "ok" || ompStatus.gateway === "ok")
-    return (proxyMode ? proxyName + " · " : "") + list + (percentageDisplay ? " · " + shown + " in menu bar" : "")
+    // omp counts once it adds accounts read here.
+    var ompAdds = ompStatus && ompStatus.local === "ok"
+    return list + (percentageDisplay ? " · " + shown + " in menu bar" : "")
       + (customized > 0 ? " · " + customized + " customized" : "") + (found > 0 ? " · " + found + " found" : "")
       + (ompAdds ? " · omp" : "")
   }

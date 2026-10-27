@@ -63,8 +63,8 @@ Item {
   }
 
   // Starts new sessions of `providerId` with `account`; false when that is not possible now.
-  function use(providerId, account, mode, proxyMode) {
-    if (useBusyId !== "" || !UsageLogic.accountCanUse(account, mode, proxyMode)) return false
+  function use(providerId, account, mode) {
+    if (useBusyId !== "" || !UsageLogic.accountCanUse(account, mode)) return false
     var argv = UsageLogic.accountUseArgv(providerId, account)
     if (!argv) return false
     runArgv(argv)

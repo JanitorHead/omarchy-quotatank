@@ -3,6 +3,7 @@ usage-fetch.py and cost-fetch.py merge what a computer reads with this computer'
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import os
@@ -195,21 +196,61 @@ class UsageComputerTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def payload(self, mine: dict[str, dict], answers: dict[str, object], ids=("claude", "codex")) -> dict:
+    def payload(self, mine: dict[str, dict], answers: dict[str, object], ids=("claude", "codex"), proxy=None) -> dict:
         def run_reader(host, script, args, timeout, **_options):
             self.assertEqual((script, args[0]), ("usage-fetch.py", "--reader"))
             result = answers[host]
             if isinstance(result, Exception):
                 raise result
             return result
+
+        def collect_cliproxy(provider_ids, timeout, url, key_path, healthy):
+            self.healthy = healthy
+            return json.loads(json.dumps(proxy)), ["claude"]
         # A provider this computer is not given has no sign-in here.
         mine = {provider_id: mine.get(provider_id) or usage.error_provider(provider_id, "no_credentials", "Not signed in.")
                 for provider_id in ids}
         fetchers = {provider_id: (lambda _timeout, value=value: json.loads(json.dumps(value)))
                     for provider_id, value in mine.items()}
-        with mock.patch.dict(usage.FETCHERS, fetchers), mock.patch.object(usage.quotatank_remote, "run_reader", run_reader):
+        with mock.patch.dict(usage.FETCHERS, fetchers), mock.patch.object(usage.quotatank_remote, "run_reader", run_reader), \
+                mock.patch.object(usage, "collect_cliproxy", collect_cliproxy):
             return usage.build_payload(list(ids), 5, self.state,
-                                       computers=[(self.IDS[host], host) for host in answers])
+                                       computers=[(self.IDS[host], host) for host in answers],
+                                       proxies=[("p-00000001", "http://127.0.0.1:8317", None)] if proxy is not None else [])
+
+    def proxied(self, *accounts: dict) -> list[dict]:
+        """A proxy's result for Claude with these accounts, the way collect_cliproxy lists them."""
+        rows = [dict(account, accountId="proxy-" + str(index), origin="proxy") for index, account in enumerate(accounts)]
+        return [dict(copy.deepcopy(rows[0]), accounts=rows, accountCount=len(rows))]
+
+    def test_a_proxy_account_read_fine_here_is_shown_once_and_not_queried_again(self):
+        payload = self.payload({"claude": reading("claude", "me@example.com", 20, "Max")}, {}, ids=("claude",),
+                               proxy=self.proxied(reading("claude", "ME@example.com", 30, "Claude Max")))
+        claude = payload["providers"][0]
+        self.assertEqual((claude["windows"][0]["used"], claude.get("accounts")), (20, None))
+        self.assertEqual(self.healthy, {"claude": {"me@example.com"}})
+        self.assertIn("proxy-0", claude["liveIds"], "the proxy's activity names the account shown here")
+
+    def test_a_failed_reading_here_shows_the_proxys_reading_and_a_proxy_only_account_is_added(self):
+        expired = dict(reading("claude", "me@example.com", 0), status="error", errorKind="expired", message="Signed out.")
+        payload = self.payload({"claude": expired}, {}, ids=("claude",),
+                               proxy=self.proxied(reading("claude", "me@example.com", 40), reading("claude", "team@example.com", 5)))
+        accounts = payload["providers"][0]["accounts"]
+        self.assertEqual([(entry["account"], entry["status"]) for entry in accounts],
+                         [("me@example.com", "ok"), ("team@example.com", "ok")])
+        self.assertEqual((accounts[0]["standIn"], accounts[0]["notice"]),
+                         ({"id": "p-00000001", "name": "CLIProxyAPI", "accountId": "proxy-0"}, "Signed out."),
+                         "a reset goes through the proxy under the proxy's id for the account")
+        self.assertEqual((accounts[1]["proxy"]["id"], accounts[1]["active"]), ("p-00000001", False))
+        self.assertEqual(payload["proxies"][0]["status"], "ok")
+
+    def test_a_proxy_failure_for_an_account_read_fine_elsewhere_is_a_note(self):
+        failed = dict(reading("claude", "me@example.com"), status="error", errorKind="http", message="CLIProxyAPI refused it.")
+        payload = self.payload({}, {"devbox": answer(reading("claude", "me@example.com", 12))}, ids=("claude",),
+                               proxy=self.proxied(failed))
+        claude = payload["providers"][0]
+        self.assertEqual((claude["status"], claude["computer"]["name"]), ("ok", "devbox"))
+        self.assertEqual(claude["notice"], "CLIProxyAPI could not read it: CLIProxyAPI refused it.")
 
     def test_one_account_read_on_two_computers_is_shown_once_from_this_computer(self):
         payload = self.payload({"claude": reading("claude", "me@example.com", 20, "Max")},
@@ -239,7 +280,8 @@ class UsageComputerTests(unittest.TestCase):
         payload = self.payload({"claude": failed}, {"devbox": answer(reading("claude", "me@example.com", 42))}, ids=("claude",))
         claude = payload["providers"][0]
         self.assertEqual((claude["status"], claude["windows"][0]["used"]), ("ok", 42))
-        self.assertEqual(claude["standIn"], {"id": "c-00000001", "name": "devbox"})
+        self.assertEqual(claude["standIn"], {"id": "c-00000001", "name": "devbox",
+                                             "accountId": "c-00000001/" + usage.PRIMARY_ACCOUNT_ID})
         self.assertEqual(claude["notice"], "Claude did not answer.")
 
     def test_not_set_up_contributes_nothing_when_another_source_has_the_provider(self):

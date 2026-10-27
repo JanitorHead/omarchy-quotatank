@@ -322,7 +322,7 @@ class ResetListingTests(unittest.TestCase):
         native = dict(live.usage.base_provider("claude"), account="ana@example.com")
         report = {"provider": "anthropic", "fetchedAt": 1, "limits": [], "metadata": {"email": "ANA@example.com"}}
         providers = [native]
-        live.usage.merge_omp(providers, ["claude"], [{"reports": [report]}], None, False)
+        live.usage.merge_omp(providers, ["claude"], [{"reports": [report]}], None)
         self.assertEqual(providers[0]["ompAccountId"], live.parse_reset_listing(LISTING)[0]["5"]["accountId"])
 
     def listing(self, executable="/opt/omp", set_up=True, version="18.11.0", outcome=(0, LISTING.encode())):

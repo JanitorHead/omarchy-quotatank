@@ -9,8 +9,10 @@ ShellRoot {
   property int phase: 0
   property int ticks: 0
   property int finishes: 0
+  readonly property var proxy: ({ id: "p-1a2b3c4d", name: "CLIProxyAPI" })
+  // A Codex account read through the proxy: its resets are applied there.
   readonly property var account: ({ id: "codex", accountId: "account", status: "ok",
-    credits: { resetCreditsAvailable: 2 }, planType: "pro" })
+    credits: { resetCreditsAvailable: 2 }, planType: "pro", origin: "proxy", proxy: proxy })
   // A single Claude Code sign-in (no accountId) holding one reset Claude lets it spend now.
   readonly property var claude: ({ id: "claude", name: "Claude Code", status: "ok", plan: "Max",
     credits: { label: "Banked resets", resetCreditsAvailable: 1, resetCreditsUsable: true, resetCreditsReason: "" } })
@@ -18,9 +20,8 @@ ShellRoot {
   QtObject {
     id: usage
     property string connectionId: "first-server"
-    property string usageSource: "cliproxy"
-    property string cliproxyUrl: "http://synthetic.invalid"
-    property string cliproxyKeyFile: ""
+    property var settings: ({ sources: JSON.stringify([{ id: "p-1a2b3c4d", kind: "proxy", on: true,
+      url: "http://synthetic.invalid", keyFile: "" }]) })
     function localPath(url) { return String(url).replace("file://", "") }
   }
   Item { id: host; width: 420; height: 800 }
@@ -48,14 +49,17 @@ ShellRoot {
     backend = create("ResetBackend.qml", { usageBackend: usage, scriptPath: Quickshell.env("QUOTATANK_FAKE_RESET") })
     form = create("ResetConfirmation.qml", { backend: backend, width: 420 })
     backend.finished.connect(function() { root.finishes++ })
-    usage.usageSource = "direct"
-    check(!backend.begin(account, "Account 1"), "direct mode is not actionable")
+    var own = Object.assign({}, account, { origin: "omarchy" })
+    delete own.proxy
+    check(!backend.begin(own, "Account 1"), "a Codex account read here is not actionable")
     check(!backend.begin(Object.assign({}, claude, { credits: Object.assign({}, claude.credits,
       { resetCreditsUsable: false, resetCreditsReason: "limit" }) }), "Claude Code"), "a reset Claude holds back is not actionable")
     check(!backend.begin(Object.assign({}, claude, { origin: "omp" }), "Claude Code"), "omp keeps that sign-in")
-    usage.usageSource = "cliproxy"
+    check(!backend.begin(Object.assign({}, account, { proxy: { id: "p-00000000", name: "CLIProxyAPI" } }), "Account 1"),
+      "a proxy that is no longer under Sources cannot apply it")
     check(!backend.begin(Object.assign({}, account, { credits: {} }), "Account 1"), "unknown count is not actionable")
     check(backend.begin(account, "Account 1"), "begin fresh lookup")
+    check(backend.proxy && backend.proxy.url === "http://synthetic.invalid", "the reset goes through the reading's proxy")
     check(!backend.begin(account, "Account 2"), "duplicate click is ignored")
   }
   Timer {
@@ -108,9 +112,9 @@ ShellRoot {
         b.apply()
         root.check(b.state === "error" && !b.busy, "stale confirmation cannot submit")
         b.cancel()
-        usage.usageSource = "direct"
         root.check(b.begin(root.claude, "Claude Code"), "a Claude Code sign-in applies its own reset")
-        root.check(b.providerId === "claude" && b.accountId === "main", "the single sign-in is main")
+        root.check(b.providerId === "claude" && b.accountId === "main" && b.proxy === null,
+          "the single sign-in is main, reset with its own sign-in")
         root.phase++
       } else if (root.phase === 6 && b.state === "ready") {
         root.check(b.selectedCredit.id === "launch-reset", "Claude's offered reset is selected")
@@ -120,7 +124,6 @@ ShellRoot {
       } else if (root.phase === 7 && b.state === "result") {
         root.check(root.finishes === 3, "a Claude reset refreshes usage")
         b.cancel()
-        usage.usageSource = "cliproxy"
         if (Quickshell.env("QT_QPA_PLATFORM") === "offscreen") {
           console.log("Reset QML contract: passed")
           Qt.quit()
@@ -128,7 +131,7 @@ ShellRoot {
         }
         root.widget = root.create("Panel.qml", { moduleName: "test.reset", ipcTarget: "test.reset",
           settings: { sources: JSON.stringify([{ id: "p-1a2b3c4d", kind: "proxy", url: "https://proxy.test/prefix",
-            keyFile: "/private/proxy key" }]), enabledProviders: [], refreshIntervalSec: 3600 } })
+            keyFile: "/private/proxy key", on: true }]), enabledProviders: ["codex"], refreshIntervalSec: 3600 } })
         root.widget.resetAction.scriptPath = Quickshell.env("QUOTATANK_FAKE_RESET")
         root.phase++
       } else if (root.phase === 8 && root.widget.providers.length > 0) {

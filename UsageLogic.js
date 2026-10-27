@@ -1041,11 +1041,6 @@ function availableProviders(providers) {
   var list = listOrEmpty(providers)
   for (var i = 0; i < list.length; i++) {
     var provider = list[i]
-    // Keep connection-level errors visible so the user can fix proxy setup.
-    if (provider && provider.id === "cliproxy") {
-      result.push(provider)
-      continue
-    }
     var accounts = listOrEmpty(provider && provider.accounts)
     if (accounts.length > 0) {
       for (var j = 0; j < accounts.length; j++) {
@@ -1737,26 +1732,46 @@ function accountResetLabel(account) {
   return count + " banked reset" + (count === 1 ? "" : "s")
 }
 
-// Whether the account's resets are shown: Claude's wherever it is read, Codex's in CLIProxyAPI mode, where they
-// can be applied.
-function accountResetShown(account, proxyMode) {
-  return accountResetLabel(account) !== "" && (account.id === "claude" || !!proxyMode)
+// The proxy a reading came through: its own (`proxy`), or the one standing in for a reading that failed
+// elsewhere (`standIn` with a proxy's id). null for every other reading.
+function readingProxy(account) {
+  if (!account) return null
+  if (account.proxy && typeof account.proxy === "object") return account.proxy
+  if (account.standIn && /^p-/.test(String(account.standIn.id || ""))) return account.standIn
+  return null
+}
+
+// Whether the account's resets are shown: Claude's wherever it is read, Codex's when read through CLIProxyAPI,
+// where they can be applied.
+function accountResetShown(account) {
+  return accountResetLabel(account) !== "" && (account.id === "claude" || readingProxy(account) !== null)
 }
 
 // Whether this widget can apply one of the account's resets: Codex through CLIProxyAPI, Claude with its own
 // sign-in or through CLIProxyAPI when Claude lets the next one be spent now. An account read only through omp
-// keeps its sign-in in omp, so its reset is applied there.
-function accountResetActionable(account, proxyMode) {
-  if (!accountResetShown(account, proxyMode) || !(accountResetCount(account) > 0) || account.origin === "omp") return false
+// keeps its sign-in in omp, and one read on another computer keeps it there, so its reset is applied there.
+function accountResetActionable(account) {
+  if (!accountResetShown(account) || !(accountResetCount(account) > 0) || account.origin === "omp") return false
+  if (readingComputer(account) !== null) return false
   return account.id === "codex" || account.credits.resetCreditsUsable === true
 }
 
 // Why a reset the account has cannot be applied from here; "" when it can, or when it has none.
-function accountResetNote(account, proxyMode) {
-  if (!accountResetShown(account, proxyMode) || !(accountResetCount(account) > 0) || accountResetActionable(account, proxyMode))
+function accountResetNote(account) {
+  if (!accountResetShown(account) || !(accountResetCount(account) > 0) || accountResetActionable(account))
     return ""
   if (account.origin === "omp") return "Apply it in omp: omp usage reset."
+  var computer = readingComputer(account)
+  if (computer) return "Its sign-in is on " + String(computer.name || "another computer") + ": apply it there."
   return CLAUDE_RESET_NOTES[String(account.credits.resetCreditsReason || "")] || CLAUDE_RESET_NOTES.unavailable
+}
+
+// The other computer a reading came from, its own (`computer`) or standing in (`standIn` with a computer's id).
+function readingComputer(account) {
+  if (!account) return null
+  if (account.computer && typeof account.computer === "object") return account.computer
+  if (account.standIn && /^c-/.test(String(account.standIn.id || ""))) return account.standIn
+  return null
 }
 
 // Whether `credits` carries money (a balance, spending or a cap) beside any banked-reset count.
@@ -1797,45 +1812,6 @@ function errorTitle(provider) {
   case "cli_unavailable": return name + " CLI unavailable"
   default: return name + " usage unavailable"
   }
-}
-
-function preserveProxyReadings(previous, next) {
-  if (!previous || previous.source !== "cliproxy") return next
-  function retain(old, fresh) {
-    if (!old || !fresh || fresh.status !== "error" || old.status !== "ok") return fresh
-    return Object.assign({}, fresh, {
-      status: "ok", stale: true, windows: old.windows, credits: old.credits,
-      plan: old.plan, account: old.account, fetchedAt: old.fetchedAt,
-      notice: "Last known reading · " + String(fresh.message || "Refresh failed.")
-    })
-  }
-  var oldProviders = listOrEmpty(previous.providers)
-  if (next.providers.length === 1 && next.providers[0].id === "cliproxy" && next.providers[0].status === "error"
-      && oldProviders.length > 0 && oldProviders[0].id !== "cliproxy") {
-    var failure = next.providers[0]
-    next.providers = Array.prototype.map.call(oldProviders, function(old) {
-      var fresh = Object.assign({}, old, { status: "error", message: failure.message, errorKind: failure.errorKind })
-      fresh.accounts = Array.prototype.map.call(listOrEmpty(old.accounts), function(account) {
-        return retain(account, Object.assign({}, account, { status: "error", message: failure.message }))
-      })
-      return retain(old, fresh)
-    })
-  }
-  next.providers = listOrEmpty(next.providers).map(function(fresh) {
-    var old = null
-    for (var i = 0; i < oldProviders.length; i++)
-      if (oldProviders[i].id === fresh.id) old = oldProviders[i]
-    var accounts = listOrEmpty(fresh.accounts).map(function(account) {
-      var prior = listOrEmpty(old && old.accounts)
-      for (var j = 0; j < prior.length; j++)
-        if (prior[j].accountId === account.accountId) return retain(prior[j], account)
-      return account
-    })
-    var result = old && old.accountId === fresh.accountId ? retain(old, fresh) : fresh
-    if (fresh.accounts) result.accounts = accounts
-    return result
-  })
-  return next
 }
 
 // Custom cost rates are stored as JSON for the manifest's string setting, but
@@ -2256,11 +2232,30 @@ function sourcesOf(settings, kind) {
   return parseSources(settings).filter(function(entry) { return entry.kind === kind })
 }
 
-// The proxy Limits reads, or null: the first switched-on proxy with an address.
+// The switched-on proxy with an address (the Sources page offers one), or null: its Keeper maps requests to
+// its accounts.
 function activeProxy(settings) {
   var proxies = sourcesOf(settings, "proxy")
   for (var i = 0; i < proxies.length; i++) if (proxies[i].on && proxies[i].url !== "") return proxies[i]
   return null
+}
+
+// A proxy by id (a reading's `proxy` or proxy `standIn`), switched on or not, or null.
+function proxyById(settings, id) {
+  var proxies = sourcesOf(settings, "proxy")
+  for (var i = 0; i < proxies.length; i++) if (proxies[i].id === id) return proxies[i]
+  return null
+}
+
+// usage-fetch.py --proxy / --proxy-key-file for each switched-on proxy with an address.
+function proxyArguments(settings) {
+  var result = []
+  sourcesOf(settings, "proxy").forEach(function(entry) {
+    if (!entry.on || entry.url === "") return
+    result.push("--proxy", entry.id + "=" + entry.url)
+    if (entry.keyFile !== "") result.push("--proxy-key-file", entry.id + "=" + entry.keyFile)
+  })
+  return result
 }
 
 // cost-fetch.py --t3-servers: the T3 entries in the shape scripts/t3_costs.py reads.
@@ -2373,7 +2368,14 @@ function computerState(payload, id) {
   return null
 }
 
-// The status line under a computer in Settings → Sources. `formatClock(epochSeconds)` names a time.
+// A proxy's state in the usage payload's `proxies`, or null before it was read.
+function proxyState(payload, id) {
+  var list = payload ? listOrEmpty(payload.proxies) : []
+  for (var i = 0; i < list.length; i++) if (list[i] && list[i].id === id) return list[i]
+  return null
+}
+
+// The status line under a computer or a proxy in Settings → Sources. `formatClock(epochSeconds)` names a time.
 function computerLine(entry, state, formatClock) {
   if (!entry) return { tone: "off", text: "" }
   if (!entry.on) return { tone: "off", text: "Off" }
@@ -2411,9 +2413,9 @@ function setupActionFor(entry, reading, payload, computer) {
 }
 
 // The other computers whose omp requests are followed live: switched on, with omp found set up there at
-// the last refresh (`computers` is the usage payload's). Nothing through a proxy or with omp turned off.
-function ompLiveComputers(settings, computers, proxyMode) {
-  if (proxyMode === true || !ompSettings(settings).local) return []
+// the last refresh (`computers` is the usage payload's). Nothing with omp turned off.
+function ompLiveComputers(settings, computers) {
+  if (!ompSettings(settings).local) return []
   var list = listOrEmpty(computers)
   return sourcesOf(settings, "computer").filter(function(entry) {
     if (!entry.on) return false
@@ -2504,10 +2506,8 @@ function ompFound(status) {
 }
 
 // omp-live.py flags, or [] while there is nothing to follow: omp's sessions here once omp is found and
-// set up (with --accounts, the map that names the account behind each request). Nothing through a proxy:
-// its accounts are the proxy's, and omp is not read then.
-function ompLiveArguments(settings, status, proxyMode) {
-  if (proxyMode === true) return []
+// set up (with --accounts, the map that names the account behind each request).
+function ompLiveArguments(settings, status) {
   if (ompSettings(settings).local && ompFound(status) === true && status.local !== "unused") return ["--local", "--accounts"]
   return []
 }
@@ -2869,6 +2869,12 @@ function providerAccounts(provider) {
   return listOrEmpty(provider && provider.accounts)
 }
 
+// Whether every account of the provider is read through a proxy, which rotates them: they are spent together.
+function proxyPool(provider) {
+  var accounts = providerAccounts(provider)
+  return accounts.length > 0 && accounts.every(function(account) { return accountSourceKind(account) === "proxy" })
+}
+
 // The mode chosen in Settings for one provider (`accountModes`, read by parseAccountModes), or "" for
 // automatic. Settings owns writing it; anything parseAccountModes drops counts as automatic.
 function accountModeChoice(raw, providerId) {
@@ -2946,10 +2952,10 @@ function spendingNow(account, nowSeconds, recentByAccount) {
 // The Settings choice for the provider wins. A provider whose logins Omarchy switches between
 // (`accountSwitch`) stays one at a time: right after a switch the old account still rises from the
 // sessions left running on it, yet new sessions use only the new one.
-function accountMode(provider, modesRaw, proxyMode, nowSeconds, recentByAccount) {
+function accountMode(provider, modesRaw, nowSeconds, recentByAccount) {
   var chosen = accountModeChoice(modesRaw, provider ? provider.id : "")
   if (chosen !== "") return chosen
-  if (proxyMode) return "together"
+  if (proxyPool(provider)) return "together"
   if (provider && provider.pool && typeof provider.pool === "object") return "together"
   if (provider && provider.accountSwitch && typeof provider.accountSwitch === "object") return "single"
   var now = finiteOrNull(nowSeconds)
@@ -3020,12 +3026,12 @@ function countedAccounts(provider, mode, nowSeconds, recentByAccount) {
 // another computer, whatever its origin there: Omarchy switches only this computer's logins). Readings from a
 // backend without `origin` are told apart by their ids. `source` is the API's description, not a kind.
 // The one rule for every surface: rows, dots, hints and notices.
-function accountSourceKind(account, proxyMode) {
+function accountSourceKind(account) {
   if (!account) return ""
   if (account.computer && typeof account.computer === "object") return "computer"
+  if (account.proxy && typeof account.proxy === "object") return "proxy"
   var origin = String(account.origin || "")
   if (origin === "omarchy" || origin === "signin" || origin === "key" || origin === "omp" || origin === "proxy") return origin
-  if (proxyMode) return "proxy"
   var id = String(account.accountId || "")
   if (id === "primary" || /^k-[0-9a-f]{8}$/.test(id)) return "key"
   if (/^omp-/.test(id)) return "omp"
@@ -3045,12 +3051,12 @@ function accountSourceLabel(kind) {
 // Row order as account indexes. One at a time keeps the stable order (Omarchy's registry order, then
 // keys, then omp). Together puts the account with the least headroom first; accounts without a reading
 // go last. Ties keep the stable order, so rows only move when headroom really changes places.
-function accountOrder(accounts, mode, proxyMode) {
+function accountOrder(accounts, mode) {
   var list = listOrEmpty(accounts)
   var rows = []
   for (var i = 0; i < list.length; i++) {
     var headroom = minRemaining(list[i])
-    var rank = ACCOUNT_SOURCE_RANK[accountSourceKind(list[i], proxyMode)]
+    var rank = ACCOUNT_SOURCE_RANK[accountSourceKind(list[i])]
     rows.push({ index: i, rank: rank === undefined ? 0 : rank, headroom: headroom === null ? Infinity : headroom })
   }
   rows.sort(function (a, b) {
@@ -3117,7 +3123,7 @@ function accountUsedUp(account) {
 // switch or reset, the plan, the source. `event` is this account's newest {kind: "switch"|"reset", at},
 // or null. Returns {kind, text, at, tone}; tone is "urgent", "accent" or "dim", and `at` is a time to
 // append.
-function accountStatusLine(account, spending, nowSeconds, event, proxyMode) {
+function accountStatusLine(account, spending, nowSeconds, event) {
   if (!account) return { kind: "", text: "", at: null, tone: "dim" }
   var status = String(account.status || "")
   if (status === "error") {
@@ -3128,7 +3134,8 @@ function accountStatusLine(account, spending, nowSeconds, event, proxyMode) {
   if (status === "disabled") return { kind: "paused", text: "paused", at: null, tone: "dim" }
   var usedUp = accountUsedUp(account)
   if (usedUp !== null) return { kind: "usedup", text: "used up", at: usedUp.resetsAt, tone: "urgent" }
-  var computer = account.computer && account.computer.name ? String(account.computer.name) : ""
+  var computer = account.computer && account.computer.name ? String(account.computer.name)
+    : account.proxy && account.proxy.name ? String(account.proxy.name) : ""
   if (account.stale === true) {
     var readAt = Date.parse(String(account.readAt || "")) / 1000
     return computer && isFinite(readAt)
@@ -3140,10 +3147,12 @@ function accountStatusLine(account, spending, nowSeconds, event, proxyMode) {
   var eventAt = event ? finiteOrNull(event.at) : null
   if (event && (event.kind === "switch" || event.kind === "reset") && withinSeconds(eventAt, now, ACCOUNT_EVENT_SECONDS))
     return { kind: event.kind, text: event.kind === "switch" ? "switched" : "reset", at: eventAt, tone: "accent" }
-  if (account.standIn && account.standIn.name) return { kind: "standin", text: "read on " + account.standIn.name, at: null, tone: "dim" }
+  if (account.standIn && account.standIn.name)
+    return { kind: "standin", text: (readingProxy(account) ? "read through " : "read on ") + account.standIn.name, at: null, tone: "dim" }
+  var where = account.computer && account.computer.name ? "on " + account.computer.name : ""
   if (account.plan || account.planType)
-    return { kind: "plan", text: accountPlanLabel(account) + (computer ? " · on " + computer : ""), at: null, tone: "dim" }
-  return { kind: "source", text: computer ? "on " + computer : accountSourceLabel(accountSourceKind(account, proxyMode)), at: null, tone: "dim" }
+    return { kind: "plan", text: accountPlanLabel(account) + (where ? " · " + where : ""), at: null, tone: "dim" }
+  return { kind: "source", text: where || accountSourceLabel(accountSourceKind(account)), at: null, tone: "dim" }
 }
 
 // The command behind a row's Use button: Omarchy starts new sessions of the provider with that login.
@@ -3160,23 +3169,23 @@ function accountUseArgv(providerId, account) {
 
 // A row offers Use in one-at-a-time mode for an Omarchy login on this computer that is not in use and can be
 // read: Omarchy switches logins only here.
-function accountCanUse(account, mode, proxyMode) {
+function accountCanUse(account, mode) {
   return !!account && mode === "single" && account.active !== true && account.status === "ok"
-    && accountSourceKind(account, proxyMode) === "omarchy"
+    && accountSourceKind(account) === "omarchy"
 }
 
 // How new sessions pick among a provider's accounts, for the ACCOUNTS header and the hover card alike:
 // "Used together · omp" (omp's pool, or an account omp reads), "Used together · CLIProxyAPI" (a proxy),
 // "Omarchy · switches at 95%" or "Omarchy · notifies at 95%"; "" otherwise.
-function accountModeText(provider, mode, proxyMode) {
+function accountModeText(provider, mode) {
   if (!provider) return ""
   if (mode === "together") {
-    if (proxyMode) return "Used together · CLIProxyAPI"
+    if (proxyPool(provider)) return "Used together · CLIProxyAPI"
     var accounts = providerAccounts(provider)
     var omp = !!provider.pool
     for (var i = 0; i < accounts.length && !omp; i++) {
       var origins = listOrEmpty(accounts[i] && accounts[i].origins)
-      omp = accountSourceKind(accounts[i], false) === "omp" || contains(origins, "omp")
+      omp = accountSourceKind(accounts[i]) === "omp" || contains(origins, "omp")
     }
     return "Used together" + (omp ? " · omp" : "")
   }
@@ -3214,12 +3223,12 @@ function pickAccounts(order, counted, keep) {
 
 // What every surface says about a provider's accounts (DESIGN §2–3), worked out once per provider and
 // clock tick so the chip, its dots and hover card, the tile, the Limits rows and the runway agree.
-// `options`: modes (the accountModes setting, text or parsed), proxyMode, nowSeconds (the panel's one
+// `options`: modes (the accountModes setting, text or parsed), nowSeconds (the panel's one
 // clock), recentByAccount (mergeRecentActivity), warningThreshold, criticalThreshold. Returns null
 // without accounts, else:
 // - mode: "single" | "together"; counted: indexes the chip counts (ascending); value: the counted
 //   account with the least headroom, whose figure the tile shows;
-// - spending, rings, inUse: one entry per account ("in use" only one at a time, never through a proxy);
+// - spending, rings, inUse: one entry per account ("in use" only one at a time, never a proxy's account);
 // - order: the Limits rows' order; stable: the dots' order (Omarchy logins, keys, omp);
 // - dots: { dots: [{ index, state, counted, spending }], extra }, at most four dots in stable order,
 //   three and "+N" from five accounts on, counted accounts kept.
@@ -3227,8 +3236,7 @@ function accountState(provider, options) {
   var accounts = providerAccounts(provider)
   if (accounts.length === 0) return null
   var opts = options || {}
-  var proxyMode = opts.proxyMode === true
-  var mode = accountMode(provider, opts.modes, proxyMode, opts.nowSeconds, opts.recentByAccount)
+  var mode = accountMode(provider, opts.modes, opts.nowSeconds, opts.recentByAccount)
   var counted = countedAccounts(provider, mode, opts.nowSeconds, opts.recentByAccount)
   var spending = []
   var rings = []
@@ -3236,9 +3244,9 @@ function accountState(provider, options) {
   for (var i = 0; i < accounts.length; i++) {
     spending.push(spendingNow(accounts[i], opts.nowSeconds, opts.recentByAccount))
     rings.push(accountRingState(accounts[i], opts.warningThreshold, opts.criticalThreshold))
-    inUse.push(mode === "single" && !proxyMode && !!accounts[i] && accounts[i].active === true)
+    inUse.push(mode === "single" && !!accounts[i] && accounts[i].active === true && accountSourceKind(accounts[i]) !== "proxy")
   }
-  var stable = accountOrder(accounts, "single", proxyMode)
+  var stable = accountOrder(accounts, "single")
   var shown = stable.length <= 4 ? stable : pickAccounts(stable, counted, 3)
   var dots = []
   for (var d = 0; d < shown.length; d++) {
@@ -3254,7 +3262,7 @@ function accountState(provider, options) {
     spending: spending,
     rings: rings,
     inUse: inUse,
-    order: mode === "together" ? accountOrder(accounts, "together", proxyMode) : stable,
+    order: mode === "together" ? accountOrder(accounts, "together") : stable,
     stable: stable,
     dots: { dots: accounts.length > 1 ? dots : [], extra: accounts.length > 1 ? stable.length - shown.length : 0 }
   }
@@ -3387,7 +3395,7 @@ function accountRunway(provider, mode, counted, nowSeconds, order) {
   if (!baseRow || resetsAt === null || resetsAt <= now) return null
   var horizon = resetsAt - now
   var sequence = []
-  var source = listOrEmpty(order).length === accounts.length ? listOrEmpty(order) : accountOrder(accounts, mode, false)
+  var source = listOrEmpty(order).length === accounts.length ? listOrEmpty(order) : accountOrder(accounts, mode)
   if (mode !== "together") sequence.push(base)
   for (var s = 0; s < source.length; s++)
     if (mode === "together" || source[s] !== base) sequence.push(source[s])
@@ -3543,7 +3551,7 @@ function accountEvents(previous, providers, nowSeconds, warningThreshold) {
     for (var x = 0; x < accounts.length; x++)
       if (accounts[x] && accounts[x].active === true) activeIndex = x
     var active = accounts.length > 1 && activeIndex >= 0
-      && accountSourceKind(accounts[activeIndex], false) === "omarchy" ? accounts[activeIndex] : null
+      && accountSourceKind(accounts[activeIndex]) === "omarchy" ? accounts[activeIndex] : null
     entry.active = active ? String(active.accountId || "") : ""
     if (before && before.active && entry.active && before.active !== entry.active) {
       var from = null
@@ -3558,7 +3566,7 @@ function accountEvents(previous, providers, nowSeconds, warningThreshold) {
       var account = readings[a]
       var accountId = accounts.length > 0 ? String(account.accountId || "") : ""
       entry.seen[accountId] = true
-      if (account.status === "error" && account.errorKind === "expired" && accountSourceKind(account, false) === "omp") {
+      if (account.status === "error" && account.errorKind === "expired" && accountSourceKind(account) === "omp") {
         entry.expired[accountId] = true
         if (before && before.seen && before.seen[accountId] === true && before.expired && before.expired[accountId] !== true)
           events.push({ id: "omp-expired|" + id + "|" + accountId + "|" + now, kind: "omp-expired", provider: id,
@@ -3722,11 +3730,11 @@ function barAccountStrip(provider, state, options) {
     var choice = provider.accountSwitch
     if (state.mode === "together" || opts.stale || wanted.length !== 1 || !choice || choice.mode !== "manual") return strip
     var current = wanted[0]
-    if (states[current] !== "critical" || accountSourceKind(accounts[current], false) !== "omarchy") return strip
+    if (states[current] !== "critical" || accountSourceKind(accounts[current]) !== "omarchy") return strip
     var target = -1
     var targetLeft = -1
     for (var k = 0; k < accounts.length; k++) {
-      if (k === current || states[k] !== "ok" || accountSourceKind(accounts[k], false) !== "omarchy") continue
+      if (k === current || states[k] !== "ok" || accountSourceKind(accounts[k]) !== "omarchy") continue
       var left = remainingForWindow(accounts[k], opts.selector)
       if (left !== null && left > targetLeft) {
         target = k
@@ -3815,7 +3823,7 @@ function barAgoText(seconds) {
 // The hover card of a chip with several accounts (DESIGN §2.4), as plain text and values, from the
 // provider's accountState() so it says what the chip and Limits say. It lists every account up to
 // BAR_HOVER_ROWS; past that the counted ones, then those closest to a limit, and `more` for the rest.
-// Rows follow the dots' order and are keyed by account. `options`: proxyMode, nowSeconds,
+// Rows follow the dots' order and are keyed by account. `options`: nowSeconds,
 // extraKeys, readAtSeconds, stale, formatClock(epochSeconds) → "18:02".
 function barHoverModel(provider, state, options) {
   var opts = options || {}
@@ -3874,7 +3882,7 @@ function barHoverModel(provider, state, options) {
   var readText = readAtSeconds <= 0 ? "" : opts.stale
     ? "Read " + barAgoText(now - readAtSeconds) + " ago" : "Read at " + clock(readAtSeconds)
   return { title: providerShortName(provider) + " · " + accounts.length + " accounts",
-           modeText: accountModeText(provider, state ? state.mode : "single", opts.proxyMode === true),
+           modeText: accountModeText(provider, state ? state.mode : "single"),
            rows: rows, more: Math.max(0, accounts.length - rows.length), readText: readText, stale: !!opts.stale }
 }
 

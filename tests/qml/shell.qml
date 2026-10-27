@@ -94,7 +94,7 @@ ShellRoot {
     assertEqual(form.draft.hideAccountEmails, false, "Cancel discards privacy edits")
 
     form.setValue("sources", proxySources("https://proxy.test/prefix", "", "", ""))
-    assertTrue(form.proxyMode, "proxy source reveals connection fields")
+    assertTrue(form.proxyEntry !== null && form.proxyEntry.on, "a proxy source reveals connection fields")
     form.setValue("sources", proxySources("https://user:secret@proxy.test", "", "", ""))
     assertTrue(!form.submit(), "URL credentials cannot be saved")
     form.setValue("sources", proxySources("https://proxy.test/prefix/management.html", "", "", ""))
@@ -178,9 +178,9 @@ ShellRoot {
     }, "UsageBackend.qml CLIProxyAPI settings")
     proxyWidget = loadComponent(panelUrl, {
       moduleName: "test.proxy-widget", ipcTarget: "test.proxy-widget", bar: fakeBar,
-      settings: { enabledProviders: [],
+      settings: { enabledProviders: ["claude", "codex", "kimi"],
         sources: proxySources("https://proxy.test/prefix", "/private/proxy key", "", "") }
-    }, "Panel.qml proxy discovery")
+    }, "Panel.qml proxy accounts")
     if (malformedBackend) {
       malformedBackend.settings = { enabledProviders: ["kimi"], refreshIntervalSec: 3600 }
       malformedBackend.refresh()
@@ -209,14 +209,14 @@ ShellRoot {
   function runChecks() {
     if (proxyBackend) {
       assertEqual(proxyBackend.fetchError, "", "CLIProxyAPI settings reach the backend")
-      assertEqual(proxyBackend.providers.length, 4, "CLIProxyAPI discovers all providers independent of local filters")
+      assertEqual(proxyBackend.providers.length, 2, "a proxy reads the monitored providers")
       if (proxyBackend.providers.length > 0) {
         assertEqual(proxyBackend.providers[0].source, "CLIProxyAPI management API", "proxy source is retained")
-        assertEqual(proxyBackend.providers[0].availableCount, 2, "proxy account coverage is retained")
+        assertEqual(proxyBackend.providers[0].proxy.id, "p-1a2b3c4d", "a proxy reading names its proxy")
       }
     }
     if (proxyWidget) {
-      assertEqual(proxyWidget.providers.length, 4, "proxy popup includes newly discovered providers with no local selection")
+      assertEqual(proxyWidget.providers.length, 3, "the popup shows the monitored providers the proxy reads")
       proxyWidget.selectProviderId("codex")
       assertEqual(proxyWidget.proxyAccounts.length, 3, "all three Codex subscriptions are available together")
       assertEqual(proxyWidget.accountList.view.count, 3, "three separate Codex account rows are rendered")
@@ -235,10 +235,9 @@ ShellRoot {
       proxyWidget.selectAccount("2")
       assertEqual(proxyWidget.selectedAccount.accountId, "2", "a row selects the account the detail shows")
       assertEqual(proxyWidget.limitCards.count, 4, "the detail shows every limit of the selected account")
-      proxyWidget.selectProviderId("gemini")
+      proxyWidget.selectProviderId("kimi")
       assertEqual(proxyWidget.selectedAccountId, "", "provider navigation returns to the counted account")
-      assertEqual(proxyWidget.provider.status, "unsupported", "unsupported quota is not shown as zero")
-      assertEqual(proxyWidget.viewOptions.length, 2, "proxy shows Limits and Costs only")
+      assertEqual(proxyWidget.viewOptions.length, 2, "Limits and Costs")
       assertTrue(proxyWidget.hideAccountEmails, "account emails are hidden by default")
       assertEqual(proxyWidget.accountDisplayName({account: "secret@example.invalid"}, 2), "Account 2", "hidden label contains no account identity")
       assertTrue(proxyWidget.accountTooltip({account: "secret@example.invalid"}).indexOf("secret") < 0, "settings cannot reveal hidden account identity")
@@ -534,8 +533,8 @@ ShellRoot {
       var costReady = root.richCostBackend && root.richCostBackend.providers.length === 2
       var malformedCostReady = root.malformedCostBackend && root.malformedCostBackend.fetchError !== ""
       var lastGoodReady = root.backendErrorCostBackend && root.backendErrorCostBackend.providers.length === 2
-      var proxyReady = root.proxyBackend && root.proxyBackend.providers.length === 4
-        && root.proxyWidget && root.proxyWidget.providers.length === 4
+      var proxyReady = root.proxyBackend && root.proxyBackend.providers.length === 2
+        && root.proxyWidget && root.proxyWidget.providers.length === 3
       if ((richReady && malformedReady && costReady && malformedCostReady && lastGoodReady && proxyReady)
           || root.waitAttempts >= 120) {
         stop()
