@@ -88,7 +88,8 @@ ShellRoot {
 
   Component.onCompleted: {
     form = create("UsageSettings.qml", { width: 420, settings: { costPriceOverrides: custom, enabledProviders: root.sixProviders },
-      costModels: [{ model: "vendor/Example[2m]" }, { model: "free-model" }, { model: "vendor/Example[2m]" }] })
+      costModels: [{ model: "vendor/Example[2m]", costUsd: 1.5 }, { model: "free-model", costUsd: null },
+        { model: "vendor/Example[2m]", costUsd: 1.5 }, { model: "Other models", costUsd: 0.2 }, { model: "Unknown model", costUsd: null }] })
     form.changeRequested.connect(host)
     form.begin("costs")
     view = create("UsageCosts.qml", {width: 420, payload: {
@@ -281,11 +282,12 @@ ShellRoot {
         root.edit("costModel-1", "mini")
         root.check(root.find(root.form, "costModel-1") === blankRow, "an edit keeps the same field object")
         root.check(root.find(root.form, "costModel-1").text === "mini", "typing a model ID keeps every keystroke")
-        // The picker fills the field with an exact id from the costs view; the
-        // field stays the source of truth for anything else.
+        // The picker fills the field with an exact id from the costs view, the ones
+        // without a price first; the field stays the source of truth for anything else.
         var choices = root.form.priceEditor.modelChoices
-        root.check(choices.length === 2 && choices[0].value === "free-model" && choices[1].value === "vendor/Example[2m]",
-          "the picker offers the models in the costs view once each")
+        root.check(JSON.stringify(choices.map(function(choice) { return choice.label })) === '["free-model · no price","vendor/Example[2m]"]',
+          "the picker offers each model once, unpriced first, and not the view's own groups: " + JSON.stringify(choices))
+        root.check(root.find(root.form, "costModelPick-1").showingPlaceholder, "a row whose model is not listed says what the picker is for")
         root.find(root.form, "costModelPick-1").changed("vendor/Example[2m]")
         root.check(root.find(root.form, "costModel-1").text === "vendor/Example[2m]", "picking a model fills its exact id")
         root.edit("costModel-1", "free-model")

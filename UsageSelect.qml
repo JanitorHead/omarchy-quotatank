@@ -17,6 +17,9 @@ Controls.ComboBox {
   property string fontFamily: Style.font.family
   property real popupMaximumWidth: parent ? parent.width : implicitWidth
   property bool alignPopupRight: false
+  // Shown, dimmed, while `value` is none of the options.
+  property string placeholder: ""
+  readonly property bool showingPlaceholder: currentIndex < 0 && placeholder !== ""
   readonly property bool menuOpen: popup.visible
 
   signal changed(string value)
@@ -44,8 +47,8 @@ Controls.ComboBox {
 
   contentItem: PlainText {
     id: selectedLabel
-    text: root.displayText
-    color: root.foreground
+    text: root.showingPlaceholder ? root.placeholder : root.displayText
+    color: root.showingPlaceholder ? Qt.darker(root.foreground, 1.5) : root.foreground
     font.family: root.fontFamily
     font.pixelSize: Style.font.bodySmall
     verticalAlignment: Text.AlignVCenter
