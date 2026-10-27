@@ -4,6 +4,13 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **Costs counts MiniMax, Xiaomi MiMo and Grok billings.** Those subscriptions keep no transcripts of their own, so every message Oh My Pi or OpenCode billed to one of them was dropped. Each now counts under the provider that billed it, priced from the CLI's own recorded cost or the public table. OpenCode 2's `session_message` table is read beside the older `message` table, and a response both repeat counts once. Contributed by @cbayschm74 in #4.
+- **The grok CLI's history as a local cost source.** **Settings → Costs** can read the session totals the grok CLI keeps (`${GROK_HOME:-~/.grok}/sessions/**/usage.json`, `costLocalProviders` value `grok`); it is off by default. Contributed by @cbayschm74 in #4.
+
 ## 2.2.0
 
 ### Added

@@ -321,6 +321,7 @@ Custom IDs are trimmed but retain case, provider prefixes, and variant suffixes.
 
 - Claude: `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/**/*.jsonl`
 - Codex: `${CODEX_HOME:-~/.codex}/sessions/**/*.jsonl`
+- Grok CLI (opt-in): `${GROK_HOME:-~/.grok}/sessions/**/usage.json`, each read whole; its size counts against the scan's changed-input limit
 
 Files are streamed line by line. Scan-cache version 5 rebuilds Codex records with duplicate signatures that include cumulative usage counters, so distinct responses with equal token counts remain counted. It also excludes former proxy/app classification metadata; older caches rebuild safely. Scan-cache version 8 adds each record's project folder name and Oh My Pi agent kind; older caches rebuild. Oh My Pi transcripts are cached and resumed like the other transcripts. It retains a byte offset, SHA-256 hash of up to 64 bytes immediately before that offset, device/inode identity, and sanitized parser state (the Codex reducer, the hashed session id, and the session's project folder name). A strictly grown file resumes only after its identity and guard match. Shrinkage, replacement, changed same-size files, or a failed guard cause a full reparse. The guard checks the previous tail, not the entire prefix: it is a lightweight check for normal append-only CLI transcripts, not a guarantee against arbitrary earlier in-place edits. Concurrently changed snapshots are skipped with incomplete coverage and retried on the next scan.
 

@@ -149,7 +149,7 @@ Costs estimates what your recorded tokens would cost at API rates. It is not a b
 - **When** maps the last seven days by hour, so you see when you spend.
 - **Live with omp**: each request adds to the total and to today's bar as it lands.
 
-Local Claude Code, Codex, OpenCode, and omp history are read on this computer; T3 Code servers and an omp stats dashboard bring in other computers. Prices come from the public LiteLLM table, and **Custom prices** set your own per exact model ID.
+Local Claude Code, Codex, OpenCode, omp, and (when turned on) grok CLI history are read on this computer; T3 Code servers and an omp stats dashboard bring in other computers. Prices come from the public LiteLLM table, and **Custom prices** set your own per exact model ID.
 
 ## omp (Oh My Pi)
 
@@ -221,7 +221,7 @@ flowchart TB
     uf --> panel["Limits tab"]
   end
   subgraph Costs
-    logs["Local transcripts<br/>Claude Code · Codex · OpenCode · omp"] --> cf["cost-fetch.py"]
+    logs["Local transcripts<br/>Claude Code · Codex · OpenCode · omp · grok CLI"] --> cf["cost-fetch.py"]
     t3["T3 Code servers"] --> cf
     omps["omp stats<br/>on another computer"] --> cf
     cf --> costs["Costs tab"]
@@ -317,7 +317,7 @@ The [configuration reference](https://github.com/JanitorHead/omarchy-quotatank/b
 
 ### Cost history
 
-Open **Settings → Costs**. Local Codex CLI, Claude Code, OpenCode, and omp history are on by default; **omp on another computer** reads an omp stats dashboard. Add up to four T3 Code servers, each with a name, base URL, and connection token. Servers must use usage contract version 4 or 5. Custom model prices are set on the same page, by exact model ID.
+Open **Settings → Costs**. Local Codex CLI, Claude Code, OpenCode, and omp history are on by default, and grok CLI history can be turned on; **omp on another computer** reads an omp stats dashboard. Add up to four T3 Code servers, each with a name, base URL, and connection token. Servers must use usage contract version 4 or 5. Custom model prices are set on the same page, by exact model ID.
 
 ## Controls
 
