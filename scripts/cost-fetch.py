@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import time
 import urllib.parse
@@ -33,6 +34,7 @@ sys.dont_write_bytecode = True
 from quotatank_common import (
     atomic_write_json, clean_message, move_legacy_folders, opencode_database_path, read_capped, state_folder,
 )
+import quotatank_remote
 import t3_costs
 
 
@@ -2034,11 +2036,73 @@ def parse_provider_ids(value: str) -> list[str]:
     return [provider for provider in ("claude", "codex", "opencode", "grok") if provider in requested]
 
 
+# Another computer's transcripts count as this computer's: its reader (`--records`) sends the raw records for the
+# window the view needs, read with its own incremental scan cache, and they are aggregated here as one history.
+# The last good records are kept, so a computer that does not answer still counts, marked stale.
+COMPUTER_ID = re.compile(r"c-[0-9a-f]{8}")
+MAX_COMPUTERS = 16
+COMPUTER_READ_SECONDS = 90.0  # A first scan there reads every transcript; later ones only what changed.
+MAX_COMPUTER_RECORDS_BYTES = 32 * 1024 * 1024
+
+
+def parse_computers(values: list[str]) -> list[tuple[str, str]]:
+    computers: list[tuple[str, str]] = []
+    for value in values:
+        computer_id, separator, host = str(value).partition("=")
+        if (separator and COMPUTER_ID.fullmatch(computer_id) and quotatank_remote.valid_destination(host)
+                and all(known != computer_id for known, _host in computers)):
+            computers.append((computer_id, host))
+    return computers[:MAX_COMPUTERS]
+
+
+def read_computer_records(computer_id: str, host: str, provider_ids: list[str], days: int, zone: Any,
+                          state_dir: Path | None) -> dict[str, Any]:
+    """A computer's records: fresh (`ok`), its last good ones (`stale`), or none (`failed`), with when and why."""
+    args = ["--records", "--providers=" + ",".join(provider_ids), "--days", str(days)]
+    zone_key = getattr(zone, "key", "")
+    if zone_key and quotatank_remote.PLAIN_ARGUMENT.fullmatch(zone_key):
+        args += ["--time-zone", zone_key]  # Days begin at the same moment on both computers.
+    path = state_path("computers", state_dir) / f"{computer_id}-costs.json"
+    try:
+        answer = quotatank_remote.run_reader(host, "cost-fetch.py", args, COMPUTER_READ_SECONDS, compress=True,
+                                             max_bytes=MAX_COMPUTER_RECORDS_BYTES)
+        if not isinstance(answer, dict) or not isinstance(answer.get("records"), list):
+            raise quotatank_remote.RemoteFailure("failed", f"Quotatank's reader on {host} sent an answer this "
+                                                 "version cannot read.")
+    except quotatank_remote.RemoteFailure as failure:
+        try:
+            saved = json.loads(path.read_text("utf-8"))
+            return {"status": "stale", "readAt": int(saved["readAt"]), "rows": list(saved["rows"]),
+                    "message": failure.message}
+        except (OSError, ValueError, KeyError, TypeError):
+            return {"status": "failed", "readAt": None, "rows": [], "message": failure.message}
+    read_at = int(time.time() * 1000)
+    try:
+        atomic_write_json(path, {"readAt": read_at, "rows": answer["records"]})
+    except OSError:
+        pass  # Without a saved copy the computer only counts while it answers.
+    return {"status": "ok", "readAt": read_at, "rows": answer["records"], "message": ""}
+
+
+def computer_candidate(computer_id: str, host: str, read: dict[str, Any], provider_ids: list[str],
+                       history_start: int, start: int, stamp: int) -> dict[str, Any]:
+    rows = (deserialize_record(row) for row in read["rows"][:MAX_TRANSCRIPT_RECORDS_TOTAL + 1])
+    history = [r for r in rows if r is not None and history_start <= r.timestamp_ms <= stamp]
+    records = [r for r in history if r.timestamp_ms >= start]
+    counts = {p: len({r.session_id for r in records if r.provider == p and r.session_id}) for p in {r.provider for r in records}}
+    message = {"ok": "", "stale": f"{host} is not answering; its last records are counted. {read['message']}".strip(),
+               "failed": read["message"]}[read["status"]]
+    return {"id": computer_id, "name": host, "kind": "computer", "provider": "",
+            "providers": sorted(counts) if read["status"] != "failed" else list(provider_ids),
+            "fingerprint": "computer:" + computer_id, "status": read["status"], "updatedAt": read["readAt"],
+            "message": message, "records": records, "history": history, "sessions": 0, "sessionCounts": counts}
+
+
 def build_payload(
     provider_ids: list[str], days: int, timeout: float, state_dir: Path | None,
     now_ms: int | None = None, zone_name: str | None = None,
     rates_override=None, force_rates: bool = False, price_overrides: str = "{}",
-    t3_servers: str = "[]",
+    t3_servers: str = "[]", computers: list[tuple[str, str]] | None = None, records_only: bool = False,
 ) -> dict[str, Any]:
     started = time.monotonic()
     overrides = parse_price_overrides(price_overrides)
@@ -2062,10 +2126,13 @@ def build_payload(
     if days == 1:
         query.update(sinceTime=iso_timestamp(start / 1000), untilTime=iso_timestamp(stamp / 1000))
     candidates, sources = [], []
-    # I/O for up to four T3 servers overlaps with the local scan; one deadline per server.
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    computers = [] if records_only else (computers or [])
+    # I/O for up to four T3 servers and every other computer overlaps with the local scan; one deadline each.
+    with ThreadPoolExecutor(max_workers=4 + len(computers)) as pool:
         futures = [(server, pool.submit(t3_costs.collect, server, query, days,
                      state_path("t3", state_dir), timeout)) for server in servers]
+        remote = [pool.submit(read_computer_records, computer_id, host, provider_ids, days, zone, state_dir)
+                  for computer_id, host in computers]
         local, coverage = scan_transcripts(provider_ids, state_dir, stamp)
         for item in coverage:
             provider = item["id"]
@@ -2113,6 +2180,13 @@ def build_payload(
                 "updatedAt": stamp, "message": item["message"], "records": records, "history": history,
                 "scannedFiles": item.get("scannedFiles", 0), "skippedFiles": item.get("skippedFiles", 0),
                 "sessions": len({r.session_id for r in records if r.session_id}), "sessionCounts": session_counts})
+        if records_only:
+            # Another computer's reader: this computer's records for the window the full view needs, as they are.
+            return {"schemaVersion": SCHEMA_VERSION, "records": [serialize_record(r) for c in candidates for r in c["history"]],
+                    "coverage": [{"id": c["provider"], "status": c["status"], "message": c["message"]} for c in candidates]}
+        for (computer_id, host), future in zip(computers, remote):
+            candidates.append(computer_candidate(computer_id, host, future.result(), provider_ids,
+                                                 history_start, start, stamp))
         for server, future in futures:
             try:
                 summary, state, error = future.result()
@@ -2171,7 +2245,7 @@ def build_payload(
         if included:
             seen.add(candidate["fingerprint"])
             records.extend(candidate["records"])
-            if candidate["kind"] == "local":
+            if candidate["kind"] in ("local", "computer"):
                 local_history.extend(candidate["history"])
             else:
                 remote_included = True
@@ -2181,11 +2255,12 @@ def build_payload(
         elif available:
             public.update(status="duplicate", message="This transcript folder is already included by another source.")
         sources.append(public)
-    if len(records) > MAX_TRANSCRIPT_RECORDS_TOTAL:
+    # Each computer's scan has its own ceiling, so the combined history may hold one ceiling per computer.
+    if len(records) > MAX_TRANSCRIPT_RECORDS_TOTAL * (1 + len(computers)):
         raise ValueError("Combined transcript history exceeds the record limit. Select a shorter period.")
     # A local source reports its own provider; the Oh My Pi source reports each provider its
     # messages were billed to, so those billings reach the aggregate as their own rows.
-    provider_ids = sorted({p for c in candidates for p in (c.get("providers") or [c["provider"]])})
+    provider_ids = sorted({p for c in candidates for p in (c.get("providers") or [c["provider"]]) if p})
     if rates_override is not None:
         rates, pricing = rates_override
     elif force_rates or any(r.model not in overrides for batch in (records, local_history) for r in batch):
@@ -2246,6 +2321,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--refresh-prices", action="store_true")
     parser.add_argument("--price-overrides", default="{}", help="Exact-model rates as JSON, in USD per million tokens")
     parser.add_argument("--t3-servers", default="[]")
+    parser.add_argument("--computer", action="append", default=[], metavar="ID=HOST",
+                        help="Another computer whose transcripts count too, read over SSH.")
+    parser.add_argument("--records", action="store_true",
+                        help="Run as another computer's reader: print this computer's records, not the summary.")
     args = parser.parse_args(argv)
     try:
         payload = build_payload(
@@ -2257,6 +2336,8 @@ def main(argv: list[str] | None = None) -> int:
             force_rates=args.refresh_prices,
             price_overrides=args.price_overrides,
             t3_servers=args.t3_servers,
+            computers=parse_computers(args.computer),
+            records_only=args.records,
         )
     except Exception as exc:
         payload = {

@@ -51,6 +51,7 @@ from quotatank_common import (
     open_private_directory, open_tcp, move_legacy_folders, opencode_data_root, opencode_database_path,
     read_capped, secret_opener, state_folder,
 )
+import quotatank_remote
 
 SCHEMA_VERSION = 1
 # Every provider the collector can read, in the order the widget lists them by default. Plan
@@ -8067,7 +8068,9 @@ def update_and_attach_history(
     path = history_path(state_dir)
     history = load_history(path)
     readings = series_readings(providers)
-    changed = record_history(history, readings, stamp)
+    # A stale reading repeats an old answer and a stand-in is another source's: neither is this reading's use.
+    changed = record_history(history, {key: reading for key, reading in readings.items()
+                                       if not reading.get("stale") and not reading.get("standIn")}, stamp)
     if prune_account_series(history, readings):
         changed = True
     accounts_of: dict[str, list[str]] = {}
@@ -8649,22 +8652,27 @@ def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
                 stand_in_omp_reading(native, entry)
         if not matches:
             added.append(entry)
-    if added:
-        single_native = "accounts" not in provider
-        if single_native:
-            provider.update(accountId="primary" if provider_id in KEYED_FETCHERS else PRIMARY_ACCOUNT_ID,
-                            active=True, primary=True, origin=native_origin(provider, provider, cliproxy))
-            provider["accounts"] = [copy.deepcopy(provider)]
-        provider["accounts"].extend(added)
-        healthy = next((position for position, entry in enumerate(provider["accounts"]) if entry["status"] == "ok"), None)
-        # A broken single sign-in (expired, signed out) should not hide omp accounts that work: the first healthy
-        # one leads. Omarchy's in-use login keeps the lead even when it fails, since that is what new sessions use.
-        if single_native and provider["status"] != "ok" and healthy is not None:
-            for position, entry in enumerate(provider["accounts"]):
-                entry["active"] = position == healthy
-            return summarize_accounts(provider["accounts"], healthy)
-        for entry in (provider, *provider["accounts"]):
-            entry["accountCount"] = len(provider["accounts"])
+    return add_accounts(provider, provider_id, added, cliproxy) if added else provider
+
+
+def add_accounts(provider: dict[str, Any], provider_id: str, added: list[dict[str, Any]],
+                 cliproxy: bool) -> dict[str, Any]:
+    """`provider` with the readings of other accounts listed after its own, in place where it can be."""
+    single_native = "accounts" not in provider
+    if single_native:
+        provider.update(accountId="primary" if provider_id in KEYED_FETCHERS else PRIMARY_ACCOUNT_ID,
+                        active=True, primary=True, origin=native_origin(provider, provider, cliproxy))
+        provider["accounts"] = [copy.deepcopy(provider)]
+    provider["accounts"].extend(added)
+    healthy = next((position for position, entry in enumerate(provider["accounts"]) if entry["status"] == "ok"), None)
+    # A broken single sign-in (expired, signed out) should not hide other accounts that work: the first healthy
+    # one leads. Omarchy's in-use login keeps the lead even when it fails, since that is what new sessions use.
+    if single_native and provider["status"] != "ok" and healthy is not None:
+        for position, entry in enumerate(provider["accounts"]):
+            entry["active"] = position == healthy
+        return summarize_accounts(provider["accounts"], healthy)
+    for entry in (provider, *provider["accounts"]):
+        entry["accountCount"] = len(provider["accounts"])
     return provider
 
 
@@ -8704,6 +8712,191 @@ def merge_omp_safely(providers: list[dict[str, Any]], provider_ids: list[str], r
     except Exception:
         return providers, 0, ("error", OMP_UNREADABLE, None)
     return candidate, count, read
+
+
+# --------------------------------------------------------------- Other computers
+# Another computer is read over SSH by this same collector, run there as a reader (scripts/quotatank_remote.py),
+# and its readings merge with this computer's (backend contract, "Other computers"). Each computer's last good
+# answer is kept, so one that stops answering shows its last readings as stale instead of an error.
+COMPUTER_ID = re.compile(r"c-[0-9a-f]{8}")
+MAX_COMPUTERS = 16
+NOT_SET_UP_KINDS = frozenset({"no_credentials", "cli_unavailable"})
+READING_FIELDS = ("status", "errorKind", "message", "windows", "credits", "source", "fetchedAt", "plan")
+
+
+def parse_computers(values: list[str]) -> list[tuple[str, str]]:
+    """`--computer ID=HOST` pairs, in order; malformed ids or destinations and repeated ids are ignored."""
+    computers: list[tuple[str, str]] = []
+    for value in values:
+        computer_id, separator, host = str(value).partition("=")
+        if (separator and COMPUTER_ID.fullmatch(computer_id) and quotatank_remote.valid_destination(host)
+                and all(known != computer_id for known, _host in computers)):
+            computers.append((computer_id, host))
+    return computers[:MAX_COMPUTERS]
+
+
+def computer_cache_path(state_dir: Path | None, computer_id: str) -> Path:
+    return (state_dir or state_folder()) / "computers" / f"{computer_id}.json"
+
+
+def computer_answer(payload: Any, provider_ids: list[str]) -> dict[str, Any]:
+    """The parts of a reader's payload this computer uses, checked: unknown providers and odd shapes are left out."""
+    if not isinstance(payload, dict) or payload.get("backendError") or not isinstance(payload.get("providers"), list):
+        raise quotatank_remote.RemoteFailure("failed", clean_message(payload.get("backendError") if isinstance(
+            payload, dict) else "") or "Quotatank's reader there sent an answer this version cannot read.")
+    wanted = set(provider_ids)
+    providers = [provider for provider in payload["providers"] if isinstance(provider, dict)
+                 and provider.get("id") in wanted and isinstance(provider.get("status"), str)]
+    names = lambda key: [item for item in payload.get(key) or [] if isinstance(item, str) and item in PROVIDER_ORDER]
+    omp = payload.get("omp") if isinstance(payload.get("omp"), dict) else {}
+    return {"providers": providers, "installed": names("installed"), "detected": names("detected"),
+            "omp": {key: omp[key] for key in ("local", "installed", "localAccounts", "version") if key in omp}}
+
+
+def read_computer(computer_id: str, host: str, provider_ids: list[str], timeout: float, omp_local: bool,
+                  state_dir: Path | None) -> dict[str, Any]:
+    """One computer's answer: fresh, else its last good one marked stale, else the failure alone."""
+    args = ["--reader", "--providers=" + ",".join(provider_ids), "--timeout", str(round(timeout)),
+            "--omp", "local" if omp_local else "off"]
+    path = computer_cache_path(state_dir, computer_id)
+    # omp usage there may take up to 45 s, as here; the connection itself gets 8 s.
+    seconds = 55.0 if omp_local else timeout + 20.0
+    try:
+        answer = computer_answer(quotatank_remote.run_reader(host, "usage-fetch.py", args, seconds), provider_ids)
+    except quotatank_remote.RemoteFailure as failure:
+        state = {"id": computer_id, "host": host, "status": "error", **failure.as_dict()}
+        try:
+            saved = json.loads(path.read_text("utf-8"))
+            answer = computer_answer(saved["answer"], provider_ids)
+            state.update(status="stale", readAt=str(saved["readAt"]))
+        except (OSError, ValueError, KeyError, TypeError, quotatank_remote.RemoteFailure):
+            return {**state, "providers": [], "installed": [], "detected": [], "omp": {}}
+        return {**state, **answer}
+    read_at = now_iso()
+    try:
+        atomic_write_json(path, {"readAt": read_at, "answer": answer})
+    except OSError:
+        pass  # Without a saved copy the computer is only an error the next time it does not answer.
+    return {"id": computer_id, "host": host, "status": "ok", "readAt": read_at, **answer}
+
+
+def readings_of(provider: dict[str, Any]) -> list[dict[str, Any]]:
+    accounts = provider.get("accounts")
+    return [entry for entry in accounts if isinstance(entry, dict)] if isinstance(accounts, list) else [provider]
+
+
+def mark_computer(provider: dict[str, Any], computer: dict[str, Any]) -> dict[str, Any]:
+    """Name the computer on every reading of `provider` and give its accounts ids no other computer shares."""
+    single = "accounts" not in provider
+    for reading in [provider, *([] if single else readings_of(provider))]:
+        reading["computer"] = {"id": computer["id"], "name": computer["host"]}
+        if computer["status"] == "stale":
+            reading.update(stale=True, readAt=computer["readAt"])
+        for key in ("accountId", "ompAccountId"):
+            if isinstance(reading.get(key), str) and reading[key]:
+                reading[key] = computer["id"] + "/" + reading[key]
+    if single:
+        provider["accountId"] = computer["id"] + "/" + (
+            "primary" if provider["id"] in KEYED_FETCHERS else PRIMARY_ACCOUNT_ID)
+    return provider
+
+
+def not_set_up(provider: dict[str, Any]) -> bool:
+    return provider.get("errorKind") in NOT_SET_UP_KINDS and "accounts" not in provider
+
+
+def same_account(native: dict[str, Any], entry: dict[str, Any]) -> bool:
+    """Two readings of one account: the same email and plan (or the same email when a plan is missing); readings
+    without an email match by their limits (same_limits), or, for API keys, by the same balance and limits to
+    the cent: one key set on two computers."""
+    email = str(native.get("account") or "").strip().lower()
+    other = str(entry.get("account") or "").strip().lower()
+    if email or other:
+        plans = {str(reading.get("plan") or "").strip().lower() for reading in (native, entry)}
+        return email == other and (len(plans) == 1 or "" in plans)
+    return same_limits(native, entry) or same_key_reading(native, entry)
+
+
+def same_key_reading(native: dict[str, Any], entry: dict[str, Any]) -> bool:
+    if native.get("status") != "ok" or entry.get("status") != "ok" or entry.get("id") not in KEYED_FETCHERS:
+        return False
+    def figures(reading: dict[str, Any]) -> Any:
+        windows = [(window.get("id"), window.get("used"), window.get("limit"), window.get("resetsAt"))
+                   for window in dict_list(reading.get("windows"))]
+        return reading.get("plan"), reading.get("credits"), windows
+    mine = figures(native)
+    return (bool(mine[1]) or bool(mine[2])) and mine == figures(entry)
+
+
+def unusable(reading: dict[str, Any]) -> bool:
+    return reading.get("status") != "ok" or bool(reading.get("stale"))
+
+
+def stand_in(native: dict[str, Any], entry: dict[str, Any]) -> None:
+    """A preferred reading that failed (or went stale) shows another source's reading of the same account, which
+    names where it came from; the preferred one's failure becomes the notice."""
+    failure = native.get("message") if native.get("status") != "ok" else ""
+    for key in READING_FIELDS:
+        if key in entry:
+            native[key] = copy.deepcopy(entry[key])
+        elif key != "plan":
+            native.pop(key, None)
+    native["standIn"] = dict(entry["computer"])
+    native["notice"] = failure or entry.get("notice") or ""
+    for key in ("stale", "readAt"):
+        if key in entry:
+            native[key] = entry[key]
+        else:
+            native.pop(key, None)
+
+
+def merge_computer_provider(ours: dict[str, Any] | None, theirs: dict[str, Any]) -> dict[str, Any]:
+    """This side's result for one provider with another computer's merged in. This side is preferred."""
+    if not_set_up(theirs):
+        return ours if ours is not None else theirs
+    if ours is None or not_set_up(ours):
+        return theirs
+    natives = readings_of(ours)
+    added = []
+    stood_in = False
+    for entry in readings_of(theirs):
+        match = next((native for native in natives if same_account(native, entry)), None)
+        if match is None:
+            entry["active"] = False
+            added.append(entry)
+        elif unusable(match) and entry.get("status") == "ok" and not (entry.get("stale") and match.get("stale")):
+            stand_in(match, entry)
+            stood_in = True
+    if stood_in and "accounts" in ours:
+        # The summary is a copy of the leading account: it follows that account's stand-in.
+        lead = next((entry for entry in ours["accounts"] if entry.get("active")), ours["accounts"][0])
+        for key in (*READING_FIELDS, "standIn", "notice", "stale", "readAt", "errorKind"):
+            if key in lead:
+                ours[key] = copy.deepcopy(lead[key])
+            else:
+                ours.pop(key, None)
+    return add_accounts(ours, ours["id"], added, False) if added else ours
+
+
+def merge_computers(providers: list[dict[str, Any]], provider_ids: list[str], computers: list[dict[str, Any]]) -> None:
+    """Merge every computer's readings into `providers`, in place, in the computers' order."""
+    for computer in computers:
+        for theirs in computer["providers"]:
+            if theirs["id"] not in provider_ids:
+                continue
+            theirs = mark_computer(copy.deepcopy(theirs), computer)
+            position = next((index for index, provider in enumerate(providers) if provider.get("id") == theirs["id"]), None)
+            merged = merge_computer_provider(providers[position] if position is not None else None, theirs)
+            if position is None:
+                providers.append(merged)
+            else:
+                providers[position] = merged
+
+
+def computer_state(computer: dict[str, Any]) -> dict[str, Any]:
+    """What the payload says about a computer (`computers` in the backend contract)."""
+    keys = ("id", "host", "status", "readAt", "kind", "message", "fix", "installed", "detected", "omp")
+    return {key: computer[key] for key in keys if key in computer}
 
 
 # --------------------------------------------------------------- Orchestration
@@ -8814,14 +9007,18 @@ def build_payload(
     source: str = "direct", cliproxy_url: str = "http://127.0.0.1:8317",
     key_file: Path | None = None, key_files: dict[str, Path] | None = None,
     extra_keys: dict[str, list[tuple[str, Path]]] | None = None,
-    omp_local: bool = False,
+    omp_local: bool = False, computers: list[tuple[str, str]] | None = None, reader: bool = False,
 ) -> dict[str, Any]:
     omp = omp_executable()
     reads_local = omp_local and omp is not None and omp_set_up()
-    # omp takes longer than most providers, so it is read while they are.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+    computers = [] if reader else (computers or [])
+    base_state = history_path(state_dir).parent
+    # omp and other computers take longer than most providers, so they are read while the providers are.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2 + len(computers)) as pool:
         local = pool.submit(read_omp_local, omp, state_dir) if reads_local else None
         version = pool.submit(omp_version, omp, state_dir) if reads_local else None
+        remote = [pool.submit(read_computer, computer_id, host, provider_ids, timeout, omp_local, base_state)
+                  for computer_id, host in computers]
         if source == "cliproxy":
             providers = collect_cliproxy(provider_ids, timeout, cliproxy_url, key_file or cliproxy_key_path(), discover=True)
             try:
@@ -8841,24 +9038,30 @@ def build_payload(
         else:
             local_read = ("unused", OMP_NOT_SET_UP, None)
         omp_release = version.result() if version else ""
+        answers = [future.result() for future in remote]
     providers, merged, local_read = merge_omp_safely(providers, provider_ids, local_read, source == "cliproxy")
+    merge_computers(providers, provider_ids, answers)
     providers = bound_providers(providers)
-    update_and_attach_history(providers, state_dir)
+    if not reader:
+        update_and_attach_history(providers, state_dir)
     omp_summary = {
         "local": local_read[0], "message": clean_message(local_read[1]), "accounts": merged,
         "localAccounts": omp_account_count(local_read[2], provider_ids), "installed": omp is not None,
     }
     if omp_release:
         omp_summary["version"] = omp_release
-    return {
+    payload = {
         "schemaVersion": SCHEMA_VERSION,
         "generatedAt": now_iso(),
         "providers": providers,
         "source": source,
-        "detected": detected_providers(),
+        "detected": list(dict.fromkeys([*detected_providers(), *(item for answer in answers for item in answer["detected"])])),
         "installed": installed_providers(),
         "omp": omp_summary,
     }
+    if computers:
+        payload["computers"] = [computer_state(answer) for answer in answers]
+    return payload
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -8876,6 +9079,10 @@ def main(argv: list[str] | None = None) -> int:
                              "KEYID is the id of a key saved in widget settings (k- and eight hex digits).")
     parser.add_argument("--omp", choices=("off", "local"), default="off",
                         help="local: add the accounts omp (Oh My Pi) signs in to, from `omp usage --json`.")
+    parser.add_argument("--computer", action="append", default=[], metavar="ID=HOST",
+                        help="Another computer to read over SSH (c- and eight hex digits, then its SSH destination).")
+    parser.add_argument("--reader", action="store_true",
+                        help="Run as another computer's reader: no history is read or written.")
     args = parser.parse_args(argv)
 
     provider_ids = parse_provider_ids(args.providers)
@@ -8884,7 +9091,8 @@ def main(argv: list[str] | None = None) -> int:
         key_files = parse_key_files(args.key_file)
         extra_keys = parse_extra_keys(args.extra_key)
         payload = build_payload(provider_ids, timeout, args.state_dir, args.source, args.cliproxy_url,
-                                args.cliproxy_key_file, key_files, extra_keys, omp_local=args.omp == "local")
+                                args.cliproxy_key_file, key_files, extra_keys, omp_local=args.omp == "local",
+                                computers=parse_computers(args.computer), reader=args.reader)
     except Exception as exc:
         payload = {
             "schemaVersion": SCHEMA_VERSION,
