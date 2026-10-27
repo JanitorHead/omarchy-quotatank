@@ -18,9 +18,6 @@ parser.add_argument("--cliproxy-key-file")
 parser.add_argument("--key-file", action="append", default=[])
 # omp is read on this computer by default (Settings → Providers → omp), so every direct refresh passes it.
 parser.add_argument("--omp", choices=("local",))
-parser.add_argument("--omp-gateway-url")
-parser.add_argument("--omp-gateway-key-file")
-parser.add_argument("--omp-only", action="store_true")
 args = parser.parse_args()
 
 # A singleton-backend instance in the QML contract deliberately gets bad

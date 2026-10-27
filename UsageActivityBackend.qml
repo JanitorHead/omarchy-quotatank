@@ -7,7 +7,6 @@ Item {
   id: root
   visible: false
   required property var usageBackend
-  property var settings: ({})
   property var providers: []
   property string fetchError: ""
   property double lastSuccessAt: 0

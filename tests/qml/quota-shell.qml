@@ -12,8 +12,8 @@ ShellRoot {
   Component.onCompleted: {
     var component = Qt.createComponent(Quickshell.env("QUOTATANK_REPO_URL") + "/UsageBackend.qml")
     check(component.status === Component.Ready, component.errorString())
-    backend = component.createObject(root, {settings: {
-      usageSource: "cliproxy", cliproxyUrl: "https://old.example", enabledProviders: ["codex"]}})
+    backend = component.createObject(root, {settings: {enabledProviders: ["codex"],
+      sources: JSON.stringify([{id: "p-1a2b3c4d", kind: "proxy", url: "https://old.example", keyFile: ""}])}})
     check(backend !== null, component.errorString())
     backend.refreshed.connect(function() {
       root.responses++
@@ -22,8 +22,8 @@ ShellRoot {
     })
     backend.refresh()
     check(backend.loading, "refresh reports loading during process startup")
-    backend.settings = {usageSource: "cliproxy", cliproxyUrl: "https://new.example",
-      cliproxyKeyFile: "/synthetic/new-key", enabledProviders: ["codex"]}
+    backend.settings = {enabledProviders: ["codex"],
+      sources: JSON.stringify([{id: "p-1a2b3c4d", kind: "proxy", url: "https://new.example", keyFile: "/synthetic/new-key"}])}
     backend.refresh()
     backend.refresh()
   }

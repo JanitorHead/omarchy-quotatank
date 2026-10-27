@@ -80,8 +80,7 @@ ShellRoot {
     widget.showSettings()
     assertTrue(widget.configuring, "settings opens from the panel")
     var form = widget.settingsForm
-    assertEqual(form.refreshMinutes, "60", "refresh interval is presented in minutes")
-    assertTrue(!form.alertsExpanded && !form.refreshExpanded && !form.activityExpanded, "optional settings start collapsed")
+    assertEqual(String(form.findChild("refreshMinutes").source), "60", "refresh interval is presented in minutes")
     var initialBarProviders = form.draft.barProviders.join(",")
     var expectedBarProviders = initialBarProviders.split(",").filter(function (id) { return id !== "codex" }).join(",")
     form.toggleProvider("barProviders", "codex")
@@ -94,23 +93,23 @@ ShellRoot {
     assertEqual(form.draft.barProviders.join(","), initialBarProviders, "Cancel discards draft edits")
     assertEqual(form.draft.hideAccountEmails, false, "Cancel discards privacy edits")
 
-    form.setValue("usageSource", "cliproxy")
+    form.setValue("sources", proxySources("https://proxy.test/prefix", "", "", ""))
     assertTrue(form.proxyMode, "proxy source reveals connection fields")
-    form.setValue("cliproxyUrl", "https://user:secret@proxy.test")
+    form.setValue("sources", proxySources("https://user:secret@proxy.test", "", "", ""))
     assertTrue(!form.submit(), "URL credentials cannot be saved")
-    form.setValue("cliproxyUrl", "https://proxy.test/prefix/management.html")
-    form.managementKey = "invalid\nkey"
-    assertTrue(!form.submit(), "multiline management keys cannot be saved")
-    form.managementKey = "synthetic-secret"
+    form.setValue("sources", proxySources("https://proxy.test/prefix/management.html", "", "", ""))
+    form.findChild("managementKeyRowField").text = "invalid\nkey"
+    form.findChild("managementKeyRow").submit()
+    assertTrue(form.findChild("managementKeyRow").error !== "", "multiline management keys cannot be saved")
+    form.findChild("managementKeyRowField").text = "synthetic-secret"
     form.setValue("refreshIntervalSec", "")
     assertTrue(!form.submit(), "empty numeric input cannot be saved")
-    assertTrue(form.refreshExpanded, "invalid interval reveals the collapsed refresh settings")
     form.setValue("refreshIntervalSec", "900")
     form.setValue("criticalThreshold", "50")
     assertTrue(!form.submit(), "inverted thresholds cannot be saved")
     assertEqual(mockShell.saveCount, 0, "invalid and cancelled edits never reach persistence")
     form.cancelRequested()
-    assertEqual(form.managementKey, "", "Cancel clears the entered key")
+    assertEqual(form.findChild("managementKeyRowField").text, "", "Cancel clears the entered key")
 
     widget.showSettings()
     form.setValue("criticalThreshold", "90")
@@ -174,13 +173,13 @@ ShellRoot {
       settings: { enabledProviders: ["kimi"], refreshIntervalSec: 3600 }
     }, "UsageBackend.qml malformed boundary")
     proxyBackend = loadComponent(backendUrl, {
-      settings: { enabledProviders: ["claude", "codex"], usageSource: "cliproxy",
-        cliproxyUrl: "https://proxy.test/prefix", cliproxyKeyFile: "/private/proxy key" }
+      settings: { enabledProviders: ["claude", "codex"],
+        sources: proxySources("https://proxy.test/prefix", "/private/proxy key", "", "") }
     }, "UsageBackend.qml CLIProxyAPI settings")
     proxyWidget = loadComponent(panelUrl, {
       moduleName: "test.proxy-widget", ipcTarget: "test.proxy-widget", bar: fakeBar,
-      settings: { enabledProviders: [], usageSource: "cliproxy",
-        cliproxyUrl: "https://proxy.test/prefix", cliproxyKeyFile: "/private/proxy key" }
+      settings: { enabledProviders: [],
+        sources: proxySources("https://proxy.test/prefix", "/private/proxy key", "", "") }
     }, "Panel.qml proxy discovery")
     if (malformedBackend) {
       malformedBackend.settings = { enabledProviders: ["kimi"], refreshIntervalSec: 3600 }
@@ -405,15 +404,26 @@ ShellRoot {
     }
   }
 
+  // The Sources entry that holds the proxy: the old proxy mode is one switched-on proxy row.
+  function proxySources(url, keyFile, keeperUrl, keeperPasswordFile) {
+    return JSON.stringify([{ id: "p-1a2b3c4d", kind: "proxy", url: url, keyFile: keyFile,
+      keeperUrl: keeperUrl, keeperPasswordFile: keeperPasswordFile, on: true }])
+  }
+  function proxyRow(settings) {
+    var rows = JSON.parse(String(settings.sources || "[]"))
+    for (var i = 0; i < rows.length; i++) if (rows[i].kind === "proxy") return rows[i]
+    return {}
+  }
+
   property var beforeKeySettings: ({})
   property int keySavePhase: 0
   function startKeySaveCheck() {
     beforeKeySettings = JSON.parse(JSON.stringify(widget.settings))
     widget.showSettings()
-    widget.settingsForm.setValue("usageSource", "cliproxy")
-    widget.settingsForm.managementKey = "qml-synthetic-management-key"
-    widget.settingsForm.setValue("costKeeperUrl", "https://keeper.example/keeper")
-    widget.settingsForm.keeperPassword = "qml-synthetic-keeper-password"
+    var form = widget.settingsForm
+    form.setValue("sources", proxySources("https://proxy.test/prefix", "", "https://keeper.example/keeper", ""))
+    form.findChild("managementKeyRowField").text = "qml-synthetic-management-key"
+    form.findChild("managementKeyRow").submit()
     widget.settingsForm.submit()
     keySavePhase = 0
     waitForKeySave.restart()
@@ -577,28 +587,36 @@ ShellRoot {
       var form = root.widget.settingsForm
       if (root.keySavePhase === 0) {
         root.assertTrue(!root.widget.configuring, "key save completes and returns to usage: " + form.errorText)
-        root.assertEqual(form.managementKey, "", "successful save clears the key field")
-        root.assertEqual(form.keeperPassword, "", "successful save clears the Keeper password field")
-        root.assertTrue(String(mockShell.savedSettings.cliproxyKeyFile).indexOf("/management-keys/key-") > 0,
+        root.assertEqual(form.findChild("managementKeyRowField").text, "", "successful save clears the key field")
+        root.assertTrue(String(root.proxyRow(mockShell.savedSettings).keyFile).indexOf("/management-keys/key-") > 0,
           "GUI key save persists a generated private file path")
         root.assertTrue(JSON.stringify(mockShell.savedSettings).indexOf("qml-synthetic-management-key") < 0,
           "management key never reaches widget settings")
-        root.assertTrue(JSON.stringify(mockShell.savedSettings).indexOf("qml-synthetic-keeper-password") < 0,
-          "Keeper password never reaches widget settings")
-        root.assertTrue(String(mockShell.savedSettings.costKeeperPasswordFile).indexOf("/management-keys/key-") > 0,
-          "Keeper password persists only as a private file path")
         root.widget.showSettings()
-        root.assertEqual(form.managementKey, "", "saved key is never loaded into the editor")
-        root.assertTrue(!form.connectionExpanded, "saved proxy connection starts collapsed")
-        var savedPath = root.widget.settings.cliproxyKeyFile
+        root.assertEqual(form.findChild("managementKeyRowField").text, "", "saved key is never loaded into the editor")
+        var savedPath = String(root.proxyRow(root.widget.settings).keyFile)
         form.submit()
-        root.assertEqual(root.widget.settings.cliproxyKeyFile, savedPath, "blank key preserves saved credentials")
+        root.assertEqual(String(root.proxyRow(root.widget.settings).keyFile), savedPath, "blank key preserves saved credentials")
         root.widget.showSettings()
-        form.managementKey = "replacement-that-must-be-rolled-back"
-        form.keeperPassword = "keeper-replacement-that-must-be-rolled-back"
-        mockShell.rejectSave = true
+        form.findChild("keeperPasswordRowField").text = "qml-synthetic-keeper-password"
+        form.findChild("keeperPasswordRow").submit()
         form.submit()
         root.keySavePhase = 1
+        attempts = 0
+        restart()
+      } else if (root.keySavePhase === 1) {
+        root.assertTrue(!root.widget.configuring, "Keeper password save completes and returns to usage: " + form.errorText)
+        root.assertEqual(form.findChild("keeperPasswordRowField").text, "", "successful save clears the Keeper password field")
+        root.assertTrue(JSON.stringify(mockShell.savedSettings).indexOf("qml-synthetic-keeper-password") < 0,
+          "Keeper password never reaches widget settings")
+        root.assertTrue(String(root.proxyRow(mockShell.savedSettings).keeperPasswordFile).indexOf("/management-keys/key-") > 0,
+          "Keeper password persists only as a private file path")
+        root.widget.showSettings()
+        form.findChild("managementKeyRowField").text = "replacement-that-must-be-rolled-back"
+        form.findChild("managementKeyRow").submit()
+        mockShell.rejectSave = true
+        form.submit()
+        root.keySavePhase = 2
         attempts = 0
         restart()
       } else {

@@ -897,7 +897,6 @@ Ui.Panel {
   UsageActivityBackend {
     id: activityBackend
     usageBackend: backend
-    settings: root.settings
   }
 
   ResetBackend {

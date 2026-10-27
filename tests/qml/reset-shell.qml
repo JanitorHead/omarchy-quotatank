@@ -127,8 +127,8 @@ ShellRoot {
           return
         }
         root.widget = root.create("Panel.qml", { moduleName: "test.reset", ipcTarget: "test.reset",
-          settings: { usageSource: "cliproxy", cliproxyUrl: "https://proxy.test/prefix",
-            cliproxyKeyFile: "/private/proxy key", enabledProviders: [], refreshIntervalSec: 3600 } })
+          settings: { sources: JSON.stringify([{ id: "p-1a2b3c4d", kind: "proxy", url: "https://proxy.test/prefix",
+            keyFile: "/private/proxy key" }]), enabledProviders: [], refreshIntervalSec: 3600 } })
         root.widget.resetAction.scriptPath = Quickshell.env("QUOTATANK_FAKE_RESET")
         root.phase++
       } else if (root.phase === 8 && root.widget.providers.length > 0) {

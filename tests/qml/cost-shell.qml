@@ -31,6 +31,11 @@ ShellRoot {
   function check(condition, message) {
     if (!condition) throw new Error("COST TEST FAILED: " + message)
   }
+  // The T3 entries of saved settings, in the backend's shape (`on` reads as `enabled`).
+  function t3Of(settings) {
+    return JSON.parse(settings.sources || "[]").filter(function (entry) { return entry.kind === "t3" })
+      .map(function (entry) { return Object.assign({}, entry, { enabled: entry.on !== false }) })
+  }
   function create(name, values) {
     var component = Qt.createComponent(Quickshell.env("QUOTATANK_REPO_URL") + "/" + name)
     check(component.status === Component.Ready, component.errorString())
@@ -261,7 +266,7 @@ ShellRoot {
         root.form.usagePayload = null
         root.form.page = "costs"
         root.check(root.find(root.form, "providerFilterFieldInput") === null
-          && root.find(root.form, "cliproxyUrlFieldInput") === null
+          && root.find(root.form, "proxyUrlFieldInput") === null
           && root.find(root.form, "refreshMinutesFieldInput") === null, "fields on hidden pages keep no live input")
         root.savesBeforeBlankRow = root.saves
         root.check(root.find(root.overview, "costModel-9") !== null, "expanded breakdown includes models beyond the former top eight")
@@ -300,18 +305,18 @@ ShellRoot {
         root.phase++
       } else if (root.phase === 4 && root.backend.fetchError !== "" && !root.backend.loading) {
         root.check(!root.backend.payload.generatedAt, "source change clears old totals even on failure")
-        root.form.settings = {costLocalProviders: ["claude"], costT3Servers: '[{"id":"first","name":"Remote","url":"https://first.example","tokenFile":"","enabled":true}]'}
+        root.form.settings = {costLocalProviders: ["claude"], sources: '[{"id":"t3-first","kind":"t3","name":"Remote","url":"https://first.example","tokenFile":"","on":true}]'}
         root.find(root.form, "costLocal-claudeSwitch").toggled()
-        root.check(root.saved.costLocalProviders.length === 0 && JSON.parse(root.saved.costT3Servers)[0].enabled, "remote-only setting round trips and is included")
+        root.check(root.saved.costLocalProviders.length === 0 && root.t3Of(root.saved)[0].enabled, "remote-only setting round trips and is included")
         root.backend.settings = root.saved
         root.phase++
       } else if (root.phase === 5 && root.backend.loading) {
-        root.backend.settings = {costLocalProviders: [], costT3Servers: '[{"id":"second","name":"Second","url":"https://second.example","tokenFile":"","enabled":true}]'}
+        root.backend.settings = {costLocalProviders: [], sources: '[{"id":"t3-second","kind":"t3","name":"Second","url":"https://second.example","tokenFile":"","on":true}]'}
         root.phase++
       } else if (root.phase === 6 && !root.backend.loading && root.backend.payload.generatedAt) {
         root.check(JSON.parse(root.backend.payload.testRequest.servers)[0].url === "https://second.example", "in-flight old server response is discarded")
         root.form.settings = {}
-        root.form.begin("costs")
+        root.form.begin("sources")
         root.find(root.form, "addT3Server").clicked()
         root.phase++
       } else if (root.phase === 7) {
@@ -323,20 +328,20 @@ ShellRoot {
         root.check(root.saves === before, "a server without a name is not saved yet")
         root.check(!root.find(root.form, "t3Credential-0Save").enabled, "a token cannot be saved before the server is complete")
         root.edit("t3Name-0Field", "Lab", true)
-        root.check(root.saves > before && JSON.parse(root.saved.costT3Servers)[0].url === "https://t3.example", "a complete server saves on its own")
+        root.check(root.saves > before && root.t3Of(root.saved)[0].url === "https://t3.example", "a complete server saves on its own")
         root.edit("t3Credential-0Field", "synthetic-t3-token")
         root.saved = null
         root.find(root.form, "t3Credential-0Save").clicked()
         root.check(root.form.pendingApply !== null, "private token staging starts")
         root.phase++
       } else if (root.phase === 8 && root.saved && !root.form.saving) {
-        var remote = JSON.parse(root.saved.costT3Servers)[0]
+        var remote = root.t3Of(root.saved)[0]
         root.check(remote.enabled && remote.tokenFile.indexOf("/management-keys/key-") >= 0, "token stored as private file reference")
         root.check(JSON.stringify(root.saved).indexOf("synthetic-t3-token") < 0, "raw token never enters widget settings")
         root.check(root.find(root.form, "t3Credential-0").saved, "saved token has an explicit configured state")
         root.check(!root.find(root.form, "t3Credential-0Field").visible, "saved token does not show an empty editor")
-        root.form.begin("costs")
-        root.check(JSON.parse(root.form.settings.costT3Servers)[0].tokenFile === remote.tokenFile, "saved token path round trips")
+        root.form.begin("sources")
+        root.check(root.t3Of(root.form.settings)[0].tokenFile === remote.tokenFile, "saved token path round trips")
         // Paste goes through the bounded reader (tests/fake-bin/wl-paste offers a short text, then
         // one past the 64 KiB limit).
         root.form.page = "advanced"
@@ -442,7 +447,7 @@ ShellRoot {
         root.check(chart.chartMaximum > 0 && root.find(root.costs, "costSummaryValue").text === "$12.34", "the week renders its total")
         var delta = root.find(root.costs, "costDelta")
         root.check(delta.visible && delta.text === "▲ 18% vs previous 7 days", "the total shows its change on the previous week: " + delta.text)
-        root.check(root.costs.sourceSummary === "Local transcripts + omp on devbox · live", "the footer names the sources: " + root.costs.sourceSummary)
+        root.check(root.costs.sourceSummary === "Local transcripts + T3 on Lab · live", "the footer names the sources: " + root.costs.sourceSummary)
         root.check(root.find(root.costs, "costCacheLine").visible && root.costs.cache.text === "81% read from cache · saved $21.50",
           "the cache line reads the totals")
         var noPrevious = JSON.parse(JSON.stringify(root.rich))

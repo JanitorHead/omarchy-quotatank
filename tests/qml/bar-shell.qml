@@ -316,7 +316,7 @@ ShellRoot {
 
   readonly property var panelSteps: [
     function () {
-      root.live = Qt.createQmlObject('import QtQuick; QtObject { signal request(var event); signal remoteActivity(); '
+      root.live = Qt.createQmlObject('import QtQuick; QtObject { signal request(var event); '
         + 'property var recentByAccount: ({}); property var requestLog: []; property int requestRevision: 0; '
         + 'property string state: "live"; property string message: "" }', root, "live")
       root.widget = create("Panel.qml", panelHost, { moduleName: "test.bar", ipcTarget: "test.bar",
@@ -444,8 +444,8 @@ ShellRoot {
     },
     function () {
       check(widget.selectedAccount.accountId === "personal", "choosing the provider again shows the counted account")
-      widget.settings = Object.assign({}, widget.settings, { usageSource: "cliproxy", cliproxyUrl: "https://proxy.test/prefix",
-        cliproxyKeyFile: "/private/proxy key" })
+      widget.settings = Object.assign({}, widget.settings, { sources: JSON.stringify([{ id: "p-1a2b3c4d", kind: "proxy",
+        url: "https://proxy.test/prefix", keyFile: "/private/proxy key" }]) })
       return true
     },
     function () {

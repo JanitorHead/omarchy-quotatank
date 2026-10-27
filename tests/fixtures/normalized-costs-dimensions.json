@@ -11,7 +11,7 @@
     { "id": "local-claude", "name": "Local Claude", "kind": "local", "provider": "claude", "status": "ok", "included": true, "updatedAt": null, "message": "" },
     { "id": "local-codex", "name": "Local OpenAI Codex", "kind": "local", "provider": "codex", "status": "ok", "included": true, "updatedAt": null, "message": "" },
     { "id": "local-omp", "name": "Local Oh My Pi", "kind": "local", "provider": "omp", "status": "ok", "included": true, "updatedAt": null, "message": "" },
-    { "id": "omp-remote", "status": "ok", "message": "", "host": "devbox" }
+    { "id": "lab-claude", "name": "Lab · Claude", "kind": "t3", "provider": "claude", "status": "ok", "included": true, "updatedAt": null, "message": "" }
   ],
   "scanDurationMs": 37,
   "period": { "days": 7, "resolution": "day", "since": "2030-01-09", "until": "2030-01-15", "label": "Past 7 days" },
