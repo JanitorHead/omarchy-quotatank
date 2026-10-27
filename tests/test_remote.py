@@ -207,7 +207,10 @@ class ComputerCheckTests(FakeSsh):
         self.assertTrue(result["ok"])
 
     def test_this_computer_is_not_added_again(self):
-        result = check.test("devbox", "", "off")  # tests/fake-bin/ssh runs "devbox" here.
+        # The same machine id there as here, whether or not the host running the tests has one.
+        with mock.patch.object(remote, "machine_id", return_value="0123456789abcdef"), \
+                mock.patch.object(remote, "run_reader", return_value={"python": "3.12.0", "machine": "0123456789abcdef"}):
+            result = check.test("devbox", "", "off")
         self.assertFalse(result["ok"])
         self.assertIn("is this computer", result["steps"][-1]["text"])
 
