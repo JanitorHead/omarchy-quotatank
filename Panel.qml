@@ -1799,6 +1799,7 @@ Ui.Panel {
             usagePayload: root.proxyMode ? null : backend.payload
             usageLoading: backend.loading
             costSources: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sources) : []
+            costModels: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.models) : []
             ompActivity: root.ompActivity
             motion: root.motion
             onSetupRequested: function(entry, action) { root.startSetup(entry, action) }

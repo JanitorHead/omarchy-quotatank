@@ -13,6 +13,28 @@ Column {
   property string fontFamily: Style.font.family
   property string loadError: ""
   property int draftGeneration: 0
+  // Models the costs view has seen, exact ids, the ones it has no price for first: the
+  // picker fills the row's Model ID with one of them, and the field stays free for
+  // anything else. "Unknown model" and "Other models" are the view's own groups, not
+  // ids a price could match, so they are not offered.
+  property var costModels: []
+  readonly property var modelChoices: {
+    var seen = {}
+    var rows = []
+    for (var i = 0; i < costModels.length; i++) {
+      var entry = costModels[i] || {}
+      var model = String(entry.model || "")
+      if (model === "" || seen[model] || model === "Unknown model" || model === "Other models") continue
+      seen[model] = true
+      var unpriced = entry.costUsd === null
+      rows.push({ value: model, label: unpriced ? model + " · no price" : model, unpriced: unpriced })
+    }
+    rows.sort(function(a, b) {
+      if (a.unpriced !== b.unpriced) return a.unpriced ? -1 : 1
+      return a.value < b.value ? -1 : a.value > b.value ? 1 : 0
+    })
+    return rows
+  }
   readonly property int priceCount: prices.count
   signal revealRequested(var item)
   signal edited()
@@ -91,7 +113,7 @@ Column {
     fontFamily: root.fontFamily
     onRevealRequested: function(item) { root.revealRequested(item) }
     Label {
-      text: "Copy the exact model ID from Costs, including its provider and any [variant]. Overrides apply across all sources. Remove a row to restore automatic pricing. Blank cache prices use the input price; enter 0 for free tokens."
+      text: "Pick a model from your costs, or type its exact ID, including its provider and any [variant]. Overrides apply across all sources. Remove a row to restore automatic pricing. Blank cache prices use the input price; enter 0 for free tokens."
       font.pixelSize: Style.font.caption
       color: Qt.darker(root.foreground, 1.5)
     }
@@ -123,7 +145,25 @@ Column {
       spacing: Style.spacing.md
 
       Label { text: "Model ID" }
+      UsageSelect {
+        objectName: "costModelPick-" + priceRow.index
+        visible: root.modelChoices.length > 0
+        width: parent.width
+        label: "From your costs"
+        placeholder: "Pick a model from your costs…"
+        options: root.modelChoices
+        value: priceRow.modelId
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onChanged: function(next) {
+          // The field owns its text once it has been typed in, so fill it too.
+          modelIdField.text = next
+          prices.setProperty(priceRow.index, "modelId", next)
+          root.edited()
+        }
+      }
       SettingsField {
+        id: modelIdField
         objectName: "costModel-" + priceRow.index
         width: parent.width
         text: priceRow.modelId
