@@ -2312,10 +2312,13 @@ function migrateSources(settings) {
   var list = parseSources(source)
   var proxyUrl = text("cliproxyUrl")
   var proxyMode = text("usageSource") === "cliproxy"
-  // A Keeper was only ever set up for a proxy, also one left at the default address (which is not stored).
+  // A proxy set up but not in use (its own address or key) stays, switched off; so does one a Keeper was
+  // set up for, also at the default address (which is not stored). Only an untouched default is dropped.
   // A 2.3 backup restored over Sources that already have a proxy keeps that one (the widget reads one).
   var hasProxy = list.some(function(entry) { return entry.kind === "proxy" })
-  if (!hasProxy && (proxyMode || text("costKeeperUrl") !== "")) {
+  var proxySetUp = (proxyUrl !== "" && proxyUrl.replace(/\/+$/, "") !== "http://127.0.0.1:8317")
+    || text("cliproxyKeyFile") !== "" || text("costKeeperUrl") !== ""
+  if (!hasProxy && (proxyMode || proxySetUp)) {
     list.push({ id: newSourceId("proxy", list), kind: "proxy", on: proxyMode,
       url: proxyUrl !== "" ? proxyUrl : "http://127.0.0.1:8317", keyFile: text("cliproxyKeyFile"),
       keeperUrl: text("costKeeperUrl"), keeperPasswordFile: text("costKeeperPasswordFile") })

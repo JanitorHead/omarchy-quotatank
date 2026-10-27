@@ -1176,6 +1176,11 @@ console.log("Provider setup: passed");
     "a Keeper set up for a proxy that was not in use stays with that proxy, switched off");
   assert.equal(JSON.parse(migrate({ usageSource: "direct", cliproxyUrl: "http://127.0.0.1:8317" }).changes.sources).length, 0,
     "an unused proxy default is not a source");
+  const unused = JSON.parse(migrate({ usageSource: "direct", cliproxyUrl: "https://proxy.example", cliproxyKeyFile: "/k/proxy.key" }).changes.sources);
+  assert.deepEqual(unused.map((entry) => [entry.kind, entry.on, entry.url, entry.keyFile]), [["proxy", false, "https://proxy.example", "/k/proxy.key"]],
+    "a proxy set up but not in use stays, switched off, with its key");
+  assert.equal(JSON.parse(migrate({ usageSource: "direct", cliproxyUrl: "http://127.0.0.1:8317/", cliproxyKeyFile: "/k/proxy.key" }).changes.sources)[0].keyFile,
+    "/k/proxy.key", "a saved key is a proxy set up, also at the default address");
   const keeperOnly = JSON.parse(migrate({ usageSource: "direct", costKeeperUrl: "http://127.0.0.1:8318" }).changes.sources);
   assert.deepEqual(keeperOnly.map((entry) => [entry.kind, entry.on, entry.url]), [["proxy", false, "http://127.0.0.1:8317"]],
     "a Keeper set up for the proxy at its default address keeps that proxy");
