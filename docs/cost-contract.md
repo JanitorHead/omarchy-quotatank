@@ -35,7 +35,11 @@ harness reports reasoning inside output, so its `output` is used as-is and
 `reasoningTokens` stays informational. Rows are deduplicated by their message
 id, and the database is queried read-only with `query_only` set; no row content
 outside ids, the model and the provider that billed it, timestamp, the working directory's folder name, and the
-token split leaves SQLite. OpenCode's and the grok CLI's own
+token split leaves SQLite. Memory stays bounded however large the database is (up to 4 GiB): it is never
+memory-mapped and gets a 16 MiB page cache, each response looks its session's folder up by id instead of
+loading the session table, text comes back cut (ids, model and provider at 256 characters, the working
+directory at 4,096; a longer message id is skipped), and more than 80,000 responses in the retention window,
+counted or dropped as another vendor's, skip the database for that scan. OpenCode's and the grok CLI's own
 recorded costs are kept and used, because each priced every response with the
 rates of the provider that served it — the only reliable rate for model IDs the
 public table cannot disambiguate (`deepseek-v4.1-flash`, for instance, exists
