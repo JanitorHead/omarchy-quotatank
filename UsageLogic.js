@@ -2304,6 +2304,8 @@ function migrateSources(settings) {
     return value === undefined || value === null ? "" : String(value).trim()
   }
   var changes = { sourcesVersion: 1 }
+  // Nothing stored yet is a fresh install: it opens setup. Settings that carry over skip it.
+  if (source.setupDone === undefined) changes.setupDone = Object.keys(source).length > 0
   var list = parseSources(source)
   var proxyUrl = text("cliproxyUrl")
   var proxyMode = text("usageSource") === "cliproxy"
@@ -2325,6 +2327,40 @@ function migrateSources(settings) {
   if (text("ompStatsUrl") !== "" || text("ompGatewayUrl") !== "") changes.sourcesNotice = "ompRemote"
   LEGACY_SOURCE_KEYS.forEach(function(key) { if (source[key] !== undefined) changes[key] = null })
   return { changes: changes, notice: changes.sourcesNotice === "ompRemote" }
+}
+
+// ---- First-run setup and hints
+
+// Setup runs while `setupDone` is false: set on a fresh install (migrateSources) and by Run setup again.
+function setupWanted(settings) {
+  return !!settings && settings.setupDone === false
+}
+
+// The one-line explanations shown the first time each part appears; `hintsDismissed` is a JSON list of ids.
+var HINT_IDS = ["accounts", "runway", "forecast", "heatmap"]
+var HINT_TEXT = {
+  accounts: "One row per account: its tightest limit, its trend over 24 hours, and whether it is spending now. Select a row for its limits.",
+  runway: "How long your accounts last at the current pace, from now on the left to the reset on the right. A gap lane is time with nothing left.",
+  forecast: "The dashes show the blocks the current pace still fills before the reset.",
+  heatmap: "When you spend: the last 7 days by hour, darker means more. Hover a cell to read it."
+}
+
+function dismissedHints(settings) {
+  var raw = settings && settings.hintsDismissed !== undefined ? settings.hintsDismissed : "[]"
+  var list = []
+  try { list = typeof raw === "string" ? JSON.parse(raw) : raw } catch (e) { list = [] }
+  return listOrEmpty(list).filter(function(id) { return HINT_IDS.indexOf(id) >= 0 })
+}
+
+function hintShown(settings, id) {
+  return HINT_IDS.indexOf(id) >= 0 && dismissedHints(settings).indexOf(id) < 0
+}
+
+// The `hintsDismissed` value once `id` is dismissed.
+function hintsDismissing(settings, id) {
+  var list = dismissedHints(settings)
+  if (HINT_IDS.indexOf(id) >= 0 && list.indexOf(id) < 0) list.push(id)
+  return JSON.stringify(list)
 }
 
 // ---- Other computers (sources of kind "computer"), read over SSH by the backends.

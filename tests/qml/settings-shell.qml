@@ -255,6 +255,35 @@ ShellRoot {
       shown("barShowPeriodsToggleSwitch").toggled()
       check(saved.barShowPeriods === true, "and back on")
       form.page = "providers"
+      formPhase = 12
+    } else if (formPhase === 12) {
+      // Setup walks Sources, Providers and Menu bar, then saves setupDone; Run setup again starts it over.
+      var finished = 0
+      form.setupFinished.connect(function() { finished++ })
+      form.beginSetup()
+      check(form.page === "sources" && form.pageTitle === "Setup · 1 of 3", "setup starts on Sources: " + form.pageTitle)
+      check(shown("setupIntro").visible && !shown("settingsBackButton").visible, "the first step explains itself and has no Back")
+      check(shown("setupNext").text === "Next", "Next moves on")
+      shown("setupNext").clicked()
+      check(form.page === "providers" && shown("settingsBackButton").visible, "step 2 is Providers, with Back")
+      form.back()
+      check(form.page === "sources" && form.setupStep === 1, "Back (or Escape) returns a step")
+      form.back()
+      check(form.setupStep === 1, "Escape on the first step stays in setup")
+      shown("setupNext").clicked()
+      shown("setupNext").clicked()
+      check(form.page === "bar" && shown("setupNext").text === "Done", "the last step is Menu bar, with Done")
+      shown("setupNext").clicked()
+      check(finished === 1 && form.setupStep === 0 && saved.setupDone === true, "Done saves setupDone and lands on Limits")
+      check(!shown("setupIntro").visible && !shown("setupFooter").visible, "setup chrome is gone afterwards")
+      saved.hintsDismissed = '["runway"]'
+      form.page = "advanced"
+      shown("runSetupAgain").clicked()
+      check(saved.setupDone === false && saved.hintsDismissed === "[]" && form.page === "sources" && form.setupStep === 1,
+        "Run setup again restarts setup and brings the hints back")
+      shown("settingsCloseButton").clicked()
+      check(finished === 2 && saved.setupDone === true, "closing setup skips the rest of it")
+      form.page = "providers"
       formPhase = 99
     }
   }

@@ -46,6 +46,8 @@
       "mainComputer": "",
       "sourcesVersion": 0,
       "sourcesNotice": "",
+      "setupDone": true,
+      "hintsDismissed": "[]",
       "factoryKeyFile": "",
       "ampKeyFile": "",
       "kiloKeyFile": "",
@@ -196,6 +198,20 @@
         "label": "Pending Sources notice",
         "defaultValue": "",
         "description": "Managed automatically. \"ompRemote\" while the notice that omp on another computer now uses SSH waits to be read."
+      },
+      {
+        "key": "setupDone",
+        "type": "boolean",
+        "label": "Setup done",
+        "defaultValue": true,
+        "description": "Managed automatically. False on a fresh install, until its setup finishes, and after Settings → Advanced → Run setup again."
+      },
+      {
+        "key": "hintsDismissed",
+        "type": "string",
+        "label": "Dismissed hints",
+        "defaultValue": "[]",
+        "description": "Managed automatically. JSON list of the explanations already dismissed: accounts, runway, forecast, heatmap."
       },
       {
         "key": "factoryKeyFile",

@@ -91,6 +91,7 @@ Column {
     { id: "advanced", title: "Advanced", summary: "Refresh every " + Math.round(Number(value("refreshIntervalSec", 900)) / 60) + " min" }
   ]
   readonly property string pageTitle: {
+    if (setupStep > 0) return "Setup · " + setupStep + " of " + setupPages.length
     for (var i = 0; i < pages.length; i++) if (pages[i].id === page) return pages[i].title
     return "Settings"
   }
@@ -262,7 +263,9 @@ Column {
   function back() {
     if (saving) return
     errorText = ""
-    if (page !== "") { page = ""; Qt.callLater(function() { root.forceActiveFocus() }) }
+    if (setupStep > 1) setupGo(setupStep - 1)
+    else if (setupStep > 0) return
+    else if (page !== "") { page = ""; Qt.callLater(function() { root.forceActiveFocus() }) }
     else closeRequested()
   }
 
@@ -270,6 +273,7 @@ Column {
     discardKey()
     errorText = ""
     priceError = ""
+    setupStep = 0
     page = pageId || ""
     providerFilter = ""
     providerFilterField.text = ""
@@ -509,16 +513,16 @@ Column {
       objectName: "settingsBackButton"
       anchors.left: parent.left
       anchors.verticalCenter: parent.verticalCenter
-      visible: root.page !== ""
-      text: "‹ Settings"
+      visible: root.setupStep > 0 ? root.setupStep > 1 : root.page !== ""
+      text: root.setupStep > 0 ? "‹ Back" : "‹ Settings"
       foreground: root.foreground
       fontFamily: root.fontFamily
       fontSize: Style.font.bodySmall
       horizontalPadding: Style.spacing.sm
       verticalPadding: Style.spacing.xs
       focusable: true
-      Accessible.name: "Back to settings"
-      onClicked: root.back()
+      Accessible.name: root.setupStep > 0 ? "Previous setup step" : "Back to settings"
+      onClicked: root.setupStep > 1 ? root.setupGo(root.setupStep - 1) : root.back()
       onActiveFocusChanged: if (activeFocus) root.revealRequested(backButton)
     }
 
@@ -542,11 +546,11 @@ Column {
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
       iconText: "󰅖"
-      tooltipText: "Close settings"
+      tooltipText: root.setupStep > 0 ? "Skip setup" : "Close settings"
       foreground: root.foreground
       fontFamily: root.fontFamily
       focusable: true
-      onClicked: root.closeRequested()
+      onClicked: root.setupStep > 0 ? root.finishSetup() : root.closeRequested()
       onActiveFocusChanged: if (activeFocus) root.revealRequested(closeButton)
     }
   }
@@ -559,6 +563,12 @@ Column {
     color: root.urgent
     font.family: root.fontFamily
     font.pixelSize: Style.font.caption
+  }
+
+  Hint {
+    objectName: "setupIntro"
+    visible: root.setupStep > 0
+    text: root.setupStep > 0 ? root.setupIntros[root.setupStep - 1] : ""
   }
 
   // ---- index
@@ -1789,6 +1799,23 @@ Column {
     }
     Hint { text: "How often limits are read. Refresh any time with R or the refresh button." }
 
+    Column {
+      width: parent.width
+      spacing: Style.spacing.sm
+      Label { text: "Setup"; font.bold: true }
+      Hint { text: "Walk through sources, providers and the menu bar again. The explanations in Limits and Costs come back too." }
+      Ui.Button {
+        objectName: "runSetupAgain"
+        text: "Run setup again"
+        bordered: true
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        fontSize: Style.font.bodySmall
+        focusable: true
+        onClicked: root.runSetupAgain()
+      }
+    }
+
     SettingsSection {
       objectName: "diagnosticsSection"
       width: parent.width
@@ -1881,8 +1908,53 @@ Column {
     }
   }
 
+  // ---- setup: the first open walks three pages, Sources, Providers and Menu bar, then lands on Limits.
+  Row {
+    objectName: "setupFooter"
+    visible: root.setupStep > 0
+    width: parent.width
+    layoutDirection: Qt.RightToLeft
+    spacing: Style.spacing.md
+    Ui.Button {
+      objectName: "setupNext"
+      text: root.setupStep < root.setupPages.length ? "Next" : "Done"
+      bordered: true
+      selected: true
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      focusable: true
+      onClicked: root.setupStep < root.setupPages.length ? root.setupGo(root.setupStep + 1) : root.finishSetup()
+    }
+  }
+
   function resetToDefaults() {
     setMany(JSON.parse(JSON.stringify(UsageLogic.DEFAULT_SETTINGS)))
+  }
+
+  readonly property var setupPages: ["sources", "providers", "bar"]
+  // 1 to 3 while setup runs, else 0.
+  property int setupStep: 0
+  readonly property var setupIntros: [
+    "Where your agents run. This computer is read already; add another computer or a proxy if your agents run there too.",
+    "What was found. Monitor the providers you use: they show in Limits.",
+    "The menu bar. Choose chips or an icon, and which providers get a chip."
+  ]
+  signal setupFinished()
+
+  function beginSetup() { begin(""); setupGo(1) }
+  function setupGo(step) {
+    setupStep = step
+    page = setupPages[step - 1]
+  }
+  function finishSetup() {
+    setupStep = 0
+    page = ""
+    set("setupDone", true)
+    setupFinished()
+  }
+  function runSetupAgain() {
+    setMany({ setupDone: false, hintsDismissed: "[]" })
+    beginSetup()
   }
 
   // ---- backup: scripts/backup.py encrypts settings and saved keys with gpg; secrets cross only its stdin

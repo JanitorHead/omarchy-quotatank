@@ -122,6 +122,9 @@ Item {
 
   signal periodRequested(int days)
   signal menuClosed()
+  signal hintDismissed(string hintId)
+  // The heatmap's one-line explanation, until it is dismissed (UsageLogic.hintShown).
+  property bool heatmapHintShown: false
 
   implicitHeight: content.implicitHeight
   onMetricChanged: tokenDetailsExpanded = metric === "tokens"
@@ -564,7 +567,18 @@ Item {
       onExpandRequested: function(expanded) { root.modelsExpanded = expanded }
     }
 
+    HintLine {
+      objectName: "hint-heatmap"
+      width: parent.width
+      hintId: "heatmap"
+      shown: root.heatmapHintShown && heatmapView.visible
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onDismissed: function(hintId) { root.hintDismissed(hintId) }
+    }
+
     CostHeatmap {
+      id: heatmapView
       objectName: "costWhen"
       visible: root.hasResult && hasActivity
       width: parent.width

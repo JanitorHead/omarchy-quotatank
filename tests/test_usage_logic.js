@@ -1144,7 +1144,18 @@ console.log("Provider setup: passed");
   const migrate = (settings) => plain(context.migrateSources(settings));
   assert.equal(context.migrateSources({ sourcesVersion: 1, usageSource: "cliproxy" }), null, "it runs once");
   const fresh = migrate({});
-  assert.deepEqual(fresh, { changes: { sourcesVersion: 1, sources: "[]" }, notice: false }, "a fresh install has nothing to move");
+  assert.deepEqual(fresh, { changes: { sourcesVersion: 1, setupDone: false, sources: "[]" }, notice: false },
+    "a fresh install has nothing to move and opens setup");
+  assert.equal(context.setupWanted(context.migrateSources({}).changes), true);
+  assert.equal(migrate({ refreshIntervalSec: 600 }).changes.setupDone, true, "settings carried over skip setup");
+  assert.equal(context.setupWanted({ refreshIntervalSec: 600 }), false, "no setupDone is a setup already done");
+  assert.equal(migrate({ setupDone: false }).changes.setupDone, undefined, "a pending setup stays pending");
+  assert.equal(context.hintShown({}, "runway"), true);
+  const dismissed = context.hintsDismissing({ hintsDismissed: '["heatmap","nope"]' }, "runway");
+  assert.deepEqual(JSON.parse(dismissed), ["heatmap", "runway"], "dismissing keeps the others and drops unknown ids");
+  assert.equal(context.hintShown({ hintsDismissed: dismissed }, "runway"), false);
+  assert.equal(context.hintShown({ hintsDismissed: dismissed }, "accounts"), true);
+  assert.equal(context.hintShown({ hintsDismissed: "not json" }, "forecast"), true, "a broken list shows every hint");
   const moved = migrate({ usageSource: "cliproxy", cliproxyUrl: "https://proxy.example", cliproxyKeyFile: "/k/proxy.key",
     costKeeperUrl: "https://proxy.example/keeper", costKeeperPasswordFile: "/k/keeper.key", ompStatsUrl: "http://devbox:3847",
     ompGatewayUrl: "", ompGatewayKeyFile: "", refreshIntervalSec: 600,

@@ -51,7 +51,7 @@ class ProjectContractTests(unittest.TestCase):
             "refreshIntervalSec", "enabledProviders", "barDisplayMode", "quotaMode", "barWindow", "barWindowSecondary", "barProviders",
             "barProviderLimits", "barShowResets", "barShowPeriods", "barResetTimeFormat", "barResetDateFormat",
             "warningThreshold", "criticalThreshold",
-            "sources", "mainComputer", "sourcesVersion", "sourcesNotice",
+            "sources", "mainComputer", "sourcesVersion", "sourcesNotice", "setupDone", "hintsDismissed",
             "hideAccountEmails", "squareUsageCards", "providerColors", "notifyLimitThresholds", "costPriceOverrides",
             "costLocalProviders", "extraKeys",
             "ompLocal", "barAccountMode", "motion", "accountModes", "hiddenAccounts",

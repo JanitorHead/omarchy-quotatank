@@ -261,7 +261,13 @@ ShellRoot {
           "the provider's notice shows markup as text")
         var panelSinks = root.markupSinks(content).concat(root.markupSinks(w))
         root.check(panelSinks.length === 0, "panel text items that read markup: " + panelSinks.join(", "))
+        root.check(w.singleAccount === w.provider && root.find(content, "singleTrend").visible
+          && root.find(content, "singleSparkline").values.length === 4, "one account: its 24-hour trend sits beside the headline")
         w.selectProviderId("claude")
+        root.check(w.singleAccount === null && !root.find(content, "singleTrend").visible,
+          "several accounts keep their trends in their rows")
+        root.check(w.limitsHint === "accounts" && root.find(content, "hint-accounts").visible
+          && !root.find(content, "hint-runway").visible, "Limits explains one part at a time, the account list first")
         // The recorder stands in for Omarchy: it notes the command and switches the synthetic registry.
         w.accountEvents.runArgv = function(argv) {
           root.argvs = root.argvs.concat([argv])
@@ -307,9 +313,67 @@ ShellRoot {
       } else if (root.phase === 8) {
         root.check(root.widget.limitCards.count === UsageLogic.USAGE_LIST_LIMITS.windows,
           "a card per kept limit: " + root.widget.limitCards.count)
+        // A fresh install, with a bar that saves: setup first, then Limits explains one part at a time.
+        root.fresh = Qt.createComponent(Quickshell.env("QUOTATANK_REPO_URL") + "/Panel.qml").createObject(host, {
+          moduleName: "test.fresh", ipcTarget: "test.fresh", bar: savingBar, settings: {} })
+        root.check(root.fresh !== null, "a fresh panel loads")
+        root.phase++
+      } else if (root.phase === 9 && root.fresh.providers.length > 0) {
+        var f = root.fresh
+        root.check(f.configuring && f.settingsForm.setupStep === 1 && f.settingsForm.page === "sources",
+          "a fresh install opens setup on Sources")
+        root.check(savingShell.saved && savingShell.saved.setupDone === false, "setup stays pending until it finishes")
+        f.settingsForm.finishSetup()
+        root.check(f.viewMode === "limits" && savingShell.saved.setupDone === true, "finishing setup lands on Limits")
+        f.selectProviderId("claude")
+        root.phase++
+      } else if (root.phase === 10) {
+        var fp = root.fresh
+        root.check(fp.limitsHint === "accounts", "the account list is explained first: " + fp.limitsHint)
+        var hint = fp.accountList
+        while (hint.parent) hint = hint.parent
+        hint = root.find(hint, "hint-accounts")
+        root.find(hint, "hintDismiss").clicked()
+        root.check(savingShell.saved.hintsDismissed === '["accounts"]' && !hint.visible, "Got it is saved and the line goes")
+        root.check(fp.limitsHint === "forecast", "then the next part explains itself: " + fp.limitsHint)
         console.log("Limits QML contract: passed")
         Qt.quit()
       }
     }
+  }
+
+  property var fresh: null
+  QtObject {
+    id: savingShell
+    property var saved: null
+    property var bar: savingBar
+    property var barConfig: ({ position: "top" })
+    property var shellConfig: ({ version: 1, plugins: [], bar: { layout: { left: [], center: [], right: [] } } })
+    function firstPartyServiceFor(id) { return null }
+    function serviceFor(id) { return null }
+    function updateEntryInline(moduleName, settings) { saved = JSON.parse(JSON.stringify(settings)); return true }
+  }
+  QtObject {
+    id: savingBar
+    property bool vertical: false
+    property int barSize: 26
+    property string position: "top"
+    property string fontFamily: "monospace"
+    property color foreground: "#f4f4f5"
+    property color barForeground: foreground
+    property color background: "#09090b"
+    property color urgent: "#ef4444"
+    property bool foregroundAnimationEnabled: false
+    property var activePopout: null
+    property var clickTargets: []
+    property var shell: savingShell
+    function run(command) {}
+    function showTooltip(target, text) {}
+    function hideTooltip(target) {}
+    function requestPopout(owner) { activePopout = owner }
+    function releasePopout(owner) { if (activePopout === owner) activePopout = null }
+    function registerClickTarget(target) { clickTargets.push(target) }
+    function unregisterClickTarget(target) {}
+    function switchPanelFrom(owner, direction) { return false }
   }
 }

@@ -466,6 +466,16 @@ ShellRoot {
         root.check(readout.text === "Tue 15:00 · $4.20 · 63 requests", "hovering a cell reads it out: " + readout.text)
         when.hoveredCell = -1
         root.check(readout.text.indexOf("Busiest: Tue 15:00") === 0, "without hover the line names the busiest hour: " + readout.text)
+        var heatHint = root.find(root.costs, "hint-heatmap")
+        root.check(!heatHint.visible, "the heatmap's explanation waits for the panel to ask")
+        var dismissedHints = []
+        root.costs.hintDismissed.connect(function(hintId) { dismissedHints.push(hintId) })
+        root.costs.heatmapHintShown = true
+        root.check(heatHint.visible && root.find(heatHint, "hintText").text.indexOf("When you spend") === 0,
+          "the first time, one line explains the heatmap")
+        root.find(heatHint, "hintDismiss").clicked()
+        root.check(dismissedHints.join() === "heatmap", "Got it asks the panel to dismiss it")
+        root.costs.heatmapHintShown = false
 
         var dimensions = root.find(root.costs, "costBreakdownMode")
         root.check(dimensions.visible && dimensions.options.length === 3, "Model, Project and Agent are offered")

@@ -410,6 +410,45 @@ Ui.Panel {
   // With several accounts the same line heads the selected account's detail instead.
   readonly property var headline: accountOverview ? ({ text: "", urgent: false }) : headlineFor(provider)
   readonly property var accountHeadline: accountOverview ? headlineFor(selectedAccount) : ({ text: "", urgent: false })
+  // A provider read with one account that has limits: that account, whose 24-hour trend and "spending now"
+  // sit beside the headline. Providers with several accounts show both in their account rows instead.
+  readonly property var singleAccount: {
+    if (viewMode !== "limits" || accountOverview || !provider || provider.status !== "ok") return null
+    var accounts = UsageLogic.listOrEmpty(provider.accounts)
+    if (accounts.length > 1) return null
+    var account = accounts.length ? accounts[0] : provider
+    var trend = account.history ? UsageLogic.listOrEmpty(account.history.h24) : []
+    return UsageLogic.listOrEmpty(account.windows).length > 0 && trend.length > 1 ? account : null
+  }
+  readonly property bool singleSpending: !!singleAccount && UsageLogic.spendingNow(singleAccount, nowSeconds, recentByAccount)
+
+  // First-run setup (UsageLogic.setupWanted): the panel opens on Settings, which walks Sources, Providers
+  // and Menu bar, then lands on Limits.
+  readonly property bool setupWanted: UsageLogic.setupWanted(settings)
+  onSetupWantedChanged: beginSetupIfWanted()
+  function beginSetupIfWanted() {
+    if (!setupWanted || configForm.setupStep > 0) return
+    settingsReturnView = "limits"
+    configForm.beginSetup()
+    viewMode = "settings"
+  }
+  function hintShown(hintId) { return UsageLogic.hintShown(settings, hintId) }
+  function dismissHint(hintId) { saveSettings({ hintsDismissed: UsageLogic.hintsDismissing(settings, hintId) }) }
+  // Limits explains one part at a time, top to bottom: the next shows once the one above is dismissed.
+  readonly property string limitsHint: {
+    if (viewMode !== "limits") return ""
+    var parts = [["accounts", accountOverview], ["forecast", forecastVisible], ["runway", runwayVisible]]
+    for (var i = 0; i < parts.length; i++) if (parts[i][1] && hintShown(parts[i][0])) return parts[i][0]
+    return ""
+  }
+  // Any limit card of the detail draws forecast dashes.
+  readonly property bool forecastVisible: {
+    for (var i = 0; i < limitCards.count; i++) {
+      var card = limitCards.itemAt(i)
+      if (card && card.forecastShown) return true
+    }
+    return false
+  }
 
   function headlineFor(reading) {
     var empty = { text: "", urgent: false }
@@ -621,7 +660,7 @@ Ui.Panel {
     settings = entry
   }
   onSettingsChanged: moveLegacyPaths()
-  Component.onCompleted: moveLegacyPaths()
+  Component.onCompleted: { moveLegacyPaths(); beginSetupIfWanted() }
 
   function handleBarPress(buttonCode) {
     if (buttonCode === Qt.MiddleButton) nextProvider()
@@ -1757,16 +1796,59 @@ Ui.Panel {
               wrapMode: Text.WordWrap
             }
 
-            PlainText {
-              objectName: "limitsHeadline"
+            Item {
               width: parent.width
-              visible: root.viewMode === "limits" && text !== ""
-              text: root.headline.text
-              color: root.headline.urgent ? root.urgent : root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.heading
-              font.bold: true
-              wrapMode: Text.WordWrap
+              visible: root.viewMode === "limits" && root.headline.text !== ""
+              implicitHeight: Math.max(headlineText.implicitHeight, singleTrend.visible ? singleTrend.implicitHeight : 0)
+
+              PlainText {
+                id: headlineText
+                objectName: "limitsHeadline"
+                anchors.left: parent.left
+                anchors.right: singleTrend.visible ? singleTrend.left : parent.right
+                anchors.rightMargin: singleTrend.visible ? Style.spacing.lg : 0
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.headline.text
+                color: root.headline.urgent ? root.urgent : root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.heading
+                font.bold: true
+                wrapMode: Text.WordWrap
+              }
+
+              Row {
+                id: singleTrend
+                objectName: "singleTrend"
+                visible: !!root.singleAccount
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.spacing.md
+
+                PlainText {
+                  objectName: "singleSpending"
+                  visible: root.singleSpending
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "spending now"
+                  color: Commons.Color.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Sparkline {
+                  objectName: "singleSparkline"
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Style.space(52)
+                  height: Style.space(18)
+                  values: root.singleAccount && root.singleAccount.history ? UsageLogic.listOrEmpty(root.singleAccount.history.h24) : []
+                  endSeconds: root.readingSeconds(root.provider)
+                  lineColor: root.singleSpending ? Commons.Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.5)
+                  dotColor: root.singleSpending ? Commons.Color.accent : root.foreground
+                  guideColor: root.foreground
+                  fontFamily: root.fontFamily
+                  clockFormat: root.tickTimeFormat
+                  motion: root.motion
+                }
+              }
             }
           }
 
@@ -1786,6 +1868,7 @@ Ui.Panel {
             ompActivity: root.ompActivity
             motion: root.motion
             onSetupRequested: function(entry, action) { root.startSetup(entry, action) }
+            onSetupFinished: root.viewMode = "limits"
             onChangeRequested: function(values) { root.saveSettings(values) }
             onCloseRequested: root.leaveSettings()
             onRevealRequested: function(item) {
@@ -1832,6 +1915,16 @@ Ui.Panel {
             visible: root.viewMode === "limits" && root.accountOverview
             width: parent.width
             spacing: Style.spacing.lg
+
+            HintLine {
+              objectName: "hint-accounts"
+              width: parent.width
+              hintId: "accounts"
+              shown: root.limitsHint === "accounts"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onDismissed: function(hintId) { root.dismissHint(hintId) }
+            }
 
             AccountList {
               id: accountListView
@@ -2089,6 +2182,16 @@ Ui.Panel {
               width: parent.width
               spacing: Style.spacing.lg
 
+              HintLine {
+                objectName: "hint-forecast"
+                width: parent.width
+                hintId: "forecast"
+                shown: root.limitsHint === "forecast"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onDismissed: function(hintId) { root.dismissHint(hintId) }
+              }
+
               Repeater {
                 id: limitCards
                 model: limitCardModel
@@ -2115,6 +2218,16 @@ Ui.Panel {
                   motion: root.motion
                 }
               }
+            }
+
+            HintLine {
+              objectName: "hint-runway"
+              width: parent.width
+              hintId: "runway"
+              shown: root.limitsHint === "runway"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onDismissed: function(hintId) { root.dismissHint(hintId) }
             }
 
             RunwayCard {
@@ -2251,6 +2364,8 @@ Ui.Panel {
             clockFormat: root.tickTimeFormat
             motion: root.motion
             ompActivity: root.ompActivity
+            heatmapHintShown: root.hintShown("heatmap")
+            onHintDismissed: function(hintId) { root.dismissHint(hintId) }
             onPeriodRequested: function(days) { costBackend.selectPeriod(days) }
             onMenuClosed: Qt.callLater(function() {
               if (root.opened && !root.configuring && !resetBackend.active)
