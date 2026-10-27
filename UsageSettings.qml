@@ -644,7 +644,8 @@ Column {
           id: computerRow
           required property var modelData
           required property int index
-          readonly property var state: UsageLogic.computerState(root.lastPayload, modelData.id)
+          // Not `state`: that is Item's own property, and Qt 6.12's qmllint refuses the override.
+          readonly property var answer: UsageLogic.computerState(root.lastPayload, modelData.id)
           width: parent.width
           spacing: Style.spacing.sm
           SwitchRow {
@@ -655,13 +656,13 @@ Column {
           }
           StatusLine {
             objectName: "computerStatus-" + computerRow.index
-            line: UsageLogic.computerLine(computerRow.modelData, computerRow.state, root.clockText)
+            line: UsageLogic.computerLine(computerRow.modelData, computerRow.answer, root.clockText)
           }
           CommandBlock {
             objectName: "computerFix-" + computerRow.index
-            visible: computerRow.modelData.on && !!computerRow.state && computerRow.state.status !== "ok"
-              && /^ssh/.test(String(computerRow.state.fix || ""))
-            command: computerRow.state ? String(computerRow.state.fix || "") : ""
+            visible: computerRow.modelData.on && !!computerRow.answer && computerRow.answer.status !== "ok"
+              && /^ssh/.test(String(computerRow.answer.fix || ""))
+            command: computerRow.answer ? String(computerRow.answer.fix || "") : ""
           }
           TestBlock {
             objectName: "computerTest-" + computerRow.index
