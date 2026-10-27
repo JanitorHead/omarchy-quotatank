@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **A model picker for custom prices.** **Settings → Costs → Custom prices** offers the exact model IDs from the costs view beside the Model ID field. Picking one fills the field, which stays free for an ID the view has not seen.
+
 ## 2.3.0
 
 ### Added

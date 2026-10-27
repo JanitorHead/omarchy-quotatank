@@ -87,7 +87,8 @@ ShellRoot {
   }
 
   Component.onCompleted: {
-    form = create("UsageSettings.qml", { width: 420, settings: { costPriceOverrides: custom, enabledProviders: root.sixProviders } })
+    form = create("UsageSettings.qml", { width: 420, settings: { costPriceOverrides: custom, enabledProviders: root.sixProviders },
+      costModels: [{ model: "vendor/Example[2m]" }, { model: "free-model" }, { model: "vendor/Example[2m]" }] })
     form.changeRequested.connect(host)
     form.begin("costs")
     view = create("UsageCosts.qml", {width: 420, payload: {
@@ -272,6 +273,13 @@ ShellRoot {
         root.check(root.find(root.form, "costSource-remote").text.indexOf("Unavailable") >= 0, "source diagnostics are available in Costs settings")
         var before = root.saves
         root.check(root.form.priceError !== "" && root.saves === root.savesBeforeBlankRow, "a blank added row is explained and not saved")
+        // The picker fills the field with an exact id from the costs view; the
+        // field stays the source of truth for anything else.
+        var choices = root.form.priceEditor.modelChoices
+        root.check(choices.length === 2 && choices[0].value === "free-model" && choices[1].value === "vendor/Example[2m]",
+          "the picker offers the models in the costs view once each")
+        root.find(root.form, "costModelPick-1").changed("vendor/Example[2m]")
+        root.check(root.find(root.form, "costModel-1").text === "vendor/Example[2m]", "picking a model fills its exact id")
         root.edit("costModel-1", "free-model")
         root.edit("costRate-1-inputCostPerMillionTokens", "0")
         root.edit("costRate-1-outputCostPerMillionTokens", "0")

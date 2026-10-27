@@ -26,6 +26,7 @@ Column {
   property var usagePayload: null
   property bool usageLoading: false
   property var costSources: []
+  property var costModels: []
   // "" is the index; otherwise one of the page ids below.
   property string page: ""
   property string errorText: ""
@@ -1607,6 +1608,7 @@ Column {
       onRevealRequested: function(item) { root.revealRequested(item) }
       CostPriceEditor {
         id: prices
+        costModels: root.costModels
         width: parent.width
         foreground: root.foreground
         urgent: root.urgent
