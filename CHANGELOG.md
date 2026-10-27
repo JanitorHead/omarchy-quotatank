@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **A settings switch logged a `TypeError`.** A switch row read its parent's width after its row was removed, which logged `Cannot read property 'width' of null` on shell start in CLIProxyAPI mode and when the provider rows were rebuilt.
+
 ## 2.2.0
 
 ### Added
