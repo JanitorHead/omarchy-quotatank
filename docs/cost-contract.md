@@ -2,9 +2,10 @@
 
 `scripts/cost-fetch.py` writes schema-v1 JSON. Costs combines local Codex/Claude
 history selected by `--providers claude,codex,opencode,grok` with enabled servers in
-`--t3-servers`. `--t3-servers` is a JSON array of at most four objects:
+`--t3-servers`, and with the transcripts of other computers in `--computer ID=HOST`
+(repeatable, see [Other computers](#other-computers)). `--t3-servers` is a JSON array of at most four objects:
 `{"id":"home","name":"Home T3","url":"https://t3.example","tokenFile":"/private/token","enabled":true}`.
-Local providers and T3 servers are independent of quota settings.
+Local providers, other computers and T3 servers are independent of quota settings.
 Legacy `costSource` and `costLocalBackfill` settings are ignored. Keeper is used
 only by quota account activity, through `scripts/keeper_client.py`.
 
@@ -96,11 +97,11 @@ over fresh partial and stale ones, with local preferred on ties. Missing/failed
 sources cannot suppress a healthy duplicate. This identifies shared folders, not
 transcript copies on distinct computers; replicated histories can still overlap.
 
-Top-level `sources` contains `id`, `name`, `kind` (`local`/`t3`), optional
+Top-level `sources` contains `id`, `name`, `kind` (`local`/`t3`/`computer`), optional
 `provider` or `providers`, `status` (`ok`, `partial`, `missing`, `failed`, `stale`,
 `unavailable`, `duplicate`), `included`, nullable
 `updatedAt` in Unix milliseconds, and safe `message`. Raw source hostnames, paths and server
-error bodies never enter the output/cache.
+error bodies never enter the output/cache; a computer's entry names it by its SSH destination.
 
 Normalized remote snapshots are private, keyed by URL, credential identity,
 period and timezone. On failure a snapshot up to 32 days old is reused, clipped
@@ -172,6 +173,21 @@ The dollar fields are API-equivalent estimates, not subscription charges. Nullab
 `providers` contains the same metrics as `totals`, identity fields, and the matching coverage `status`/`message`. `models` contains the metrics plus provider/model identity. `periods` contains one filled bucket for each hour in the rolling 24-hour view or each calendar day in the 7/30-day views. Every period also has a `providers` array for the stacked chart.
 
 Pricing statuses are `fresh`, `cached`, `unavailable`, or `notNeeded`. Coverage statuses are `ok`, `partial`, `missing`, or `failed`; unreadable files make coverage `partial` or `failed` rather than silently producing a complete-looking total. `scannedFiles` counts readable recent transcript files, including files with no usage-bearing rows, while `skippedFiles` counts files or directories that could not be inspected. `costSource` is `none`, `providerReported`, `modelPriced`, `customPriced`, `mixed`, or `unpriced`. Token totals always include unpriced records from readable files. `reasoningTokens` is informational and is already included in `outputTokens`; it must not be summed again.
+
+## Other computers
+
+`--computer ID=HOST` (`c-` and eight hex digits, then an SSH destination; at most 16) counts
+another computer's transcripts as this computer's. That computer runs this same scanner as a
+reader over SSH, as for limits ([backend contract, Other computers](backend-contract.md#other-computers)):
+`cost-fetch.py --records` with the same `--providers` and days, and this computer's time zone
+so days begin at the same moment on both. It sends the raw records of the window, read with its
+own incremental scan cache in `~/.cache/quotatank/state/` there, compressed and at most 32 MiB,
+within 90 seconds (a first scan reads every transcript; later ones only what changed). Here they
+are priced and aggregated with the local records as one history, so projects, agents, the
+heatmap and the comparison include them. The last good records are kept in
+`computers/<id>-costs.json` in the state folder: a computer that does not answer still counts,
+as `stale`, with a message saying so; one that never answered is `failed`. Each computer's scan
+has its own record ceiling.
 
 ## Projects, agents, heatmap and comparison
 
@@ -351,3 +367,11 @@ When the helper stops (SIGTERM, SIGHUP or SIGINT, exit status 128 + the signal; 
 closed stdout), it kills an omp run in progress with its process group first, and the
 kernel kills omp if the helper dies of SIGKILL (see the backend contract's resource
 ceilings).
+
+**On another computer.** `scripts/computer-check.py --live HOST -- --local --accounts` runs this
+helper on another computer (see [Other computers](#other-computers)), over the same shared SSH
+connection, and passes its lines through as they come. The widget follows omp there while
+that computer is switched on under **Settings → Sources**, **Read omp's accounts** is on, and
+the last reading found omp set up there. It puts the computer's id in front
+of the account ids in its `accounts` lines (`c-0011aabb/omp-0123456789ab`), as `usage-fetch.py`
+does for that computer's readings, so live requests mark the right account.

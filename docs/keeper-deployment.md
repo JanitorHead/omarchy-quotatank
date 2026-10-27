@@ -29,8 +29,9 @@ Keeper-only setup when CLIProxyAPI already runs. For the widget:
 
 ## Configure the widget
 
-1. Open **Limits**, then the gear, and set **Quota source** to CLIProxyAPI.
-2. Under **Account activity**, enter the **CPA Usage Keeper URL**, such as
+1. Open **Limits**, then the gear, then **Sources**, and open the CLIProxyAPI
+   proxy whose accounts Keeper collects (add it first if needed).
+2. Enter the **CPA Usage Keeper URL**, such as
    `https://proxy.example.com/keeper`. Use Keeper's own address, not the
    CLIProxyAPI address.
 3. Enter the **Keeper login password** and save. The widget stores it in a
