@@ -9,6 +9,7 @@ All notable changes to this project will be documented here. The format follows
 ### Fixed
 
 - **A settings switch logged a `TypeError`.** A switch row read its parent's width after its row was removed, which logged `Cannot read property 'width' of null` on shell start in CLIProxyAPI mode and when the provider rows were rebuilt.
+- **Hide providers that are used up hid every account.** With several accounts, the provider left the bar as soon as the account its figures came from was used up, even with another account still free. Now only used-up accounts leave the bar, the chip shows an account with room, and the provider goes once every account is used up.
 
 ## 2.2.0
 

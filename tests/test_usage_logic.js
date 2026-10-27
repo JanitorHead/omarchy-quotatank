@@ -698,6 +698,23 @@ assert.equal(context.usedUpLongWindow(usedUp([
 ])).id, "weekly", "the soonest return is reported");
 assert.equal(context.usedUpLongWindow({ ...usedUp([{ id: "weekly", remaining: 0, windowSeconds: 604800 }]), status: "error" }), null);
 
+// With several accounts only the used-up ones leave the bar; the provider goes once none is left.
+const spentWeek = [{ id: "weekly", remaining: 0, windowSeconds: 604800 }];
+const roomyWeek = [{ id: "weekly", remaining: 75, windowSeconds: 604800 }];
+const spentAccount = { accountId: "a", status: "ok", windows: spentWeek };
+const roomyAccount = { accountId: "b", status: "ok", windows: roomyWeek };
+const pair = { id: "claude", status: "ok", windows: spentWeek, accounts: [spentAccount, roomyAccount] };
+const trimmed = context.withoutUsedUpAccounts(pair);
+assert.deepEqual(trimmed.accounts.map((account) => account.accountId), ["b"], "the used-up lead leaves, the other stays");
+assert.equal(trimmed.windows, roomyWeek, "the provider's figures follow the account left");
+assert.equal(pair.accounts.length, 2, "the reading itself is untouched");
+assert.equal(context.withoutUsedUpAccounts({ ...pair, accounts: [spentAccount, { ...spentAccount, accountId: "c" }] }), null);
+const roomyPair = { ...pair, windows: roomyWeek, accounts: [roomyAccount, { ...roomyAccount, accountId: "c" }] };
+assert.equal(context.withoutUsedUpAccounts(roomyPair), roomyPair);
+assert.equal(context.withoutUsedUpAccounts(usedUp(spentWeek)), null, "a single reading used up still hides");
+assert.equal(context.withoutUsedUpAccounts({ ...pair, accounts: [{ ...spentAccount, status: "error" }, spentAccount] }).accounts.length, 1,
+  "a failed account is not used up");
+
 // Money follows Show limits as, against whichever allowance binds.
 const balanceBound = { id: "openrouter", status: "ok", windows: [],
   credits: { currency: "USD", spendable: 1.58, remaining: 1.58, total: 75, used: 73.42 } };

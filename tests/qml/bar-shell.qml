@@ -25,6 +25,7 @@ ShellRoot {
   property int step: 0
   property int ticks: 0
   property int waited: 0
+  property var savedPayload: null
 
   Item {
     id: panelHost
@@ -330,6 +331,39 @@ ShellRoot {
       check(chips.length > 0 && chips.length <= 4, "chips per account stay within the four-chip cap, got " + chips.length)
       check(namedChild(widget, "barOverflowChip").visible, "the provider that does not fit folds into +N")
       widget.settings = Object.assign({}, widget.settings, { barMaxChips: 0 })
+      return true
+    },
+    function () {
+      // One chip per account with used-up accounts hidden: a used-up Claude login between Personal and
+      // the login in use leaves, and the chips left must point at the two logins the bar still has.
+      root.savedPayload = widget.usageBackend.payload
+      var copy = JSON.parse(JSON.stringify(savedPayload))
+      var claude = copy.providers.filter(function (provider) { return provider.id === "claude" })[0]
+      var inUse = claude.accounts[0]
+      var personal = claude.accounts[1]
+      var spent = JSON.parse(JSON.stringify(personal))
+      spent.accountId = "spent"
+      spent.label = "Spent"
+      spent.windows[1].used = 100
+      spent.windows[1].remaining = 0
+      claude.accounts = [personal, spent, inUse]
+      widget.usageBackend.payload = copy
+      widget.settings = Object.assign({}, widget.settings, { hideExhaustedProviders: true })
+      return true
+    },
+    function () {
+      var chips = namedChildren(widget, "barChip-claude@", [])
+      var keys = chips.map(function (chip) { return chip.objectName }).sort()
+      check(JSON.stringify(keys) === JSON.stringify(["barChip-claude@main", "barChip-claude@personal"]),
+        "hiding a used-up login keeps a chip for each of the others: " + JSON.stringify(keys))
+      var underlined = chips.filter(function (chip) {
+        var line = namedChild(chip, "barAccountUnderline")
+        return line && line.visible
+      })
+      check(underlined.length === 1 && underlined[0].objectName === "barChip-claude@main",
+        "and the login in use is still the one underlined")
+      widget.usageBackend.payload = savedPayload
+      widget.settings = Object.assign({}, widget.settings, { hideExhaustedProviders: false })
       return true
     },
     function () {

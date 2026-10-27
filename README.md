@@ -131,7 +131,7 @@ When something is wrong, the panel says what and what to do: a used-up limit nam
 - **Limit shown** picks the window every chip shows. The default is each provider's most constrained limit; 5-hour, 7-day, and monthly pin one window. Every line is tagged with its period (`7d 91%`).
 - **Second limit below** stacks a second limit under the first; **Show when limits reset** appends when each line resets.
 - **Accounts** keeps one chip per provider with a dot per account, or gives each account its own chip.
-- **Hide providers that are used up** takes a provider out of the bar until its weekly or monthly limit resets.
+- **Hide providers that are used up** takes a provider out of the bar until its weekly or monthly limit resets; with several accounts, only the used-up accounts leave until all of them are.
 - **Chips in the bar** caps how many chips the bar holds, four by default, and folds the rest into a `+N` chip.
 - **Provider colors** paints each chip and meter in the provider's brand color; alerts always use the theme's alert color.
 
