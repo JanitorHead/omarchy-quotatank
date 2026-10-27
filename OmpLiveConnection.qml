@@ -12,6 +12,10 @@ Item {
   visible: false
   required property string scriptPath
   required property var flags
+  // Another computer's omp: `scriptPath` is scripts/computer-check.py, which runs omp-live.py there over SSH,
+  // and the accounts its requests name get that computer's prefix, as its readings do ("c-…/omp-…").
+  property string host: ""
+  property string accountPrefix: ""
   // "connecting" until the helper speaks, then "live"; "reconnecting" while the helper restarts,
   // "unavailable" once it has failed three times in a row.
   property string feedState: "connecting"
@@ -31,7 +35,8 @@ Item {
 
   function start() {
     if (stopped || process.running) return
-    process.command = ["python3", "-u", scriptPath].concat(flags)
+    process.command = host === "" ? ["python3", "-u", scriptPath].concat(flags)
+      : ["python3", "-u", scriptPath, "--live", host, "--"].concat(flags)
     process.body = ""
     startedAt = Date.now()
     process.running = true
@@ -84,7 +89,12 @@ Item {
     message = ""
     var now = Date.now() / 1000
     if (line.type === "accounts") {
-      accountMap = line.map
+      if (accountPrefix === "") accountMap = line.map
+      else {
+        var prefixed = {}
+        for (var key in line.map) prefixed[key] = { provider: line.map[key].provider, accountId: accountPrefix + line.map[key].accountId }
+        accountMap = prefixed
+      }
     } else if (line.type === "request") {
       var event = UsageLogic.resolveOmpRequest(line, accountMap)
       // The map is a new object only when an account's time changed.

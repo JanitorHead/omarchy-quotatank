@@ -1182,6 +1182,69 @@ console.log("Provider setup: passed");
   assert.equal(JSON.parse(migrate({ usageSource: "direct", cliproxyUrl: "http://127.0.0.1:8317" }).changes.sources).length, 0,
     "an unused proxy default is not a source");
   assert.equal(JSON.parse(migrate({ costT3Servers: "not json" }).changes.sources).length, 0, "unreadable T3 settings move nothing");
+
+  // Other computers.
+  const devbox = { id: "c-00000001", kind: "computer", host: "devbox", on: true };
+  const buildbox = { id: "c-00000002", kind: "computer", host: "rafa@buildbox", on: false };
+  const withComputers = (extra) => ({ sources: JSON.stringify([devbox, buildbox]), ...extra });
+  assert.deepEqual(Array.from(context.computerArguments(withComputers())), ["--computer", "c-00000001=devbox"],
+    "a switched-off computer is not read");
+  assert.equal(context.mainComputer(withComputers()).id, "c-00000001", "automatic: the one switched-on computer");
+  assert.equal(context.mainComputer(withComputers({ mainComputer: "this" })), null);
+  assert.equal(context.mainComputer({ sources: JSON.stringify([devbox, { ...buildbox, on: true }]) }), null,
+    "automatic with two computers: this computer");
+  assert.equal(context.mainComputer(withComputers({ mainComputer: "c-00000002" })), null, "a switched-off main computer is not used");
+  assert.deepEqual(plain(context.mainComputerOptions(withComputers()).map((option) => option.label)),
+    ["Automatic (devbox)", "This computer", "devbox"]);
+  const payload = { installed: ["claude"], computers: [{ id: "c-00000001", host: "devbox", status: "stale",
+    readAt: "2030-01-15T12:00:00Z", message: "devbox cannot be reached from here.", installed: ["codex"],
+    omp: { installed: true, local: "ok" } }] };
+  const clock = (seconds) => new Date(seconds * 1000).toISOString().slice(11, 16);
+  assert.deepEqual(plain(context.computerLine(devbox, context.computerState(payload, devbox.id), clock)),
+    { tone: "error", text: "Not answering since 12:00. devbox cannot be reached from here." });
+  assert.equal(context.computerLine(devbox, null, clock).text, "Read with the next refresh");
+  assert.equal(context.computerLine(buildbox, null, clock).text, "Off");
+  const claude = context.localProvider("claude");
+  const signedOut = { id: "claude", status: "error", errorKind: "no_credentials" };
+  assert.equal(context.setupActionFor(claude, signedOut, payload, null).command, "claude auth login", "on this computer, as before");
+  const there = context.setupActionFor(claude, signedOut, payload, devbox);
+  assert.equal(there.kind, "install", "what is installed on the main computer decides");
+  assert.equal(there.label, "Install and sign in on devbox");
+  assert.equal(there.command, "ssh -t devbox 'mise use -g claude && claude auth login'");
+  const ompThere = context.setupActionFor(context.localProvider("codex"), { id: "codex", status: "error", errorKind: "no_credentials" }, payload, devbox);
+  assert.equal(ompThere.command, "ssh -t devbox 'omp login'", "omp on the main computer signs in for the providers it reads");
+  assert.deepEqual(plain(context.ompLiveComputers(withComputers(), payload.computers, false).map((entry) => entry.id)), ["c-00000001"]);
+  assert.equal(context.ompLiveComputers(withComputers(), payload.computers, true).length, 0, "nothing through a proxy");
+  assert.equal(context.ompLiveComputers(withComputers({ ompLocal: false }), payload.computers, false).length, 0);
+  assert.equal(context.computersSummary(withComputers(), payload), "devbox · devbox not answering");
+  assert.equal(context.computersSummary({}, null), "None");
+
+  const tested = (reply) => plain(context.computerTestResult(reply, "devbox"));
+  const refused = tested({ ok: false, steps: [{ id: "ssh", ok: false, text: "devbox did not accept this computer's SSH key.", fix: "ssh-copy-id devbox" }] });
+  assert.deepEqual([refused.addable, refused.fix, refused.lines.length], [false, "ssh-copy-id devbox", 1], "a refused key cannot be added yet");
+  const empty = tested({ ok: false, steps: [{ id: "ssh", ok: true, text: "Connected to devbox" },
+    { id: "found", ok: false, text: "Nothing to read there yet.", fix: "" }] });
+  assert.equal(empty.addable, true, "a computer that answered can be added before anything is signed in there");
+  assert.equal(tested({ ok: false, thisComputer: true, steps: [{ id: "found", ok: false, text: "devbox is this computer." }] }).addable, false);
+  const old = tested({ ok: false, steps: [{ id: "ssh", ok: true, text: "Connected" }, { id: "python", ok: false, text: "Python on devbox is older than 3.10.",
+    fix: "Install Python 3.10 or newer there." }] });
+  assert.deepEqual([old.fix, old.lines[2]], ["", { tone: "info", text: "Install Python 3.10 or newer there." }], "a fix that is not a command is a note");
+  assert.equal(tested({ probeError: "timeout" }).lines[0].text, "No answer within 120 s. Check that devbox is on and online.");
+
+  // Readings from another computer.
+  const remoteAccount = { id: "claude", accountId: "c-00000001/main", status: "ok", computer: { id: "c-00000001", name: "devbox" },
+    windows: [], origin: "omarchy" };
+  assert.equal(context.accountSourceKind(remoteAccount, false), "computer");
+  assert.equal(context.accountCanUse(remoteAccount, "single", false), false, "Use switches Omarchy logins on this computer only");
+  assert.equal(context.accountStatusLine(remoteAccount, false, 0, null, false).text, "on devbox");
+  const staleLine = context.accountStatusLine({ ...remoteAccount, stale: true, readAt: "2030-01-15T12:00:00Z" }, false, 0, null, false);
+  assert.equal(staleLine.text + " " + clock(staleLine.at), "devbox not answering since 12:00");
+  assert.equal(context.accountStatusLine({ id: "claude", status: "ok", windows: [], standIn: { id: "c-00000001", name: "devbox" } },
+    false, 0, null, false).text, "read on devbox");
+  assert.equal(context.accountLiveAt({ id: "claude", accountId: "main", liveIds: ["c-00000001/omp-0123456789ab"] },
+    { "claude@c-00000001/omp-0123456789ab": 1800000000 }), 1800000000, "a request on devbox counts for the same account here");
+  assert.equal(context.costSourceSummary([{ kind: "local", included: true }, { kind: "computer", name: "devbox", status: "stale", included: true }], false),
+    "Local transcripts + devbox (last known)");
   console.log("Sources: passed");
 }
 

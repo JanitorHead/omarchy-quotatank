@@ -168,7 +168,6 @@ class ProjectContractTests(unittest.TestCase):
         self.assertIn("Math.max(60, Math.min(3600", backend)
         self.assertNotIn("Timer {\n    interval:", cost_backend.split("Process {")[0])
         self.assertIn("function ensureLoaded()", cost_backend)
-        self.assertIn("interval: 60000", cost_backend)
         for source in (backend, cost_backend):
             self.assertNotIn("StdioCollector", source)
             self.assertIn('splitMarker: ""', source)

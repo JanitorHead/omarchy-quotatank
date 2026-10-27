@@ -151,7 +151,7 @@ def test(host: str, providers: str, omp: str) -> dict[str, Any]:
     machine = probed.get("machine") if isinstance(probed, dict) else ""
     if machine and machine == remote.machine_id():
         steps.append(step("found", False, f"{host} is this computer: it is already read."))
-        return {"ok": False, "steps": steps, "found": {"python": python}}
+        return {"ok": False, "thisComputer": True, "steps": steps, "found": {"python": python}}
     try:
         payload = remote.run_reader(host, "usage-fetch.py", ["--reader", "--providers=" + providers, "--timeout", "12",
                                                              "--omp", omp], READ_SECONDS)

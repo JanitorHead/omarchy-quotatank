@@ -8864,7 +8864,12 @@ def merge_computer_provider(ours: dict[str, Any] | None, theirs: dict[str, Any])
         if match is None:
             entry["active"] = False
             added.append(entry)
-        elif unusable(match) and entry.get("status") == "ok" and not (entry.get("stale") and match.get("stale")):
+            continue
+        # Live omp requests on that computer name the account by its ids there.
+        aliases = match.setdefault("liveIds", [])
+        aliases += [entry[key] for key in ("accountId", "ompAccountId")
+                    if isinstance(entry.get(key), str) and entry[key] and entry[key] not in aliases][:4]
+        if unusable(match) and entry.get("status") == "ok" and not (entry.get("stale") and match.get("stale")):
             stand_in(match, entry)
             stood_in = True
     if stood_in and "accounts" in ours:

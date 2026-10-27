@@ -52,7 +52,15 @@ Item {
   // Providers whose CLI is on PATH, or null before a payload says: Settings offers Sign in for these
   // and Install for the rest.
   readonly property var installed: payload && payload.installed !== undefined ? UsageLogic.listOrEmpty(payload.installed) : null
-  readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl, cliproxyKeyFile, keyFiles, extraKeyArguments, ompArguments])
+  // Other computers under Settings → Sources, read over SSH with the same providers.
+  readonly property var computerArguments: UsageLogic.computerArguments(settings)
+  // What the backend says about each computer: { id, host, status, readAt, kind, message, fix, installed, omp }.
+  readonly property var computers: payload ? UsageLogic.listOrEmpty(payload.computers) : []
+  // Where Sign in and Install open a terminal (null: this computer), and what is installed there.
+  readonly property var mainComputer: UsageLogic.mainComputer(settings)
+  readonly property var setupInstalled: UsageLogic.setupInstalled(payload, mainComputer)
+  readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl, cliproxyKeyFile, keyFiles, extraKeyArguments,
+    ompArguments, computerArguments])
   readonly property string scriptPath: localPath(Qt.resolvedUrl("scripts/usage-fetch.py"))
   readonly property double nextRefreshAt: lastAttemptAt > 0
     ? lastAttemptAt + refreshIntervalSec * 1000 : 0
@@ -112,6 +120,7 @@ Item {
       for (var i = 0; i < keyFiles.length; i++) command.push("--key-file", keyFiles[i][0] + "=" + keyFiles[i][1])
       command = command.concat(extraKeyArguments).concat(ompArguments)
     }
+    command = command.concat(computerArguments)
     fetchProcess.command = command
     fetchProcess.connectionId = connectionId
     fetchProcess.running = true
@@ -224,8 +233,9 @@ Item {
 
   Timer {
     id: processTimeout
-    // `omp usage` may take up to 45 s, so the collector gets longer when it runs omp.
-    interval: root.ompArguments.indexOf("local") >= 0 ? 60000 : 35000
+    // `omp usage` may take up to 45 s, and another computer gets 55 s over SSH (scripts/usage-fetch.py), so
+    // the collector gets longer when it runs either.
+    interval: root.computerArguments.length > 0 ? 75000 : root.ompArguments.indexOf("local") >= 0 ? 60000 : 35000
     repeat: false
     onTriggered: {
       fetchProcess.timedOut = true

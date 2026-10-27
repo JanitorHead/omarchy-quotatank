@@ -660,12 +660,15 @@ Ui.Panel {
     var readings = []
     for (var i = 0; i < root.providers.length; i++) {
       var provider = root.providers[i]
+      // A stale reading repeats what another computer said before it stopped answering: it keeps the
+      // last level ("none") instead of crossing a threshold again.
+      var stale = provider.stale === true
       var rows = UsageLogic.listOrEmpty(provider.windows)
       for (var j = 0; j < rows.length; j++) {
         var row = rows[j]
         readings.push({
           key: String(provider.id) + "|" + String(row.label || j),
-          severity: windowSeverity(row),
+          severity: stale ? "none" : windowSeverity(row),
           title: String(provider.name || provider.id) + " · " + String(row.label || "Usage limit"),
           remaining: UsageLogic.windowRemaining(row),
           mode: quotaModeFor(provider.id)
@@ -673,7 +676,7 @@ Ui.Panel {
       }
       var money = UsageLogic.spendable(provider)
       if (money !== null) {
-        var level = moneySeverityOf(provider)
+        var level = stale ? "none" : moneySeverityOf(provider)
         readings.push({
           key: String(provider.id) + "|money",
           severity: level,
@@ -923,6 +926,7 @@ Ui.Panel {
     id: ompActivityHelper
     settings: root.settings
     status: backend.ompStatus
+    computers: backend.computers
     proxyMode: root.proxyMode
   }
 
@@ -1961,7 +1965,10 @@ Ui.Panel {
                     var plan = account.plan || account.planType ? UsageLogic.accountPlanLabel(account) : ""
                     if (plan !== "" && plan !== detailName.text) parts.push(plan)
                     if (root.providerState && root.providerState.inUse[root.selectedAccountIndex] === true) parts.push("in use")
-                    if (UsageLogic.accountSourceKind(account, root.proxyMode) === "omp") parts.push("from omp")
+                    var kind = UsageLogic.accountSourceKind(account, root.proxyMode)
+                    if (kind === "omp") parts.push("from omp")
+                    else if (kind === "computer") parts.push("on " + String(account.computer.name || ""))
+                    else if (account.standIn && account.standIn.name) parts.push("read on " + String(account.standIn.name))
                     return parts.length > 0 ? " · " + parts.join(" · ") : ""
                   }
                   color: root.dim
@@ -2029,7 +2036,7 @@ Ui.Panel {
                   id: errorSetupButton
                   objectName: "errorSetupButton"
                   readonly property var entry: root.proxyMode || root.accountOverview || !root.provider ? null : UsageLogic.localProvider(root.provider.id)
-                  readonly property var action: UsageLogic.setupAction(entry, root.provider, backend.installed)
+                  readonly property var action: UsageLogic.setupActionFor(entry, root.provider, backend.payload, backend.mainComputer)
                   visible: action.kind === "signin" || action.kind === "install"
                   text: root.setupWatchId !== "" && entry && root.setupWatchId === entry.id ? "Waiting for the sign-in…" : action.label
                   bordered: true

@@ -2133,16 +2133,18 @@ function costScanHasOmp(sources) {
   return false
 }
 
-// Footer line naming where the totals come from: "Local transcripts + T3 on devbox · live".
+// Footer line naming where the totals come from: "Local transcripts + devbox + T3 on Lab · live".
 function costSourceSummary(sources, live) {
   var list = listOrEmpty(sources)
   var local = false
+  var computers = []
   var servers = []
   for (var i = 0; i < list.length; i++) {
     var source = list[i]
     if (!source || typeof source !== "object") continue
     if (source.included !== true) continue
     if (source.kind === "local") local = true
+    else if (source.kind === "computer") computers.push(String(source.name || "") + (source.status === "stale" ? " (last known)" : ""))
     else if (source.kind === "t3") {
       var name = String(source.name || "").split(" · ")[0]
       if (name !== "" && servers.indexOf(name) < 0) servers.push(name)
@@ -2150,6 +2152,7 @@ function costSourceSummary(sources, live) {
   }
   var parts = []
   if (local) parts.push("Local transcripts")
+  parts = parts.concat(computers)
   for (var j = 0; j < servers.length; j++) parts.push("T3 on " + servers[j])
   if (parts.length > 3) parts = [parts[0], (parts.length - 1) + " more sources"]
   var text = parts.join(" + ")
@@ -2327,6 +2330,138 @@ function migrateSources(settings) {
   if (text("ompStatsUrl") !== "" || text("ompGatewayUrl") !== "") changes.sourcesNotice = "ompRemote"
   LEGACY_SOURCE_KEYS.forEach(function(key) { if (source[key] !== undefined) changes[key] = null })
   return { changes: changes, notice: changes.sourcesNotice === "ompRemote" }
+}
+
+// ---- Other computers (sources of kind "computer"), read over SSH by the backends.
+
+// usage-fetch.py and cost-fetch.py flags: one --computer ID=HOST per switched-on computer, in order.
+function computerArguments(settings) {
+  var result = []
+  sourcesOf(settings, "computer").forEach(function(entry) {
+    if (entry.on) result.push("--computer", entry.id + "=" + entry.host)
+  })
+  return result
+}
+
+// The computer Sign in and Install open a terminal on: a computer entry, or null for this computer.
+// `mainComputer` is "this", a computer's id, or "" (automatic): the one switched-on computer when there is
+// exactly one, else this computer.
+function mainComputer(settings) {
+  var choice = settings && settings.mainComputer !== undefined && settings.mainComputer !== null ? String(settings.mainComputer) : ""
+  var on = sourcesOf(settings, "computer").filter(function(entry) { return entry.on })
+  if (choice === "this") return null
+  if (choice === "") return on.length === 1 ? on[0] : null
+  for (var i = 0; i < on.length; i++) if (on[i].id === choice) return on[i]
+  return null
+}
+
+// The Main computer menu: Automatic (naming what it picks), This computer, then each switched-on computer.
+function mainComputerOptions(settings) {
+  var automatic = mainComputer({ sources: settings && settings.sources, mainComputer: "" })
+  var options = [{ value: "", label: "Automatic (" + (automatic ? automatic.host : "this computer") + ")" },
+    { value: "this", label: "This computer" }]
+  sourcesOf(settings, "computer").forEach(function(entry) {
+    if (entry.on) options.push({ value: entry.id, label: entry.host })
+  })
+  return options
+}
+
+// A computer's state in the usage payload's `computers`, or null before it was read.
+function computerState(payload, id) {
+  var list = payload ? listOrEmpty(payload.computers) : []
+  for (var i = 0; i < list.length; i++) if (list[i] && list[i].id === id) return list[i]
+  return null
+}
+
+// The status line under a computer in Settings → Sources. `formatClock(epochSeconds)` names a time.
+function computerLine(entry, state, formatClock) {
+  if (!entry) return { tone: "off", text: "" }
+  if (!entry.on) return { tone: "off", text: "Off" }
+  if (!state) return { tone: "pending", text: "Read with the next refresh" }
+  var readAt = Date.parse(String(state.readAt || "")) / 1000
+  var when = isFinite(readAt) && formatClock ? formatClock(readAt) : ""
+  if (state.status === "ok") return { tone: "ok", text: "Answering" + (when ? " · read at " + when : "") }
+  if (state.status === "stale")
+    return { tone: "error", text: ("Not answering" + (when ? " since " + when : "") + ". " + String(state.message || "")).trim() }
+  return { tone: "error", text: String(state.message || "Could not be read.") }
+}
+
+// What a provider's Sign in or Install does when the main computer is another one: the same command in a
+// terminal on that computer, over `ssh -t`. omp there signs in for the providers it reads, so it goes first.
+// The destination was checked (validDestination); the command is the registry's own.
+function setupOn(action, computer, state, providerId) {
+  if (!computer || !action || action.command === "") return action
+  var omp = state && state.omp && state.omp.installed === true && contains(OMP_PROVIDER_IDS, providerId)
+  var command = omp && action.kind === "signin" ? "omp login" : action.command
+  return { kind: action.kind, label: action.label + " on " + computer.host, url: action.url,
+    command: "ssh -t " + computer.host + " '" + command.replace(/'/g, "'\\''") + "'" }
+}
+
+// The installed providers that decide between Sign in and Install: the main computer's.
+function setupInstalled(payload, computer) {
+  if (!computer) return payload && isListLike(payload.installed) ? payload.installed : null
+  var state = computerState(payload, computer.id)
+  return state && isListLike(state.installed) ? state.installed : null
+}
+
+// setupAction on the main computer: what is installed there decides, and the command runs there.
+function setupActionFor(entry, reading, payload, computer) {
+  var action = setupAction(entry, reading, setupInstalled(payload, computer))
+  return setupOn(action, computer, computer ? computerState(payload, computer.id) : null, entry ? entry.id : "")
+}
+
+// The other computers whose omp requests are followed live: switched on, with omp found set up there at
+// the last refresh (`computers` is the usage payload's). Nothing through a proxy or with omp turned off.
+function ompLiveComputers(settings, computers, proxyMode) {
+  if (proxyMode === true || !ompSettings(settings).local) return []
+  var list = listOrEmpty(computers)
+  return sourcesOf(settings, "computer").filter(function(entry) {
+    if (!entry.on) return false
+    for (var i = 0; i < list.length; i++)
+      if (list[i] && list[i].id === entry.id) return !!list[i].omp && list[i].omp.local === "ok"
+    return false
+  })
+}
+
+// What a computer's Test says (scripts/computer-check.py --test): one line per step, the command that fixes
+// the step that failed, and whether the computer may be added (it answered; reading nothing yet is fine).
+var COMPUTER_TEST_SECONDS = 120
+function computerTestResult(reply, host) {
+  var result = { ok: false, addable: false, fix: "", lines: [] }
+  if (!reply) {
+    result.lines = [{ tone: "error", text: "The test did not run. Check that Python 3 is installed, then try again." }]
+    return result
+  }
+  if (reply.probeError === "timeout") {
+    result.lines = [{ tone: "error", text: "No answer within " + COMPUTER_TEST_SECONDS + " s. Check that " + host + " is on and online." }]
+    return result
+  }
+  var steps = listOrEmpty(reply.steps)
+  for (var i = 0; i < steps.length; i++) {
+    if (!steps[i] || typeof steps[i].text !== "string") continue
+    result.lines.push({ tone: steps[i].ok === true ? "ok" : "error", text: steps[i].text })
+    if (steps[i].ok !== true && result.fix === "") result.fix = String(steps[i].fix || "")
+  }
+  var failed = steps.filter(function(entry) { return entry && entry.ok !== true })
+  result.ok = reply.ok === true
+  result.addable = result.ok || (reply.thisComputer !== true && failed.length === 1 && failed[0].id === "found")
+  if (result.fix !== "" && !/^ssh/.test(result.fix)) {
+    result.lines.push({ tone: "info", text: result.fix })
+    result.fix = ""
+  }
+  return result
+}
+
+// Settings → Sources → Other computers in the index: "None", "devbox", "devbox, buildbox · buildbox not answering".
+function computersSummary(settings, payload) {
+  var entries = sourcesOf(settings, "computer").filter(function(entry) { return entry.on })
+  if (entries.length === 0) return sourcesOf(settings, "computer").length ? "Off" : "None"
+  var silent = entries.filter(function(entry) {
+    var state = computerState(payload, entry.id)
+    return state && state.status !== "ok"
+  })
+  var names = entries.map(function(entry) { return entry.host }).join(", ")
+  return names + (silent.length ? " · " + joinNames(silent.map(function(entry) { return entry.host })) + " not answering" : "")
 }
 
 // ---- 1.9 QmlSettings ----
@@ -2724,7 +2859,7 @@ var ACCOUNT_TOGETHER_SECONDS = 3600     // two accounts rising within this time 
 var ACCOUNT_SPENDING_SECONDS = 900      // a reading that rose this recently means "spending now"
 var ACCOUNT_LIVE_SECONDS = 120          // a live request this recent means "spending now"
 var ACCOUNT_EVENT_SECONDS = 3 * 60 * 60 // a row mentions a switch or a reset for this long
-var ACCOUNT_SOURCE_RANK = { omarchy: 0, signin: 0, proxy: 0, key: 1, omp: 2 }
+var ACCOUNT_SOURCE_RANK = { omarchy: 0, signin: 0, proxy: 0, key: 1, omp: 2, computer: 3 }
 var ACCOUNT_ERROR_TEXT = {
   expired: "sign-in expired", no_credentials: "signed out", rate_limited: "rate limited",
   timeout: "timed out", network: "offline", config: "needs setup", cli_unavailable: "CLI missing"
@@ -2742,23 +2877,32 @@ function accountModeChoice(raw, providerId) {
   return Object.prototype.hasOwnProperty.call(modes, id) ? modes[id] : ""
 }
 
+// The ids live requests may name an account by: its own, omp's id for a native login that omp also reads
+// (`ompAccountId`), and its ids on other computers that read the same account (`liveIds`).
+function accountLiveIds(account) {
+  var ids = [String(account.accountId || "")]
+  if (typeof account.ompAccountId === "string" && account.ompAccountId !== "") ids.push(account.ompAccountId)
+  listOrEmpty(account.liveIds).forEach(function(id) { if (typeof id === "string" && id !== "") ids.push(id) })
+  return ids
+}
+
 // The newest live request for an account in a "<provider>@<accountId>" map (live omp requests, a
-// proxy's activity). A native login that omp also reads carries omp's id for it (`ompAccountId`), and
-// omp's requests name it by that id, so both keys count.
+// proxy's activity), under any of its ids.
 function accountLiveAt(account, recentByAccount) {
   if (!account || !recentByAccount || typeof recentByAccount !== "object") return null
   var provider = String(account.id || "")
-  var at = finiteOrNull(recentByAccount[provider + "@" + String(account.accountId || "")])
-  var omp = typeof account.ompAccountId === "string" ? account.ompAccountId : ""
-  var also = omp !== "" ? finiteOrNull(recentByAccount[provider + "@" + omp]) : null
-  return also !== null && (at === null || also > at) ? also : at
+  var newest = null
+  accountLiveIds(account).forEach(function(id) {
+    var at = finiteOrNull(recentByAccount[provider + "@" + id])
+    if (at !== null && (newest === null || at > newest)) newest = at
+  })
+  return newest
 }
 
 // Whether a live request naming `accountId` (omp's or the proxy's id) was served by this account.
 function accountAnswersTo(account, accountId) {
   var id = String(accountId || "")
-  return !!account && id !== "" && (String(account.accountId || "") === id
-    || (typeof account.ompAccountId === "string" && account.ompAccountId === id))
+  return !!account && id !== "" && accountLiveIds(account).indexOf(id) >= 0
 }
 
 // The latest sign of use per account ("<provider>@<accountId>" → epoch seconds), one map for every
@@ -2872,11 +3016,13 @@ function countedAccounts(provider, mode, nowSeconds, recentByAccount) {
 }
 
 // Where an account's reading comes from (its `origin`): "omarchy" (a login in Omarchy's registry),
-// "signin" (the one native sign-in next to omp accounts), "key", "omp", or "proxy". Readings from a
+// "signin" (the one native sign-in next to omp accounts), "key", "omp", "proxy", or "computer" (read on
+// another computer, whatever its origin there: Omarchy switches only this computer's logins). Readings from a
 // backend without `origin` are told apart by their ids. `source` is the API's description, not a kind.
 // The one rule for every surface: rows, dots, hints and notices.
 function accountSourceKind(account, proxyMode) {
   if (!account) return ""
+  if (account.computer && typeof account.computer === "object") return "computer"
   var origin = String(account.origin || "")
   if (origin === "omarchy" || origin === "signin" || origin === "key" || origin === "omp" || origin === "proxy") return origin
   if (proxyMode) return "proxy"
@@ -2892,6 +3038,7 @@ function accountSourceLabel(kind) {
   if (kind === "omarchy") return "Omarchy"
   if (kind === "signin") return "sign-in"
   if (kind === "proxy") return "proxy"
+  if (kind === "computer") return "another computer"
   return ""
 }
 
@@ -2981,14 +3128,22 @@ function accountStatusLine(account, spending, nowSeconds, event, proxyMode) {
   if (status === "disabled") return { kind: "paused", text: "paused", at: null, tone: "dim" }
   var usedUp = accountUsedUp(account)
   if (usedUp !== null) return { kind: "usedup", text: "used up", at: usedUp.resetsAt, tone: "urgent" }
-  if (account.stale === true) return { kind: "stale", text: "last known reading", at: null, tone: "dim" }
+  var computer = account.computer && account.computer.name ? String(account.computer.name) : ""
+  if (account.stale === true) {
+    var readAt = Date.parse(String(account.readAt || "")) / 1000
+    return computer && isFinite(readAt)
+      ? { kind: "stale", text: computer + " not answering since", at: readAt, tone: "dim" }
+      : { kind: "stale", text: "last known reading", at: null, tone: "dim" }
+  }
   if (spending === true) return { kind: "spending", text: "spending now", at: null, tone: "accent" }
   var now = finiteOrNull(nowSeconds)
   var eventAt = event ? finiteOrNull(event.at) : null
   if (event && (event.kind === "switch" || event.kind === "reset") && withinSeconds(eventAt, now, ACCOUNT_EVENT_SECONDS))
     return { kind: event.kind, text: event.kind === "switch" ? "switched" : "reset", at: eventAt, tone: "accent" }
-  if (account.plan || account.planType) return { kind: "plan", text: accountPlanLabel(account), at: null, tone: "dim" }
-  return { kind: "source", text: accountSourceLabel(accountSourceKind(account, proxyMode)), at: null, tone: "dim" }
+  if (account.standIn && account.standIn.name) return { kind: "standin", text: "read on " + account.standIn.name, at: null, tone: "dim" }
+  if (account.plan || account.planType)
+    return { kind: "plan", text: accountPlanLabel(account) + (computer ? " · on " + computer : ""), at: null, tone: "dim" }
+  return { kind: "source", text: computer ? "on " + computer : accountSourceLabel(accountSourceKind(account, proxyMode)), at: null, tone: "dim" }
 }
 
 // The command behind a row's Use button: Omarchy starts new sessions of the provider with that login.
@@ -3003,7 +3158,8 @@ function accountUseArgv(providerId, account) {
   return ["omarchy", "agent", "account", "use", provider, id]
 }
 
-// A row offers Use in one-at-a-time mode for an Omarchy login that is not in use and can be read.
+// A row offers Use in one-at-a-time mode for an Omarchy login on this computer that is not in use and can be
+// read: Omarchy switches logins only here.
 function accountCanUse(account, mode, proxyMode) {
   return !!account && mode === "single" && account.active !== true && account.status === "ok"
     && accountSourceKind(account, proxyMode) === "omarchy"

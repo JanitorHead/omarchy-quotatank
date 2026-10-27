@@ -40,7 +40,9 @@ Item {
   readonly property string priceOverrides: String(setting("costPriceOverrides", "{}"))
   // T3 Code servers under Settings → Sources, in the shape scripts/t3_costs.py reads.
   readonly property string t3Servers: UsageLogic.t3ServersJson(settings)
-  readonly property string connectionId: JSON.stringify([enabledProviderIds, t3Servers])
+  // Other computers under Settings → Sources: their transcripts count with this computer's.
+  readonly property var computerArguments: UsageLogic.computerArguments(settings)
+  readonly property string connectionId: JSON.stringify([enabledProviderIds, t3Servers, computerArguments])
 
   signal refreshed()
 
@@ -115,6 +117,7 @@ Item {
       "--t3-servers", t3Servers,
       "--price-overrides", priceOverrides
     ]
+    command = command.concat(computerArguments)
     if (pendingPriceRefresh) command.push("--refresh-prices")
     pendingPriceRefresh = false
     fetchProcess.command = command
@@ -222,7 +225,8 @@ Item {
 
   Timer {
     id: processTimeout
-    interval: 60000
+    // Another computer's first scan may take 90 s (scripts/cost-fetch.py); later scans read only what changed.
+    interval: root.computerArguments.length > 0 ? 120000 : 60000
     repeat: false
     onTriggered: {
       fetchProcess.timedOut = true

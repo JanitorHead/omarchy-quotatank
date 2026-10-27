@@ -39,6 +39,10 @@ Column {
     return null
   }
   readonly property bool proxyMode: UsageLogic.activeProxy(settings) !== null
+  // Other computers (Settings → Sources → Other computers) and where Sign in and Install open a terminal.
+  readonly property var computerEntries: UsageLogic.sourcesOf(settings, "computer")
+  readonly property var mainComputer: UsageLogic.mainComputer(settings)
+  readonly property string computerCheckPath: decodeURIComponent(String(Qt.resolvedUrl("scripts/computer-check.py")).replace(/^file:\/\//, ""))
   readonly property string quotaMode: String(value("quotaMode", "Used")) === "Remaining" ? "Remaining" : "Used"
   // Each monitored provider is a card like the ones in Limits (same fill, border, and corners), so
   // its switches, key, and Customize read as one block.
@@ -369,6 +373,84 @@ Column {
     keyRemover.running = true
   }
 
+  // ---- Other computers: a Test connects, copies the readers and reads once (scripts/computer-check.py);
+  // a computer is added once it answered. One Test runs at a time.
+  property string newComputerHost: ""
+  property string computerTesting: ""
+  property string computerTested: ""
+  property var computerTestResult: ({ ok: false, addable: false, fix: "", lines: [] })
+  property var computerSuggestions: []
+  // Suggestions not added yet.
+  readonly property var freshSuggestions: computerSuggestions.filter(function(entry) {
+    return !computerEntries.some(function(known) { return known.host === entry.host })
+  })
+
+  function clockText(seconds) { return Qt.formatDateTime(new Date(seconds * 1000), "HH:mm") }
+
+  function computerHostProblem(text) {
+    var host = String(text || "").trim()
+    if (host === "") return ""
+    if (!UsageLogic.validDestination(host))
+      return "Enter a name from ~/.ssh/config or user@name: letters, digits, dots, dashes and underscores. Set ports and options in ~/.ssh/config."
+    if (computerEntries.some(function(entry) { return entry.host === host })) return host + " is already added."
+    return ""
+  }
+
+  function testComputer(host) {
+    if (computerProbe.active || !UsageLogic.validDestination(host)) return
+    computerTesting = host
+    computerTested = ""
+    computerProbe.start(["python3", computerCheckPath, "--test", host, "--providers", enabledProviders.join(","),
+      "--omp", omp.local ? "local" : "off"])
+  }
+
+  function addComputer(host) {
+    if (computerHostProblem(host) !== "" || host === "") return
+    setSource({ id: UsageLogic.newSourceId("computer", sourceEntries), kind: "computer", on: true, host: host })
+    newComputerHost = ""
+  }
+
+  // Forgets the computer here and, in the background, deletes Quotatank's readers there.
+  function removeComputer(entry) {
+    if (!entry) return
+    var changes = { sources: UsageLogic.sourcesWith(settings, entry.id, null) }
+    if (String(value("mainComputer", "")) === entry.id) changes.mainComputer = ""
+    setMany(changes)
+    if (computerTested === entry.host) computerTested = ""
+    computerRemover.command = ["python3", computerCheckPath, "--remove", entry.host, "--id", entry.id]
+    computerRemover.running = true
+  }
+
+  function computersSummary() { return UsageLogic.computersSummary(settings, lastPayload) }
+
+  Probe {
+    id: computerProbe
+    timeoutMs: UsageLogic.COMPUTER_TEST_SECONDS * 1000
+    onFinished: function(reply) {
+      root.computerTestResult = UsageLogic.computerTestResult(reply, root.computerTesting)
+      root.computerTested = root.computerTesting
+      root.computerTesting = ""
+    }
+  }
+
+  Probe {
+    id: suggestProbe
+    timeoutMs: 10000
+    onFinished: function(reply) {
+      root.computerSuggestions = reply ? UsageLogic.listOrEmpty(reply.suggestions).filter(function(entry) {
+        return entry && UsageLogic.validDestination(entry.host)
+      }) : []
+    }
+  }
+  // SSH config and Tailscale are read each time Sources opens: computers come and go.
+  onPageChanged: if (page === "sources" && !suggestProbe.active) suggestProbe.start(["python3", computerCheckPath, "--suggest"])
+
+  Process {
+    id: computerRemover
+    stdout: SplitParser { onRead: function(data) {} }
+    stderr: SplitParser { splitMarker: "" }
+  }
+
   // Forgets one of a provider's extra keys and deletes its private file.
   function removeExtraKey(providerId, key) {
     set("extraKeys", UsageLogic.removeExtraKey(value("extraKeys", "{}"), providerId, key.id))
@@ -524,6 +606,144 @@ Column {
         text: root.proxyMode
           ? "While the proxy below is on, Limits shows its accounts; Costs still reads this computer's history."
           : "Its sign-ins, API keys and agent history. Providers lists what was found here."
+      }
+    }
+    Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
+
+    SettingsSection {
+      id: computersSection
+      objectName: "computersSection"
+      width: parent.width
+      title: "Other computers"
+      summary: root.computersSummary()
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onRevealRequested: function(item) { root.revealRequested(item) }
+
+      Hint {
+        text: "Read the sign-ins, limits and agent history of another computer you reach over SSH with a key, "
+          + "such as the desktop you work on from a laptop. Quotatank copies its readers to ~/.cache/quotatank there and changes nothing else."
+      }
+      Repeater {
+        model: root.computerEntries
+        delegate: Column {
+          id: computerRow
+          required property var modelData
+          required property int index
+          readonly property var state: UsageLogic.computerState(root.lastPayload, modelData.id)
+          width: parent.width
+          spacing: Style.spacing.sm
+          SwitchRow {
+            objectName: "computerOn-" + computerRow.index
+            label: computerRow.modelData.host
+            checked: computerRow.modelData.on
+            onToggled: root.updateSource(computerRow.modelData, "on", !computerRow.modelData.on)
+          }
+          StatusLine {
+            objectName: "computerStatus-" + computerRow.index
+            line: UsageLogic.computerLine(computerRow.modelData, computerRow.state, root.clockText)
+          }
+          CommandBlock {
+            objectName: "computerFix-" + computerRow.index
+            visible: computerRow.modelData.on && !!computerRow.state && computerRow.state.status !== "ok"
+              && /^ssh/.test(String(computerRow.state.fix || ""))
+            command: computerRow.state ? String(computerRow.state.fix || "") : ""
+          }
+          TestBlock {
+            objectName: "computerTest-" + computerRow.index
+            running: root.computerTesting === computerRow.modelData.host && computerProbe.active
+            waitingText: "Connecting to " + computerRow.modelData.host + "…"
+            lines: root.computerTested === computerRow.modelData.host ? root.computerTestResult.lines : []
+            onRequested: root.testComputer(computerRow.modelData.host)
+          }
+          Ui.Button {
+            objectName: "computerRemove-" + computerRow.index
+            text: "Remove " + computerRow.modelData.host
+            foreground: root.urgent
+            fontFamily: root.fontFamily
+            focusable: true
+            onClicked: root.removeComputer(computerRow.modelData)
+          }
+          Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
+        }
+      }
+
+      Column {
+        objectName: "addComputer"
+        visible: root.computerEntries.length < UsageLogic.SOURCE_LIMIT
+        width: parent.width
+        spacing: Style.spacing.sm
+        Label { text: "Add a computer"; font.bold: true }
+        TextRow {
+          id: computerHostField
+          objectName: "computerHost"
+          label: "SSH destination"
+          placeholder: "devbox or you@devbox"
+          maximumLength: 255
+          source: root.newComputerHost
+          validate: function(text) { return root.computerHostProblem(text) }
+          onApplied: function(text) { root.newComputerHost = text }
+        }
+        Flow {
+          objectName: "computerSuggestions"
+          visible: root.freshSuggestions.length > 0
+          width: parent.width
+          spacing: Style.spacing.sm
+          Repeater {
+            model: root.freshSuggestions
+            delegate: Ui.Button {
+              required property var modelData
+              objectName: "computerSuggestion-" + modelData.host
+              text: modelData.host
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              focusable: true
+              tooltipText: modelData.via === "tailscale" ? "On your tailnet" : "In ~/.ssh/config"
+              onClicked: { root.newComputerHost = modelData.host; root.testComputer(modelData.host) }
+            }
+          }
+        }
+        TestBlock {
+          objectName: "computerAddTest"
+          ready: root.newComputerHost !== "" && root.computerHostProblem(root.newComputerHost) === ""
+          blockedReason: root.newComputerHost === "" ? "Enter the computer's SSH destination, or pick one above, to test it."
+            : root.computerHostProblem(root.newComputerHost)
+          running: root.computerTesting === root.newComputerHost && computerProbe.active
+          waitingText: "Connecting to " + root.newComputerHost + " and copying Quotatank's readers…"
+          lines: root.computerTested !== "" && root.computerTested === root.newComputerHost ? root.computerTestResult.lines : []
+          onRequested: root.testComputer(root.newComputerHost)
+        }
+        CommandBlock {
+          objectName: "computerAddFix"
+          visible: root.computerTested === root.newComputerHost && !computerProbe.active && /^ssh/.test(root.computerTestResult.fix)
+          command: root.computerTestResult.fix
+        }
+        Ui.Button {
+          objectName: "computerAdd"
+          visible: root.computerTested !== "" && root.computerTested === root.newComputerHost && !computerProbe.active
+            && root.computerTestResult.addable
+          text: root.computerTestResult.ok ? "Add " + root.newComputerHost : "Add " + root.newComputerHost + " anyway"
+          bordered: true
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          focusable: true
+          onClicked: root.addComputer(root.newComputerHost)
+        }
+      }
+
+      SelectRow {
+        objectName: "mainComputer"
+        visible: root.computerEntries.some(function(entry) { return entry.on })
+        label: "Main computer"
+        options: UsageLogic.mainComputerOptions(root.settings)
+        value: String(root.value("mainComputer", ""))
+        onChanged: function(next) { root.set("mainComputer", next) }
+      }
+      Hint {
+        visible: root.computerEntries.some(function(entry) { return entry.on })
+        text: "Sign in and Install open a terminal on the main computer. Use switches Omarchy logins on this computer only."
       }
     }
     Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
@@ -827,7 +1047,7 @@ Column {
         readonly property var entry: root.proxyMode ? null : UsageLogic.localProvider(providerId)
         readonly property bool hasKey: UsageLogic.keySaved(root.settings, providerId)
         readonly property var reading: UsageLogic.readingFor(root.shownReadings, providerId)
-        readonly property var setup: reading ? UsageLogic.setupAction(entry, reading, root.shownInstalled) : UsageLogic.setupAction(null, null, null)
+        readonly property var setup: reading ? UsageLogic.setupActionFor(entry, reading, root.lastPayload, root.mainComputer) : UsageLogic.setupAction(null, null, null)
         readonly property var status: entry ? UsageLogic.providerStatus(entry, reading, hasKey, root.usageLoading,
           setup.kind === "signin" || setup.kind === "install") : null
         // A provider that also has a sign-in of its own only needs the editor while that sign-in is
@@ -1134,8 +1354,8 @@ Column {
         model: root.proxyMode ? [] : root.sections.waiting
         delegate: ProviderOption {
           id: waitingOption
-          readonly property var setup: UsageLogic.setupAction(waitingOption.modelData,
-            UsageLogic.readingFor(root.shownReadings, waitingOption.modelData.id), root.shownInstalled)
+          readonly property var setup: UsageLogic.setupActionFor(waitingOption.modelData,
+            UsageLogic.readingFor(root.shownReadings, waitingOption.modelData.id), root.lastPayload, root.mainComputer)
           hint: UsageLogic.providerStatus(waitingOption.modelData,
             UsageLogic.readingFor(root.shownReadings, waitingOption.modelData.id), false, root.usageLoading,
             setup.kind === "signin" || setup.kind === "install").text
@@ -1992,7 +2212,8 @@ Column {
       lift.y = Style.space(3)
       appear.restart()
     }
-    width: parent.width
+    // A line of a row that is being removed (a removed computer) has no parent while it is destroyed.
+    width: parent ? parent.width : 0
     implicitHeight: resultText.implicitHeight
     height: implicitHeight
     transform: Translate { id: lift }
@@ -2878,7 +3099,7 @@ Column {
     // monitored has no reading to wait for.
     property bool needsReading: false
     readonly property var action: needsReading && !reading
-      ? UsageLogic.setupAction(null, null, null) : UsageLogic.setupAction(entry, reading, root.shownInstalled)
+      ? UsageLogic.setupAction(null, null, null) : UsageLogic.setupActionFor(entry, reading, root.lastPayload, root.mainComputer)
     readonly property bool pending: !!entry && root.pendingSetup === entry.id
     visible: !root.proxyMode && action.kind !== ""
     spacing: Style.spacing.sm
@@ -3142,8 +3363,9 @@ Column {
 
   function sourcesSummary() {
     var parts = ["This computer"]
+    computerEntries.forEach(function(entry) { if (entry.on) parts.push(entry.host) })
     if (proxyEntry && proxyEntry.on) parts.push(proxyName)
     if (servers.count > 0) parts.push(servers.count + (servers.count === 1 ? " T3 server" : " T3 servers"))
-    return parts.join(", ")
+    return parts.length > 4 ? parts.slice(0, 3).join(", ") + " and " + (parts.length - 3) + " more" : parts.join(", ")
   }
 }

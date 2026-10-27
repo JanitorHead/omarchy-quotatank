@@ -174,6 +174,44 @@ ShellRoot {
       check(editableTextInputs(form) === 0, "no source field is an editable TextInput")
       shown("removeProxy").clicked()
       check(JSON.parse(saved.sources).length === 0, "Remove proxy leaves no proxy source")
+      formPhase = 10
+    } else if (formPhase === 10) {
+      shown("computersSection").expanded = true
+      edit("computerHostField", "-oProxyCommand=x", true)
+      check(form.newComputerHost === "" && text("computerAddTestBlocked").indexOf("Enter the computer's SSH destination") === 0,
+        "an option-like destination is refused: " + form.newComputerHost)
+      edit("computerHostField", "devbox", true)
+      check(form.newComputerHost === "devbox" && shown("computerAddTestButton").visible && shown("computerAddTestButton").enabled,
+        "a destination can be tested")
+      shown("computerAddTestButton").clicked()
+      formPhase = 11
+    } else if (formPhase === 11) {
+      if (form.computerTested !== "devbox" || form.computerSuggestions.length === 0) return
+      check(text("computerAddTestLine-0Text") === "Connected to devbox", "the test shows its steps: " + text("computerAddTestLine-0Text"))
+      check(shown("computerAdd").visible && shown("computerAdd").text === "Add devbox", "a computer that answered can be added")
+      shown("computerAdd").clicked()
+      var computers = JSON.parse(saved.sources || "[]")
+      check(computers.length === 1 && computers[0].kind === "computer" && computers[0].host === "devbox" && computers[0].on === true
+        && /^c-[0-9a-f]{8}$/.test(computers[0].id), "Add saves a switched-on computer: " + saved.sources)
+      check(form.newComputerHost === "" && text("computerStatus-0Text") === "Read with the next refresh", "until the next refresh reads it")
+      check(JSON.stringify(form.freshSuggestions.map(function(entry) { return entry.host })) === '["buildbox"]',
+        "suggestions leave out added computers and option-like names: " + JSON.stringify(form.freshSuggestions))
+      check(form.sourcesSummary() === "This computer, devbox", "the index names the computer: " + form.sourcesSummary())
+      var refused = payload(ompFound)
+      refused.computers = [{ id: computers[0].id, host: "devbox", status: "error", message: "devbox did not accept this computer's SSH key.",
+        fix: "ssh-copy-id devbox" }]
+      form.usagePayload = refused
+      check(text("computerStatus-0Text") === "devbox did not accept this computer's SSH key." && shown("computerFix-0").visible
+        && shown("computerFix-0").command === "ssh-copy-id devbox", "a computer that does not answer says why, with the fix")
+      check(form.computersSummary() === "devbox · devbox not answering", "and the section says so: " + form.computersSummary())
+      check(shown("mainComputer").visible, "with a computer switched on, the main computer can be chosen")
+      shown("mainComputerSelect").changed(computers[0].id)
+      check(saved.mainComputer === computers[0].id, "the choice saves mainComputer")
+      shown("computerOn-0").toggled()
+      check(JSON.parse(saved.sources)[0].on === false && !shown("mainComputer").visible, "the switch turns the computer off")
+      shown("computerRemove-0").clicked()
+      check(JSON.parse(saved.sources).length === 0 && saved.mainComputer === "", "Remove forgets the computer and the main-computer choice")
+      form.usagePayload = payload(ompFound)
       formPhase = 2
     } else if (formPhase === 2) {
       form.page = "costs"

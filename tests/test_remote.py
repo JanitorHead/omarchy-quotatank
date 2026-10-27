@@ -219,6 +219,12 @@ class UsageComputerTests(unittest.TestCase):
         self.assertEqual(claude["windows"][0]["used"], 20)
         self.assertNotIn("computer", claude)
 
+    def test_requests_on_the_other_computer_name_the_account_shown_here(self):
+        there = reading("claude", "me@example.com", 30, "Max", ompAccountId="omp-0123456789ab")
+        payload = self.payload({"claude": reading("claude", "me@example.com", 20, "Max")},
+                               {"devbox": answer(there)}, ids=("claude",))
+        self.assertIn("c-00000001/omp-0123456789ab", payload["providers"][0]["liveIds"])
+
     def test_another_computers_own_account_is_added_under_its_name(self):
         payload = self.payload({"claude": reading("claude", "me@example.com")},
                                {"devbox": answer(reading("claude", "work@example.com", 55))}, ids=("claude",))
