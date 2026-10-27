@@ -172,6 +172,9 @@ filter is needed: all enabled cost sources contribute together.
 
 Costs does not read CLIProxyAPI or Keeper. Keeper remains optional for the quota
 menubar’s last-used account feature; see [deployment](keeper-deployment.md).
+Review work that codex sends to another provider through tool-free OMP is not
+counted either: those runs write no session transcript, so only the provider’s
+own quota shows them.
 
 For standalone quota backend use, `--source cliproxy`, `--cliproxy-url`, and `--cliproxy-key-file` are available. `CLIPROXY_API_URL` supplies the URL when the CLI flag is omitted, and `CLIPROXY_API_KEY_FILE` supplies the key path when neither the widget nor the CLI sets one. Keys are never passed as command-line arguments or saved in widget settings.
 
