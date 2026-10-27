@@ -1867,6 +1867,7 @@ Ui.Panel {
             usagePayload: backend.payload
             usageLoading: backend.loading
             costSources: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sources) : []
+            costModels: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.models) : []
             motion: root.motion
             onSetupRequested: function(entry, action) { root.startSetup(entry, action) }
             onSetupFinished: root.viewMode = "limits"

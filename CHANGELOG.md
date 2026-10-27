@@ -23,6 +23,22 @@ All notable changes to this project will be documented here. The format follows
 - **The backend's flags.** `usage-fetch.py --proxy ID=URL` and `--proxy-key-file ID=PATH` replace `--source`, `--cliproxy-url` and `--cliproxy-key-file`, and `--computer ID=HOST` reads another computer (also in `cost-fetch.py`). The payload has no `source` key; it lists `computers` and `proxies`. See the [backend contract](docs/backend-contract.md).
 - **One history for every source.** A proxy's accounts are recorded in `history.json` with the rest; the `cliproxy-<hash>` history folders in the state folder are no longer read and can be deleted.
 
+## 2.4.0
+
+### Added
+
+- **A model picker for custom prices.** **Settings → Costs → Custom prices** offers the exact model IDs from the costs view above the Model ID field, the ones it has no price for first (marked `· no price`). Picking one fills the field, which stays free for an ID the view has not seen. Contributed by @cbayschm74 in #20.
+
+### Fixed
+
+- **A custom price could not be typed.** Each keystroke in a new price row moved the focus to the field the row still lacked, and a complete row was rebuilt under the cursor as it saved. Contributed by @cbayschm74 in #19.
+- **Costs could run out of memory on a large OpenCode database.** The whole session table was loaded to find each response's project, and every message id was kept before other vendors' responses were dropped. Each response now looks its session up by id, text comes back cut to fixed lengths, SQLite gets a 16 MiB page cache and no memory map, and more than 80,000 responses in the retention window skip the database for that scan.
+- **Selectors showed the first option for a value they do not list.** A custom price for a model the current costs period has not seen showed another model in its picker; it now says "Pick a model from your costs…".
+
+### Changed
+
+- **When tool-free omp runs count in Costs.** An Oh My Pi run counts when it keeps its session, tool-free runs included; one made with `--no-session` writes no transcript and shows only in that provider's limits. Contributed by @cbayschm74 in #18.
+
 ## 2.3.0
 
 ### Added

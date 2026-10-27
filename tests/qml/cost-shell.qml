@@ -92,7 +92,9 @@ ShellRoot {
   }
 
   Component.onCompleted: {
-    form = create("UsageSettings.qml", { width: 420, settings: { costPriceOverrides: custom, enabledProviders: root.sixProviders } })
+    form = create("UsageSettings.qml", { width: 420, settings: { costPriceOverrides: custom, enabledProviders: root.sixProviders },
+      costModels: [{ model: "vendor/Example[2m]", costUsd: 1.5 }, { model: "free-model", costUsd: null },
+        { model: "vendor/Example[2m]", costUsd: 1.5 }, { model: "Other models", costUsd: 0.2 }, { model: "Unknown model", costUsd: null }] })
     form.changeRequested.connect(host)
     form.begin("costs")
     view = create("UsageCosts.qml", {width: 420, payload: {
@@ -277,9 +279,31 @@ ShellRoot {
         root.check(root.find(root.form, "costSource-remote").text.indexOf("Unavailable") >= 0, "source diagnostics are available in Costs settings")
         var before = root.saves
         root.check(root.form.priceError !== "" && root.saves === root.savesBeforeBlankRow, "a blank added row is explained and not saved")
+        // Editing is saved as it happens, so typing must neither steal focus to
+        // the field the row still owes nor rebuild the rows under the cursor.
+        var blankRow = root.find(root.form, "costModel-1")
+        root.edit("costModel-1", "m")
+        root.edit("costModel-1", "mi")
+        root.edit("costModel-1", "mini")
+        root.check(root.find(root.form, "costModel-1") === blankRow, "an edit keeps the same field object")
+        root.check(root.find(root.form, "costModel-1").text === "mini", "typing a model ID keeps every keystroke")
+        // The picker fills the field with an exact id from the costs view, the ones
+        // without a price first; the field stays the source of truth for anything else.
+        var choices = root.form.priceEditor.modelChoices
+        root.check(JSON.stringify(choices.map(function(choice) { return choice.label })) === '["free-model · no price","vendor/Example[2m]"]',
+          "the picker offers each model once, unpriced first, and not the view's own groups: " + JSON.stringify(choices))
+        var pick = root.find(root.form, "costModelPick-1")
+        root.check(pick.showingPlaceholder && pick.contentItem.text === "Pick a model from your costs…",
+          "a row whose model is not listed says what the picker is for, not the first model: " + pick.contentItem.text)
+        pick.changed("vendor/Example[2m]")
+        root.check(root.find(root.form, "costModel-1").text === "vendor/Example[2m]", "picking a model fills its exact id")
+        root.check(!pick.showingPlaceholder && pick.contentItem.text === "vendor/Example[2m]", "the picker then names that model")
         root.edit("costModel-1", "free-model")
         root.edit("costRate-1-inputCostPerMillionTokens", "0")
+        var inputRate = root.find(root.form, "costRate-1-inputCostPerMillionTokens")
         root.edit("costRate-1-outputCostPerMillionTokens", "0")
+        root.check(root.find(root.form, "costRate-1-inputCostPerMillionTokens") === inputRate,
+          "saving a complete row does not rebuild the editor")
         root.check(root.form.priceError === "" && root.saves > before, "explicit zero prices save once the row is complete")
         root.check(JSON.parse(root.saved.costPriceOverrides)["free-model"].outputCostPerMillionTokens === 0,
           "zero survives settings serialization")

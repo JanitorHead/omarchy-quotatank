@@ -675,6 +675,52 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertEqual([r.dedupe_key for r in records or []], [costs.opaque_id("opencode:m1")],
                          "a row that is not JSON is skipped and the rest still count")
 
+    def test_a_database_with_more_responses_than_the_limit_fails_also_when_none_are_counted(self):
+        # Another vendor's responses are dropped, but their ids are still remembered to drop repeats, so they
+        # count against the limit too.
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(costs, "MAX_OPENCODE_ROWS", 5):
+            path = Path(temporary) / "opencode.db"
+            self.write_open_code_2(path, [("ses1", "/tmp")],
+                                   [self.open_code_2_row(f"m{index}", "ses1", "some-vendor", "x") for index in range(5)])
+            self.assertEqual(costs.parse_opencode_database(path, 0), [], "at the limit the database still reads")
+            connection = sqlite3.connect(path)
+            connection.execute("INSERT INTO session_message VALUES (?,?,?,?,?,?,?)",
+                               self.open_code_2_row("m5", "ses1", "some-vendor", "x"))
+            connection.commit()
+            connection.close()
+            self.assertIsNone(costs.parse_opencode_database(path, 0), "one more and the database is skipped")
+
+    def test_oversized_open_code_fields_come_back_cut_and_an_oversized_id_is_skipped(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "opencode.db"
+            deep = "/home/user/" + "a" * 5000 + "/my-app"
+            self.write_open_code_2(path, [("ses1", deep), ("ses2", "/home/user/dev/shop")], [
+                self.open_code_2_row("m1", "ses1", "xai", "grok-" + "4" * 10_000),
+                self.open_code_2_row("m" * 300, "ses2", "xai", "grok-4.7"),
+                self.open_code_2_row("m2", "ses2", "xai", "grok-4.7"),
+            ])
+            records = costs.parse_opencode_database(path, 0)
+
+        self.assertEqual([r.dedupe_key for r in records or []],
+                         [costs.opaque_id("opencode:m1"), costs.opaque_id("opencode:m2")])
+        assert records is not None
+        self.assertLessEqual(len(records[0].model), costs.MAX_OPENCODE_NAME_CHARS)
+        self.assertNotEqual(records[0].project, "my-app", "a directory past the path limit is cut, not read whole")
+        self.assertEqual(records[1].project, "shop", "each response still finds its session's folder")
+
+    def test_an_older_session_table_without_a_directory_does_not_cost_the_database(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "opencode.db"
+            self.write_open_code_2(path, [("ses1", "/home/user/dev/shop")],
+                                   [self.open_code_2_row("m1", "ses1", "xai", "grok-4.7")])
+            connection = sqlite3.connect(path)
+            connection.execute("CREATE TABLE session (id text PRIMARY KEY, title text)")
+            connection.commit()
+            connection.close()
+            records = costs.parse_opencode_database(path, 0)
+
+        self.assertEqual([r.project for r in records or []], ["shop"])
+
     @staticmethod
     def write_grok_session(root: Path, project: str, session: str, turns) -> Path:
         """A grok CLI session: `usage.json` under a percent-encoded project folder."""

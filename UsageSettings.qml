@@ -25,6 +25,7 @@ Column {
   property var usagePayload: null
   property bool usageLoading: false
   property var costSources: []
+  property var costModels: []
   // "" is the index; otherwise one of the page ids below.
   property string page: ""
   property string errorText: ""
@@ -1767,6 +1768,7 @@ Column {
       onRevealRequested: function(item) { root.revealRequested(item) }
       CostPriceEditor {
         id: prices
+        costModels: root.costModels
         width: parent.width
         foreground: root.foreground
         urgent: root.urgent
@@ -2046,6 +2048,9 @@ Column {
     try {
       var json = prices.serialize()
       priceError = ""
+      // The write is ours: record it before it comes back through
+      // onSettingsChanged, or every keystroke rebuilds the rows under the cursor.
+      lastPricesJson = json
       set("costPriceOverrides", json)
     } catch (error) {
       priceError = String(error.message || error)
