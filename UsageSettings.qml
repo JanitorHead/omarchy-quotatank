@@ -1109,7 +1109,13 @@ Column {
         value: UsageLogic.normalizeSecondaryBarWindow(root.value("barWindowSecondary", "none"))
         onChanged: function(next) { root.set("barWindowSecondary", next) }
       }
-      Hint { text: "Each chip line is tagged with the period of the limit it shows: 5h, 7d, 30d." }
+      SwitchRow {
+        objectName: "barShowPeriodsToggle"
+        label: "Show limit period"
+        checked: root.value("barShowPeriods", true) !== false
+        onToggled: root.set("barShowPeriods", !checked)
+      }
+      Hint { text: "Tags each chip line with the period of the limit it shows: 5h, 7d, 30d. Off, chips show only the figure and get narrower." }
 
       SwitchRow {
         objectName: "barShowResetsToggle"

@@ -49,7 +49,7 @@ class ProjectContractTests(unittest.TestCase):
         key_files = {entry["id"] + "KeyFile" for entry in js_registry() if entry["auth"] != "signin"}
         self.assertEqual(keys, {
             "refreshIntervalSec", "enabledProviders", "barDisplayMode", "quotaMode", "barWindow", "barWindowSecondary", "barProviders",
-            "barProviderLimits", "barShowResets", "barResetTimeFormat", "barResetDateFormat",
+            "barProviderLimits", "barShowResets", "barShowPeriods", "barResetTimeFormat", "barResetDateFormat",
             "warningThreshold", "criticalThreshold",
             "usageSource", "cliproxyUrl", "cliproxyKeyFile", "hideAccountEmails", "squareUsageCards", "providerColors", "notifyLimitThresholds", "costPriceOverrides",
             "costLocalProviders", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers", "extraKeys",

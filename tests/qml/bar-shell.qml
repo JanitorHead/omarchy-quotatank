@@ -403,6 +403,21 @@ ShellRoot {
       return true
     },
     function () {
+      var chip = namedChild(widget, "barChip-claude")
+      check(chip.topParts.tag !== "" && namedChild(chip, "barAccountRemainingTag").visible,
+        "a chip line carries its limit period by default: " + JSON.stringify(chip.topParts))
+      widget.settings = Object.assign({}, widget.settings, { barShowPeriods: false })
+      return true
+    },
+    function () {
+      var chip = namedChild(widget, "barChip-claude")
+      check(chip.topParts.tag === "" && chip.bottomParts.tag === "", "Show limit period off drops the tags")
+      check(!namedChild(chip, "barAccountRemainingTag").visible && !namedChild(chip, "barAccountRemainingTopTag").visible
+        && !namedChild(chip, "barAccountRemainingBottomTag").visible, "and hides them, so the chip line keeps no room for one")
+      widget.settings = Object.assign({}, widget.settings, { barShowPeriods: true })
+      return true
+    },
+    function () {
       check(countedEverywhere("claude") === "[0] | [0] | [0]", "one at a time, chip, tile and rows count Work: " + countedEverywhere("claude"))
       check(widget.selectedAccount && widget.selectedAccount.accountId === "main", "the detail shows the counted login")
       // Flashes (M3): a rolling window shedding use stays quiet, a real reset flashes once.

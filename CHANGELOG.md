@@ -6,6 +6,10 @@ All notable changes to this project will be documented here. The format follows
 
 ## Unreleased
 
+### Added
+
+- **Chips without the period tag.** **Settings → Menu bar → Show limit period** (`barShowPeriods`, on by default) can drop the `5h`, `7d` and `30d` tags from the chips, which then take only the room their figures need.
+
 ### Fixed
 
 - **A settings switch logged a `TypeError`.** A switch row read its parent's width after its row was removed, which logged `Cannot read property 'width' of null` on shell start in CLIProxyAPI mode and when the provider rows were rebuilt.

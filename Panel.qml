@@ -73,6 +73,7 @@ Ui.Panel {
   readonly property string barWindowSecondary: UsageLogic.normalizeSecondaryBarWindow(setting("barWindowSecondary", "none"))
   readonly property string barProviderLimits: String(setting("barProviderLimits", "{}"))
   readonly property bool barShowResets: setting("barShowResets", false) === true
+  readonly property bool barShowPeriods: setting("barShowPeriods", true) !== false
   // Clock format for the pace tick's "Now" time: the same reset time setting as the bar.
   readonly property string tickTimeFormat: UsageLogic.barResetFormat("time", setting("barResetTimeFormat", "24h"), setting("barResetDateFormat", "DD/MM"))
   // Optionally drop accounts whose weekly or monthly limit is used up, and a provider once all of them
@@ -1177,6 +1178,7 @@ Ui.Panel {
     }
 
     PlainText {
+      objectName: chipLine.valueName + "Tag"
       visible: chipLine.tag !== ""
       anchors.baseline: chipValue.baseline
       rightPadding: chipLine.spaceWidth
@@ -1303,13 +1305,13 @@ Ui.Panel {
           readonly property string secondaryText: secondaryRemaining === null ? "—"
             : UsageLogic.formatPercent(providerChip.quotaMode === "Remaining"
               ? secondaryRemaining : UsageLogic.usedFromRemaining(secondaryRemaining)) + "%"
-          readonly property string topTag: UsageLogic.barTagFor(reading, topWindow, true)
-          readonly property string bottomTag: UsageLogic.windowShortLabel(secondaryWindow)
+          readonly property string topTag: root.barShowPeriods ? UsageLogic.barTagFor(reading, topWindow, true) : ""
+          readonly property string bottomTag: root.barShowPeriods ? UsageLogic.windowShortLabel(secondaryWindow) : ""
           readonly property string topReset: root.barShowResets
             ? root.barResetText(UsageLogic.windowRowFor(reading, topWindow, true)) : ""
           readonly property string bottomReset: root.barShowResets && windowStacked
             ? root.barResetText(UsageLogic.windowRowFor(reading, secondaryWindow, false)) : ""
-          readonly property string percentTag: topTag !== "" || !moneyChip ? topTag
+          readonly property string percentTag: topTag !== "" || !moneyChip || !root.barShowPeriods ? topTag
             : UsageLogic.rowPeriodTag(UsageLogic.windowRowFor(reading, topWindow, true))
           readonly property string percentLine: (percentTag ? percentTag + " " : "") + shownText + (topReset ? " · " + topReset : "")
           readonly property string topText: failed ? UsageLogic.errorReasonLabel(failure.errorKind)
