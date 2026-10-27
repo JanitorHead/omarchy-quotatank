@@ -616,30 +616,66 @@ def parse_claude_file(path: Path, retention_start_ms: int, cursor: TranscriptCur
 # billing provider in three shapes: `model.id`/`model.providerID`,
 # `model.modelID`, and the older top-level `modelID`/`providerID`.
 
+# Text comes back from SQLite already cut to these lengths, so an oversized row cannot fill memory. Real ids
+# and names are far shorter, a longer message id is skipped, and a project keeps only its folder's name.
+MAX_OPENCODE_ID_CHARS = 256
+MAX_OPENCODE_NAME_CHARS = 256
+MAX_OPENCODE_PATH_CHARS = 4096
+# Rows read from one database, kept or not (another vendor's responses, repeats of the older table): each id
+# is remembered to drop repeats, so this also bounds that memory. More than this and the database is skipped.
+MAX_OPENCODE_ROWS = 4 * MAX_TRANSCRIPT_RECORDS_PER_FILE
+# SQLite's page cache for the query, in KiB; the database is never memory-mapped.
+OPENCODE_CACHE_KIB = 16 * 1024
+
 OPENCODE_QUERY = (
-    "SELECT id, session_id, time_created,"
-    " CAST(COALESCE(json_extract(data, '$.model.id'), json_extract(data, '$.model.modelID'),"
-    " json_extract(data, '$.modelID')) AS TEXT),"
-    " CAST(COALESCE(json_extract(data, '$.model.providerID'), json_extract(data, '$.providerID')) AS TEXT),"
-    " CAST(COALESCE(json_extract(data, '$.tokens.input'), 0) AS INTEGER),"
-    " CAST(COALESCE(json_extract(data, '$.tokens.output'), 0) AS INTEGER),"
-    " CAST(COALESCE(json_extract(data, '$.tokens.reasoning'), 0) AS INTEGER),"
-    " CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),"
-    " CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),"
-    " CAST(COALESCE(json_extract(data, '$.cost'), 0) AS REAL),"
-    " {cwd}"
-    " FROM {table}"
-    " WHERE {condition}"
-    " AND time_created >= ?"
+    "SELECT m.id, substr(m.session_id, 1, {id_chars}), m.time_created,"
+    " substr(CAST(COALESCE(json_extract(m.data, '$.model.id'), json_extract(m.data, '$.model.modelID'),"
+    " json_extract(m.data, '$.modelID')) AS TEXT), 1, {name_chars}),"
+    " substr(CAST(COALESCE(json_extract(m.data, '$.model.providerID'), json_extract(m.data, '$.providerID'))"
+    " AS TEXT), 1, {name_chars}),"
+    " CAST(COALESCE(json_extract(m.data, '$.tokens.input'), 0) AS INTEGER),"
+    " CAST(COALESCE(json_extract(m.data, '$.tokens.output'), 0) AS INTEGER),"
+    " CAST(COALESCE(json_extract(m.data, '$.tokens.reasoning'), 0) AS INTEGER),"
+    " CAST(COALESCE(json_extract(m.data, '$.tokens.cache.read'), 0) AS INTEGER),"
+    " CAST(COALESCE(json_extract(m.data, '$.tokens.cache.write'), 0) AS INTEGER),"
+    " CAST(COALESCE(json_extract(m.data, '$.cost'), 0) AS REAL),"
+    " substr({cwd}, 1, {path_chars})"
+    " FROM {table} AS m"
+    " WHERE {condition} AND typeof(m.id) = 'text' AND length(m.id) <= {id_chars}"
+    " AND m.time_created >= ?"
 )
 
 OPENCODE_TABLES = (
-    # A row whose data is not JSON is skipped, never allowed to fail the whole query.
-    ("session_message", "type = 'assistant' AND json_valid(data)", "NULL"),
-    ("message", "data LIKE '%\"role\"%:%\"assistant\"%'"
-                " AND CASE WHEN json_valid(data) THEN json_extract(data, '$.role') END = 'assistant'",
-     "CASE WHEN json_type(data, '$.path.cwd') = 'text' THEN json_extract(data, '$.path.cwd') END"),
+    # A row whose data is not JSON is skipped, never allowed to fail the whole query. The last field is the
+    # working directory the row names itself, if any.
+    ("session_message", "m.type = 'assistant' AND json_valid(m.data)", ""),
+    ("message", "m.data LIKE '%\"role\"%:%\"assistant\"%'"
+                " AND CASE WHEN json_valid(m.data) THEN json_extract(m.data, '$.role') END = 'assistant'",
+     "CASE WHEN json_type(m.data, '$.path.cwd') = 'text' THEN json_extract(m.data, '$.path.cwd') END"),
 )
+
+
+def opencode_directory(own: str, session_tables: list[str]) -> str:
+    """SQL for a row's working directory: its own, else the one beside its session in `session_tables` (in
+    order: OpenCode 2's `session_v2` supersedes the older `session`). Each row looks its session up by id, so
+    no table of sessions is ever held in memory."""
+    choices = [own] if own else []
+    choices += [f"(SELECT s.directory FROM {table} AS s WHERE s.id = m.session_id"
+                " AND typeof(s.directory) = 'text' LIMIT 1)" for table in session_tables]
+    if not choices:
+        return "NULL"
+    return choices[0] if len(choices) == 1 else "COALESCE(" + ", ".join(choices) + ")"
+
+
+def opencode_session_tables(connection: sqlite3.Connection, tables: set[str]) -> list[str]:
+    """The session tables that name a directory, newest first; an older one without the column is left out."""
+    found = []
+    for table in ("session_v2", "session"):
+        if table in tables:
+            columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+            if {"id", "directory"} <= columns:
+                found.append(table)
+    return found
 
 
 class DbSignature:
@@ -672,23 +708,6 @@ def opencode_signature(path: Path) -> DbSignature | None:
     return DbSignature(size, device, inode, max(stamps))
 
 
-def opencode_projects(connection: sqlite3.Connection, tables: set[str]) -> dict[str, str]:
-    """`session_id` → the working directory beside it. OpenCode 2 names it in `session_v2`, which
-    supersedes the older `session` table when both exist."""
-    projects: dict[str, str] = {}
-    for table in ("session", "session_v2"):
-        if table not in tables:
-            continue
-        try:
-            rows = connection.execute(f"SELECT id, directory FROM {table}")
-        except sqlite3.Error:
-            continue
-        for session_id, directory in rows:
-            if isinstance(session_id, str) and session_id and isinstance(directory, str) and directory:
-                projects[session_id] = directory
-    return projects
-
-
 def parse_opencode_database(path: Path, retention_start_ms: int,
                             cursor: TranscriptCursor | None = None) -> list[UsageRecord] | None:
     # The database is queried, never read positionally, so the transcript
@@ -700,16 +719,25 @@ def parse_opencode_database(path: Path, retention_start_ms: int,
         return None
     try:
         connection.execute("PRAGMA query_only = ON")
+        connection.execute(f"PRAGMA cache_size = -{OPENCODE_CACHE_KIB}")
+        connection.execute("PRAGMA mmap_size = 0")
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        projects = opencode_projects(connection, tables)
+        session_tables = opencode_session_tables(connection, tables)
         seen: set[str] = set()
-        for table, condition, cwd_column in OPENCODE_TABLES:
+        rows_read = 0
+        for table, condition, own_directory in OPENCODE_TABLES:
             if table not in tables:
                 continue
             newest = connection.execute(f"SELECT MAX(time_created) FROM {table}").fetchone()
             unit = 1000 if newest and newest[0] is not None and int(newest[0]) < 1e12 else 1
-            query = OPENCODE_QUERY.format(table=table, condition=condition, cwd=cwd_column)
+            query = OPENCODE_QUERY.format(table=table, condition=condition,
+                                          cwd=opencode_directory(own_directory, session_tables),
+                                          id_chars=MAX_OPENCODE_ID_CHARS, name_chars=MAX_OPENCODE_NAME_CHARS,
+                                          path_chars=MAX_OPENCODE_PATH_CHARS)
             for row in connection.execute(query, (retention_start_ms // unit,)):
+                rows_read += 1
+                if rows_read > MAX_OPENCODE_ROWS:
+                    raise TranscriptLimitError("too many responses in one database")
                 (raw_id, session, created, model, billed, inp, out, reasoning,
                  cache_read, cache_write, recorded, cwd) = row
                 if not isinstance(raw_id, str) or not raw_id or created is None or raw_id in seen:
@@ -733,8 +761,8 @@ def parse_opencode_database(path: Path, retention_start_ms: int,
                 recorded_cost = finite_number(recorded)
                 if recorded_cost is not None and recorded_cost <= 0:
                     recorded_cost = None
-                if not isinstance(cwd, str) or not cwd:
-                    cwd = projects.get(session, "") if isinstance(session, str) else ""
+                if not isinstance(cwd, str):
+                    cwd = ""
                 record = UsageRecord(
                     provider=provider,
                     timestamp_ms=timestamp,

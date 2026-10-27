@@ -58,11 +58,10 @@ Column {
       var row = prices.get(i)
       rows.push(Object.assign({}, row, { model: row.modelId }))
     }
-    try { return UsageLogic.encodeCostPrices(rows) }
-    catch (error) {
-      focusField(error.rowIndex === undefined ? 0 : error.rowIndex, error.fieldKey || "modelId")
-      throw error
-    }
+    // Editing is saved as it happens, so an incomplete row is an expected way
+    // station, not a submit to answer with stolen focus: the error is reported
+    // and the row is left unpriced until it is complete.
+    return UsageLogic.encodeCostPrices(rows)
   }
 
   function findItem(item, name) {
