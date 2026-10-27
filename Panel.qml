@@ -141,16 +141,25 @@ Ui.Panel {
     ompActivity && ompActivity.recentByAccount ? ompActivity.recentByAccount : null,
     proxyMode ? activityBackend.providers : [])
   readonly property var accountModeChoices: UsageLogic.parseAccountModes(setting("accountModes", "{}"))
+  readonly property var accountStateOptions: ({ modes: accountModeChoices, proxyMode: proxyMode, nowSeconds: nowSeconds,
+    recentByAccount: recentByAccount, warningThreshold: warningThreshold, criticalThreshold: criticalThreshold })
   readonly property var accountStates: {
     var states = {}
     for (var i = 0; i < providers.length; i++)
-      states[String(providers[i].id)] = UsageLogic.accountState(providers[i], { modes: accountModeChoices,
-        proxyMode: proxyMode, nowSeconds: nowSeconds, recentByAccount: recentByAccount,
-        warningThreshold: warningThreshold, criticalThreshold: criticalThreshold })
+      states[String(providers[i].id)] = UsageLogic.accountState(providers[i], accountStateOptions)
     return states
   }
   function accountStateOf(reading) {
     return reading ? accountStates[String(reading.id)] || null : null
+  }
+  // The bar's chips index the accounts the bar shows. A reading trimmed of its used-up accounts has
+  // fewer accounts than the state worked out for the full reading, so it gets a state of its own,
+  // from the reading itself: its counted account, dots and chips per account then point at accounts
+  // that are still there, even while the trim and the shared states update one after the other.
+  function barAccountStateOf(reading) {
+    var state = accountStateOf(reading)
+    if (!state || UsageLogic.providerAccounts(reading).length === state.rings.length) return state
+    return UsageLogic.accountState(reading, accountStateOptions)
   }
   // The provider on screen: one at a time ("single") or used together, the counted accounts, row order.
   readonly property var providerState: accountStateOf(providerSummary)
@@ -1002,7 +1011,7 @@ Ui.Panel {
     return map
   }
   readonly property var barChipEntries: UsageLogic.barChipEntries(root.percentageProviders, barAccountMode,
-    function (provider) { return root.accountStateOf(provider) }, setting("extraKeys", "{}"), barMaxChips)
+    function (provider) { return root.barAccountStateOf(provider) }, setting("extraKeys", "{}"), barMaxChips)
   onBarChipEntriesChanged: syncBarChips()
 
   // Keeps one row per chip key, moved and updated in place, so chips survive readings.
@@ -1244,8 +1253,9 @@ Ui.Panel {
           readonly property bool multiAccount: accounts.length >= 2
           // Chips per account: this chip is one account of its provider.
           readonly property bool accountChip: accountIndex >= 0 && accountIndex < accounts.length
-          // The provider's account state, shared with its tile, the Limits rows and the runway.
-          readonly property var accountState: multiAccount ? root.accountStateOf(modelData) : null
+          // The provider's account state, shared with its tile, the Limits rows and the runway; with
+          // used-up accounts hidden, that of the accounts the bar still shows.
+          readonly property var accountState: multiAccount ? root.barAccountStateOf(modelData) : null
           readonly property string accountMode: accountState ? accountState.mode : "single"
           readonly property var counted: accountState ? accountState.counted : []
           readonly property bool countedAccount: accountChip && counted.indexOf(accountIndex) !== -1
