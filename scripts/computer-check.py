@@ -172,9 +172,11 @@ def test(host: str, providers: str, omp: str) -> dict[str, Any]:
     steps.append(step("found", ok, text, "" if ok else f"Sign in to your agents on {host}, then test again."))
     installed = answer.get("installed")
     harnesses = [item for item in installed if isinstance(item, str)] if isinstance(installed, list) else []
-    unread = [provider_name(answer, item) for item in harnesses if item not in read]
+    # Only providers that are monitored here were asked for: the others show under Found once it is added.
+    monitored = set(providers.split(","))
+    unread = [provider_name(answer, item) for item in harnesses if item in monitored and item not in read]
     if unread:
-        steps.append(step("harnesses", True, "Installed there, not read: " + ", ".join(unread[:8])))
+        steps.append(step("harnesses", True, "Installed there, not signed in or not read: " + ", ".join(unread[:8])))
     omp_state = answer.get("omp") if isinstance(answer.get("omp"), dict) else {}
     return {"ok": ok, "steps": steps, "found": {"python": python, "harnesses": harnesses, "accounts": accounts,
                                                "omp": bool(omp_state.get("installed"))}}

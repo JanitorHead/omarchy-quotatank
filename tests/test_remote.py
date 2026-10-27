@@ -191,17 +191,19 @@ class ComputerCheckTests(FakeSsh):
             self.assertFalse(result["ok"])
             self.assertEqual((result["found"]["accounts"], result["found"]["harnesses"]), (0, []))
 
-    def test_a_test_names_the_agents_installed_there_that_it_could_not_read(self):
+    def test_a_test_names_the_monitored_agents_installed_there_that_it_could_not_read(self):
         payload = {"providers": [dict(reading("claude", "me@example.com"), name="Claude"),
                                  usage.error_provider("codex", "no_credentials", "Codex is not signed in.")],
-                   "installed": ["claude", "codex"]}
+                   "installed": ["claude", "codex", "opencode"]}
 
         def answer_for(host, script, args, seconds):
             return {"python": "3.12.0", "machine": "another"} if script == "quotatank_remote.py" else payload
         with mock.patch.object(remote, "run_reader", side_effect=answer_for):
             result = check.test("devbox", "claude,codex", "off")
         self.assertEqual([(entry["id"], entry["text"]) for entry in result["steps"][3:]],
-                         [("found", "1 account: Claude"), ("harnesses", "Installed there, not read: OpenAI Codex")])
+                         [("found", "1 account: Claude"),
+                          ("harnesses", "Installed there, not signed in or not read: OpenAI Codex")],
+                         "OpenCode is not monitored here, so it was not asked for")
         self.assertTrue(result["ok"])
 
     def test_this_computer_is_not_added_again(self):
