@@ -2064,8 +2064,12 @@ def read_computer_records(computer_id: str, host: str, provider_ids: list[str], 
         args += ["--time-zone", zone_key]  # Days begin at the same moment on both computers.
     path = state_path("computers", state_dir) / f"{computer_id}-costs.json"
     try:
-        answer = quotatank_remote.run_reader(host, "cost-fetch.py", args, COMPUTER_READ_SECONDS, compress=True,
-                                             max_bytes=MAX_COMPUTER_RECORDS_BYTES)
+        try:
+            answer = quotatank_remote.run_reader(host, "cost-fetch.py", args, COMPUTER_READ_SECONDS, compress=True,
+                                                 max_bytes=MAX_COMPUTER_RECORDS_BYTES)
+        except (OSError, ValueError) as exc:
+            # Failing here (the runtime folder, the readers' files, starting ssh) must not cost the other sources.
+            raise quotatank_remote.RemoteFailure("failed", f"Could not start ssh for {host} on this computer.", "") from exc
         if not isinstance(answer, dict) or not isinstance(answer.get("records"), list):
             raise quotatank_remote.RemoteFailure("failed", f"Quotatank's reader on {host} sent an answer this "
                                                  "version cannot read.")

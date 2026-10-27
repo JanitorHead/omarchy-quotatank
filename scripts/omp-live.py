@@ -331,14 +331,15 @@ def lists_resets(version: str) -> bool:
     return len(parts) >= 2 and (int(parts[0]), int(parts[1])) >= RESET_LISTING_VERSION
 
 
-def read_reset_listing() -> str | None:
+def read_reset_listing(state_dir: Path | None = None) -> str | None:
     """Output of `omp usage reset --json`, which lists each account's credential id. None when omp is missing,
-    not set up here, older than 18.9 or not omp at all, or when the listing fails."""
+    not set up here, older than 18.9 or not omp at all, or when the listing fails. omp runs in `state_dir`'s
+    work folder (another computer's reader passes Quotatank's folder there)."""
     omp = usage.omp_executable()
-    if not omp or not usage.omp_set_up() or not lists_resets(usage.omp_version(omp)):
+    if not omp or not usage.omp_set_up() or not lists_resets(usage.omp_version(omp, state_dir)):
         return None
     try:
-        code, output = usage.run_omp(omp, RESET_LISTING_ARGUMENTS, ACCOUNTS_TIMEOUT, MAX_LISTING_BYTES)
+        code, output = usage.run_omp(omp, RESET_LISTING_ARGUMENTS, ACCOUNTS_TIMEOUT, MAX_LISTING_BYTES, state_dir)
     except (OSError, TimeoutError, ValueError):
         return None
     return output.decode("utf-8", "replace") if code == 0 else None
@@ -417,7 +418,8 @@ def run(args: argparse.Namespace, emit: Callable[[dict[str, Any]], None]) -> Non
     """Tail session files and send heartbeats until stopped. Session files are read only while omp is set up
     here. However the loop ends (a closed stdout raises), an omp listing still running ends with it."""
     try:
-        accounts = AccountMap(emit) if args.accounts else None
+        state_dir = getattr(args, "state_dir", None)
+        accounts = AccountMap(emit, lambda: read_reset_listing(state_dir)) if args.accounts else None
         if accounts is not None:
             accounts.refresh()
         tailer = Tailer(omp_sessions_root())
@@ -440,6 +442,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--local", action="store_true", help="report the requests omp records in its session files")
     parser.add_argument("--accounts", action="store_true", help="with --local, map omp credential ids to accounts")
+    parser.add_argument("--state-dir", type=Path, help="where omp runs from (default: Quotatank's state folder)")
     args = parser.parse_args()
     if args.accounts and not args.local:
         parser.error("--accounts requires --local")

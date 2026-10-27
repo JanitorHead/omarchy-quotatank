@@ -45,18 +45,12 @@ Item {
   readonly property var providers: UsageLogic.withoutHiddenAccounts(allProviders, setting("hiddenAccounts", "{}"))
   // Providers set up on this computer, monitored or not; Settings offers the ones not monitored yet.
   readonly property var detected: payload ? UsageLogic.listOrEmpty(payload.detected) : []
-  // Providers whose CLI is on PATH, or null before a payload says: Settings offers Sign in for these
-  // and Install for the rest.
-  readonly property var installed: payload && payload.installed !== undefined ? UsageLogic.listOrEmpty(payload.installed) : null
   // Other computers under Settings → Sources, read over SSH with the same providers.
   readonly property var computerArguments: UsageLogic.computerArguments(settings)
   // What the backend says about each computer: { id, host, status, readAt, kind, message, fix, installed, omp }.
   readonly property var computers: payload ? UsageLogic.listOrEmpty(payload.computers) : []
-  // What the backend says about each proxy: { id, status, readAt, errorKind, message, detected }.
-  readonly property var proxies: payload ? UsageLogic.listOrEmpty(payload.proxies) : []
-  // Where Sign in and Install open a terminal (null: this computer), and what is installed there.
+  // Where Sign in and Install open a terminal (null: this computer).
   readonly property var mainComputer: UsageLogic.mainComputer(settings)
-  readonly property var setupInstalled: UsageLogic.setupInstalled(payload, mainComputer)
   readonly property string connectionId: JSON.stringify([keyFiles, extraKeyArguments, ompArguments, computerArguments,
     proxyArguments])
   readonly property string scriptPath: localPath(Qt.resolvedUrl("scripts/usage-fetch.py"))

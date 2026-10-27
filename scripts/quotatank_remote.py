@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tarfile
@@ -42,7 +43,7 @@ EXIT_NO_BUNDLE = 86
 EXIT_OLD_PYTHON = 87
 # Folders where people keep python3, omp and the provider CLIs that a non-interactive SSH session's PATH misses.
 REMOTE_PATH = "$HOME/.local/bin:$HOME/.local/share/mise/shims:$HOME/.bun/bin:$HOME/.cargo/bin"
-STATE_SCRIPTS = frozenset({"usage-fetch.py", "cost-fetch.py"})
+STATE_SCRIPTS = frozenset({"usage-fetch.py", "cost-fetch.py", "omp-live.py"})
 
 
 class RemoteFailure(Exception):
@@ -74,15 +75,19 @@ def bundle_id(folder: Path = HERE) -> str:
 
 
 def runtime_folder() -> Path:
-    """Where the SSH connection sockets live: private to this user, gone at logout."""
+    """Where the SSH connection sockets live: private to this user, gone at logout. Without XDG_RUNTIME_DIR it
+    is a folder in /tmp, which another account could have made first: it must be ours and not a symlink."""
     base = os.environ.get("XDG_RUNTIME_DIR")
     folder = Path(base) / "quotatank" if base else Path(f"/tmp/quotatank-{os.getuid()}")
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = os.lstat(folder)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise RemoteFailure("failed", f"{folder} belongs to another account: remove it, then try again.", "")
     os.chmod(folder, 0o700)
     return folder
 
 
-def ssh_argv(host: str, remote_command: str, *, tty: bool = False, compress: bool = False) -> list[str]:
+def ssh_argv(host: str, remote_command: str, *, compress: bool = False) -> list[str]:
     """ssh with keys only (BatchMode), known host keys only, and one shared connection per computer."""
     if not valid_destination(host):
         raise RemoteFailure("failed", "That is not an SSH destination Quotatank can use.", "")
@@ -92,8 +97,6 @@ def ssh_argv(host: str, remote_command: str, *, tty: bool = False, compress: boo
     argv += ["-o", "ControlPath=" + str(runtime_folder() / "ssh-%C")]
     if compress:
         argv.append("-C")
-    if tty:
-        argv.append("-t")
     return argv + ["--", host, remote_command]
 
 
@@ -126,13 +129,15 @@ def reader_command(script: str, args: list[str], bundle: str | None = None) -> s
 
 
 def install_command(bundle: str) -> str:
-    """Unpack the bundle from stdin next to its final place, check it, then swap it in and drop older ones."""
+    """Unpack the bundle from stdin into a staging folder of its own, check it, then swap it in and drop older ones."""
     readers = f"{REMOTE_ROOT}/readers"
-    staged = f"{readers}/{bundle}.tmp"
-    return posix(prologue() + f"umask 077; mkdir -p {readers} && rm -rf {staged} && mkdir {staged} "
+    staged = f"{readers}/{bundle}.tmp.$$"
+    return posix(prologue() + f"umask 077; mkdir -p {readers} && mkdir {staged} "
                  f"&& tar -x -f - -C {staged} && python3 {staged}/quotatank_remote.py verify {bundle} "
-                 f"&& : > {staged}/.ok && rm -rf {readers}/{bundle} && mv {staged} {readers}/{bundle} "
-                 f'&& for entry in {readers}/*; do [ "$entry" = {readers}/{bundle} ] || rm -rf "$entry"; done')
+                 f"&& : > {staged}/.ok && if [ -f {readers}/{bundle}/.ok ]; then rm -rf {staged}; "
+                 f"else rm -rf {readers}/{bundle} && mv {staged} {readers}/{bundle}; fi "
+                 f'&& for entry in {readers}/*; do case "$entry" in *.tmp.*) ;; '
+                 f'*) [ "$entry" = {readers}/{bundle} ] || rm -rf "$entry";; esac; done')
 
 
 def remove_command() -> str:
@@ -160,7 +165,7 @@ def classify(returncode: int, stderr: str, host: str) -> RemoteFailure:
                              "Install Python 3.10 or newer there (python3 on its PATH).")
     if returncode == EXIT_OLD_PYTHON:
         return RemoteFailure("python-old", f"Python on {host} is older than 3.10.", "Install Python 3.10 or newer there.")
-    if returncode == 255 or "ssh:" in text or "permission denied" in text:
+    if returncode == 255:
         if "host key verification failed" in text or "remote host identification has changed" in text \
                 or "host key for" in text and "has changed" in text or "no matching host key" in text:
             return RemoteFailure("host-key", f"{host}'s host key is not known here yet, or it changed.",
@@ -177,7 +182,8 @@ def classify(returncode: int, stderr: str, host: str) -> RemoteFailure:
             return RemoteFailure("dns", f"No computer called {host} was found.",
                                  "Check the name, or add it to ~/.ssh/config.")
         if "connection refused" in text:
-            return RemoteFailure("refused", f"{host} refused the connection: is its SSH server running?", "")
+            return RemoteFailure("refused", f"{host} refused the connection: is its SSH server running?",
+                                 f"On {host}: sudo systemctl enable --now sshd")
         if "timed out" in text:
             return RemoteFailure("timeout", f"{host} did not answer in time: is it on and online?", "")
         if "no route to host" in text or "network is unreachable" in text or "host is down" in text:

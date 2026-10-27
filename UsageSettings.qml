@@ -66,7 +66,6 @@ Column {
   property var lastPayload: null
   readonly property var shownReadings: lastPayload ? UsageLogic.listOrEmpty(lastPayload.providers) : []
   readonly property var shownDetected: lastPayload ? UsageLogic.listOrEmpty(lastPayload.detected) : []
-  readonly property var shownInstalled: lastPayload && lastPayload.installed !== undefined ? UsageLogic.listOrEmpty(lastPayload.installed) : null
   // The provider whose sign-in or install was just started from here, until its next good reading.
   property string pendingSetup: ""
   onShownReadingsChanged: {
@@ -102,16 +101,12 @@ Column {
   readonly property int rowMs: reducedMotion ? 0 : (motion ? motion.row : 260)
   readonly property int staggerMs: reducedMotion ? 0 : 60
 
-  // ---- omp (Oh My Pi) on this computer: its accounts and its live feed. The panel passes its live feed in.
-  property var ompActivity: null
+  // ---- omp (Oh My Pi) on this computer: its accounts.
   readonly property var omp: UsageLogic.ompSettings(settings)
   readonly property var ompStatus: lastPayload && lastPayload.omp && typeof lastPayload.omp === "object" ? lastPayload.omp : null
   // true, false, or null while no refresh has said.
   readonly property var ompFound: UsageLogic.ompFound(ompStatus)
   readonly property var ompLocalLine: UsageLogic.ompLocalStatus(ompStatus, omp.local, usageLoading)
-  readonly property string ompLiveState: ompActivity ? String(ompActivity.state) : ""
-  readonly property string usageFetchPath: decodeURIComponent(String(Qt.resolvedUrl("scripts/usage-fetch.py")).replace(/^file:\/\//, ""))
-  readonly property string costFetchPath: decodeURIComponent(String(Qt.resolvedUrl("scripts/cost-fetch.py")).replace(/^file:\/\//, ""))
 
   // Changes are batched per control: { key: value }. The host persists them and reports back
   // through finishSave(), which also commits or discards a staged secret.
@@ -320,9 +315,26 @@ Column {
     if (path !== "") {
       var request = {}
       request[settingKey] = path
-      keyRemover.request = request
-      keyRemover.running = true
+      removeFiles(request)
     }
+  }
+
+  // Deletes private files through management-key.py, one request at a time: starting keyRemover again while
+  // it runs would drop the request. Restore's leftover files (removeStaleKeyFiles) go once these are done.
+  property var keyRemovals: []
+  function removeFiles(request) {
+    keyRemovals = keyRemovals.concat([request])
+    nextKeyRemoval()
+  }
+  function nextKeyRemoval() {
+    if (keyRemover.running) return
+    if (keyRemovals.length === 0) {
+      removeStaleKeyFiles()
+      return
+    }
+    keyRemover.request = keyRemovals[0]
+    keyRemovals = keyRemovals.slice(1)
+    keyRemover.running = true
   }
 
   // ---- Sources: entries are saved whole, in place (UsageLogic.sourcesWith).
@@ -340,10 +352,7 @@ Column {
     var request = {}
     if (entry.keyFile) request["proxyKey_" + entry.id] = entry.keyFile
     if (entry.keeperPasswordFile) request["keeperPassword_" + entry.id] = entry.keeperPasswordFile
-    if (entry.tokenFile) request["t3Token_" + entry.id] = entry.tokenFile
-    if (Object.keys(request).length === 0) return
-    keyRemover.request = request
-    keyRemover.running = true
+    if (Object.keys(request).length > 0) removeFiles(request)
   }
   // A source's secret (`field` names where its path is kept), written privately by management-key.py.
   function saveSourceKey(entry, field, settingKey, secret) {
@@ -365,8 +374,7 @@ Column {
     if (path === "") return
     var request = {}
     request[settingKey] = path
-    keyRemover.request = request
-    keyRemover.running = true
+    removeFiles(request)
   }
 
   // ---- Other computers: a Test connects, copies the readers and reads once (scripts/computer-check.py);
@@ -406,14 +414,22 @@ Column {
     newComputerHost = ""
   }
 
-  // Forgets the computer here and, in the background, deletes Quotatank's readers there.
+  // Forgets the computer here and, in the background, deletes Quotatank's readers there. Removals run one
+  // after another: a Process started again while it runs would drop the second.
+  property var computerRemovals: []
   function removeComputer(entry) {
     if (!entry) return
     var changes = { sources: UsageLogic.sourcesWith(settings, entry.id, null) }
     if (String(value("mainComputer", "")) === entry.id) changes.mainComputer = ""
     setMany(changes)
     if (computerTested === entry.host) computerTested = ""
-    computerRemover.command = ["python3", computerCheckPath, "--remove", entry.host, "--id", entry.id]
+    computerRemovals = computerRemovals.concat([["python3", computerCheckPath, "--remove", entry.host, "--id", entry.id]])
+    nextComputerRemoval()
+  }
+  function nextComputerRemoval() {
+    if (computerRemover.running || computerRemovals.length === 0) return
+    computerRemover.command = computerRemovals[0]
+    computerRemovals = computerRemovals.slice(1)
     computerRemover.running = true
   }
 
@@ -445,6 +461,7 @@ Column {
     id: computerRemover
     stdout: SplitParser { onRead: function(data) {} }
     stderr: SplitParser { splitMarker: "" }
+    onRunningChanged: if (!running) Qt.callLater(root.nextComputerRemoval)
   }
 
   // Forgets one of a provider's extra keys and deletes its private file.
@@ -452,8 +469,7 @@ Column {
     set("extraKeys", UsageLogic.removeExtraKey(value("extraKeys", "{}"), providerId, key.id))
     var request = {}
     request["extraKey_" + providerId + "_" + key.id] = key.file
-    keyRemover.request = request
-    keyRemover.running = true
+    removeFiles(request)
   }
 
   function validSecret(text) {
@@ -668,7 +684,8 @@ Column {
 
       Column {
         objectName: "addComputer"
-        visible: root.computerEntries.length < UsageLogic.SOURCE_LIMIT
+        // Every kind of source counts toward the limit parseSources reads back.
+        visible: root.sourceEntries.length < UsageLogic.SOURCE_LIMIT
         width: parent.width
         spacing: Style.spacing.sm
         Label { text: "Add a computer"; font.bold: true }
@@ -758,11 +775,11 @@ Column {
 
       Hint {
         text: "Reads the Claude, Codex, Kimi and Antigravity accounts a " + root.proxyName + " server holds, beside this "
-          + "computer's and the other computers'. An account already read fine elsewhere is not asked for again."
+          + "computer's and the other computers'. An account this computer already read fine is not asked for again."
       }
       Ui.Button {
         objectName: "addProxy"
-        visible: !root.proxyEntry
+        visible: !root.proxyEntry && root.sourceEntries.length < UsageLogic.SOURCE_LIMIT
         text: "Add a proxy"
         bordered: true
         foreground: root.foreground
@@ -916,8 +933,7 @@ Column {
               if (path !== "") {
                 var request = {}
                 request["t3Token_" + serverRow.serverId] = path
-                keyRemover.request = request
-                keyRemover.running = true
+                root.removeFiles(request)
               }
             }
           }
@@ -935,7 +951,7 @@ Column {
       Ui.Button {
         objectName: "addT3Server"
         text: "Add T3 server"
-        enabled: servers.count < 4
+        enabled: servers.count < 4 && root.sourceEntries.length < UsageLogic.SOURCE_LIMIT
         bordered: true
         foreground: root.foreground
         fontFamily: root.fontFamily
@@ -2010,7 +2026,7 @@ Column {
   }
   Connections {
     target: keyRemover
-    function onRunningChanged() { if (!keyRemover.running) Qt.callLater(root.removeStaleKeyFiles) }
+    function onRunningChanged() { if (!keyRemover.running) Qt.callLater(root.nextKeyRemoval) }
   }
 
   // A partial restore (keys or preferences only) leaves the rest as it is, so only files that the merged
@@ -2068,9 +2084,14 @@ Column {
       setProperty(index, key, value)
       persist()
     }
+    // The server's token file goes with it, as Remove token does.
     function removeServer(index) {
+      var row = get(index)
+      var request = {}
+      if (row.tokenFile !== "") request["t3Token_" + row.serverId] = row.tokenFile
       remove(index)
       persist()
+      if (Object.keys(request).length > 0) root.removeFiles(request)
     }
     // Rows without a name or URL are kept on screen but not saved, so a half-typed server never
     // reaches the scanner. The T3 entries follow the other sources.
@@ -2141,11 +2162,6 @@ Column {
   component Hint: Label {
     color: Qt.darker(root.foreground, 1.5)
     font.pixelSize: Style.font.caption
-  }
-
-  // Where the command below it runs ("On the other computer").
-  component WhereLabel: Hint {
-    topPadding: Style.spacing.xs
   }
 
   // A state mark and one line of status: a filled dot while something is found (accent) or failing
@@ -2248,24 +2264,6 @@ Column {
     Timer { id: copiedReset; interval: 1600; onTriggered: { commandBlock.copied = false; commandBlock.failed = false } }
   }
 
-  // A caution in running text, marked by a bar in the alert colour.
-  component Warning: Item {
-    id: warning
-    property string text: ""
-    width: parent.width
-    implicitHeight: warningText.implicitHeight
-    height: implicitHeight
-    Rectangle { width: Style.space(2); height: parent.height; color: root.urgent }
-    Label {
-      id: warningText
-      objectName: warning.objectName + "Text"
-      x: Style.space(2) + Style.spacing.md
-      width: parent.width - x
-      text: warning.text
-      font.pixelSize: Style.font.caption
-    }
-  }
-
   // One finding of a Test: ✓ in the accent colour, ✕ and the text in the alert colour, › for a note.
   // It fades and rises in after `delay`, so a result's lines arrive one after another.
   component ResultLine: Item {
@@ -2316,8 +2314,7 @@ Column {
   }
 
   // A Test button and what the test found: after 300 ms without an answer a spinner says what it is
-  // waiting for; then one line per finding. `liveLine` follows something that keeps changing after the
-  // test, such as omp's live feed.
+  // waiting for; then one line per finding.
   component TestBlock: Column {
     id: test
     property bool running: false
@@ -2325,7 +2322,6 @@ Column {
     property string blockedReason: ""
     property string waitingText: "Testing…"
     property var lines: []
-    property var liveLine: null
     property bool slow: false
     signal requested()
     width: parent.width
@@ -2393,12 +2389,6 @@ Column {
         line: modelData
         delay: index * root.staggerMs
       }
-    }
-    ResultLine {
-      objectName: test.objectName + "Live"
-      visible: !test.running && test.lines.length > 0 && test.liveLine !== null
-      line: test.liveLine || ({ tone: "info", text: "" })
-      delay: test.lines.length * root.staggerMs
     }
   }
 

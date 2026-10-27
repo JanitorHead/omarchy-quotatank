@@ -1760,9 +1760,10 @@ function accountResetActionable(account) {
 function accountResetNote(account) {
   if (!accountResetShown(account) || !(accountResetCount(account) > 0) || accountResetActionable(account))
     return ""
-  if (account.origin === "omp") return "Apply it in omp: omp usage reset."
   var computer = readingComputer(account)
-  if (computer) return "Its sign-in is on " + String(computer.name || "another computer") + ": apply it there."
+  var where = computer ? String(computer.name || "another computer") : ""
+  if (account.origin === "omp") return "Apply it in omp" + (where ? " on " + where : "") + ": omp usage reset."
+  if (computer) return "Its sign-in is on " + where + ": apply it there."
   return CLAUDE_RESET_NOTES[String(account.credits.resetCreditsReason || "")] || CLAUDE_RESET_NOTES.unavailable
 }
 
@@ -2184,6 +2185,8 @@ function syncKeyedOrder(list, keys) {
 
 var SOURCE_KINDS = ["computer", "proxy", "t3"]
 var SOURCE_LIMIT = 16
+// The providers a CLIProxyAPI server has limits for (CLIPROXY_QUOTA_PROVIDERS in scripts/usage-fetch.py).
+var PROXY_PROVIDERS = ["claude", "codex", "kimi", "antigravity"]
 var SOURCE_FIELDS = {
   computer: ["host"],
   proxy: ["url", "keyFile", "keeperUrl", "keeperPasswordFile"],
@@ -2309,11 +2312,17 @@ function migrateSources(settings) {
   var list = parseSources(source)
   var proxyUrl = text("cliproxyUrl")
   var proxyMode = text("usageSource") === "cliproxy"
-  if (proxyMode || (text("costKeeperUrl") !== "" && proxyUrl !== "")) {
+  // A Keeper was only ever set up for a proxy, also one left at the default address (which is not stored).
+  // A 2.3 backup restored over Sources that already have a proxy keeps that one (the widget reads one).
+  var hasProxy = list.some(function(entry) { return entry.kind === "proxy" })
+  if (!hasProxy && (proxyMode || text("costKeeperUrl") !== "")) {
     list.push({ id: newSourceId("proxy", list), kind: "proxy", on: proxyMode,
       url: proxyUrl !== "" ? proxyUrl : "http://127.0.0.1:8317", keyFile: text("cliproxyKeyFile"),
       keeperUrl: text("costKeeperUrl"), keeperPasswordFile: text("costKeeperPasswordFile") })
   }
+  // In proxy mode only the proxy was read: monitoring what it reads keeps the bar as it was, and what this
+  // computer has besides arrives under Found.
+  if (proxyMode) changes.enabledProviders = PROXY_PROVIDERS.slice()
   var servers = []
   try { servers = JSON.parse(text("costT3Servers") || "[]") } catch (e) { servers = [] }
   if (Array.isArray(servers)) {
@@ -2477,8 +2486,15 @@ function computerTestResult(reply, host) {
   var steps = listOrEmpty(reply.steps)
   for (var i = 0; i < steps.length; i++) {
     if (!steps[i] || typeof steps[i].text !== "string") continue
-    result.lines.push({ tone: steps[i].ok === true ? "ok" : "error", text: steps[i].text })
+    // "harnesses" names what is installed there but was not read: a note, not a passed step.
+    var tone = steps[i].id === "harnesses" ? "info" : steps[i].ok === true ? "ok" : "error"
+    result.lines.push({ tone: tone, text: steps[i].text })
     if (steps[i].ok !== true && result.fix === "") result.fix = String(steps[i].fix || "")
+  }
+  if (result.lines.length === 0) {
+    // Too large to read (probeError "tooLarge") or not the shape this version sends.
+    result.lines = [{ tone: "error", text: "The test sent an answer this version cannot read. Update Quotatank, then try again." }]
+    return result
   }
   var failed = steps.filter(function(entry) { return entry && entry.ok !== true })
   result.ok = reply.ok === true
@@ -3074,6 +3090,11 @@ function accountSourceKind(account) {
   return "omarchy"
 }
 
+// Whether omp holds the account's sign-in, here or on the computer that read it.
+function fromOmp(account) {
+  return !!account && (account.origin === "omp" || accountSourceKind(account) === "omp")
+}
+
 function accountSourceLabel(kind) {
   if (kind === "omp") return "omp"
   if (kind === "key") return "key"
@@ -3221,7 +3242,7 @@ function accountModeText(provider, mode) {
     var omp = !!provider.pool
     for (var i = 0; i < accounts.length && !omp; i++) {
       var origins = listOrEmpty(accounts[i] && accounts[i].origins)
-      omp = accountSourceKind(accounts[i]) === "omp" || contains(origins, "omp")
+      omp = fromOmp(accounts[i]) || contains(origins, "omp")
     }
     return "Used together" + (omp ? " · omp" : "")
   }
@@ -3602,11 +3623,13 @@ function accountEvents(previous, providers, nowSeconds, warningThreshold) {
       var account = readings[a]
       var accountId = accounts.length > 0 ? String(account.accountId || "") : ""
       entry.seen[accountId] = true
-      if (account.status === "error" && account.errorKind === "expired" && accountSourceKind(account) === "omp") {
+      if (account.status === "error" && account.errorKind === "expired" && fromOmp(account)) {
         entry.expired[accountId] = true
+        var there = readingComputer(account)
         if (before && before.seen && before.seen[accountId] === true && before.expired && before.expired[accountId] !== true)
           events.push({ id: "omp-expired|" + id + "|" + accountId + "|" + now, kind: "omp-expired", provider: id,
-            accountId: accountId, from: "", fromUsed: null, label: "", at: now })
+            accountId: accountId, from: "", fromUsed: null, label: "", at: now,
+            where: there ? String(there.name || "") : "" })
       }
       var rows = account.status === "ok" ? listOrEmpty(account.windows) : []
       for (var w = 0; w < rows.length; w++) {
@@ -3650,7 +3673,8 @@ function eventNoticeText(event, provider, names, clock, manual) {
       + " reset at " + clock(event.at) + "."
   }
   if (event.kind === "omp-expired")
-    return "omp can no longer renew " + who(event.accountId) + "'s sign-in. Sign in again in omp."
+    return "omp can no longer renew " + who(event.accountId) + "'s sign-in. Sign in again in omp"
+      + (event.where ? " on " + event.where : "") + "."
   return ""
 }
 

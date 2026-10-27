@@ -20,12 +20,6 @@ ShellRoot {
   property int ticks: 0
   readonly property string fakeLive: Quickshell.env("QUOTATANK_FAKE_OMP_LIVE")
 
-  QtObject {
-    id: liveStub
-    property string state: "live"
-    property string message: ""
-  }
-
   function check(condition, message) {
     if (!condition) throw new Error("SETTINGS TEST FAILED: " + message)
   }
@@ -86,7 +80,7 @@ ShellRoot {
   readonly property var ompFound: ({ local: "ok", version: "omp/18.10.3", localAccounts: 3, accounts: 3, installed: true })
 
   Component.onCompleted: {
-    form = create("UsageSettings.qml", { width: 420, ompActivity: liveStub,
+    form = create("UsageSettings.qml", { width: 420,
       settings: { enabledProviders: ["claude", "codex"], barProviders: ["claude", "codex"] } })
     form.changeRequested.connect(host)
     form.begin("sources")

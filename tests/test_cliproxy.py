@@ -41,7 +41,7 @@ class CliProxyTests(unittest.TestCase):
         with mock.patch.object(usage, "read_cliproxy_key", return_value="key"), \
                 mock.patch.object(usage.CliProxyClient, "auth_files", return_value=entries), \
                 mock.patch.object(usage.CliProxyClient, "usage") as upstream:
-            rows, found = usage.collect_cliproxy([], 1, "https://proxy.test", Path("key"))
+            rows, found, _aliases = usage.collect_cliproxy([], 1, "https://proxy.test", Path("key"))
         self.assertEqual((rows, found), ([], ["claude"]), "nothing is read for a provider that is not monitored")
         upstream.assert_not_called()
 
@@ -53,8 +53,10 @@ class CliProxyTests(unittest.TestCase):
                 mock.patch.object(usage.CliProxyClient, "auth_files", return_value=entries), \
                 mock.patch.object(usage, "fetch_cliproxy_account",
                                   side_effect=lambda _id, entry, *_: asked.append(entry["auth_index"]) or usage.base_provider("kimi")):
-            rows, _found = usage.collect_cliproxy(["kimi"], 1, "https://proxy.test", Path("key"), {"kimi": {"me@example.com"}})
+            rows, _found, aliases = usage.collect_cliproxy(["kimi"], 1, "https://proxy.test", Path("key"), {"kimi": {"me@example.com"}})
         self.assertEqual((asked, len(rows[0]["accounts"])), (["b"], 1))
+        self.assertEqual([(alias["id"], alias["account"]) for alias in aliases], [("kimi", "Me@example.com")],
+                         "the account not asked about is still named by its id on the proxy")
 
     def test_new_provider_history_survives_reload(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -193,7 +195,7 @@ class CliProxyTests(unittest.TestCase):
     def test_a_provider_the_proxy_has_no_account_for_adds_nothing_and_a_bad_key_is_the_proxys_failure(self):
         with mock.patch.object(usage, "read_cliproxy_key", return_value="private-key"), \
                 mock.patch.object(usage.CliProxyClient, "auth_files", return_value=[]):
-            self.assertEqual(usage.collect_cliproxy(["claude", "kimi"], 1, "https://proxy.test", Path("key")), ([], []))
+            self.assertEqual(usage.collect_cliproxy(["claude", "kimi"], 1, "https://proxy.test", Path("key")), ([], [], []))
         with tempfile.TemporaryDirectory() as temporary, self.assertRaises(usage.ProviderFailure) as raised:
             usage.collect_cliproxy(["codex"], 1, "https://proxy.test", Path(temporary) / "absent")
         self.assertEqual(raised.exception.kind, "config")

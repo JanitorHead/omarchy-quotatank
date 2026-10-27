@@ -90,7 +90,7 @@ The OpenCode provider reads the sign-in OpenCode saved, and never renews or rewr
 
 ### OpenRouter
 
-OpenRouter has no CLI sign-in and is off by default. Turn on its **Monitor** switch under **Settings → Providers**, then paste a key in the **API key** editor that appears under it and press **Save**. OpenRouter is read only in local mode; CLIProxyAPI does not report it.
+OpenRouter has no CLI sign-in and is off by default. Turn on its **Monitor** switch under **Settings → Providers**, then paste a key in the **API key** editor that appears under it and press **Save**. CLIProxyAPI does not report it.
 
 OpenRouter is measured in money as well as limits:
 
@@ -120,7 +120,7 @@ A computer's sign-ins, API keys, omp accounts and agent history count as this co
 
 #### CLIProxyAPI
 
-A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) server adds the Claude, Codex, Kimi and Antigravity accounts it holds, for the providers you monitor, beside this computer's and the other computers'. An account already read fine elsewhere is not asked for again. Choose **Add a proxy**, set its URL (default `http://127.0.0.1:8317`), and save its **Management API key**. Dashboard URLs ending in `/management.html`, management API URLs ending in `/v0/management` or `/v0/management/auth-files`, and reverse-proxy path prefixes are accepted. HTTPS certificates are verified; redirects are rejected. Plain HTTP carries the management key only to this computer or over Tailscale; on this computer, CLIProxyAPI must run as you (or root, as Docker's port forwarding does), and a server another account runs gets nothing. A proxy on another network needs HTTPS, and a remote server must permit remote management.
+A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) server adds the Claude, Codex, Kimi and Antigravity accounts it holds, for the providers you monitor, beside this computer's and the other computers'. An account this computer already read fine is not asked for again. Choose **Add a proxy**, set its URL (default `http://127.0.0.1:8317`), and save its **Management API key**. Dashboard URLs ending in `/management.html`, management API URLs ending in `/v0/management` or `/v0/management/auth-files`, and reverse-proxy path prefixes are accepted. HTTPS certificates are verified; redirects are rejected. Plain HTTP carries the management key only to this computer or over Tailscale; on this computer, CLIProxyAPI must run as you (or root, as Docker's port forwarding does), and a server another account runs gets nothing. A proxy on another network needs HTTPS, and a remote server must permit remote management.
 
 Use the plaintext key the management panel accepts, not a client API key or a bcrypt hash from the server configuration. It is saved in a private file (`0600`); the saved key is never loaded back into the form. Without a saved key, `CLIPROXY_API_KEY_FILE` or `${XDG_CONFIG_HOME:-~/.config}/omarchy/quotatank/cliproxy.key` is used. To create that file without putting the key in shell history:
 

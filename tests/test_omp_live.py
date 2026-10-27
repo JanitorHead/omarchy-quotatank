@@ -325,23 +325,26 @@ class ResetListingTests(unittest.TestCase):
         live.usage.merge_omp(providers, ["claude"], [{"reports": [report]}], None)
         self.assertEqual(providers[0]["ompAccountId"], live.parse_reset_listing(LISTING)[0]["5"]["accountId"])
 
+    STATE = Path("/state/quotatank")
+
     def listing(self, executable="/opt/omp", set_up=True, version="18.11.0", outcome=(0, LISTING.encode())):
         run_omp = mock.Mock(side_effect=[outcome])
         omp_version = mock.Mock(return_value=version)
         with mock.patch.multiple(live.usage, omp_executable=mock.Mock(return_value=executable),
                                  omp_set_up=mock.Mock(return_value=set_up), omp_version=omp_version, run_omp=run_omp):
-            listing = live.read_reset_listing()
+            listing = live.read_reset_listing(self.STATE)
         return listing, [call.args for call in omp_version.call_args_list + run_omp.call_args_list]
 
     def test_only_a_set_up_omp_18_9_or_later_lists_and_it_never_names_a_target(self):
-        listing = ("/opt/omp", ("usage", "reset", "--json", "--no-extensions"), 30, 256 * 1024)
+        # omp runs from the state folder it is given (another computer's reader passes ~/.cache/quotatank there).
+        listing = ("/opt/omp", ("usage", "reset", "--json", "--no-extensions"), 30, 256 * 1024, self.STATE)
         for version in ("18.11.0", "18.9.0", "19.0.0"):
             with self.subTest(version=version):
-                self.assertEqual(self.listing(version=version), (LISTING, [("/opt/omp",), listing]))
+                self.assertEqual(self.listing(version=version), (LISTING, [("/opt/omp", self.STATE), listing]))
         # Older than `omp usage reset`, or a program that does not answer as omp: nothing is listed.
         for version in ("18.8.12", "17.30.0", ""):
             with self.subTest(version=version):
-                self.assertEqual(self.listing(version=version), (None, [("/opt/omp",)]))
+                self.assertEqual(self.listing(version=version), (None, [("/opt/omp", self.STATE)]))
         self.assertEqual(self.listing(set_up=False), (None, []))
         self.assertEqual(self.listing(executable=None), (None, []))
         for outcome in ((1, b"{}"), TimeoutError(), ValueError(), OSError()):

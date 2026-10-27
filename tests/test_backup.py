@@ -324,6 +324,27 @@ class GpgBackupTests(BackupTestCase):
         self.assertEqual((response["skipped"], set(response["settings"])), (2, set(self.sample_settings())))
         self.assertEqual(len(self.key_files()), 4)
 
+    def test_legacy_settings_survive_a_round_trip_and_ask_for_migration(self):
+        legacy = {**self.sample_settings(), "usageSource": "cliproxy", "cliproxyUrl": "https://cliproxy.example",
+                  "cliproxyKeyFile": str(self.legacy),
+                  "costT3Servers": json.dumps([{"id": "t-9", "name": "Old", "url": "https://old.example",
+                                                "tokenFile": str(self.legacy)}])}
+        self.assertEqual(self.export(legacy)[0], 0)
+        code, response = self.inspect()
+        self.assertEqual((code, response["skipped"]), (0, 0))
+        code, response = self.restore()
+        self.assertEqual((code, response["ok"], response["skipped"]), (0, True, 0))
+        settings = response["settings"]
+        self.assertEqual((settings["usageSource"], settings["cliproxyUrl"]),
+                         ("cliproxy", "https://cliproxy.example"))
+        self.assertEqual(settings["sourcesVersion"], 0)
+        self.assertEqual(os.path.dirname(settings["cliproxyKeyFile"]), str(self.keys_dir))
+        (server,) = json.loads(settings["costT3Servers"])
+        self.assertEqual(server["url"], "https://old.example")
+        self.assertEqual(os.path.dirname(server["tokenFile"]), str(self.keys_dir))
+        contents = {(self.keys_dir / name).read_text(encoding="ascii") for name in self.key_files()}
+        self.assertIn("LEGACY-KEY-0005\n", contents)
+
     def test_include_keys_false_writes_no_files(self):
         self.assertEqual(self.export()[0], 0)
         self.assertEqual(self.restore(include={"keys": False}),

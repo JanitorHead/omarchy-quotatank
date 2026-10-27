@@ -79,6 +79,16 @@ class BundleTests(FakeSsh):
         readers = self.home("devbox") / ".cache" / "quotatank" / "readers"
         self.assertEqual([path.name for path in readers.iterdir()], [remote.bundle_id()])
 
+    def test_a_second_install_leaves_other_staging_folders_alone(self):
+        readers = self.home("devbox") / ".cache" / "quotatank" / "readers"
+        other = readers / (remote.bundle_id() + ".tmp.123")
+        other.mkdir(parents=True)
+        (other / "work.txt").write_text("another install")
+        remote.install_bundle("devbox", 30)
+        remote.install_bundle("devbox", 30)
+        self.assertEqual((other / "work.txt").read_text(), "another install")
+        self.assertEqual(sorted(path.name for path in readers.iterdir()), sorted([remote.bundle_id(), other.name]))
+
     def test_remove_deletes_everything_quotatank_put_there(self):
         remote.run_reader("devbox", "quotatank_remote.py", ["probe"], 30)
         (self.home("devbox") / "notes.txt").write_text("mine")
@@ -107,6 +117,19 @@ class BundleTests(FakeSsh):
             remote.run_reader("slow", "quotatank_remote.py", ["probe"], 1)
         self.assertEqual(caught.exception.kind, "timeout")
         self.assertIn("slow", caught.exception.message)
+
+    def test_only_an_ssh_exit_of_255_is_an_ssh_failure(self):
+        for host in ("odd", "stalled"):
+            with self.subTest(host), self.assertRaises(remote.RemoteFailure) as caught:
+                remote.run_reader(host, "quotatank_remote.py", ["probe"], 30)
+            self.assertEqual(caught.exception.kind, "failed")
+            self.assertIn(host, caught.exception.message)
+
+    def test_a_refused_connection_says_how_to_start_the_server(self):
+        with self.assertRaises(remote.RemoteFailure) as caught:
+            remote.run_reader("refused", "quotatank_remote.py", ["probe"], 30)
+        self.assertEqual((caught.exception.kind, caught.exception.fix),
+                         ("refused", "On refused: sudo systemctl enable --now sshd"))
 
     def test_nothing_but_a_plain_destination_and_plain_arguments_reaches_ssh(self):
         for host in ("-oProxyCommand=touch /tmp/x", "a b", "devbox;true", "", "x" * 256):
@@ -148,10 +171,38 @@ class ComputerCheckTests(FakeSsh):
     def test_a_computer_that_answers_is_ready_and_says_what_it_found(self):
         with mock.patch.object(remote, "machine_id", return_value="this-computer"):
             result = check.test("devbox", "", "off")
-        self.assertEqual([(entry["id"], entry["ok"]) for entry in result["steps"]],
+        self.assertEqual([(entry["id"], entry["ok"]) for entry in result["steps"][:4]],
                          [("ssh", True), ("python", True), ("readers", True), ("found", False)])
         self.assertIn("Nothing to read there yet", result["steps"][3]["text"])
         self.assertEqual(result["found"]["python"], ".".join(map(str, sys.version_info[:3])))
+
+    def test_a_computer_that_answers_with_nothing_to_read_says_how_to_fix_it(self):
+        with mock.patch.object(remote, "machine_id", return_value="this-computer"):
+            result = check.test("devbox", "", "off")
+        self.assertEqual(result["steps"][3]["fix"], "Sign in to your agents on devbox, then test again.")
+
+    def test_a_reader_answer_of_the_wrong_shape_counts_as_nothing_read(self):
+        for payload in ({"providers": 5, "installed": "claude"}, {"providers": True, "installed": 7},
+                        {"providers": "claude", "installed": {"claude": 1}}):
+            def answer_for(host, script, args, seconds, payload=payload):
+                return {"python": "3.12.0", "machine": "another"} if script == "quotatank_remote.py" else payload
+            with self.subTest(payload=payload), mock.patch.object(remote, "run_reader", side_effect=answer_for):
+                result = check.test("devbox", "claude", "off")
+            self.assertFalse(result["ok"])
+            self.assertEqual((result["found"]["accounts"], result["found"]["harnesses"]), (0, []))
+
+    def test_a_test_names_the_agents_installed_there_that_it_could_not_read(self):
+        payload = {"providers": [dict(reading("claude", "me@example.com"), name="Claude"),
+                                 usage.error_provider("codex", "no_credentials", "Codex is not signed in.")],
+                   "installed": ["claude", "codex"]}
+
+        def answer_for(host, script, args, seconds):
+            return {"python": "3.12.0", "machine": "another"} if script == "quotatank_remote.py" else payload
+        with mock.patch.object(remote, "run_reader", side_effect=answer_for):
+            result = check.test("devbox", "claude,codex", "off")
+        self.assertEqual([(entry["id"], entry["text"]) for entry in result["steps"][3:]],
+                         [("found", "1 account: Claude"), ("harnesses", "Installed there, not read: OpenAI Codex")])
+        self.assertTrue(result["ok"])
 
     def test_this_computer_is_not_added_again(self):
         result = check.test("devbox", "", "off")  # tests/fake-bin/ssh runs "devbox" here.
@@ -205,8 +256,14 @@ class UsageComputerTests(unittest.TestCase):
             return result
 
         def collect_cliproxy(provider_ids, timeout, url, key_path, healthy):
+            # As the real one: accounts read fine here are not asked about, only named by their proxy id.
             self.healthy = healthy
-            return json.loads(json.dumps(proxy)), ["claude"]
+            rows, aliases = json.loads(json.dumps(proxy)), []
+            for row in rows:
+                skipped = [entry for entry in row["accounts"] if usage.account_email(entry) in healthy.get(row["id"], set())]
+                aliases += [{"id": row["id"], "accountId": entry["accountId"], "account": entry["account"]} for entry in skipped]
+                row["accounts"] = [entry for entry in row["accounts"] if entry not in skipped]
+            return [row for row in rows if row["accounts"]], ["claude"], aliases
         # A provider this computer is not given has no sign-in here.
         mine = {provider_id: mine.get(provider_id) or usage.error_provider(provider_id, "no_credentials", "Not signed in.")
                 for provider_id in ids}
@@ -283,6 +340,27 @@ class UsageComputerTests(unittest.TestCase):
         self.assertEqual(claude["standIn"], {"id": "c-00000001", "name": "devbox",
                                              "accountId": "c-00000001/" + usage.PRIMARY_ACCOUNT_ID})
         self.assertEqual(claude["notice"], "Claude did not answer.")
+
+    def test_two_other_computers_keep_their_own_account_ids_when_this_computer_has_none(self):
+        payload = self.payload({}, {"devbox": answer(reading("claude", "me@example.com", 10)),
+                                    "buildbox": answer(reading("claude", "work@example.com", 20))}, ids=("claude",))
+        accounts = payload["providers"][0]["accounts"]
+        self.assertEqual([entry["accountId"] for entry in accounts], ["c-00000001/main", "c-00000002/main"])
+
+    def test_an_account_read_everywhere_keeps_at_most_four_live_ids(self):
+        def there(name):
+            return answer(reading("claude", "me@example.com", 30, "Max", ompAccountId="omp-" + name))
+        payload = self.payload({"claude": reading("claude", "me@example.com", 20, "Max")},
+                               {"devbox": there("devbox"), "buildbox": there("buildbox")}, ids=("claude",),
+                               proxy=self.proxied(reading("claude", "me@example.com", 30)))
+        self.assertEqual(payload["providers"][0]["liveIds"],
+                         ["c-00000001/main", "c-00000001/omp-devbox", "c-00000002/main", "c-00000002/omp-buildbox"])
+
+    def test_a_computer_ssh_cannot_even_start_for_costs_only_that_computer(self):
+        payload = self.payload({"claude": reading("claude", "me@example.com", 20)},
+                               {"devbox": PermissionError("runtime folder")}, ids=("claude",))
+        self.assertEqual((payload["providers"][0]["status"], payload["computers"][0]["status"]), ("ok", "error"))
+        self.assertEqual(payload["computers"][0]["message"], "Could not start ssh for devbox on this computer.")
 
     def test_not_set_up_contributes_nothing_when_another_source_has_the_provider(self):
         missing = usage.error_provider("codex", "no_credentials", "Codex is not signed in.")

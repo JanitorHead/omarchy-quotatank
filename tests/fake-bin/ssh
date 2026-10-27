@@ -18,6 +18,9 @@ case "$host" in
   stranger) echo "Host key verification failed." >&2; exit 255 ;;
   refuses) echo "rafa@refuses: Permission denied (publickey)." >&2; exit 255 ;;
   nowhere) echo "ssh: Could not resolve hostname nowhere: Name or service not known" >&2; exit 255 ;;
+  refused) echo "ssh: connect to host refused port 22: Connection refused" >&2; exit 255 ;;
+  odd) echo "rafa@odd: Permission denied (publickey)." >&2; exit 1 ;;
+  stalled) echo "ssh: connect to host stalled port 22: Connection timed out" >&2; exit 1 ;;
   nopython) cat >/dev/null; exit 85 ;;
   slow) sleep 5; exit 0 ;;
 esac

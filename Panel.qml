@@ -427,9 +427,9 @@ Ui.Panel {
   readonly property bool setupWanted: UsageLogic.setupWanted(settings)
   onSetupWantedChanged: beginSetupIfWanted()
   function beginSetupIfWanted() {
-    if (!setupWanted || configForm.setupStep > 0) return
+    if (!setupWanted) return
+    if (configForm.setupStep === 0) configForm.beginSetup()
     settingsReturnView = "limits"
-    configForm.beginSetup()
     viewMode = "settings"
   }
   function hintShown(hintId) { return UsageLogic.hintShown(settings, hintId) }
@@ -697,8 +697,8 @@ Ui.Panel {
     var readings = []
     for (var i = 0; i < root.providers.length; i++) {
       var provider = root.providers[i]
-      // A stale reading repeats what another computer said before it stopped answering: it keeps the
-      // last level ("none") instead of crossing a threshold again.
+      // A stale reading repeats what another computer said before it stopped answering: "none" leaves it out,
+      // so the level noted before stays and nothing crosses a threshold again when it answers.
       var stale = provider.stale === true
       var rows = UsageLogic.listOrEmpty(provider.windows)
       for (var j = 0; j < rows.length; j++) {
@@ -905,6 +905,8 @@ Ui.Panel {
   }
   onOpenedChanged: if (opened) {
     nowMs = Date.now()
+    // Until setup is done or skipped, opening the panel goes back to it, at the step it was left on.
+    beginSetupIfWanted()
     latchDefaultAccount()
     if (panelFlick) panelFlick.contentY = 0
     Qt.callLater(function() {
@@ -1865,7 +1867,6 @@ Ui.Panel {
             usagePayload: backend.payload
             usageLoading: backend.loading
             costSources: costBackend.payload ? UsageLogic.listOrEmpty(costBackend.payload.sources) : []
-            ompActivity: root.ompActivity
             motion: root.motion
             onSetupRequested: function(entry, action) { root.startSetup(entry, action) }
             onSetupFinished: root.viewMode = "limits"
@@ -2248,16 +2249,17 @@ Ui.Panel {
               motion: root.motion
             }
 
-            // The detail's banked resets outside CLIProxyAPI mode (whose rows carry them): what is left, when
-            // the next one expires, and the button that opens the confirmation.
+            // The detail's banked resets when no account row carries them: what is left, when the next one
+            // expires, and the button that opens the confirmation.
             Ui.BorderSurface {
               id: resetCard
               objectName: "bankedResetCard"
               readonly property var reading: root.detail
               readonly property bool actionable: UsageLogic.accountResetActionable(reading)
-              // A reading through a proxy carries its resets on its row instead.
-              visible: !!reading && !UsageLogic.readingProxy(reading) && UsageLogic.accountResetShown(reading)
-                && UsageLogic.accountResetCount(reading) > 0
+              // With account rows, a reading through a proxy carries its resets on its row; a single reading
+              // standing in through a proxy has no row, so they show here.
+              visible: !!reading && !(root.accountOverview && UsageLogic.readingProxy(reading))
+                && UsageLogic.accountResetShown(reading) && UsageLogic.accountResetCount(reading) > 0
               width: parent.width
               implicitHeight: resetCardContent.implicitHeight + contentTopInset + contentBottomInset
               color: Style.normalFillFor(root.foreground, Commons.Color.accent, root.urgent)

@@ -7726,21 +7726,33 @@ def proxy_entry_enabled(entry: dict[str, Any]) -> bool:
 
 
 def collect_cliproxy(provider_ids: list[str], timeout: float, address: str, key_path: Path,
-                     healthy: dict[str, set[str]] | None = None) -> tuple[list[dict[str, Any]], list[str]]:
+                     healthy: dict[str, set[str]] | None = None
+                     ) -> tuple[list[dict[str, Any]], list[str], list[dict[str, str]]]:
     """The proxy's accounts for `provider_ids` (one result per provider it has accounts for, each listed under
-    `accounts`) and the providers it has a working account for. An account `healthy` names (provider id → emails
-    read fine from another source this refresh) is not queried again. Raises ProviderFailure when the proxy
-    cannot be listed."""
+    `accounts`), the providers it has a working account for, and the accounts it was not asked about: an account
+    `healthy` names (provider id → emails read fine from another source this refresh) is not queried again, but
+    its id on the proxy is returned (`{"id", "accountId", "account"}`), since the proxy's live activity names it
+    so. Raises ProviderFailure when the proxy cannot be listed."""
     deadline = time.monotonic() + timeout
     client = CliProxyClient(address, read_cliproxy_key(key_path))
     entries = [entry for entry in client.auth_files(timeout) if isinstance(entry, dict)]
     found = sorted({provider_id for entry in entries if proxy_entry_enabled(entry)
                     and (provider_id := proxy_provider_id(entry)) in CLIPROXY_QUOTA_PROVIDERS})
     skip = healthy or {}
+    wanted = [provider_id for provider_id in provider_ids if provider_id in CLIPROXY_QUOTA_PROVIDERS]
+
+    def skipped(entry: dict[str, Any], provider_id: str) -> bool:
+        return account_email({"account": entry.get("email")}) in skip.get(provider_id, set())
+
+    aliases = []
+    for entry in entries:
+        if (provider_id := proxy_provider_id(entry)) in wanted and skipped(entry, provider_id):
+            record = cliproxy_account_record(provider_id, entry)
+            aliases.append({"id": provider_id, "accountId": record["accountId"], "account": record["account"]})
 
     def fetch(provider_id: str) -> dict[str, Any] | None:
         matching = [entry for entry in entries if proxy_provider_id(entry) == provider_id
-                    and account_email({"account": entry.get("email")}) not in skip.get(provider_id, set())]
+                    and not skipped(entry, provider_id)]
         if not matching:
             return None
 
@@ -7767,12 +7779,11 @@ def collect_cliproxy(provider_ids: list[str], timeout: float, address: str, key_
         best["notice"] = " ".join(notes)
         return best
 
-    wanted = [provider_id for provider_id in provider_ids if provider_id in CLIPROXY_QUOTA_PROVIDERS]
     if not wanted:
-        return [], found
+        return [], found, aliases
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(wanted))) as pool:
         results = list(pool.map(fetch, wanted))
-    return [result for result in results if result is not None], found
+    return [result for result in results if result is not None], found, aliases
 
 
 # --------------------------------------------------------------- History
@@ -8650,7 +8661,9 @@ def add_accounts(provider: dict[str, Any], provider_id: str, added: list[dict[st
     """`provider` with the readings of other accounts listed after its own, in place where it can be."""
     single_native = "accounts" not in provider
     if single_native:
-        provider.update(accountId="primary" if provider_id in KEYED_FETCHERS else PRIMARY_ACCOUNT_ID,
+        # A reading from another computer keeps its prefixed id: no two computers share an account id.
+        provider.update(accountId=provider.get("accountId") or ("primary" if provider_id in KEYED_FETCHERS
+                                                                else PRIMARY_ACCOUNT_ID),
                         active=True, primary=True, origin=native_origin(provider, provider))
         provider["accounts"] = [copy.deepcopy(provider)]
     provider["accounts"].extend(added)
@@ -8754,7 +8767,11 @@ def read_computer(computer_id: str, host: str, provider_ids: list[str], timeout:
     # omp usage there may take up to 45 s, as here; the connection itself gets 8 s.
     seconds = 55.0 if omp_local else timeout + 20.0
     try:
-        answer = computer_answer(quotatank_remote.run_reader(host, "usage-fetch.py", args, seconds), provider_ids)
+        try:
+            answer = computer_answer(quotatank_remote.run_reader(host, "usage-fetch.py", args, seconds), provider_ids)
+        except (OSError, ValueError) as exc:
+            # Failing here (the runtime folder, the readers' files, starting ssh) must not cost the other sources.
+            raise quotatank_remote.RemoteFailure("failed", f"Could not start ssh for {host} on this computer.", "") from exc
     except quotatank_remote.RemoteFailure as failure:
         state = {"id": computer_id, "host": host, "status": "error", **failure.as_dict()}
         try:
@@ -8878,9 +8895,7 @@ def merge_computer_provider(ours: dict[str, Any] | None, theirs: dict[str, Any])
             added.append(entry)
             continue
         # Live requests there (omp on that computer, the proxy's activity) name the account by its ids there.
-        aliases = match.setdefault("liveIds", [])
-        aliases += [entry[key] for key in ("accountId", "ompAccountId")
-                    if isinstance(entry.get(key), str) and entry[key] and entry[key] not in aliases][:4]
+        add_live_ids(match, [entry.get("accountId"), entry.get("ompAccountId")])
         if unusable(match) and entry.get("status") == "ok" and not (entry.get("stale") and match.get("stale")):
             stand_in(match, entry)
             stood_in = True
@@ -8899,6 +8914,17 @@ def merge_computer_provider(ours: dict[str, Any] | None, theirs: dict[str, Any])
     return add_accounts(ours, ours["id"], added) if added else ours
 
 
+MAX_LIVE_IDS = 4
+
+
+def add_live_ids(reading: dict[str, Any], ids: list[Any]) -> None:
+    """Note on `reading` the ids another source knows its account by (`liveIds`), at most MAX_LIVE_IDS."""
+    known = reading.setdefault("liveIds", [])
+    for value in ids:
+        if isinstance(value, str) and value and value not in known and len(known) < MAX_LIVE_IDS:
+            known.append(value)
+
+
 def merge_computers(providers: list[dict[str, Any]], provider_ids: list[str], computers: list[dict[str, Any]]) -> None:
     """Merge every other source's readings into `providers`, in place, in order: computers, then proxies."""
     for computer in computers:
@@ -8912,6 +8938,14 @@ def merge_computers(providers: list[dict[str, Any]], provider_ids: list[str], co
                 providers.append(merged)
             else:
                 providers[position] = merged
+        # A proxy was not asked about accounts read fine here, but its live activity still names them by its ids.
+        for alias in computer.get("aliases") or []:
+            provider = next((row for row in providers if row.get("id") == alias["id"]), None)
+            email = account_email(alias)
+            reading = next((reading for reading in readings_of(provider) if account_email(reading) == email),
+                           None) if provider is not None and email else None
+            if reading is not None:
+                add_live_ids(reading, [alias["accountId"]])
 
 
 def computer_state(computer: dict[str, Any]) -> dict[str, Any]:
@@ -8956,7 +8990,7 @@ def read_proxy(proxy_id: str, url: str, key_file: Path | None, provider_ids: lis
     path = proxy_cache_path(state_dir, proxy_id)
     state = {"id": proxy_id, "host": "CLIProxyAPI", "kind": "proxy"}
     try:
-        providers, found = collect_cliproxy(provider_ids, timeout, url, key_file or cliproxy_key_path(), healthy)
+        providers, found, aliases = collect_cliproxy(provider_ids, timeout, url, key_file or cliproxy_key_path(), healthy)
     except Exception as exc:
         failure = exc if isinstance(exc, ProviderFailure) else ProviderFailure("internal", "Could not read CLIProxyAPI's accounts.")
         state.update(status="error", errorKind=failure.kind, message=failure.message)
@@ -8973,7 +9007,7 @@ def read_proxy(proxy_id: str, url: str, key_file: Path | None, provider_ids: lis
         atomic_write_json(path, {"readAt": read_at, "answer": answer})
     except OSError:
         pass  # Without a saved copy the proxy is only an error the next time it does not answer.
-    return {**state, "status": "ok", "readAt": read_at, **answer}
+    return {**state, "status": "ok", "readAt": read_at, **answer, "aliases": aliases}
 
 
 def healthy_accounts(providers: list[dict[str, Any]]) -> dict[str, set[str]]:

@@ -1176,6 +1176,13 @@ console.log("Provider setup: passed");
     "a Keeper set up for a proxy that was not in use stays with that proxy, switched off");
   assert.equal(JSON.parse(migrate({ usageSource: "direct", cliproxyUrl: "http://127.0.0.1:8317" }).changes.sources).length, 0,
     "an unused proxy default is not a source");
+  const keeperOnly = JSON.parse(migrate({ usageSource: "direct", costKeeperUrl: "http://127.0.0.1:8318" }).changes.sources);
+  assert.deepEqual(keeperOnly.map((entry) => [entry.kind, entry.on, entry.url]), [["proxy", false, "http://127.0.0.1:8317"]],
+    "a Keeper set up for the proxy at its default address keeps that proxy");
+  assert.deepEqual(migrate({ usageSource: "cliproxy", enabledProviders: ["claude", "gemini"] }).changes.enabledProviders,
+    ["claude", "codex", "kimi", "antigravity"], "proxy mode keeps the bar to what the proxy read");
+  assert.equal("enabledProviders" in migrate({ usageSource: "direct", enabledProviders: ["claude"] }).changes, false,
+    "direct mode keeps its providers");
   assert.equal(JSON.parse(migrate({ costT3Servers: "not json" }).changes.sources).length, 0, "unreadable T3 settings move nothing");
 
   // Other computers.
@@ -1224,6 +1231,13 @@ console.log("Provider setup: passed");
     fix: "Install Python 3.10 or newer there." }] });
   assert.deepEqual([old.fix, old.lines[2]], ["", { tone: "info", text: "Install Python 3.10 or newer there." }], "a fix that is not a command is a note");
   assert.equal(tested({ probeError: "timeout" }).lines[0].text, "No answer within 120 s. Check that devbox is on and online.");
+  for (const reply of [{ probeError: "tooLarge" }, { ok: true }, { steps: "nothing" }])
+    assert.deepEqual(tested(reply).lines.map((line) => line.tone), ["error"], "an answer that cannot be read still says so: " + JSON.stringify(reply));
+  assert.deepEqual(tested({ ok: true, steps: [{ id: "found", ok: true, text: "1 account: Claude" },
+    { id: "harnesses", ok: true, text: "Installed there, not read: Codex" }] }).lines.map((line) => line.tone), ["ok", "info"]);
+  const remoteOmp = { id: "claude", accountId: "c-00000001/omp-0123456789ab", origin: "omp", computer: { id: "c-00000001", name: "devbox" },
+    status: "ok", windows: [], credits: { resetCreditsAvailable: 1, resetCreditsUsable: true } };
+  assert.equal(context.accountResetNote(remoteOmp), "Apply it in omp on devbox: omp usage reset.", "an omp sign-in on devbox is applied there");
 
   // Readings from another computer.
   const remoteAccount = { id: "claude", accountId: "c-00000001/main", status: "ok", computer: { id: "c-00000001", name: "devbox" },

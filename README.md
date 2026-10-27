@@ -307,7 +307,7 @@ Quotatank copies its readers to `~/.cache/quotatank` there and changes nothing e
 2. Enter the server URL, for example `http://127.0.0.1:8317`, and leave the field.
 3. Enter the Management API key that the server's management panel accepts and press **Save**. Client API keys and bcrypt hashes do not work.
 
-The proxy's Claude, Codex, Kimi, and Antigravity accounts join the providers you monitor, one row each, beside this computer's; an account already read fine elsewhere is not asked for again. The key is saved to a private file (`0600`) and is never loaded back into the form. Remote servers must allow remote management. The optional CPA Usage Keeper adds the last-used account to the menu bar; see the [account activity guide](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/keeper-deployment.md).
+The proxy's Claude, Codex, Kimi, and Antigravity accounts join the providers you monitor, one row each, beside this computer's; an account this computer already read fine is not asked for again. The key is saved to a private file (`0600`) and is never loaded back into the form. Remote servers must allow remote management. The optional CPA Usage Keeper adds the last-used account to the menu bar; see the [account activity guide](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/keeper-deployment.md).
 
 ### omp
 

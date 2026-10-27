@@ -313,6 +313,7 @@ ShellRoot {
       } else if (root.phase === 8) {
         root.check(root.widget.limitCards.count === UsageLogic.USAGE_LIST_LIMITS.windows,
           "a card per kept limit: " + root.widget.limitCards.count)
+        root.check(!root.widget.setupWanted && !root.widget.configuring, "settings carried over from before skip setup")
         // A fresh install, with a bar that saves: setup first, then Limits explains one part at a time.
         root.fresh = Qt.createComponent(Quickshell.env("QUOTATANK_REPO_URL") + "/Panel.qml").createObject(host, {
           moduleName: "test.fresh", ipcTarget: "test.fresh", bar: savingBar, settings: {} })
@@ -323,6 +324,10 @@ ShellRoot {
         root.check(f.configuring && f.settingsForm.setupStep === 1 && f.settingsForm.page === "sources",
           "a fresh install opens setup on Sources")
         root.check(savingShell.saved && savingShell.saved.setupDone === false, "setup stays pending until it finishes")
+        f.settingsForm.setupGo(2)
+        f.viewMode = "limits"
+        f.beginSetupIfWanted()
+        root.check(f.configuring && f.settingsForm.setupStep === 2, "opening the panel again resumes setup where it was left")
         f.settingsForm.finishSetup()
         root.check(f.viewMode === "limits" && savingShell.saved.setupDone === true, "finishing setup lands on Limits")
         f.selectProviderId("claude")

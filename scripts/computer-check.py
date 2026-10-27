@@ -121,20 +121,29 @@ def failed_steps(failure: remote.RemoteFailure, host: str) -> list[dict[str, Any
     return [connected, step("python", True, "Python found"), step("readers", False, failure.message, failure.fix)]
 
 
-def found_text(payload: dict[str, Any]) -> tuple[bool, str, int]:
+def found_text(payload: dict[str, Any]) -> tuple[bool, str, int, set[str]]:
+    """Whether anything was read there, the line saying what, how many accounts, and the providers read."""
     readings = []
-    for provider in payload.get("providers") or []:
+    providers = payload.get("providers")
+    for provider in providers if isinstance(providers, list) else []:
         if not isinstance(provider, dict):
             continue
         accounts = provider.get("accounts") if isinstance(provider.get("accounts"), list) else [provider]
         healthy = [entry for entry in accounts if isinstance(entry, dict) and entry.get("status") == "ok"]
         if healthy:
-            readings.append((str(provider.get("name") or provider.get("id")), len(healthy)))
-    count = sum(number for _name, number in readings)
+            readings.append((str(provider.get("id")), str(provider.get("name") or provider.get("id")), len(healthy)))
+    count = sum(number for _id, _name, number in readings)
     if not readings:
-        return False, "Nothing to read there yet: sign in to a provider on that computer, then test again.", 0
-    names = ", ".join(name for name, _number in readings)
-    return True, f"{count} {'account' if count == 1 else 'accounts'}: {names}", count
+        return False, "Nothing to read there yet.", 0, set()
+    names = ", ".join(name for _id, name, _number in readings)
+    return True, f"{count} {'account' if count == 1 else 'accounts'}: {names}", count, {key for key, _name, _number in readings}
+
+
+def provider_name(payload: dict[str, Any], provider_id: str) -> str:
+    providers = payload.get("providers") if isinstance(payload.get("providers"), list) else []
+    named = next((provider.get("name") for provider in providers if isinstance(provider, dict)
+                  and provider.get("id") == provider_id and isinstance(provider.get("name"), str)), None)
+    return named or provider_id
 
 
 def test(host: str, providers: str, omp: str) -> dict[str, Any]:
@@ -158,11 +167,15 @@ def test(host: str, providers: str, omp: str) -> dict[str, Any]:
     except remote.RemoteFailure as failure:
         steps.append(step("found", False, failure.message, failure.fix))
         return {"ok": False, "steps": steps, "found": {"python": python}}
-    ok, text, accounts = found_text(payload if isinstance(payload, dict) else {})
-    steps.append(step("found", ok, text))
-    harnesses = [item for item in (payload.get("installed") or []) if isinstance(item, str)] \
-        if isinstance(payload, dict) else []
-    omp_state = payload.get("omp") if isinstance(payload, dict) and isinstance(payload.get("omp"), dict) else {}
+    answer = payload if isinstance(payload, dict) else {}
+    ok, text, accounts, read = found_text(answer)
+    steps.append(step("found", ok, text, "" if ok else f"Sign in to your agents on {host}, then test again."))
+    installed = answer.get("installed")
+    harnesses = [item for item in installed if isinstance(item, str)] if isinstance(installed, list) else []
+    unread = [provider_name(answer, item) for item in harnesses if item not in read]
+    if unread:
+        steps.append(step("harnesses", True, "Installed there, not read: " + ", ".join(unread[:8])))
+    omp_state = answer.get("omp") if isinstance(answer.get("omp"), dict) else {}
     return {"ok": ok, "steps": steps, "found": {"python": python, "harnesses": harnesses, "accounts": accounts,
                                                "omp": bool(omp_state.get("installed"))}}
 
