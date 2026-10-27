@@ -115,7 +115,7 @@ class ManagementKeyTests(unittest.TestCase):
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                     env={**os.environ, "XDG_CONFIG_HOME": config})
                 self.addCleanup(self.stop, process)
-                keys = {"cliproxyKeyFile": "proxy-secret", "costKeeperPasswordFile": "keeper-secret"}
+                keys = {"proxyKey_p-1a2b3c4d": "proxy-secret", "keeperPassword_p-1a2b3c4d": "keeper-secret"}
                 process.stdin.write(json.dumps({"keys": keys, "previousPaths": {}}) + "\n")
                 process.stdin.flush()
                 response = process.stdout.readline()
@@ -207,7 +207,11 @@ class ManagementKeyTests(unittest.TestCase):
     def test_every_key_setting_is_accepted_and_nothing_else(self):
         for name, accepted in (("huggingfaceKeyFile", True), ("poeKeyFile", True), ("factoryKeyFile", True),
                                ("claudeKeyFile", False), ("KeyFile", False), ("poeKeyFile ", False),
-                               ("ompGatewayKeyFile", True), ("ompgatewayKeyFile", False), ("ompKeyFile", False),
+                               ("cliproxyKeyFile", False), ("costKeeperPasswordFile", False),
+                               ("ompGatewayKeyFile", False), ("ompgatewayKeyFile", False), ("ompKeyFile", False),
+                               ("proxyKey_p-1a2b3c4d", True), ("proxyKey_p-1A2B3C4D", False),
+                               ("keeperPassword_p-1a2b3c4d", True), ("keeperPassword_k-1a2b3c4d", False),
+                               ("t3Token_home", True), ("t3Token_t-1a2b3c4d", True), ("t3Token_home server", False),
                                ("extraKey_openrouter_k-0123abcd", True), ("extraKey_claude_k-0123abcd", False),
                                ("extraKey_openrouter_k-0123ABCD", False), ("extraKey_openrouter_k-0123abcd0", False)):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as config:

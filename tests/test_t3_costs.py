@@ -274,7 +274,7 @@ class CombinedTests(unittest.TestCase):
     def test_local_remote_overlap_is_counted_once(self):
         result = self.build(duplicate=True)
         self.assertEqual(result["totals"]["records"], 1)
-        self.assertEqual([s["status"] for s in result["sources"]], ["ok", "duplicate", "off"])
+        self.assertEqual([s["status"] for s in result["sources"]], ["ok", "duplicate"])
 
     def test_failed_local_does_not_suppress_remote(self):
         result = self.build(local_status="failed", duplicate=True)

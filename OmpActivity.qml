@@ -2,10 +2,9 @@ import QtQuick
 import "UsageLogic.js" as UsageLogic
 
 // omp's live activity for one panel: each request as it happens, with the account behind it once omp's
-// credential map names it, the log of recent requests that Costs adds to its last scan, and activity on
-// omp stats on another computer. It follows omp only while omp is set up (found here and signed in, or
-// omp stats on another computer) and never through a proxy; the panels on every monitor share one
-// helper process (OmpLiveConnection.qml).
+// credential map names it, and the log of recent requests that Costs adds to its last scan. It follows omp
+// only while omp is set up here (found and signed in) and never through a proxy; the panels on every
+// monitor share one helper process (OmpLiveConnection.qml).
 QtObject {
   id: root
 
@@ -37,8 +36,6 @@ QtObject {
   // `event`: the request line from omp-live.py, plus `accountId` and `accountKey` when omp's credential
   // map knows the credential that served it.
   signal request(var event)
-  // omp stats on another computer indexed new requests.
-  signal remoteActivity()
 
   function sync() {
     if (!ready || wantedKey === connectionKey) return
@@ -66,6 +63,5 @@ QtObject {
   property Connections feed: Connections {
     target: root.connection
     function onRequest(event) { root.request(event) }
-    function onRemoteActivity() { root.remoteActivity() }
   }
 }

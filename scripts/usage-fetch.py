@@ -46,10 +46,10 @@ from xml.etree import ElementTree
 sys.dont_write_bytecode = True
 
 from quotatank_common import (
-    FOREIGN_LOCAL_SERVER, OMP_PROVIDERS, PLAIN_HTTP_SECRET, SECRET_LOOKUP_SECONDS, CheckedAddresses,
-    ForeignLocalServer, atomic_write_json, clean_message, config_folder, foreign_local_server, omp_account_id,
+    FOREIGN_LOCAL_SERVER, OMP_PROVIDERS, PLAIN_HTTP_SECRET, SECRET_LOOKUP_SECONDS, ForeignLocalServer,
+    atomic_write_json, clean_message, config_folder, foreign_local_server, omp_account_id,
     open_private_directory, open_tcp, move_legacy_folders, opencode_data_root, opencode_database_path,
-    plain_http_token_routes, read_capped, resolve_host, secret_opener, split_server_url, state_folder,
+    read_capped, secret_opener, state_folder,
 )
 
 SCHEMA_VERSION = 1
@@ -396,17 +396,15 @@ class NoRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = None,
-              opener: urllib.request.OpenerDirector | None = None) -> Any:
-    """GET, or POST `body` as JSON when given. Redirects are refused and responses are size-capped. `opener`
-    replaces the default one, which refuses redirects and follows the environment's proxy settings."""
+def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = None) -> Any:
+    """GET, or POST `body` as JSON when given. Redirects are refused and responses are size-capped."""
     data = None if body is None else json.dumps(body, separators=(",", ":")).encode("utf-8")
     if data is not None and not any(name.lower() == "content-type" for name in headers):
         headers = {**headers, "Content-Type": "application/json"}
     request = urllib.request.Request(url, data=data, headers=headers, method="GET" if data is None else "POST")
     deadline = time.monotonic() + timeout
     try:
-        with (opener or urllib.request.build_opener(NoRedirects())).open(request, timeout=timeout) as response:
+        with urllib.request.build_opener(NoRedirects()).open(request, timeout=timeout) as response:
             raw = read_capped(response, MAX_HTTP_RESPONSE_BYTES, deadline)
             if len(raw) > MAX_HTTP_RESPONSE_BYTES:
                 raise ProviderFailure(
@@ -423,8 +421,6 @@ def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = Non
         failure.http_status = exc.code
         raise failure from None
     except (TimeoutError, urllib.error.URLError, OSError) as exc:
-        if foreign_local_server(exc):
-            raise ProviderFailure("foreign", FOREIGN_LOCAL_SERVER) from None
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
             raise ProviderFailure("timeout", "The usage request timed out.") from None
@@ -8287,15 +8283,13 @@ def parse_extra_keys(values: list[str]) -> dict[str, list[tuple[str, Path]]]:
 
 
 # --------------------------------------------------------------- omp
-# omp (Oh My Pi) keeps its own subscription sign-ins and reports their limits: on this computer with
-# `omp usage --json`, and remotely through its auth gateway's `GET /v1/usage`. Each omp account joins the provider
-# it belongs to as an `accounts` entry; omp is a source, never a provider of its own. The gateway token can also
-# spend model quota, so `/v1/usage` is the only path ever requested with it. omp runs only where it has set
-# itself up already (omp_set_up): its first run creates omp's state, which is the user's to start.
+# omp (Oh My Pi) keeps its own subscription sign-ins and reports their limits on this computer with
+# `omp usage --json`. Each omp account joins the provider it belongs to as an `accounts` entry; omp is a source,
+# never a provider of its own. omp runs only where it has set itself up already (omp_set_up): its first run
+# creates omp's state, which is the user's to start.
 OMP_USAGE_ARGUMENTS = ("usage", "--json", "--no-extensions")
 OMP_USAGE_TIMEOUT = 45.0
 OMP_VERSION_TIMEOUT = 5.0
-OMP_LOOKUP_TIMEOUT = 2.0
 # The folder omp runs in, inside Quotatank's state folder.
 OMP_WORKDIR = "omp-workdir"
 # `omp --version` prints "omp/18.11.0".
@@ -8313,22 +8307,11 @@ OMP_WINDOW_SECONDS = {"5h": FIVE_HOURS, "1d": ONE_DAY, "7d": SEVEN_DAYS, "1w": S
 OMP_UNREAD_KINDS = frozenset({"no_credentials", "cli_unavailable"})
 OMP_SIGN_IN_AGAIN = "omp can't renew this sign-in. Sign in again in omp."
 OMP_NOT_SET_UP = "omp is installed but not set up on this computer."
-OMP_GATEWAY_URL_RULE = ("The omp gateway URL must be the gateway's address alone, https://host:port or plain HTTP to "
-                        "this computer or a Tailscale address, without a path, user name, query or fragment.")
-OMP_GATEWAY_PLAIN_HTTP = "The omp gateway token goes over " + PLAIN_HTTP_SECRET
-OMP_GATEWAY_FAILURES = {
-    "expired": "The omp gateway refused the token.",
-    "rate_limited": "The omp gateway is rate limiting usage checks.",
-    "timeout": "The omp gateway did not answer in time.",
-    "network": "Could not reach the omp gateway. Check its URL, the network and its TLS certificate.",
-    "malformed": "The omp gateway returned unreadable usage data.",
-    "foreign": "The omp gateway's port on this computer belongs to another account, so the token was not sent.",
-}
-# What each source reports when the merge cannot take its data (merge_omp_safely).
-OMP_UNREADABLE = {"local": "omp usage returned unreadable data.", "gateway": OMP_GATEWAY_FAILURES["malformed"]}
+# What omp reports when its data cannot be read, or cannot be merged (merge_omp_safely).
+OMP_UNREADABLE = "omp usage returned unreadable data."
 # (email in lower case, omp's account id, omp's org id), each "" when omp gives none.
 OmpIdentity = tuple[str, str, str]
-# One omp source's result: (status, message, document); the document is None unless the status is "ok".
+# The result of reading omp: (status, message, document); the document is None unless the status is "ok".
 OmpRead = tuple[str, str, dict[str, Any] | None]
 
 
@@ -8375,16 +8358,15 @@ def omp_version(omp: str, state_dir: Path | None = None) -> str:
     return match.group(1).decode("ascii") if match else ""
 
 
-def omp_document(payload: Any, message: str) -> dict[str, Any]:
-    """An omp usage document, from the CLI's output or a decoded gateway body: an object listing `reports`."""
-    if isinstance(payload, bytes):
-        try:
-            payload = json.loads(payload)
-        except (ValueError, RecursionError):
-            raise ProviderFailure("malformed", message) from None
-    if not isinstance(payload, dict) or not isinstance(payload.get("reports"), list):
-        raise ProviderFailure("malformed", message)
-    return payload
+def omp_document(output: bytes) -> dict[str, Any]:
+    """The omp usage document in the CLI's output: an object listing `reports`."""
+    try:
+        document = json.loads(output)
+    except (ValueError, RecursionError):
+        raise ProviderFailure("malformed", OMP_UNREADABLE) from None
+    if not isinstance(document, dict) or not isinstance(document.get("reports"), list):
+        raise ProviderFailure("malformed", OMP_UNREADABLE)
+    return document
 
 
 def read_omp_local(omp: str, state_dir: Path | None = None) -> OmpRead:
@@ -8393,7 +8375,7 @@ def read_omp_local(omp: str, state_dir: Path | None = None) -> OmpRead:
         code, output = run_omp(omp, OMP_USAGE_ARGUMENTS, OMP_USAGE_TIMEOUT, MAX_OMP_OUTPUT_BYTES, state_dir)
         if code != 0:
             return "error", f"omp usage exited with status {code}.", None
-        return "ok", "", omp_document(output, "omp usage returned unreadable data.")
+        return "ok", "", omp_document(output)
     except TimeoutError:
         return "error", "omp usage did not finish in time.", None
     except ValueError:
@@ -8404,42 +8386,6 @@ def read_omp_local(omp: str, state_dir: Path | None = None) -> OmpRead:
         return "error", exc.message, None
     except Exception:
         return "error", "omp usage could not be read.", None
-
-
-def read_omp_gateway(address: str, key_file: Path | None, timeout: float) -> OmpRead:
-    """("ok", "", document) from an omp gateway's `GET /v1/usage`, else ("error", message, None).
-
-    The token goes over HTTPS, or over plain HTTP only to this computer or through Tailscale to the computer
-    the address names (plain_http_token_routes), and then only along the routes checked; on this computer, only
-    to a server that belongs to this user or root (open_tcp). Proxy settings are ignored."""
-    try:
-        parts = split_server_url(address)
-    except ValueError:
-        return "error", OMP_GATEWAY_URL_RULE, None
-    handlers: list[Any] = [urllib.request.ProxyHandler({}), NoRedirects()]
-    if parts.scheme == "http":
-        addresses = resolve_host(parts.hostname, OMP_LOOKUP_TIMEOUT)
-        if not addresses:
-            return "error", OMP_GATEWAY_FAILURES["network"], None
-        routes = plain_http_token_routes(parts.hostname, addresses, OMP_LOOKUP_TIMEOUT)
-        if routes is None:
-            return "error", OMP_GATEWAY_PLAIN_HTTP, None
-        handlers.append(CheckedAddresses(routes))
-    try:
-        headers = {"Accept": "application/json"}
-        if key_file is not None:
-            headers["Authorization"] = "Bearer " + read_private_key(key_file, "omp gateway token")
-        body = http_json(urllib.parse.urlunsplit(parts) + "/v1/usage", headers, timeout,
-                         opener=urllib.request.build_opener(*handlers))
-        return "ok", "", omp_document(body, OMP_GATEWAY_FAILURES["malformed"])
-    except ProviderFailure as exc:
-        if exc.kind == "expired" and key_file is None:
-            return "error", "The omp gateway asks for a token.", None
-        if exc.kind == "http":
-            return "error", f"The omp gateway answered HTTP {exc.http_status}.", None
-        return "error", OMP_GATEWAY_FAILURES.get(exc.kind, exc.message), None
-    except Exception:
-        return "error", "The omp gateway could not be read.", None
 
 
 def omp_text(value: Any, limit: int = 120) -> str:
@@ -8579,7 +8525,7 @@ def omp_rows(document: dict[str, Any], key: str, provider_ids: list[str]) -> Ite
 def omp_accounts(documents: list[dict[str, Any]],
                  provider_ids: list[str]) -> list[tuple[str, OmpIdentity, dict[str, Any]]]:
     """(provider id, identity, entry) for each omp account of a requested provider: the reports of every document,
-    then their disabled sign-ins. An account seen twice, say by this computer's omp and by a gateway, is kept once.
+    then their disabled sign-ins. An account listed twice is kept once.
 
     `accountId` is omp_account_id of the omp provider and the email, else omp's account id, else the row's
     position. A later account with the same id (one email in two orgs) gets `-2`, `-3`, … in that order."""
@@ -8725,7 +8671,7 @@ def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
 def merge_omp(providers: list[dict[str, Any]], provider_ids: list[str], documents: list[dict[str, Any]],
               capacity: Any, cliproxy: bool) -> int:
     """Merge omp's accounts and pools into the requested providers, in place; returns how many accounts merged.
-    A requested provider without a result of its own (proxy mode, --omp-only) is made of its omp accounts."""
+    A requested provider without a result of its own (proxy mode) is made of its omp accounts."""
     accounts = omp_accounts(documents, provider_ids)
     for provider_id in provider_ids:
         position = next((index for index, provider in enumerate(providers) if provider.get("id") == provider_id), None)
@@ -8743,37 +8689,21 @@ def merge_omp(providers: list[dict[str, Any]], provider_ids: list[str], document
     return len(accounts)
 
 
-def merge_omp_safely(providers: list[dict[str, Any]], provider_ids: list[str], reads: dict[str, OmpRead],
-                     cliproxy: bool) -> tuple[list[dict[str, Any]], int, dict[str, OmpRead]]:
+def merge_omp_safely(providers: list[dict[str, Any]], provider_ids: list[str], read: OmpRead,
+                     cliproxy: bool) -> tuple[list[dict[str, Any]], int, OmpRead]:
     """merge_omp on a copy of `providers`, so that omp data the merge cannot take never costs a native reading.
 
-    `reads` maps "local" and "gateway" to (status, message, document). When the merge fails, the sources that
-    merge on their own are kept and each other one becomes an error: omp's data was unreadable. Returns the
-    providers, how many omp accounts merged, and the reads."""
-    def merge(names: list[str]) -> tuple[list[dict[str, Any]], int] | None:
-        candidate = copy.deepcopy(providers)
-        local = reads["local"][2] if "local" in names else None
-        try:
-            count = merge_omp(candidate, provider_ids, [reads[name][2] for name in names],
-                              local.get("capacity") if local else None, cliproxy)
-        except Exception:
-            return None
-        return candidate, count
-
-    usable = [name for name, (_status, _message, document) in reads.items() if document is not None]
-    if not usable:
-        return providers, 0, reads
-    result = merge(usable)
-    if result is None and len(usable) > 1:
-        alone = {name: merge([name]) for name in usable}
-        usable = [name for name, outcome in alone.items() if outcome is not None]
-        # Two sources that merge alone but not together cannot be told apart: neither is kept.
-        result = alone[usable[0]] if len(usable) == 1 else None
-    if result is None:
-        usable, result = [], (providers, 0)
-    reads = {name: read if read[2] is None or name in usable else ("error", OMP_UNREADABLE[name], None)
-             for name, read in reads.items()}
-    return result[0], result[1], reads
+    `read` is omp's (status, message, document). When the merge fails, the read becomes an error: omp's data was
+    unreadable. Returns the providers, how many omp accounts merged, and the read."""
+    document = read[2]
+    if document is None:
+        return providers, 0, read
+    candidate = copy.deepcopy(providers)
+    try:
+        count = merge_omp(candidate, provider_ids, [document], document.get("capacity"), cliproxy)
+    except Exception:
+        return providers, 0, ("error", OMP_UNREADABLE, None)
+    return candidate, count, read
 
 
 # --------------------------------------------------------------- Orchestration
@@ -8884,19 +8814,15 @@ def build_payload(
     source: str = "direct", cliproxy_url: str = "http://127.0.0.1:8317",
     key_file: Path | None = None, key_files: dict[str, Path] | None = None,
     extra_keys: dict[str, list[tuple[str, Path]]] | None = None,
-    omp_local: bool = False, omp_gateway_url: str = "", omp_gateway_key_file: Path | None = None,
-    omp_only: bool = False,
+    omp_local: bool = False,
 ) -> dict[str, Any]:
     omp = omp_executable()
     reads_local = omp_local and omp is not None and omp_set_up()
     # omp takes longer than most providers, so it is read while they are.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         local = pool.submit(read_omp_local, omp, state_dir) if reads_local else None
         version = pool.submit(omp_version, omp, state_dir) if reads_local else None
-        gateway = pool.submit(read_omp_gateway, omp_gateway_url, omp_gateway_key_file, timeout) if omp_gateway_url else None
-        if omp_only:
-            providers: list[dict[str, Any]] = []
-        elif source == "cliproxy":
+        if source == "cliproxy":
             providers = collect_cliproxy(provider_ids, timeout, cliproxy_url, key_file or cliproxy_key_path(), discover=True)
             try:
                 server = normalize_cliproxy_url(cliproxy_url)
@@ -8914,19 +8840,13 @@ def build_payload(
             local_read = ("missing", "omp was not found on this computer.", None)
         else:
             local_read = ("unused", OMP_NOT_SET_UP, None)
-        gateway_read = gateway.result() if gateway else ("off", "", None)
         omp_release = version.result() if version else ""
-    providers, merged, reads = merge_omp_safely(providers, provider_ids, {"local": local_read, "gateway": gateway_read},
-                                                source == "cliproxy")
-    local_read, gateway_read = reads["local"], reads["gateway"]
+    providers, merged, local_read = merge_omp_safely(providers, provider_ids, local_read, source == "cliproxy")
     providers = bound_providers(providers)
-    if not omp_only:
-        update_and_attach_history(providers, state_dir)
+    update_and_attach_history(providers, state_dir)
     omp_summary = {
-        "local": local_read[0], "gateway": gateway_read[0],
-        "message": clean_message(" ".join(message for _, message, _ in reads.values() if message)),
-        "accounts": merged, "localAccounts": omp_account_count(local_read[2], provider_ids),
-        "gatewayAccounts": omp_account_count(gateway_read[2], provider_ids), "installed": omp is not None,
+        "local": local_read[0], "message": clean_message(local_read[1]), "accounts": merged,
+        "localAccounts": omp_account_count(local_read[2], provider_ids), "installed": omp is not None,
     }
     if omp_release:
         omp_summary["version"] = omp_release
@@ -8956,12 +8876,6 @@ def main(argv: list[str] | None = None) -> int:
                              "KEYID is the id of a key saved in widget settings (k- and eight hex digits).")
     parser.add_argument("--omp", choices=("off", "local"), default="off",
                         help="local: add the accounts omp (Oh My Pi) signs in to, from `omp usage --json`.")
-    parser.add_argument("--omp-gateway-url", default="",
-                        help="An omp auth gateway whose GET /v1/usage lists more omp accounts.")
-    parser.add_argument("--omp-gateway-key-file", type=lambda value: Path(value).expanduser(),
-                        help="Private file with the omp gateway's token.")
-    parser.add_argument("--omp-only", action="store_true",
-                        help="Read only omp's accounts: no provider is queried and no history is written.")
     args = parser.parse_args(argv)
 
     provider_ids = parse_provider_ids(args.providers)
@@ -8970,9 +8884,7 @@ def main(argv: list[str] | None = None) -> int:
         key_files = parse_key_files(args.key_file)
         extra_keys = parse_extra_keys(args.extra_key)
         payload = build_payload(provider_ids, timeout, args.state_dir, args.source, args.cliproxy_url,
-                                args.cliproxy_key_file, key_files, extra_keys, omp_local=args.omp == "local",
-                                omp_gateway_url=args.omp_gateway_url.strip(),
-                                omp_gateway_key_file=args.omp_gateway_key_file, omp_only=args.omp_only)
+                                args.cliproxy_key_file, key_files, extra_keys, omp_local=args.omp == "local")
     except Exception as exc:
         payload = {
             "schemaVersion": SCHEMA_VERSION,

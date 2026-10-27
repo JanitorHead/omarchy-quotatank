@@ -576,11 +576,9 @@ Ui.Panel {
 
   // Only Costs, and Settings → Costs with the sources the last scan found, read transcripts; Limits never
   // waits on a scan.
-  readonly property bool costsShown: opened && (viewMode === "costs" || (configuring && configForm.page === "costs"))
-  onCostsShownChanged: if (costsShown) {
-    costBackend.ensureLoaded()
-    if (remoteCostsChanged && !remoteCostTimer.running) scanRemoteCosts()
-  }
+  readonly property bool costsShown: opened && (viewMode === "costs"
+    || (configuring && (configForm.page === "costs" || configForm.page === "sources")))
+  onCostsShownChanged: if (costsShown) costBackend.ensureLoaded()
 
   function leaveSettings() {
     configForm.discardKey()
@@ -608,12 +606,19 @@ Ui.Panel {
     return true
   }
 
-  // Saved 1.x key paths follow the private folder to omarchy/quotatank, once (UsageLogic.legacyPathSettings).
+  // Saved 1.x key paths follow the private folder to omarchy/quotatank (UsageLogic.legacyPathSettings), and the
+  // source settings of 2.3 and older move to Settings → Sources (UsageLogic.migrateSources), in one save.
   // This runs as settings arrive, before the backends' first refresh starts.
   function moveLegacyPaths() {
-    var moved = UsageLogic.legacyPathSettings(settings)
-    if (Object.keys(moved).length === 0) return
-    var entry = Object.assign({}, settings, moved)
+    var entry = Object.assign({}, settings, UsageLogic.legacyPathSettings(settings))
+    var migration = UsageLogic.migrateSources(entry)
+    if (migration) {
+      for (var key in migration.changes) {
+        if (migration.changes[key] === null) delete entry[key]
+        else entry[key] = migration.changes[key]
+      }
+    }
+    if (JSON.stringify(entry) === JSON.stringify(settings)) return
     if (bar && bar.shell && typeof bar.shell.updateEntryInline === "function") bar.shell.updateEntryInline(moduleName, entry)
     settings = entry
   }
@@ -922,27 +927,6 @@ Ui.Panel {
     proxyMode: root.proxyMode
   }
 
-  // omp stats on another computer indexed new requests. Its figures change only with a new scan: while
-  // Costs shows that runs at most once a minute; otherwise it scans when Costs next shows.
-  property bool remoteCostsChanged: false
-  property int remoteCostScans: 0
-  function followRemoteActivity() {
-    if (!costBackend.requested) return
-    remoteCostsChanged = true
-    if (costsShown && !remoteCostTimer.running) scanRemoteCosts()
-  }
-  function scanRemoteCosts() {
-    remoteCostsChanged = false
-    remoteCostScans++
-    remoteCostTimer.restart()
-    costBackend.requestRefresh()
-  }
-  Timer {
-    id: remoteCostTimer
-    interval: 60000
-    onTriggered: if (root.remoteCostsChanged && root.costsShown) root.scanRemoteCosts()
-  }
-
   // A first open with nothing read yet shows placeholder blocks, but only once reading takes over a
   // second; a quick first reading never flashes them.
   property bool skeletonDue: false
@@ -1053,7 +1037,6 @@ Ui.Panel {
     function onRequest(event) {
       if (event) root.barLivePing(String(event.provider || ""), String(event.accountId || ""))
     }
-    function onRemoteActivity() { root.followRemoteActivity() }
   }
 
   // Hover card: opens 350 ms after the pointer settles on a chip with several accounts, closes 150 ms
@@ -1822,6 +1805,25 @@ Ui.Panel {
             cardRadius: root.usageCardRadius
             motion: root.motion
             onDismissed: root.accountEvents.dismiss()
+          }
+
+          // Once, after updating from 2.3 or older with omp read from another computer's dashboard.
+          EventNotice {
+            objectName: "sourcesNotice"
+            width: parent.width
+            shown: root.viewMode === "limits" && root.settings && root.settings.sourcesNotice === "ompRemote"
+            text: "omp on another computer now uses SSH. Add that computer under Settings → Sources."
+            actionText: "Open Sources"
+            foreground: root.foreground
+            accent: Commons.Color.accent
+            fontFamily: root.fontFamily
+            cardRadius: root.usageCardRadius
+            motion: root.motion
+            onDismissed: root.saveSettings({ sourcesNotice: "" })
+            onActionRequested: {
+              root.saveSettings({ sourcesNotice: "" })
+              root.showSettings("sources")
+            }
           }
 
           Column {

@@ -14,12 +14,13 @@ Item {
   property bool pendingRefresh: false
   property bool launchPending: false
   property string scriptPath: usageBackend.localPath(Qt.resolvedUrl("scripts/proxy-activity.py"))
-  readonly property string keeperUrl: String(settings.costKeeperUrl || "")
-  readonly property string passwordFile: String(settings.costKeeperPasswordFile || "")
+  // CPA Usage Keeper belongs to the proxy entry under Settings → Sources.
+  readonly property string keeperUrl: usageBackend.proxy ? usageBackend.proxy.keeperUrl : ""
+  readonly property string passwordFile: usageBackend.proxy ? usageBackend.proxy.keeperPasswordFile : ""
   readonly property bool trackingEnabled: usageBackend.usageSource === "cliproxy" && keeperUrl.trim() !== ""
   readonly property string connectionId: JSON.stringify([usageBackend.connectionId, keeperUrl, passwordFile])
   readonly property string notice: !trackingEnabled
-    ? "Configure CPA Usage Keeper in settings to track the last-used account."
+    ? "Configure CPA Usage Keeper under Settings → Sources to track the last-used account."
     : fetchError !== "" ? fetchError : lastSuccessAt <= 0 ? "Loading account activity…" : ""
 
   function refresh() {

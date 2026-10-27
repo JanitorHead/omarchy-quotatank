@@ -21,9 +21,11 @@ Item {
     Math.round(Number(setting("refreshIntervalSec", 900)) || 900)))
   readonly property var enabledProviderIds: normalizedProviderIds(setting(
     "enabledProviders", UsageLogic.DEFAULT_SETTINGS.enabledProviders))
-  readonly property string usageSource: String(setting("usageSource", "direct")) === "cliproxy" ? "cliproxy" : "direct"
-  readonly property string cliproxyUrl: String(setting("cliproxyUrl", "http://127.0.0.1:8317"))
-  readonly property string cliproxyKeyFile: String(setting("cliproxyKeyFile", ""))
+  // The proxy under Settings → Sources: while one is switched on, Limits reads every account from it.
+  readonly property var proxy: UsageLogic.activeProxy(settings)
+  readonly property string usageSource: proxy ? "cliproxy" : "direct"
+  readonly property string cliproxyUrl: proxy ? proxy.url : ""
+  readonly property string cliproxyKeyFile: proxy ? proxy.keyFile : ""
   // Private key files saved from settings, one `[id, path]` pair per API-key provider that has one.
   readonly property var keyFiles: {
     var result = []
@@ -36,10 +38,10 @@ Item {
   }
   // A provider's further keys, each read as its own account (Settings → Providers → Add another key).
   readonly property var extraKeyArguments: UsageLogic.extraKeyArguments(setting("extraKeys", "{}"), enabledProviderIds)
-  // omp (Oh My Pi) on this computer and through its auth gateway (Settings → Providers → omp). A proxy
-  // source reads every account from the proxy instead.
+  // omp (Oh My Pi) on this computer (Settings → Sources → This computer). A proxy source reads every account
+  // from the proxy instead.
   readonly property var ompArguments: usageSource === "cliproxy" ? [] : UsageLogic.ompUsageArguments(settings)
-  // What the backend found of omp: { local, gateway, message, accounts, ... }, or null before it says.
+  // What the backend found of omp: { local, message, accounts, ... }, or null before it says.
   readonly property var ompStatus: payload && payload.omp && typeof payload.omp === "object" ? payload.omp : null
   // Every reading as the backend gave it; Settings lists hidden accounts from these.
   readonly property var allProviders: payload ? UsageLogic.listOrEmpty(payload.providers) : []

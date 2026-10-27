@@ -110,7 +110,8 @@ class HangingOmpTestCase(unittest.TestCase):
 
 
 class CollectorTests(HangingOmpTestCase):
-    arguments = ("--providers", "claude", "--omp", "local", "--omp-only")
+    # No provider is requested, so omp is the only thing the collector runs.
+    arguments = ("--providers", "", "--omp", "local")
 
     def test_a_stopped_collector_stops_omp_and_what_omp_started(self):
         self.environment["OMP_FAKE_HELPER"] = str(self.helper_file)
@@ -159,7 +160,7 @@ class LiveHelperTests(HangingOmpTestCase):
                 raise BrokenPipeError
 
         with mock.patch.dict(os.environ, self.environment), self.assertRaises(BrokenPipeError):
-            live.run(argparse.Namespace(local=True, stats_url=None, accounts=True), emit)
+            live.run(argparse.Namespace(local=True, accounts=True), emit)
         self.assert_gone(int(self.pid_file.read_text()))
 
 

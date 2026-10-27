@@ -52,9 +52,9 @@ VERSION = 1
 FIELDS = frozenset({"format", "version", "createdAt", "pluginVersion", "settings", "secrets"})
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 # Settings whose value is JSON text holding structure. Restore keeps them as text, with references rewritten.
-CONTAINER_TYPES = {"costT3Servers": list, "extraKeys": dict}
+CONTAINER_TYPES = {"sources": list, "extraKeys": dict}
 # Settings that hold key file references, directly or inside a container. Restore's "keys" option selects these.
-KEY_SETTINGS = frozenset({"costKeeperPasswordFile", "costT3Servers", "extraKeys"})
+KEY_SETTINGS = frozenset({"sources", "extraKeys"})
 MIN_PASSPHRASE = 12
 MAX_PASSPHRASE_BYTES = 1024
 MAX_BACKUP_BYTES = 4 * 1024 * 1024
@@ -565,15 +565,15 @@ def secret_slots(settings: dict) -> list[tuple[dict, str, str]]:
 
     Shapes are checked here, so any caller that walks the slots can rely on them.
     """
-    slots = [(settings, name, name) for name in settings
-             if name.endswith("KeyFile") or name == "costKeeperPasswordFile"]
-    rows = settings.get("costT3Servers")
+    slots = [(settings, name, name) for name in settings if name.endswith("KeyFile")]
+    rows = settings.get("sources")
     if isinstance(rows, list):
         for row in rows:
             if not isinstance(row, dict):
-                raise BackupError("Setting costT3Servers has an unexpected shape.")
-            if "tokenFile" in row:
-                slots.append((row, "tokenFile", "costT3Servers"))
+                raise BackupError("Setting sources has an unexpected shape.")
+            for field in ("keyFile", "keeperPasswordFile", "tokenFile"):
+                if field in row:
+                    slots.append((row, field, "sources"))
     entries = settings.get("extraKeys")
     if isinstance(entries, dict):
         for entry in entries.values():

@@ -16,8 +16,6 @@ import tempfile
 import threading
 import time
 import unittest
-import urllib.parse
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -33,7 +31,6 @@ usage = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = usage
 SPEC.loader.exec_module(usage)
 
-TOKEN = "synthetic-gateway-token"
 # Every provider omp can report for.
 REQUESTED = ["claude", "codex", "opencode", "kimi", "zai", "antigravity", "cursor", "copilot", "minimax"]
 # Stands in for omp: answers --version, logs its arguments and folder, and prints the fixture unless told otherwise.
@@ -71,282 +68,12 @@ def native(provider_id: str, account: str = "") -> dict:
     return reading
 
 
-def write_private(path: Path, text: str) -> Path:
-    path.write_text(text)
-    path.chmod(0o600)
-    return path
-
-
-@contextlib.contextmanager
-def gateway(status: int = 200, body: dict | None = None, *, hosts: bool = False):
-    """A local gateway; `calls` lists each request's path and Authorization header, and its Host with `hosts`."""
-    calls = []
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
-
-        def do_GET(self):
-            call = (self.path, self.headers.get("Authorization"))
-            calls.append((*call, self.headers.get("Host")) if hosts else call)
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(body if body is not None else {"error": "synthetic"}).encode())
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}", calls
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
-
-
-REAL_GETADDRINFO = socket.getaddrinfo
-
-
-@contextlib.contextmanager
-def resolving(answers: dict[str, list[str] | None]):
-    """Each name in `answers` resolves to its addresses (None: no such name), and only once; others as usual.
-    Yields the names looked up."""
-    lookups = []
-
-    def getaddrinfo(host, *args, **kwargs):
-        if host not in answers:
-            return REAL_GETADDRINFO(host, *args, **kwargs)
-        lookups.append(host)
-        if answers[host] is None or lookups.count(host) > 1:
-            raise socket.gaierror(socket.EAI_NONAME, "synthetic")
-        return [(socket.AF_INET6 if ":" in address else socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 0))
-                for address in answers[host]]
-
-    with mock.patch.object(socket, "getaddrinfo", side_effect=getaddrinfo):
-        yield lookups
-
-
 IP = ipaddress.ip_address
-# This computer's Tailscale addresses, and the computers tailscaled knows by MagicDNS name: this tailnet's, and
-# one shared from another tailnet whose first label matches a computer of this one.
-OWN = ("100.101.102.1", "fd7a:115c:a1e0::1")
-SUFFIX = "tail0000.ts.net"
-TAILNET = {
-    "devbox.tail0000.ts.net.": OWN,
-    "omp-box.tail0000.ts.net.": ("100.101.102.103", "fd7a:115c:a1e0::5"),
-    "other-box.tail0000.ts.net.": ("100.101.102.110",),
-    "omp-box.other0000.ts.net.": ("100.101.102.120",),
-}
 
 
-def whois_address(text: str):
-    """The address of whois's `addr` in tailscaled 1.38's only form, "ip:port", or None."""
-    host, separator, port = text.rpartition(":")
-    if not separator or not port.isdigit() or (":" in host) != host.startswith("["):
-        return None
-    try:
-        return IP(host[1:-1] if host.startswith("[") and host.endswith("]") else host)
-    except ValueError:
-        return None
-
-
-@contextlib.contextmanager
-def tailnet(state: str | None = "Running", tun: bool = True, here: bool = True, interfaces: dict | None = None):
-    """A stand-in tailscaled on a Unix socket that, like tailscaled, answers only its own Host name: status says
-    `state` (None: tailscaled is not running) and `tun`, and whois knows TAILNET. It listens from this network
-    namespace when `here`. This computer's interfaces are `interfaces`, by default a TUN `tailscale0` holding
-    OWN and a `wlan0` with an address the network handed out from 100.64.0.0/10."""
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
-
-        def reply(self, status: int, body: object) -> None:
-            data = (body + "\n" if isinstance(body, str) else json.dumps(body)).encode()
-            self.send_response(status)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-        def do_GET(self):
-            url = urllib.parse.urlsplit(self.path)
-            query = urllib.parse.parse_qs(url.query)
-            if self.headers.get("Host") != "local-tailscaled.sock":
-                return self.reply(403, "invalid localapi request")
-            if url.path == "/localapi/v0/status" and query.get("peers") == ["false"]:
-                return self.reply(200, {"BackendState": state, "TUN": tun, "TailscaleIPs": list(OWN),
-                                        "MagicDNSSuffix": SUFFIX})
-            if url.path == "/localapi/v0/whois":
-                wanted = whois_address(query.get("addr", [""])[0])
-                if wanted is None:
-                    return self.reply(400, "invalid 'addr' parameter")
-                for name, addresses in TAILNET.items():
-                    if wanted in map(IP, addresses):
-                        prefixes = [f"{address}/{128 if ':' in address else 32}" for address in addresses]
-                        return self.reply(200, {"Node": {"Name": name, "Addresses": prefixes}})
-                return self.reply(404, "no match for IP:port")
-            self.reply(404, "not found")
-
-    if interfaces is None:
-        interfaces = {"tailscale0": (True, set(map(IP, OWN))), "wlan0": (False, {IP("100.70.0.2")})}
-    with tempfile.TemporaryDirectory() as folder, \
-            mock.patch.object(common, "TAILSCALED_SOCKET", os.path.join(folder, "tailscaled.sock")), \
-            mock.patch.object(common, "tailscaled_in_this_network", return_value=here), \
-            mock.patch.object(common, "network_interfaces", return_value=interfaces):
-        if state is None:
-            yield
-            return
-        server = socketserver.ThreadingUnixStreamServer(common.TAILSCALED_SOCKET, Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            yield
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join()
-
-
-class UrlRuleTests(unittest.TestCase):
-    def test_a_server_address_is_its_scheme_host_and_port(self):
-        accepted = {
-            "https://gateway.example.com": "https://gateway.example.com",
-            "https://gateway.example.com:8443/": "https://gateway.example.com:8443",
-            " http://127.0.0.1:4000 ": "http://127.0.0.1:4000",
-            "http://localhost:4000/": "http://localhost:4000",
-            "http://[::1]:4000": "http://[::1]:4000",
-            "http://10.1.2.3:4000": "http://10.1.2.3:4000",
-            "http://172.20.0.5:4000": "http://172.20.0.5:4000",
-            "http://192.168.1.20:4000": "http://192.168.1.20:4000",
-            "http://100.101.102.103:4000": "http://100.101.102.103:4000",
-            "http://[fd7a:115c:a1e0::1]:4000": "http://[fd7a:115c:a1e0::1]:4000",
-            "http://omp-box.tail0000.ts.net:4000": "http://omp-box.tail0000.ts.net:4000",
-            "http://omp-box:4000": "http://omp-box:4000",
-        }
-        for address, expected in accepted.items():
-            with self.subTest(address=address):
-                self.assertEqual(common.normalize_server_url(address), expected)
-
-    def test_paths_public_plain_http_and_unsafe_addresses_are_refused_without_echoing_them(self):
-        for address in ("https://gateway.example.com/omp", "https://gateway.example.com/omp/",
-                        "http://127.0.0.1:3847/api/session/trace", "http://127.0.0.1:1/\\..\\x",
-                        "http://127.0.0.1\\@gateway.example.com", "https://gateway.example.com/a/../b",
-                        "https://user:secret@gateway.example.com", "https://@gateway.example.com",
-                        "https://gateway.example.com/?token=secret", "https://gateway.example.com?",
-                        "https://gateway.example.com/#secret", "https://gate way.example.com", "http://[::1",
-                        "http://gateway.example.com:4000", "http://8.8.8.8:4000", "http://100.128.0.1:4000",
-                        "http://169.254.1.1", "http://2130706433", "http://0x7f000001", "http://ts.net",
-                        "http://[::ffff:8.8.8.8]", "ftp://gateway.example.com", "http://127.0.0.1:99999",
-                        "http://127.0.0.1\n", ""):
-            with self.subTest(address=address):
-                with self.assertRaises(ValueError) as raised:
-                    common.normalize_server_url(address)
-                self.assertEqual(str(raised.exception), "")
-
-    def test_the_gateway_url_is_checked_before_any_request(self):
-        for address in ("https://gateway.example.com/omp/", "http://user@127.0.0.1:4000", "gateway.example.com"):
-            with self.subTest(address=address), mock.patch.object(usage, "http_json") as request, \
-                    mock.patch.object(socket, "getaddrinfo", side_effect=AssertionError("looked up")):
-                result = usage.read_omp_gateway(address, None, 5)
-            request.assert_not_called()
-            self.assertEqual(result, ("error", usage.OMP_GATEWAY_URL_RULE, None))
-
-
-class GatewayAddressTests(unittest.TestCase):
-    """The gateway token can spend model quota: over plain HTTP it goes only to this computer, or through
-    Tailscale to the computer the address names in this tailnet."""
-
-    def read(self, address: str):
-        with mock.patch.object(usage, "http_json", return_value={"reports": []}) as request:
-            return usage.read_omp_gateway(address, None, 5), request
-
-    def assert_refused(self, address: str, answers: dict):
-        with resolving(answers):
-            result, request = self.read(address)
-        request.assert_not_called()
-        self.assertEqual(result, ("error", usage.OMP_GATEWAY_PLAIN_HTTP, None))
-
-    def test_plain_http_to_other_networks_is_refused_before_any_request(self):
-        cases = {
-            "http://192.168.1.20:4000": {}, "http://10.1.2.3:4000": {}, "http://[fd00::20]:4000": {},
-            "http://omp-box:4000": {"omp-box": ["192.168.1.20"]},
-            "http://omp-box.tail0000.ts.net:4000": {"omp-box.tail0000.ts.net": ["100.101.102.103", "192.168.1.20"]},
-            "http://gateway.example.com:4000": {"gateway.example.com": ["203.0.113.7"]},
-        }
-        with tailnet():
-            for address, answers in cases.items():
-                with self.subTest(address=address):
-                    self.assert_refused(address, answers)
-
-    def test_a_computer_of_this_tailnet_takes_plain_http_bound_to_tailscales_interface(self):
-        cases = (("http://omp-box:4000", {"omp-box": ["100.101.102.103"]}),
-                 ("http://omp-box.tail0000.ts.net:4000", {"omp-box.tail0000.ts.net": ["fd7a:115c:a1e0::5"]}),
-                 ("http://omp-box.tail0000.ts.net.:4000", {"omp-box.tail0000.ts.net.": ["100.101.102.103"]}),
-                 ("http://omp-box.other0000.ts.net:4000", {"omp-box.other0000.ts.net": ["100.101.102.120"]}),
-                 ("http://100.101.102.103:4000", {}), ("http://[fd7a:115c:a1e0::5]:4000", {}),
-                 ("http://100.101.102.1:4000", {}))
-        with tailnet():
-            for address, answers in cases:
-                with self.subTest(address=address), resolving(answers):
-                    result, request = self.read(address)
-                self.assertEqual(result, ("ok", "", {"reports": []}))
-                self.assertEqual(request.call_args.args[0], address + "/v1/usage")
-                checked, = [handler for handler in request.call_args.kwargs["opener"].handlers
-                            if isinstance(handler, usage.CheckedAddresses)]
-                self.assertEqual({interface for _address, interface in checked.routes}, {"tailscale0"})
-            self.assertEqual(common.plain_http_token_routes("::ffff:100.101.102.103", [IP("::ffff:100.101.102.103")], 2),
-                             [(IP("100.101.102.103"), "tailscale0")])
-
-    def test_https_reaches_any_host_and_a_name_that_does_not_resolve_is_unreachable(self):
-        with resolving({"gateway.example.com": ["203.0.113.7"]}) as lookups:
-            result, request = self.read("https://gateway.example.com:8443/")
-        self.assertEqual((result[0], lookups), ("ok", []))
-        self.assertEqual(request.call_args.args[0], "https://gateway.example.com:8443/v1/usage")
-        with resolving({"omp-box": None}):
-            result, request = self.read("http://omp-box:4000")
-        request.assert_not_called()
-        self.assertEqual(result, ("error", usage.OMP_GATEWAY_FAILURES["network"], None))
-
-    def test_this_computer_takes_plain_http_only_when_the_address_names_it_by_itself(self):
-        with tailnet(state=None):
-            for hostname, addresses in (("localhost", [IP("::1"), IP("127.0.0.1")]), ("127.0.0.1", [IP("127.0.0.1")]),
-                                        ("::ffff:127.0.0.1", [IP("::ffff:127.0.0.1")])):
-                with self.subTest(hostname=hostname):
-                    routes = common.plain_http_token_routes(hostname, addresses, 2)
-                    self.assertEqual(routes, [((address.ipv4_mapped or address) if address.version == 6 else address, None)
-                                              for address in addresses])
-        # Any other name resolving to loopback was answered by a DNS server, and the token would reach whatever
-        # listens on that port here; a name may not mix loopback and the tailnet either.
-        with tailnet():
-            for address, answers in (("http://omp-box:4000", {"omp-box": ["127.0.0.1"]}),
-                                     ("http://omp-box.tail0000.ts.net:4000", {"omp-box.tail0000.ts.net": ["::1"]}),
-                                     ("http://omp-box:4000", {"omp-box": ["100.101.102.103", "127.0.0.1"]}),
-                                     ("http://localhost:4000", {"localhost": ["127.0.0.1", "100.101.102.103"]})):
-                with self.subTest(address=address, answers=answers):
-                    self.assert_refused(address, answers)
-
-    def test_an_address_in_tailscales_ranges_is_not_enough(self):
-        # A network can hand out 100.64.0.0/10 and answer for a tailnet address while Tailscale is off,
-        # stopped, signed out or in userspace mode, while tailscaled serves another network namespace, or while
-        # Tailscale's interface is not here or not alone.
-        for setup in ({"state": None}, {"state": "Stopped"}, {"state": "NeedsLogin"}, {"tun": False}, {"here": False},
-                      {"interfaces": {"wlan0": (False, {IP(OWN[0])})}},
-                      {"interfaces": {"tailscale0": (True, {IP(OWN[0])}), "tun1": (True, {IP(OWN[0])})}}):
-            with self.subTest(setup=setup), tailnet(**setup):
-                self.assert_refused("http://omp-box:4000", {"omp-box": ["100.101.102.103"]})
-        # With Tailscale connected: an address of no computer in the tailnet, which leaves through the network;
-        # the network's DNS naming another computer of the tailnet, or one shared from another tailnet that has
-        # the same first label (MagicDNS gives those only their full name); a name outside MagicDNS.
-        with tailnet():
-            for address, answers in (("http://100.101.102.104:4000", {}),
-                                     ("http://omp-box:4000", {"omp-box": ["100.101.102.103", "100.70.0.9"]}),
-                                     ("http://omp-box:4000", {"omp-box": ["100.101.102.110"]}),
-                                     ("http://omp-box:4000", {"omp-box": ["100.101.102.120"]}),
-                                     ("http://omp-box.tail0000.ts.net:4000", {"omp-box.tail0000.ts.net": ["100.101.102.110"]}),
-                                     ("http://omp-box.example.com:4000", {"omp-box.example.com": ["100.101.102.103"]})):
-                with self.subTest(address=address, answers=answers):
-                    self.assert_refused(address, answers)
+class TailscaleTests(unittest.TestCase):
+    """Plain HTTP carries a secret off this computer only through Tailscale, and only while Tailscale's own
+    interface is here and tailscaled answers from this network namespace."""
 
     def test_tailscales_interface_is_a_tun_device_not_a_tap(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(common, "SYS_CLASS_NET", folder):
@@ -466,20 +193,6 @@ class LocalServerOwnerTests(unittest.TestCase):
                 with common.open_tcp(IP(host), listener.getsockname()[1], 5, None) as sock:
                     self.assertEqual(common.local_server_owner(sock), os.getuid())
 
-    def test_a_server_of_another_account_or_one_the_kernel_does_not_list_gets_no_token(self):
-        folder = tempfile.TemporaryDirectory()
-        self.addCleanup(folder.cleanup)
-        key = write_private(Path(folder.name) / "gateway.key", TOKEN)
-        for owner in (os.getuid() + 1, None):
-            with self.subTest(owner=owner), gateway(body={"reports": []}) as (address, calls), \
-                    mock.patch.object(common, "local_server_owner", return_value=owner):
-                result = usage.read_omp_gateway(address, key, 5)
-            self.assertEqual((result, calls), (("error", usage.OMP_GATEWAY_FAILURES["foreign"], None), []))
-        with gateway(body={"reports": []}) as (address, calls), \
-                mock.patch.object(common, "local_server_owner", return_value=0):
-            self.assertEqual(usage.read_omp_gateway(address, key, 5), ("ok", "", {"reports": []}))
-        self.assertEqual(calls, [("/v1/usage", "Bearer " + TOKEN)], "root's server may have it: root can read it anyway")
-
 
 class ReportMappingTests(unittest.TestCase):
     def setUp(self):
@@ -570,19 +283,6 @@ class AccountIdTests(unittest.TestCase):
         self.assertIn(omp_id("minimax-code", "acc-synthetic-minimax"), ids)
         self.assertIn(omp_id("opencode-go", "3"), ids)
         self.assertEqual(len(ids), len(set(ids)))
-
-    def test_an_account_both_sources_report_is_kept_once(self):
-        local = fixture()
-        remote = {"generatedAt": 1, "reports": copy.deepcopy(local["reports"][:3])}
-        del remote["reports"][0]["metadata"]["orgId"]
-        alone = usage.omp_accounts([local], ["claude", "codex"])
-        both = usage.omp_accounts([local, remote], ["claude", "codex"])
-        self.assertEqual([entry["accountId"] for _, _, entry in both], [entry["accountId"] for _, _, entry in alone])
-        # The same email in a third org is another account, numbered after the first two.
-        third = {"reports": [dict(copy.deepcopy(local["reports"][1]), metadata={"email": "dev@example.com", "orgId": "org-z"})]}
-        ids = [entry["accountId"] for _, _, entry in usage.omp_accounts([local, third], ["claude"])]
-        self.assertEqual(ids, [omp_id("anthropic", "dev@example.com"), omp_id("anthropic", "dev@example.com") + "-2",
-                               omp_id("anthropic", "dev@example.com") + "-3", omp_id("anthropic", "old@example.com")])
 
 
 class MergeTests(unittest.TestCase):
@@ -789,7 +489,6 @@ class OmpTestCase(unittest.TestCase):
         defaults = {provider_id: (lambda timeout, provider_id=provider_id: native(provider_id)) for provider_id in usage.FETCHERS}
         with mock.patch.dict(usage.FETCHERS, {**defaults, **(fetchers or {})}), contextlib.redirect_stdout(output):
             self.assertEqual(usage.main(["--state-dir", str(self.state), *arguments]), 0)
-        self.assertNotIn(TOKEN, output.getvalue())
         return json.loads(output.getvalue())
 
 
@@ -809,7 +508,7 @@ class LocalOmpTests(OmpTestCase):
         self.assertEqual(usage.omp_version(self.omp), "", "a program that does not answer as omp has no omp version")
         # A state folder given on the command line holds it instead.
         self.log.unlink()
-        self.run_main("--providers", "claude", "--omp", "local", "--omp-only")
+        self.run_main("--providers", "claude", "--omp", "local")
         self.assertEqual(set(self.log.read_text().splitlines()[1::2]), {str(self.state / "omp-workdir")})
 
     def test_failures_are_reported_without_omps_own_text(self):
@@ -835,21 +534,21 @@ class LocalOmpTests(OmpTestCase):
     def test_without_omp_nothing_changes(self):
         (self.bin / "omp").unlink()
         payload = self.run_main("--providers", "claude", "--omp", "local")
-        self.assertEqual(payload["omp"], {"local": "missing", "gateway": "off", "message": "omp was not found on this computer.",
-                                          "accounts": 0, "localAccounts": 0, "gatewayAccounts": 0, "installed": False})
+        self.assertEqual(payload["omp"], {"local": "missing", "message": "omp was not found on this computer.",
+                                          "accounts": 0, "localAccounts": 0, "installed": False})
         self.assertNotIn("accounts", payload["providers"][0])
         self.assertNotIn("origins", payload["providers"][0])
         self.assertFalse(self.log.exists())
 
     def test_without_omp_flags_omp_is_off_and_never_run(self):
         payload = self.run_main("--providers", "claude")
-        self.assertEqual(payload["omp"], {"local": "off", "gateway": "off", "message": "", "accounts": 0,
-                                          "localAccounts": 0, "gatewayAccounts": 0, "installed": True})
+        self.assertEqual(payload["omp"], {"local": "off", "message": "", "accounts": 0, "localAccounts": 0,
+                                          "installed": True})
         self.assertFalse(self.log.exists())
 
     def test_omp_is_never_run_before_it_has_set_itself_up(self):
-        unused = {"local": "unused", "gateway": "off", "message": "omp is installed but not set up on this computer.",
-                  "accounts": 0, "localAccounts": 0, "gatewayAccounts": 0, "installed": True}
+        unused = {"local": "unused", "message": "omp is installed but not set up on this computer.",
+                  "accounts": 0, "localAccounts": 0, "installed": True}
         self.agent_db.unlink()
         payload = self.run_main("--providers", "claude", "--omp", "local")
         self.assertEqual(payload["omp"], unused)
@@ -871,7 +570,7 @@ class LocalOmpTests(OmpTestCase):
 
 
 class UnreadableOmpDataTests(OmpTestCase):
-    """omp's data, local or from a remote gateway, can never cost a native reading."""
+    """omp's data can never cost a native reading."""
 
     def setUp(self):
         super().setUp()
@@ -898,24 +597,6 @@ class UnreadableOmpDataTests(OmpTestCase):
         self.assertEqual(payload["providers"][1]["origins"], ["signin", "omp"])
 
     def test_data_the_merge_cannot_take_is_an_omp_error_and_leaves_native_readings_alone(self):
-        original = usage.omp_report_entry
-
-        def breaking(provider_id, account_id, report):
-            if report.get("metadata", {}).get("email") == "broken@example.com":
-                raise RuntimeError("synthetic merge failure")
-            return original(provider_id, account_id, report)
-
-        remote = {"generatedAt": 1, "reports": [dict(fixture()["reports"][2], metadata={"email": "broken@example.com"})]}
-        key = write_private(self.root / "gateway.key", TOKEN)
-        with gateway(body=remote) as (address, _calls), mock.patch.object(usage, "omp_report_entry", side_effect=breaking):
-            payload = self.run_main("--providers", "claude,codex", "--omp", "local", "--omp-gateway-url", address,
-                                    "--omp-gateway-key-file", str(key), fetchers=self.fetchers)
-        # Only the gateway's data broke the merge: this computer's omp accounts still merge.
-        self.assertEqual((payload["omp"]["local"], payload["omp"]["gateway"]), ("ok", "error"))
-        self.assertEqual(payload["omp"]["message"], "The omp gateway returned unreadable usage data.")
-        self.assertEqual((payload["omp"]["localAccounts"], payload["omp"]["gatewayAccounts"]), (5, 0))
-        self.assertEqual(payload["providers"][0]["origins"], ["signin", "omp"])
-
         with mock.patch.object(usage, "omp_report_entry", side_effect=RuntimeError("synthetic merge failure")):
             payload = self.run_main("--providers", "claude,codex", "--omp", "local", fetchers=self.fetchers)
         self.assertEqual({name: payload["omp"][name] for name in ("local", "message", "accounts", "localAccounts")},
@@ -928,98 +609,6 @@ class UnreadableOmpDataTests(OmpTestCase):
         for provider in payload["providers"]:
             for added in ("accounts", "origins", "ompAccountId", "pool"):
                 self.assertNotIn(added, provider)
-
-
-class GatewayTests(OmpTestCase):
-    def setUp(self):
-        super().setUp()
-        self.key = write_private(self.root / "gateway.key", TOKEN + "\n")
-
-    def test_only_v1_usage_is_requested_with_the_token(self):
-        body = {"generatedAt": 1, "reports": fixture()["reports"][:1]}
-        with gateway(body=body) as (address, calls):
-            result = usage.read_omp_gateway(address + "/", self.key, 5)
-        self.assertEqual(result, ("ok", "", body))
-        self.assertEqual(calls, [("/v1/usage", "Bearer " + TOKEN)])
-
-    def test_a_name_is_looked_up_once_and_the_token_goes_to_the_address_checked(self):
-        with gateway(body={"reports": []}, hosts=True) as (address, calls):
-            port = address.rsplit(":", 1)[1]
-            with resolving({"localhost": ["127.0.0.1"]}) as lookups:
-                result = usage.read_omp_gateway(f"http://localhost:{port}", self.key, 5)
-        self.assertEqual(result, ("ok", "", {"reports": []}))
-        self.assertEqual(lookups, ["localhost"], "a second lookup could answer with another computer")
-        self.assertEqual(calls, [("/v1/usage", "Bearer " + TOKEN, f"localhost:{port}")])
-
-    def test_proxy_settings_are_ignored(self):
-        with gateway(body={"reports": []}) as (address, calls), gateway(body={"reports": []}) as (proxy, proxied):
-            with mock.patch.dict(os.environ, {"http_proxy": proxy, "https_proxy": proxy, "all_proxy": proxy,
-                                              "no_proxy": "", "NO_PROXY": ""}):
-                result = usage.read_omp_gateway(address, self.key, 5)
-        self.assertEqual(result, ("ok", "", {"reports": []}))
-        self.assertEqual((calls, proxied), ([("/v1/usage", "Bearer " + TOKEN)], []))
-
-    def test_failures_name_the_gateway(self):
-        cases = (
-            (401, self.key, {"error": "unauthorized"}, "The omp gateway refused the token."),
-            (401, None, {"error": "unauthorized"}, "The omp gateway asks for a token."),
-            (502, self.key, {"error": "synthetic"}, "The omp gateway answered HTTP 502."),
-            (200, self.key, {"ok": True}, "The omp gateway returned unreadable usage data."),
-        )
-        for status, key, body, message in cases:
-            with self.subTest(status=status, key=key is not None), gateway(status, body) as (address, _calls):
-                self.assertEqual(usage.read_omp_gateway(address, key, 5), ("error", message, None))
-
-    def test_a_key_file_others_can_read_is_refused_before_any_request(self):
-        self.key.chmod(0o644)
-        with gateway(body={"reports": []}) as (address, calls):
-            status, message, _document = usage.read_omp_gateway(address, self.key, 5)
-        self.assertEqual((status, calls), ("error", []))
-        self.assertEqual(message, "omp gateway token file must be a regular file owned by you with mode 0600.")
-
-    def test_a_refused_token_is_a_gateway_error_and_local_accounts_still_merge(self):
-        with gateway(401) as (address, _calls):
-            payload = self.run_main("--providers", "claude,codex", "--omp", "local", "--omp-gateway-url", address,
-                                    "--omp-gateway-key-file", str(self.key))
-        self.assertEqual((payload["omp"]["local"], payload["omp"]["gateway"]), ("ok", "error"))
-        self.assertEqual(payload["omp"]["message"], "The omp gateway refused the token.")
-        self.assertEqual([len(provider["accounts"]) for provider in payload["providers"]], [4, 2])
-
-
-class CommandLineTests(OmpTestCase):
-    def test_both_sources_merge_into_the_requested_providers(self):
-        remote = {"generatedAt": 1, "reports": [fixture()["reports"][0], dict(fixture()["reports"][2], metadata={
-            "email": "remote@example.com", "planType": "plus"})]}
-        key = write_private(self.root / "gateway.key", TOKEN)
-        fetchers = {"claude": lambda timeout: native("claude", "dev@example.com"),
-                    "codex": lambda timeout: usage.error_provider("codex", "cli_unavailable", "The Codex CLI was not found in PATH.")}
-        with gateway(body=remote) as (address, calls):
-            payload = self.run_main("--providers", "claude,codex", "--omp", "local", "--omp-gateway-url", address,
-                                    "--omp-gateway-key-file", str(key), fetchers=fetchers)
-        self.assertEqual(calls, [("/v1/usage", "Bearer " + TOKEN)])
-        self.assertEqual(payload["omp"], {"local": "ok", "gateway": "ok", "message": "", "accounts": 5, "localAccounts": 5,
-                                          "gatewayAccounts": 2, "installed": True, "version": "18.11.0"})
-        claude, codex = payload["providers"]
-        self.assertEqual(claude["origins"], ["signin", "omp"])
-        # Both of the email's orgs match the native sign-in, which names no org; only the disabled one is added.
-        self.assertEqual([account["accountId"] for account in claude["accounts"]],
-                         ["main", omp_id("anthropic", "old@example.com")])
-        self.assertEqual(claude["pool"]["source"], "omp")
-        self.assertEqual((codex["status"], codex["account"], codex["plan"]), ("ok", "work@example.com", "ChatGPT Pro Lite"))
-        self.assertEqual([account["account"] for account in codex["accounts"]], ["work@example.com", "remote@example.com"])
-        self.assertEqual(codex["accounts"][1]["plan"], "ChatGPT Plus")
-        self.assertTrue(codex["windows"][0]["samples"])
-        self.assertTrue((self.state / "history.json").exists())
-
-    def test_omp_only_reads_no_provider_and_writes_no_history(self):
-        untouched = mock.Mock(side_effect=AssertionError("a provider was read"))
-        payload = self.run_main("--providers", "claude,codex,grok", "--omp", "local", "--omp-only",
-                                fetchers={"claude": untouched, "codex": untouched, "grok": untouched})
-        untouched.assert_not_called()
-        self.assertEqual([provider["id"] for provider in payload["providers"]], ["claude", "codex"])
-        self.assertEqual({account["origin"] for provider in payload["providers"] for account in provider["accounts"]}, {"omp"})
-        self.assertEqual((payload["omp"]["local"], payload["omp"]["accounts"]), ("ok", 4))
-        self.assertFalse((self.state / "history.json").exists())
 
 
 if __name__ == "__main__":

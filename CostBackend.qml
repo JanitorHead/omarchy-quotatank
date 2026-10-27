@@ -38,10 +38,9 @@ Item {
   readonly property var providers: payload ? UsageLogic.listOrEmpty(payload.providers) : []
   readonly property var periods: payload ? UsageLogic.listOrEmpty(payload.periods) : []
   readonly property string priceOverrides: String(setting("costPriceOverrides", "{}"))
-  readonly property string t3Servers: String(setting("costT3Servers", "[]"))
-  // omp stats on another computer (Settings → Costs → omp on another computer).
-  readonly property var ompArguments: UsageLogic.ompCostArguments(settings)
-  readonly property string connectionId: JSON.stringify([enabledProviderIds, t3Servers, ompArguments])
+  // T3 Code servers under Settings → Sources, in the shape scripts/t3_costs.py reads.
+  readonly property string t3Servers: UsageLogic.t3ServersJson(settings)
+  readonly property string connectionId: JSON.stringify([enabledProviderIds, t3Servers])
 
   signal refreshed()
 
@@ -115,7 +114,7 @@ Item {
       "--timeout", "10",
       "--t3-servers", t3Servers,
       "--price-overrides", priceOverrides
-    ].concat(ompArguments)
+    ]
     if (pendingPriceRefresh) command.push("--refresh-prices")
     pendingPriceRefresh = false
     fetchProcess.command = command

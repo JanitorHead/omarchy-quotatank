@@ -1241,7 +1241,7 @@ var DEFAULT_SETTINGS = {
 
 // Quotatank 2 keeps its private files in omarchy/quotatank; 1.x kept them in omarchy/model-usage, and the
 // backends move that folder (plugin_folder in scripts/quotatank_common.py). The settings that still name
-// it, rewritten: key file paths and the JSON settings that list them (extraKeys, costT3Servers). {} when
+// it, rewritten: key file paths and the JSON settings that list them (extraKeys, sources). {} when
 // none does, so Panel saves this once.
 function legacyPathSettings(settings) {
   var moved = {}
@@ -1348,18 +1348,20 @@ function keySaved(settings, providerId) {
   return path !== undefined && path !== null && String(path).trim() !== ""
 }
 
-// Every private file the settings point at: `<id>KeyFile`, the proxy and Keeper secrets, extra keys,
-// and T3 tokens. A restore deletes the ones the new settings no longer use.
+// Every private file the settings point at: `<id>KeyFile`, extra keys, and the secrets of the sources
+// (proxy keys, Keeper passwords, T3 tokens). A restore deletes the ones the new settings no longer use.
 function secretPaths(settings) {
   var paths = []
   function add(path) { if (typeof path === "string" && path.trim() !== "" && paths.indexOf(path) < 0) paths.push(path) }
   if (!settings) return paths
-  for (var key in settings) if (/KeyFile$/.test(key) || key === "costKeeperPasswordFile") add(settings[key])
+  for (var key in settings) if (/KeyFile$/.test(key)) add(settings[key])
   var extra = parseExtraKeys(settings.extraKeys)
   for (var id in extra) for (var i = 0; i < extra[id].keys.length; i++) add(extra[id].keys[i].file)
-  var servers = []
-  try { servers = JSON.parse(String(settings.costT3Servers || "[]")) } catch (e) { servers = [] }
-  if (Array.isArray(servers)) for (var j = 0; j < servers.length; j++) if (servers[j]) add(servers[j].tokenFile)
+  parseSources(settings).forEach(function(entry) {
+    add(entry.keyFile)
+    add(entry.keeperPasswordFile)
+    add(entry.tokenFile)
+  })
   return paths
 }
 
@@ -2121,8 +2123,7 @@ function costCacheSummary(totals) {
 }
 
 // Whether the cost scan read the omp sessions on this computer. Live requests come only from those
-// sessions (omp-live.py --local), so only then do the ones after the scan add to its totals; omp stats
-// on another computer is never live here.
+// sessions (omp-live.py --local), so only then do the ones after the scan add to its totals.
 function costScanHasOmp(sources) {
   var list = listOrEmpty(sources)
   for (var i = 0; i < list.length; i++) {
@@ -2132,22 +2133,14 @@ function costScanHasOmp(sources) {
   return false
 }
 
-// Footer line naming where the totals come from: "Local transcripts + omp on devbox · live", or "omp
-// through a tunnel" when the server is reached through this computer.
+// Footer line naming where the totals come from: "Local transcripts + T3 on devbox · live".
 function costSourceSummary(sources, live) {
   var list = listOrEmpty(sources)
   var local = false
   var servers = []
-  var omp = ""
   for (var i = 0; i < list.length; i++) {
     var source = list[i]
     if (!source || typeof source !== "object") continue
-    if (source.id === "omp-remote") {
-      var place = ompPlace(source.host) || " on another computer"
-      if (source.status === "ok") omp = "omp" + place
-      else if (source.status === "error") omp = "omp" + place + " unavailable"
-      continue
-    }
     if (source.included !== true) continue
     if (source.kind === "local") local = true
     else if (source.kind === "t3") {
@@ -2158,7 +2151,6 @@ function costSourceSummary(sources, live) {
   var parts = []
   if (local) parts.push("Local transcripts")
   for (var j = 0; j < servers.length; j++) parts.push("T3 on " + servers[j])
-  if (omp !== "") parts.push(omp)
   if (parts.length > 3) parts = [parts[0], (parts.length - 1) + " more sources"]
   var text = parts.join(" + ")
   return text !== "" && live ? text + " · live" : text
@@ -2207,54 +2199,164 @@ function syncKeyedOrder(list, keys) {
   }
 }
 
+// ---- Sources ----
+// Where Quotatank reads from (Settings → Sources): this computer always, plus the entries of the `sources`
+// setting in the user's order: other computers (over SSH), CLIProxyAPI proxies and T3 Code servers.
+
+var SOURCE_KINDS = ["computer", "proxy", "t3"]
+var SOURCE_LIMIT = 16
+var SOURCE_FIELDS = {
+  computer: ["host"],
+  proxy: ["url", "keyFile", "keeperUrl", "keeperPasswordFile"],
+  t3: ["name", "url", "tokenFile"]
+}
+var SOURCE_ID_PATTERNS = { computer: /^c-[0-9a-f]{8}$/, proxy: /^p-[0-9a-f]{8}$/, t3: /^[A-Za-z0-9-]{1,64}$/ }
+// An SSH destination: a Host alias or name, optionally user@ (valid_destination in scripts/quotatank_remote.py).
+var SSH_DESTINATION = /^(?:[A-Za-z0-9_][A-Za-z0-9._-]*@)?[A-Za-z0-9_][A-Za-z0-9._-]*$/
+
+function validDestination(text) {
+  var value = String(text === undefined || text === null ? "" : text)
+  return value.length > 0 && value.length <= 255 && SSH_DESTINATION.test(value)
+}
+
+// The `sources` setting as a list of checked entries, each a fresh object; entries that do not fit their kind
+// are left out, so a hand-edited setting can never hand a backend something it would refuse.
+function parseSources(settings) {
+  var raw = settings && typeof settings === "object" ? settings.sources : undefined
+  var rows = []
+  try { rows = JSON.parse(String(raw === undefined || raw === null ? "[]" : raw)) } catch (e) { rows = [] }
+  if (!Array.isArray(rows)) return []
+  var result = []
+  var seen = {}
+  for (var i = 0; i < rows.length && result.length < SOURCE_LIMIT; i++) {
+    var row = rows[i]
+    if (!row || typeof row !== "object" || SOURCE_KINDS.indexOf(row.kind) < 0) continue
+    var id = String(row.id || "")
+    if (!SOURCE_ID_PATTERNS[row.kind].test(id) || seen[id]) continue
+    var entry = { id: id, kind: row.kind, on: row.on !== false }
+    var fields = SOURCE_FIELDS[row.kind]
+    var fits = true
+    for (var f = 0; f < fields.length; f++) {
+      var value = row[fields[f]]
+      if (value === undefined || value === null) value = ""
+      if (typeof value !== "string" || value.length > 4096 || /[\x00-\x1f\x7f]/.test(value)) { fits = false; break }
+      entry[fields[f]] = value.trim()
+    }
+    if (!fits || (row.kind === "computer" && !validDestination(entry.host))) continue
+    seen[id] = true
+    result.push(entry)
+  }
+  return result
+}
+
+function sourcesOf(settings, kind) {
+  return parseSources(settings).filter(function(entry) { return entry.kind === kind })
+}
+
+// The proxy Limits reads, or null: the first switched-on proxy with an address.
+function activeProxy(settings) {
+  var proxies = sourcesOf(settings, "proxy")
+  for (var i = 0; i < proxies.length; i++) if (proxies[i].on && proxies[i].url !== "") return proxies[i]
+  return null
+}
+
+// cost-fetch.py --t3-servers: the T3 entries in the shape scripts/t3_costs.py reads.
+function t3ServersJson(settings) {
+  return JSON.stringify(sourcesOf(settings, "t3").filter(function(entry) {
+    return entry.name !== "" && entry.url !== ""
+  }).map(function(entry) {
+    return { id: entry.id, name: entry.name, url: entry.url, tokenFile: entry.tokenFile, enabled: entry.on }
+  }))
+}
+
+// A new entry id for `kind` that no entry in `existing` (a parseSources list) has: kind letter, "-", 8 hex.
+function newSourceId(kind, existing) {
+  var taken = {}
+  listOrEmpty(existing).forEach(function(entry) { if (entry) taken[entry.id] = true })
+  for (;;) {
+    var id = kind.charAt(0) + "-"
+    for (var i = 0; i < 8; i++) id += "0123456789abcdef".charAt(Math.floor(Math.random() * 16))
+    if (!taken[id]) return id
+  }
+}
+
+// `sources` with `entry` in place of the entry that has its id, or appended; `entry` null removes `id`.
+function sourcesWith(settings, id, entry) {
+  var list = parseSources(settings)
+  var position = -1
+  for (var i = 0; i < list.length; i++) if (list[i].id === id) position = i
+  if (entry === null) { if (position >= 0) list.splice(position, 1) }
+  else if (position >= 0) list[position] = entry
+  else list.push(entry)
+  return JSON.stringify(list)
+}
+
+// The settings before Sources (2.3 and older) as Sources: the proxy source with its Keeper, the T3 servers,
+// and omp on another computer, which now goes over SSH and so is dropped with a notice. Returns the settings
+// to save once ({ changes, notice }), or null when there is nothing to move. Removed settings are saved as
+// null, which the shell drops from the entry.
+var LEGACY_SOURCE_KEYS = ["usageSource", "cliproxyUrl", "cliproxyKeyFile", "ompGatewayUrl", "ompGatewayKeyFile",
+  "ompStatsUrl", "costT3Servers", "costKeeperUrl", "costKeeperPasswordFile"]
+
+function migrateSources(settings) {
+  var source = settings && typeof settings === "object" ? settings : {}
+  if (Number(source.sourcesVersion) >= 1) return null
+  function text(key) {
+    var value = source[key]
+    return value === undefined || value === null ? "" : String(value).trim()
+  }
+  var changes = { sourcesVersion: 1 }
+  var list = parseSources(source)
+  var proxyUrl = text("cliproxyUrl")
+  var proxyMode = text("usageSource") === "cliproxy"
+  if (proxyMode || (text("costKeeperUrl") !== "" && proxyUrl !== "")) {
+    list.push({ id: newSourceId("proxy", list), kind: "proxy", on: proxyMode,
+      url: proxyUrl !== "" ? proxyUrl : "http://127.0.0.1:8317", keyFile: text("cliproxyKeyFile"),
+      keeperUrl: text("costKeeperUrl"), keeperPasswordFile: text("costKeeperPasswordFile") })
+  }
+  var servers = []
+  try { servers = JSON.parse(text("costT3Servers") || "[]") } catch (e) { servers = [] }
+  if (Array.isArray(servers)) {
+    servers.forEach(function(row) {
+      if (!row || typeof row.id !== "string" || !SOURCE_ID_PATTERNS.t3.test(row.id)) return
+      list.push({ id: row.id, kind: "t3", on: row.enabled !== false, name: String(row.name || "").trim(),
+        url: String(row.url || "").trim(), tokenFile: String(row.tokenFile || "").trim() })
+    })
+  }
+  changes.sources = JSON.stringify(parseSources({ sources: JSON.stringify(list) }))
+  if (text("ompStatsUrl") !== "" || text("ompGatewayUrl") !== "") changes.sourcesNotice = "ompRemote"
+  LEGACY_SOURCE_KEYS.forEach(function(key) { if (source[key] !== undefined) changes[key] = null })
+  return { changes: changes, notice: changes.sourcesNotice === "ompRemote" }
+}
+
 // ---- 1.9 QmlSettings ----
-// omp (Oh My Pi) as a source of limits, costs and live activity: the flags each backend gets, what
-// Settings says about omp, the Test results, and the lines of omp's live feed (scripts/omp-live.py).
-// Then the per-provider account mode that Providers → Customize sets.
+// omp (Oh My Pi) on this computer as a source of limits, costs and live activity: the flags each backend
+// gets, what Settings says about omp, and the lines of omp's live feed (scripts/omp-live.py). Then the
+// per-provider account mode that Providers → Customize sets.
 
 // Quotatank ids of the subscriptions omp signs in to (OMP_PROVIDERS in scripts/quotatank_common.py).
 var OMP_PROVIDER_IDS = ["claude", "codex", "kimi", "opencode", "antigravity", "copilot", "cursor", "zai", "minimax"]
-var OMP_STATS_PORT = 3847
-var OMP_GATEWAY_PORT = 4000
 var OMP_RECENT_SECONDS = 3600       // an account counts as recently used this long after a request
 var OMP_RECENT_LIMIT = 256          // accounts kept in recentByAccount
 var OMP_LOG_SECONDS = 6 * 3600      // live requests kept for the cost scans that do not hold them yet
 var OMP_LOG_LIMIT = 4096            // entries in the live request log
 var OMP_LINE_LIMIT = 65536          // characters in one live line
-var OMP_URL_PROBLEM = "Enter an HTTP or HTTPS address with a host name and, if needed, a port: no path, user name, query, or fragment."
-var OMP_HTTP_PROBLEM = "Use HTTPS, or plain HTTP only to this computer, a private network, or Tailscale."
-// A secret (the omp gateway token, the CLIProxyAPI management key, the Keeper password, a T3 token) never goes
-// over plain HTTP outside this computer and Tailscale (the backends check where a name leads, and on this
-// computer whose server it is, before they send anything).
+
+// A secret (the CLIProxyAPI management key, the Keeper password, a T3 token) never goes over plain HTTP
+// outside this computer and Tailscale (the backends check where a name leads, and on this computer whose
+// server it is, before they send anything).
 var SECRET_HTTP_PROBLEM = "Use HTTPS, or plain HTTP only to this computer or over Tailscale (a 100.x.y.z address or the computer's Tailscale name)."
 
 // The omp settings with their defaults. `local` reads omp on this computer unless turned off.
 function ompSettings(settings) {
   var source = settings && typeof settings === "object" ? settings : {}
-  function text(key) {
-    var value = source[key]
-    return value === undefined || value === null ? "" : String(value).trim()
-  }
-  return { local: source.ompLocal !== false, gatewayUrl: text("ompGatewayUrl"),
-    gatewayKeyFile: text("ompGatewayKeyFile"), statsUrl: text("ompStatsUrl") }
+  return { local: source.ompLocal !== false }
 }
 
-// usage-fetch.py flags: omp on this computer (the backend reports when omp is missing), and omp's
-// auth gateway once both its URL and its token are saved, since the gateway answers nothing without
-// the token. The caller leaves them out for a proxy source.
+// usage-fetch.py flags: omp on this computer (the backend reports when omp is missing). The caller leaves
+// them out for a proxy source.
 function ompUsageArguments(settings) {
-  var omp = ompSettings(settings)
-  var args = []
-  if (omp.local) args.push("--omp", "local")
-  if (omp.gatewayUrl !== "" && omp.gatewayKeyFile !== "")
-    args.push("--omp-gateway-url", omp.gatewayUrl, "--omp-gateway-key-file", omp.gatewayKeyFile)
-  return args
-}
-
-// cost-fetch.py flags: omp stats on another computer.
-function ompCostArguments(settings) {
-  var url = ompSettings(settings).statsUrl
-  return url === "" ? [] : ["--omp-stats-url", url]
+  return ompSettings(settings).local ? ["--omp", "local"] : []
 }
 
 // Whether omp is on this computer, from the usage backend's `omp` status: true, false, or null while
@@ -2267,15 +2369,12 @@ function ompFound(status) {
 }
 
 // omp-live.py flags, or [] while there is nothing to follow: omp's sessions here once omp is found and
-// set up (with --accounts, the map that names the account behind each request), and omp stats
-// elsewhere. Nothing through a proxy: its accounts are the proxy's, and omp is not read then.
+// set up (with --accounts, the map that names the account behind each request). Nothing through a proxy:
+// its accounts are the proxy's, and omp is not read then.
 function ompLiveArguments(settings, status, proxyMode) {
   if (proxyMode === true) return []
-  var omp = ompSettings(settings)
-  var args = []
-  if (omp.local && ompFound(status) === true && status.local !== "unused") args.push("--local", "--accounts")
-  if (omp.statsUrl !== "") args.push("--stats-url", omp.statsUrl)
-  return args
+  if (ompSettings(settings).local && ompFound(status) === true && status.local !== "unused") return ["--local", "--accounts"]
+  return []
 }
 
 // "host", "host:port" or "[v6]:port" → { host (lower case, no brackets), port }, or null.
@@ -2305,26 +2404,9 @@ function ompLoopbackHost(host) {
   return host === "localhost" || host === "::1" || /^127\.[0-9]+\.[0-9]+\.[0-9]+$/.test(host)
 }
 
-// Plain HTTP stays on networks the user controls (plain_http_allowed in quotatank_common.py):
-// loopback, private LANs, Tailscale addresses, MagicDNS names and single-label names.
-function ompPlainHttpHost(host) {
-  var octet = "(0|[1-9][0-9]{0,2})"
-  var v4 = new RegExp("^" + octet + "\\." + octet + "\\." + octet + "\\." + octet + "$").exec(host)
-  if (v4) {
-    for (var i = 1; i <= 4; i++) if (Number(v4[i]) > 255) return false
-    var a = Number(v4[1])
-    var b = Number(v4[2])
-    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
-      || (a === 100 && b >= 64 && b <= 127)
-  }
-  if (host.indexOf(":") >= 0) return host === "::1" || /^(?:0{1,4}:){7}0{0,3}1$/.test(host) || /^f[cd][0-9a-f]{0,2}:/.test(host)
-  return /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(host)
-    || /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+ts\.net$/.test(host)
-}
-
-// The gateway's plain-HTTP hosts: this computer, Tailscale addresses (100.64.0.0/10, fd7a:115c:a1e0::/48),
-// and names that may lead there (single-label and MagicDNS names); the backend resolves a name and
-// refuses it unless every address is on Tailscale.
+// The plain-HTTP hosts a secret may go to: this computer, Tailscale addresses (100.64.0.0/10,
+// fd7a:115c:a1e0::/48), and names that may lead there (single-label and MagicDNS names); the backend
+// resolves a name and refuses it unless every address is on Tailscale.
 function ompTailscaleHost(host) {
   if (ompLoopbackHost(host)) return true
   var v4 = /^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$/.exec(host)
@@ -2332,23 +2414,6 @@ function ompTailscaleHost(host) {
   if (host.indexOf(":") >= 0) return /^fd7a:115c:a1e0(?::|$)/.test(host)
   return /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(host)
     || /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+ts\.net$/.test(host)
-}
-
-// What is wrong with an omp server address, or "" when the backends take it (normalize_server_url
-// in scripts/quotatank_common.py): a scheme, a host and an optional port, nothing after them but one
-// "/"; HTTPS anywhere, plain HTTP only to this computer, a private network or Tailscale. With `gateway`
-// (the token it sends can spend model quota) plain HTTP stays on this computer and Tailscale. Empty turns
-// the server off.
-function ompServerUrlProblem(text, gateway) {
-  var value = String(text === undefined || text === null ? "" : text).trim()
-  if (value === "") return ""
-  var match = /^(https?):\/\/([^\s\/?#@\\]+)\/?$/i.exec(value)
-  if (!match || /[\x00-\x1f\x7f]/.test(value)) return OMP_URL_PROBLEM
-  var address = ompSplitHost(match[2])
-  if (!address) return OMP_URL_PROBLEM
-  if (match[1].toLowerCase() === "https") return ""
-  if (gateway === true) return ompTailscaleHost(address.host) ? "" : SECRET_HTTP_PROBLEM
-  return ompPlainHttpHost(address.host) ? "" : OMP_HTTP_PROBLEM
 }
 
 // What is wrong with the URL of a server that receives a secret (CLIProxyAPI, CPA Usage Keeper, T3), or "":
@@ -2363,37 +2428,6 @@ function secretServerUrlProblem(text, invalid) {
   if (!address) return invalid
   if (match[1].toLowerCase() === "https") return ""
   return ompTailscaleHost(address.host) ? "" : SECRET_HTTP_PROBLEM
-}
-
-// The computer an omp server address names, for "omp stats on devbox": MagicDNS names drop the
-// tailnet ("devbox.tail1234.ts.net" → "devbox"); "" when the address has no host.
-function ompHost(url) {
-  var match = /^https?:\/\/([^\s\/?#@]+)/i.exec(String(url || "").trim())
-  var address = match ? ompSplitHost(match[1]) : null
-  if (!address) return ""
-  var tailnet = /^([a-z0-9-]+)\.[a-z0-9-]+\.ts\.net$/.exec(address.host)
-  return tailnet ? tailnet[1] : address.host
-}
-
-// " on devbox" for a remote address; "" for this computer (an SSH tunnel's end) or no address.
-function ompOnHost(url) {
-  var host = ompHost(url)
-  return host === "" || ompLoopbackHost(host) ? "" : " on " + host
-}
-
-// Where an omp server is, for the footer and the summaries: " on devbox", " through a tunnel" for an
-// address on this computer (the near end of an SSH tunnel, never "127.0.0.1"), "" without an address.
-// `address` is a URL, or a host with an optional port as cost-fetch.py reports it.
-function ompPlace(address) {
-  var text = String(address || "").trim()
-  var url = /^https?:\/\//i.test(text) ? text : "http://" + text
-  return ompOnHost(url) || (ompHost(url) !== "" ? " through a tunnel" : "")
-}
-
-// A section summary's name for an omp server: its host, "SSH tunnel" for this computer, "Set" without one.
-function ompSummaryName(url) {
-  var host = ompHost(url)
-  return host === "" ? "Set" : ompLoopbackHost(host) ? "SSH tunnel" : host
 }
 
 function ompShortVersion(version) {
@@ -2425,170 +2459,14 @@ function ompLocalStatus(status, localOn, loading) {
   var name = "omp " + (version !== "" ? version + " " : "") + "found"
   if (status.local === "error") return ompLine("error", name + " · its accounts could not be read")
   var count = typeof status.localAccounts === "number" ? status.localAccounts
-    : (typeof status.accounts === "number" && (status.gateway === undefined || status.gateway === "off") ? status.accounts : null)
+    : (typeof status.accounts === "number" ? status.accounts : null)
   if (count === null) return ompLine("ok", name)
   return ompLine("ok", name + " · " + (count === 0 ? "no accounts signed in" : ompCount(count, "account", "accounts")))
 }
 
-// The local part of omp's status message (the backend puts the local part first, then the gateway's).
+// omp's status message from the last refresh, for the line under omp's switch.
 function ompLocalMessage(status) {
-  var sentences = String(status && status.message || "").split(/\.\s+/)
-  var kept = []
-  for (var i = 0; i < sentences.length; i++)
-    if (sentences[i] !== "" && !/gateway/.test(sentences[i])) kept.push(sentences[i].replace(/\.$/, ""))
-  return kept.length ? kept.join(". ") + "." : ""
-}
-
-// A gateway failure, from the backend's message, with what to do next: { summary, text }. The summary
-// stays short; it follows the host in the section's title.
-function ompGatewayProblem(message, url) {
-  var text = String(message || "")
-  var on = ompOnHost(url)
-  var host = ompHost(url)
-  if (/refused the token/.test(text))
-    return { summary: "token refused", text: "The gateway refused the token. Copy a fresh one with omp auth-gateway token" + on + ", then save it here." }
-  if (/asks for a token/.test(text))
-    return { summary: "token needed", text: "The gateway asks for a token. Save the one omp auth-gateway token prints" + on + "." }
-  if (/Could not reach the omp gateway/.test(text))
-    return { summary: "not answering", text: "Nothing answers there. Is omp auth-gateway serve running" + (on || " on the other computer") + "?" }
-  if (/gateway did not answer in time/.test(text))
-    return { summary: "not answering", text: "The gateway did not answer in time. Check that " + (host !== "" && !ompLoopbackHost(host) ? host : "the other computer") + " is awake and on the network." }
-  if (/rate limiting/.test(text))
-    return { summary: "rate limited", text: "The gateway is rate limiting usage checks. Try again in a minute." }
-  var http = /gateway answered HTTP ([0-9]{3})/.exec(text)
-  if (http)
-    return { summary: "HTTP " + http[1], text: "The gateway answered HTTP " + http[1] + ". Check that the URL points at omp auth-gateway (port " + OMP_GATEWAY_PORT + " unless you chose another)." }
-  if (/unreadable usage data/.test(text))
-    return { summary: "not a gateway", text: "That address did not answer like omp's auth gateway. Check the URL, and update omp there if it is older." }
-  if (/plain HTTP only to this computer or over Tailscale/.test(text))
-    return { summary: "needs HTTPS or Tailscale", text: "The token goes over plain HTTP only to this computer or over Tailscale. Use an https:// address, or check that Tailscale is connected on both computers and that the address is that computer's Tailscale name or address." }
-  if (/belongs to another account/.test(text))
-    return { summary: "another account's port", text: "That port on this computer belongs to another account, so the token was not sent. Start omp auth-gateway or the SSH tunnel as yourself, or use an https:// address." }
-  var sentences = text.split(/\.\s+/)
-  var kept = []
-  for (var i = 0; i < sentences.length; i++)
-    if (/gateway/.test(sentences[i])) kept.push(sentences[i].replace(/\.$/, ""))
-  return { summary: "not read", text: kept.length ? kept.join(". ") + "." : "The gateway could not be read." }
-}
-
-// The title summary of "omp on another computer (limits)".
-function ompGatewaySummary(settings, status) {
-  var omp = ompSettings(settings)
-  if (omp.gatewayUrl === "") return "Not set up"
-  var host = ompSummaryName(omp.gatewayUrl)
-  if (omp.gatewayKeyFile === "") return host + " · token needed"
-  if (!status || typeof status !== "object" || status.gateway === undefined || status.gateway === "off") return host
-  if (status.gateway === "error") return host + " · " + ompGatewayProblem(status.message, omp.gatewayUrl).summary
-  return host + (typeof status.gatewayAccounts === "number" ? " · " + ompCount(status.gatewayAccounts, "account", "accounts") : " · answers")
-}
-
-// The omp accounts a provider reading holds: entries whose kind (`origin`, or `origins` once merged
-// with a native entry) is omp, or the provider itself when omp is all it has.
-function ompFromOmp(entry) {
-  return !!entry && (entry.origin === "omp" || contains(entry.origins, "omp"))
-}
-
-function ompAccountCount(provider) {
-  if (!provider || typeof provider !== "object") return 0
-  var accounts = listOrEmpty(provider.accounts)
-  var count = 0
-  for (var i = 0; i < accounts.length; i++) if (ompFromOmp(accounts[i])) count++
-  return count === 0 && accounts.length === 0 && ompFromOmp(provider) ? 1 : count
-}
-
-// A Test that did not get an answer: { probeError: "timeout" | "tooLarge" }, or nothing at all.
-function ompProbeLines(reply, seconds) {
-  if (reply && reply.probeError === "timeout")
-    return [ompLine("error", "No answer within " + seconds + " s. Check the URL, and that the other computer is awake.")]
-  if (reply && reply.probeError === "tooLarge") return [ompLine("error", "The answer was too large to read.")]
-  if (!reply || reply.schemaVersion !== 1)
-    return [ompLine("error", "The test did not run. Check that Python 3 is installed, then try again.")]
-  if (reply.backendError) return [ompLine("error", String(reply.backendError).slice(0, 300))]
-  return null
-}
-
-// Settings → Providers → omp on another computer → Test, from usage-fetch.py --omp-only run with the
-// gateway's flags: lines { tone: "ok" | "info" | "error", text } that name what the gateway has.
-function ompGatewayTestLines(reply, url, monitored) {
-  var failed = ompProbeLines(reply, 40)
-  if (failed) return failed
-  var omp = reply.omp && typeof reply.omp === "object" ? reply.omp : {}
-  if (omp.gateway === "error") return [ompLine("error", ompGatewayProblem(omp.message, url).text)]
-  if (omp.gateway !== "ok")
-    return [ompLine("error", "This version of the backend cannot read an omp gateway. Update Quotatank, then try again.")]
-  var parts = []
-  var unmonitored = []
-  var total = 0
-  var providers = listOrEmpty(reply.providers)
-  for (var i = 0; i < providers.length; i++) {
-    var count = ompAccountCount(providers[i])
-    if (count === 0) continue
-    var name = providerShortName(providers[i])
-    total += count
-    parts.push(name + " " + count)
-    if (monitored && !contains(monitored, providers[i].id)) unmonitored.push(name)
-  }
-  if (total === 0)
-    return [ompLine("ok", "Gateway answers"), ompLine("info", "omp there has no signed-in accounts with limits that Quotatank reads.")]
-  var lines = [ompLine("ok", "Gateway answers · " + ompCount(total, "account", "accounts") + ": " + parts.join(", "))]
-  if (unmonitored.length > 0)
-    lines.push(ompLine("info", "Not monitored here: " + joinNames(unmonitored) + ". Monitor " + (unmonitored.length === 1 ? "it" : "them")
-      + " to see " + (unmonitored.length === 1 ? "its" : "their") + " accounts in Limits."))
-  return lines
-}
-
-// An omp stats failure from cost-fetch.py's omp-remote source, with what to do next.
-function ompStatsProblem(source, url) {
-  var message = String(source && source.message || "")
-  var kind = String(source && source.errorKind || "")
-  var on = ompOnHost(url)
-  if (kind === "network")
-    return on !== "" ? "Nothing answers there. Is omp stats running" + on + "?"
-      : "Nothing answers there. Is the SSH tunnel open, and omp stats running on the other computer?"
-  if (kind === "http") return (message || "omp stats returned an error.") + " Check that the URL is the dashboard's address, without a path."
-  return message || "omp stats could not be read."
-}
-
-// Settings → Costs → omp on another computer → Test, from cost-fetch.py --providers "" --days 7 run
-// with only the omp stats flag: what the server reported for the last 7 days.
-function ompStatsTestLines(reply, url) {
-  var failed = ompProbeLines(reply, 75)
-  if (failed) return failed
-  var source = readingFor(reply.sources, "omp-remote")
-  if (!source)
-    return [ompLine("error", "This version of the backend cannot read omp stats. Update Quotatank, then try again.")]
-  var on = ompOnHost(url)
-  if (source.status === "error") return [ompLine("error", ompStatsProblem(source, url))]
-  if (source.status === "duplicate")
-    return [ompLine("ok", "omp stats" + on + " answers"), ompLine("info", "It runs on this computer, so its sessions are already counted here.")]
-  if (source.status !== "ok") return [ompLine("error", "omp stats was not read. Check the URL, then try again.")]
-  var totals = reply.totals && typeof reply.totals === "object" ? reply.totals : {}
-  var records = Math.max(0, Math.round(Number(totals.records) || 0))
-  var cost = typeof totals.costUsd === "number" && isFinite(totals.costUsd) ? totals.costUsd : null
-  var lines = [ompLine("ok", "omp stats" + on + " answers")]
-  if (records === 0) lines.push(ompLine("info", "No requests in the last 7 days."))
-  else lines.push(ompLine("ok", ompCount(records, "request", "requests") + " · " + (cost === null ? "unpriced" : formatUsd(cost)) + " in the last 7 days"))
-  return lines
-}
-
-// The Test's line about omp's live feed for that server, from OmpActivity; null when it is not
-// following that server.
-function ompLiveFeedLine(state, message) {
-  if (state === "live") return ompLine("ok", "Live feed on · new activity shows within 10 s")
-  if (state === "connecting" || state === "reconnecting") return ompLine("info", "Live feed connecting…")
-  if (state === "unavailable")
-    return ompLine("error", "Live feed unavailable." + (message ? " " + String(message).slice(0, 200) : ""))
-  return null
-}
-
-// The title summary of Settings → Costs → "omp on another computer".
-function ompStatsSummary(settings, source, liveState) {
-  var url = ompSettings(settings).statsUrl
-  if (url === "") return "Not set up"
-  var host = ompSummaryName(url)
-  if (source && source.status === "error") return host + " · not answering"
-  if (source && source.status === "duplicate") return host + " · counted here"
-  return host + (liveState === "live" ? " · live" : "")
+  return String(status && status.message || "")
 }
 
 // "omp sessions on this computer" in Settings → Costs → Local history: what the last scan did, in a
@@ -2602,52 +2480,6 @@ function ompLocalCostState(sources, localProviders) {
   var labels = { ok: "Included", partial: "Partial", missing: "None found", failed: "Unavailable",
     unavailable: "Unavailable", duplicate: "Included" }
   return labels[source.status] || "Included"
-}
-
-// How to reach omp stats on another computer (Tailscale or an SSH tunnel): where each command runs
-// ("other" or "here"), and the user units that start them at login. A unit's first line names its file;
-// long lines use systemd's backslash continuation, and "$$" is systemd's literal dollar sign.
-function ompStatsRecipe(via) {
-  var port = String(OMP_STATS_PORT)
-  function unit(name, description, execStart, restart) {
-    return "# ~/.config/systemd/user/" + name + ".service\n[Unit]\nDescription=" + description
-      + "\n\n[Service]\nExecStart=" + execStart + "\nRestart=" + restart + "\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n"
-  }
-  function enable(name) {
-    return "systemctl --user daemon-reload\nsystemctl --user enable --now " + name
-  }
-  if (via === "ssh") {
-    return {
-      url: "http://127.0.0.1:" + port,
-      steps: [
-        { where: "other", command: "omp stats --host 127.0.0.1 --port " + port },
-        { where: "here", command: "ssh -N -L " + port + ":127.0.0.1:" + port + " other-computer" }
-      ],
-      units: [
-        { where: "other", enable: enable("omp-stats"), text: unit("omp-stats", "omp stats for Quotatank",
-          "/bin/sh -lc 'exec omp stats \\\n  --host 127.0.0.1 --port " + port + "'", "on-failure") },
-        { where: "here", enable: enable("omp-stats-tunnel"), text: unit("omp-stats-tunnel", "SSH tunnel to omp stats for Quotatank",
-          "/usr/bin/ssh -N \\\n  -o ExitOnForwardFailure=yes \\\n  -o ServerAliveInterval=30 \\\n  -L " + port + ":127.0.0.1:" + port + " other-computer", "always") }
-      ]
-    }
-  }
-  return {
-    url: "http://other-computer:" + port,
-    steps: [{ where: "other", command: "omp stats --host \"$(tailscale ip -4)\" --port " + port }],
-    units: [
-      { where: "other", enable: enable("omp-stats"), text: unit("omp-stats", "omp stats for Quotatank",
-        "/bin/sh -lc 'exec omp stats \\\n  --host \"$$(tailscale ip -4)\" --port " + port + "'", "on-failure") }
-    ]
-  }
-}
-
-// The commands that start omp's auth gateway on the other computer and print its token.
-function ompGatewayRecipe() {
-  // The serve line breaks before its flag with a shell continuation: it reads in two lines and pastes as one.
-  return [
-    { where: "other", command: "omp auth-gateway serve \\\n  --bind=\"$(tailscale ip -4):" + OMP_GATEWAY_PORT + "\"" },
-    { where: "other", command: "omp auth-gateway token" }
-  ]
 }
 
 function ompLiveId(value) {
@@ -2680,10 +2512,6 @@ function parseOmpLiveLine(line) {
       model: typeof raw.model === "string" ? raw.model.slice(0, 256) : "", credentialId: credential.value,
       costUsd: cost.value, tokens: tokens.value === null ? 0 : Math.floor(tokens.value), subagent: raw.subagent === true, at: raw.at }
   }
-  if (raw.type === "activity") {
-    if (typeof raw.at !== "number" || !isFinite(raw.at) || raw.at <= 0) return null
-    return { type: "activity", source: "remote", version: typeof raw.version === "number" && isFinite(raw.version) ? raw.version : 0, at: raw.at }
-  }
   if (raw.type === "accounts") {
     if (!raw.map || typeof raw.map !== "object" || Array.isArray(raw.map)) return null
     var keys = Object.keys(raw.map)
@@ -2696,10 +2524,6 @@ function parseOmpLiveLine(line) {
       map[keys[i]] = { provider: entry.provider, accountId: entry.accountId }
     }
     return { type: "accounts", map: map }
-  }
-  if (raw.type === "state") {
-    if (["live", "reconnecting", "unavailable"].indexOf(raw.state) < 0) return null
-    return { type: "state", state: raw.state, message: typeof raw.message === "string" ? raw.message.slice(0, 256) : "" }
   }
   return { type: "other" }
 }

@@ -11,11 +11,9 @@ import select
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -263,180 +261,6 @@ class RequestEventTests(unittest.TestCase):
             self.assertIsNone(live.request_event(line, False, NOW))
 
 
-class ServerSentEventTests(unittest.TestCase):
-    def test_data_of_complete_events_only(self):
-        lines = [b": keep-alive\n", b"\n", b'data: {"version":1}\r\n', b"\r\n", b"event: message\n",
-                 b"id: 4\n", b"data:first\n", b"data: second\n", b"\n", b"retry: 10\n", b"\n", b"data: cut\n"]
-        self.assertEqual(list(live.sse_data(lines)), ['{"version":1}', "first\nsecond"])
-
-    def test_oversized_event_is_an_error(self):
-        lines = [b"data: " + b"x" * 40000 + b"\n"] * 2
-        with self.assertRaises(ValueError):
-            list(live.sse_data(lines))
-
-    def test_empty_data_lines_count_toward_the_event_limit(self):
-        for line in (b"data:\n", b"data\n"):
-            with self.subTest(line=line), self.assertRaises(ValueError):
-                list(live.sse_data([line] * (live.MAX_EVENT_BYTES + 1)))
-
-    def test_versions(self):
-        self.assertEqual(live.event_version('{"version":12,"sync":{"phase":"idle"}}'), 12)
-        for data in ('{"version":true}', '{"version":-1}', '{"version":1.5}', '{"phase":"idle"}', "[1]",
-                     "not json", '{"version":9007199254740992}'):
-            self.assertIsNone(live.event_version(data))
-
-
-def stream(*events, then=None, clock=None, duration=0):
-    """A fake /api/events stream with one event per version, ending with `then` raised if given."""
-    def lines(_url):
-        for version in events:
-            yield b"data: " + json.dumps({"version": version, "sync": {"phase": "idle"}}).encode() + b"\n"
-            yield b"\n"
-            yield b": keep-alive\n\n"
-        if clock is not None:
-            clock[0] += duration
-        if then is not None:
-            raise then
-    return lines
-
-
-class RemoteFollowerTests(unittest.TestCase):
-    def follow(self, connections, sleeps=6):
-        clock = [NOW]
-        lines, pauses = [], []
-
-        def sleep(seconds):
-            follower.report()  # the main loop's pass
-            pauses.append(seconds)
-            clock[0] += seconds
-            if len(pauses) >= sleeps:
-                raise Done
-
-        attempts = iter(connections)
-
-        def open_stream(url):
-            self.assertEqual(url, "http://127.0.0.1:3847")
-            connection = next(attempts)
-            if isinstance(connection, BaseException):
-                raise connection
-            return connection(clock)
-
-        follower = live.RemoteFollower("http://127.0.0.1:3847", lines.append, open_stream,
-                                       clock=lambda: clock[0], sleep=sleep)
-        with self.assertRaises(Done):
-            follower.run()
-        return lines, pauses
-
-    def test_growth_since_the_last_report_is_one_activity_line(self):
-        clock, lines = [NOW], []
-        follower = live.RemoteFollower("http://127.0.0.1:3847", lines.append, clock=lambda: clock[0])
-        for version in (4, 4):
-            follower.accept(json.dumps({"version": version}))
-        follower.report()  # the first event only sets the baseline
-        for version in range(5, 10_000):  # a flood between two passes
-            follower.accept(json.dumps({"version": version}))
-        clock[0] += live.POLL_SECONDS
-        follower.report()
-        follower.report()  # nothing grew since
-        follower.accept(json.dumps({"version": 3}))
-        follower.report()  # a lower version is no growth
-        self.assertEqual(lines, [
-            {"schemaVersion": 1, "type": "state", "source": "remote", "state": "live", "message": live.LIVE},
-            {"schemaVersion": 1, "type": "activity", "source": "remote", "version": 9999, "at": NOW + 2},
-        ])
-
-    def test_reconnects_back_off_and_keep_the_version_baseline(self):
-        lines, pauses = self.follow([
-            ConnectionRefusedError(), TimeoutError(),
-            lambda clock: stream(5, then=OSError())(None),
-            lambda clock: stream(7, 8, clock=clock, duration=31)(None),
-            lambda clock: stream(1, 2)(None),  # the server restarted and counts from 1 again
-            ValueError(),
-        ])
-        self.assertEqual(pauses, [2, 4, 8, 2, 4, 8])
-        # Growth during one connection is one line, reported by the next pass.
-        self.assertEqual([line["version"] for line in lines if line["type"] == "activity"], [8, 2])
-        self.assertEqual([line["state"] for line in lines if line["type"] == "state"],
-                         ["reconnecting", "reconnecting", "live", "reconnecting", "live", "reconnecting",
-                          "live", "reconnecting"])
-        self.assertEqual([line["message"] for line in lines if line["type"] == "state"][:2],
-                         [live.CONNECTING, live.RECONNECTING])
-
-    def test_server_without_events_is_unavailable_and_retried_slowly(self):
-        lines, pauses = self.follow([live.EventsUnsupported(), live.EventsUnsupported()], sleeps=2)
-        self.assertEqual(pauses, [60, 60])
-        self.assertEqual([(line["state"], line["message"]) for line in lines],
-                         [("reconnecting", live.CONNECTING), ("unavailable", live.UNSUPPORTED)])
-
-
-@contextlib.contextmanager
-def event_server(respond):
-    requests = []
-
-    class Handler(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
-        def log_message(self, *_args):
-            pass
-
-        def do_GET(self):
-            requests.append((self.path, self.headers.get("Accept")))
-            self.close_connection = True  # one stream per connection, as omp stats serves it
-            try:
-                respond(self)
-            except OSError:
-                pass  # the client hung up first
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}", requests
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=3)
-
-
-def send_events(handler, chunks, content_type="text/event-stream", hold=None):
-    handler.send_response(200)
-    handler.send_header("Content-Type", content_type)
-    handler.send_header("Transfer-Encoding", "chunked")
-    handler.end_headers()
-    for chunk in chunks:
-        if isinstance(chunk, float):
-            time.sleep(chunk)
-            continue
-        handler.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
-        handler.wfile.flush()
-    if hold is not None:
-        hold.wait(10)
-    handler.wfile.write(b"0\r\n\r\n")
-
-
-class EventStreamTests(unittest.TestCase):
-    def test_only_the_events_path_is_requested_and_chunked_lines_arrive(self):
-        chunks = [b'data: {"version":1}\n\n: keep-alive\n\n', b'data: {"ver', b'sion":2}\n\n']
-        with event_server(lambda handler: send_events(handler, chunks)) as (url, requests):
-            versions = [live.event_version(data) for data in live.sse_data(live.open_event_stream(url))]
-        self.assertEqual(versions, [1, 2])
-        self.assertEqual(requests, [("/api/events", "text/event-stream")])
-
-    def test_missing_or_foreign_endpoints_are_unsupported(self):
-        for respond in (lambda handler: handler.send_error(404),
-                        lambda handler: send_events(handler, [b"<html></html>"], content_type="text/html")):
-            with event_server(respond) as (url, _requests), self.assertRaises(live.EventsUnsupported):
-                list(live.open_event_stream(url))
-
-    def test_errors_and_oversized_lines(self):
-        with event_server(lambda handler: handler.send_error(500)) as (url, _requests):
-            with self.assertRaises(ConnectionError):
-                list(live.open_event_stream(url))
-        with event_server(lambda handler: send_events(handler, [b"x" * 70000])) as (url, _requests):
-            with self.assertRaises(ValueError):
-                list(live.open_event_stream(url))
-
-
 def omp_id(provider, identity):
     # The contract's rule, written out independently of the code under test.
     return "omp-" + hashlib.sha256(f"{provider}|{identity}".encode()).hexdigest()[:12]
@@ -634,7 +458,7 @@ class LoopTests(unittest.TestCase):
                     mock.patch.object(live, "in_background", side_effect=lambda work: work()), \
                     mock.patch.object(live.time, "monotonic", side_effect=lambda: clock[0]), \
                     mock.patch.object(live.time, "sleep", side_effect=sleep), self.assertRaises(Done):
-                live.run(argparse.Namespace(local=True, stats_url=None, accounts=accounts), lines.append)
+                live.run(argparse.Namespace(local=True, accounts=accounts), lines.append)
         return [line.get("type", "heartbeat") for line in lines]
 
     def test_heartbeats_and_local_requests(self):
@@ -644,54 +468,22 @@ class LoopTests(unittest.TestCase):
         # Neither a session file nor omp's credential listing: only heartbeats.
         self.assertEqual(self.loop(set_up=False, accounts=True), ["heartbeat", "heartbeat"])
 
-    def test_invalid_stats_url_is_reported_without_connecting(self):
-        lines = []
-        with mock.patch.object(live.threading, "Thread") as thread, \
-                mock.patch.object(live.time, "sleep", side_effect=Done), self.assertRaises(Done):
-            live.run(argparse.Namespace(local=False, stats_url="http://stats.example.com", accounts=False),
-                     lines.append)
-        thread.assert_not_called()
-        self.assertEqual(lines, [live.state_line("unavailable", live.INVALID_URL), live.HEARTBEAT])
-
-    def test_remote_growth_is_reported_once_per_pass(self):
-        clock, lines = [0.0], []
-
-        def sleep(seconds):
-            clock[0] += seconds
-            if clock[0] == 2:
-                follower = thread.call_args.kwargs["target"].__self__
-                for version in (1, 2, 3):
-                    follower.accept(json.dumps({"version": version}))
-            if clock[0] >= 6:
-                raise Done
-
-        with mock.patch.object(live.threading, "Thread") as thread, \
-                mock.patch.object(live.time, "monotonic", side_effect=lambda: clock[0]), \
-                mock.patch.object(live.time, "sleep", side_effect=sleep), self.assertRaises(Done):
-            live.run(argparse.Namespace(local=False, stats_url="http://127.0.0.1:3847", accounts=False),
-                     lines.append)
-        self.assertEqual([line.get("type", "heartbeat") for line in lines], ["heartbeat", "state", "activity"])
-        self.assertEqual(lines[-1]["version"], 3)
-
     def test_arguments(self):
-        for argv in ([], ["--accounts"], ["--accounts", "--stats-url", "http://127.0.0.1:1"]):
+        for argv in ([], ["--accounts"]):
             with mock.patch.object(sys, "argv", ["omp-live.py", *argv]), \
                     contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 live.main()
 
 
 class ProcessTests(unittest.TestCase):
-    def test_process_streams_local_requests_and_remote_activity(self):
-        release = threading.Event()
-        chunks = [b'data: {"version":3}\n\n', 0.3, b'data: {"version":4}\n\n']
-        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as agent, \
-                event_server(lambda handler: send_events(handler, chunks, hold=release)) as (url, requests):
+    def test_process_streams_local_requests(self):
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as agent:
             (Path(agent) / "agent.db").write_bytes(b"")
             path = Path(temporary) / "-private-folder" / "2033_private-session.jsonl"
             path.parent.mkdir()
             path.write_bytes(assistant(time.time() - 60, text="private history"))
             process = subprocess.Popen(
-                [sys.executable, "-u", str(ROOT / "scripts/omp-live.py"), "--local", "--stats-url", url],
+                [sys.executable, "-u", str(ROOT / "scripts/omp-live.py"), "--local"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env={**os.environ, "OMP_SESSIONS_DIR": temporary, "PI_CODING_AGENT_DIR": agent,
                      "PYTHONDONTWRITEBYTECODE": "1"})
@@ -708,18 +500,12 @@ class ProcessTests(unittest.TestCase):
                         with path.open("ab") as handle:
                             handle.write(assistant(time.time(), text="private answer"))
                         appended = True
-                    kinds = {document.get("type") for document in documents}
-                    if {"request", "activity"} <= kinds:
+                    if any(document.get("type") == "request" for document in documents):
                         break
             finally:
-                release.set()
                 process.terminate()
                 process.communicate(timeout=5)
-        self.assertEqual([d["version"] for d in documents if d.get("type") == "activity"], [4])
         self.assertEqual([d["credentialId"] for d in documents if d.get("type") == "request"], [7])
-        self.assertIn({"schemaVersion": 1, "type": "state", "source": "remote", "state": "live",
-                       "message": live.LIVE}, documents)
-        self.assertEqual(requests, [("/api/events", "text/event-stream")])
         output = json.dumps(documents)
         for private in ("private", "2033_"):
             self.assertNotIn(private, output)

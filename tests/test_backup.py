@@ -37,8 +37,8 @@ SECRETS = ("FACTORY-KEY-0001", "KEEPER-PASS-0002", "T3-TOKEN-0003", "EXTRA-KEY-0
 LIST_SETTINGS = {"enabledProviders": ["factory", "openrouter"], "dismissedProviders": [],
                  "barProviders": ["factory"], "costLocalProviders": []}
 MANIFEST_DOC = {"version": "1.8.0", "barWidget": {"defaults": {
-    "usageSource": "auto", "factoryKeyFile": "", "costKeeperPasswordFile": "", "cliproxyKeyFile": "",
-    "costT3Servers": "[]", "extraKeys": "{}", "enabledProviders": [], "dismissedProviders": [],
+    "mainComputer": "", "factoryKeyFile": "", "sources": "[]", "extraKeys": "{}", "enabledProviders": [],
+    "dismissedProviders": [],
     "barProviders": [], "costLocalProviders": []}}}
 
 
@@ -53,7 +53,7 @@ def write_file(path: Path, text: str, mode: int = 0o600) -> Path:
 
 def base_document() -> dict:
     return {"format": "quotatank-backup", "version": 1, "createdAt": "2026-10-15T00:00:00Z",
-            "pluginVersion": "1.8.0", "settings": {"usageSource": "auto", "factoryKeyFile": "secret:0"},
+            "pluginVersion": "1.8.0", "settings": {"mainComputer": "this", "factoryKeyFile": "secret:0"},
             "secrets": ["FACTORY-KEY-0001"]}
 
 
@@ -87,10 +87,13 @@ class BackupTestCase(unittest.TestCase):
 
     def sample_settings(self) -> dict:
         return {
-            "usageSource": "auto",
+            "mainComputer": "this",
             "factoryKeyFile": str(self.factory),
-            "costKeeperPasswordFile": str(self.keeper),
-            "costT3Servers": json.dumps([{"name": "Home", "url": "https://t3.example", "tokenFile": str(self.t3)}]),
+            "sources": json.dumps([
+                {"id": "p-1a2b3c4d", "kind": "proxy", "url": "https://proxy.example", "keyFile": "",
+                 "keeperUrl": "https://proxy.example/keeper", "keeperPasswordFile": str(self.keeper), "on": True},
+                {"id": "t-5e6f7a8b", "kind": "t3", "name": "Home", "url": "https://t3.example",
+                 "tokenFile": str(self.t3), "on": True}]),
             "extraKeys": json.dumps({"openrouter": {"primary": "k-1", "keys": [
                 {"id": "k-1", "label": "Work", "file": str(self.extra)},
                 {"id": "k-2", "label": "Spare", "file": str(self.extra)}]}}),
@@ -216,7 +219,7 @@ class RequestTests(BackupTestCase):
                 self.assertFalse(self.backup_path.exists())
 
     def test_export_refuses_a_backup_that_restore_would_refuse(self):
-        settings = {**self.sample_settings(), "usageSource": "secret:0"}
+        settings = {**self.sample_settings(), "mainComputer": "secret:0"}
         self.assertEqual(self.export(settings), (1, {"ok": False, "error": BAD_DOCUMENT}))
         self.assertFalse(self.backup_path.exists())
 
@@ -256,10 +259,10 @@ class RequestTests(BackupTestCase):
 @unittest.skipUnless(HAS_GPG, "gpg is required")
 class GpgBackupTests(BackupTestCase):
     def test_export_writes_one_private_encrypted_file(self):
-        self.assertEqual(self.export(), (0, {"ok": True, "path": str(self.backup_path), "settings": 5, "secrets": 4}))
+        self.assertEqual(self.export(), (0, {"ok": True, "path": str(self.backup_path), "settings": 4, "secrets": 4}))
         self.assertEqual(stat.S_IMODE(self.backup_path.stat().st_mode), 0o600)
         data = self.backup_path.read_bytes()
-        for leaked in (*SECRETS[:4], PASSPHRASE, "quotatank-backup", "usageSource"):
+        for leaked in (*SECRETS[:4], PASSPHRASE, "quotatank-backup", "mainComputer"):
             self.assertNotIn(leaked.encode("utf-8"), data)
         self.assertEqual(list(self.work.glob(".quotatank-backup-*.tmp")), [])
 
@@ -273,7 +276,7 @@ class GpgBackupTests(BackupTestCase):
         self.assertEqual(self.export()[0], 0)
         code, response = self.inspect()
         self.assertRegex(response.pop("createdAt"), r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-        self.assertEqual((code, response), (0, {"ok": True, "pluginVersion": "1.8.0", "settings": 5, "secrets": 4,
+        self.assertEqual((code, response), (0, {"ok": True, "pluginVersion": "1.8.0", "settings": 4, "secrets": 4,
                                               "preferences": 1, "providers": ["factory", "openrouter"],
                                               "skipped": 0}))
         self.assertEqual(self.key_files(), [])
@@ -291,9 +294,12 @@ class GpgBackupTests(BackupTestCase):
         self.assertEqual(contents, {"FACTORY-KEY-0001\n", "KEEPER-PASS-0002\n", "T3-TOKEN-0003\n",
                                     "EXTRA-KEY-0004\n"})
         settings = response["settings"]
-        self.assertEqual(settings["usageSource"], "auto")
+        self.assertEqual(settings["mainComputer"], "this")
         self.assertEqual(os.path.dirname(settings["factoryKeyFile"]), str(self.keys_dir))
-        token = json.loads(settings["costT3Servers"])[0]["tokenFile"]
+        proxy, server = json.loads(settings["sources"])
+        self.assertEqual(proxy["keyFile"], "")
+        self.assertEqual(Path(proxy["keeperPasswordFile"]).read_text(encoding="ascii"), "KEEPER-PASS-0002\n")
+        token = server["tokenFile"]
         self.assertEqual(Path(token).read_text(encoding="ascii"), "T3-TOKEN-0003\n")
         entries = json.loads(settings["extraKeys"])["openrouter"]["keys"]
         self.assertEqual(len({entry["file"] for entry in entries}), 1)
@@ -306,14 +312,14 @@ class GpgBackupTests(BackupTestCase):
         for name, value in LIST_SETTINGS.items():
             self.assertEqual(response["settings"][name], value)
         code, response = self.inspect()
-        self.assertEqual((response["settings"], response["preferences"]), (9, 5))
+        self.assertEqual((response["settings"], response["preferences"]), (8, 5))
 
     def test_unknown_settings_are_counted_and_never_restored(self):
         settings = {**self.sample_settings(), "legacyKeyFile": str(self.legacy), "unknownSetting": "x"}
         self.assertEqual(self.export(settings),
-                         (0, {"ok": True, "path": str(self.backup_path), "settings": 7, "secrets": 5}))
+                         (0, {"ok": True, "path": str(self.backup_path), "settings": 6, "secrets": 5}))
         code, response = self.inspect()
-        self.assertEqual((response["settings"], response["secrets"], response["skipped"]), (5, 4, 2))
+        self.assertEqual((response["settings"], response["secrets"], response["skipped"]), (4, 4, 2))
         code, response = self.restore()
         self.assertEqual((response["skipped"], set(response["settings"])), (2, set(self.sample_settings())))
         self.assertEqual(len(self.key_files()), 4)
@@ -321,7 +327,7 @@ class GpgBackupTests(BackupTestCase):
     def test_include_keys_false_writes_no_files(self):
         self.assertEqual(self.export()[0], 0)
         self.assertEqual(self.restore(include={"keys": False}),
-                         (0, {"ok": True, "settings": {"usageSource": "auto"}, "skipped": 0}))
+                         (0, {"ok": True, "settings": {"mainComputer": "this"}, "skipped": 0}))
         self.assertFalse(self.keys_dir.exists())
 
     def test_include_preferences_false_keeps_only_key_settings(self):
@@ -329,7 +335,7 @@ class GpgBackupTests(BackupTestCase):
         code, response = self.restore(include={"preferences": False})
         self.assertEqual(code, 0)
         self.assertEqual(set(response["settings"]),
-                         {"factoryKeyFile", "costKeeperPasswordFile", "costT3Servers", "extraKeys"})
+                         {"factoryKeyFile", "sources", "extraKeys"})
         self.assertEqual(len(self.key_files()), 4)
 
     def test_include_both_false_restores_nothing(self):
@@ -411,13 +417,13 @@ class GpgBackupTests(BackupTestCase):
              "Setting factoryKeyFile does not reference a secret in this backup."),
             ("raw path in a key field", with_settings(factoryKeyFile="/tmp/key"),
              "Setting factoryKeyFile does not reference a secret in this backup."),
-            ("stray reference", with_settings(usageSource="secret:0"), BAD_DOCUMENT),
-            ("costT3Servers not JSON", with_settings(costT3Servers="["),
-             "Setting costT3Servers is not valid JSON."),
-            ("costT3Servers not text", with_settings(costT3Servers=[1]),
-             "Setting costT3Servers must be JSON text."),
-            ("costT3Servers rows not objects", with_settings(costT3Servers="[1]"),
-             "Setting costT3Servers has an unexpected shape."),
+            ("stray reference", with_settings(mainComputer="secret:0"), BAD_DOCUMENT),
+            ("sources not JSON", with_settings(sources="["),
+             "Setting sources is not valid JSON."),
+            ("sources not text", with_settings(sources=[1]),
+             "Setting sources must be JSON text."),
+            ("sources rows not objects", with_settings(sources="[1]"),
+             "Setting sources has an unexpected shape."),
             ("extraKeys keys not a list", with_settings(extraKeys='{"openrouter":{"keys":"nope"}}'),
              "Setting extraKeys has an unexpected shape."),
         ]
@@ -462,7 +468,9 @@ class GpgBackupTests(BackupTestCase):
 
     def test_cli_keeps_secrets_out_of_output_and_sets_exit_codes(self):
         env = {"PATH": os.environ["PATH"], "XDG_CONFIG_HOME": str(self.config)}
-        settings = {"factoryKeyFile": str(self.factory), "costKeeperPasswordFile": str(self.keeper)}
+        settings = {"factoryKeyFile": str(self.factory), "sources": json.dumps([
+            {"id": "p-1a2b3c4d", "kind": "proxy", "url": "https://proxy.example",
+             "keyFile": str(self.keeper), "keeperUrl": "", "keeperPasswordFile": "", "on": True}])}
         requests = [
             {"action": "export", "path": str(self.backup_path), "passphrase": PASSPHRASE, "settings": settings},
             {"action": "inspect", "path": str(self.backup_path), "passphrase": PASSPHRASE},
