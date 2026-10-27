@@ -4,7 +4,9 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 3.0.0
+
+Quotatank 3 reads every place your agents run at once: this computer, other computers over SSH and a CLIProxyAPI server, where 2.x read either this computer or a proxy. It is a major release because proxy mode, the omp gateway and stats readers, and the backend's `--source` flags are gone, and the settings that held them move once into `sources`.
 
 ### Added
 
@@ -19,7 +21,7 @@ All notable changes to this project will be documented here. The format follows
 - **No more proxy mode.** A CLIProxyAPI server no longer replaces this computer: its Claude, Codex, Kimi and Antigravity accounts join the providers you monitor, with one **Monitor** switch per provider for every source, and an account this computer already read fine is not asked for again. Its rows say **via proxy**, as another computer's say **on devbox**. Providers the proxy cannot read quotas for are no longer listed as unsupported. A proxy that stops answering keeps its last accounts, marked stale, and banked resets go through the proxy that read the account.
 - **omp on another computer is read over SSH.** The `omp stats` dashboard and the omp auth gateway readers are gone: add that computer under **Settings → Sources** instead. After the update, a notice in Limits says so when they were set up.
 - **CPA Usage Keeper belongs to its proxy** under **Settings → Sources**, and never feeds Costs. T3 Code servers moved there from **Settings → Costs**.
-- **Settings move once.** The first time this version runs, `usageSource`, `cliproxyUrl`, `cliproxyKeyFile`, `costKeeperUrl`, `costKeeperPasswordFile` and `costT3Servers` become entries of `sources`, keeping their saved keys; a proxy set up but not in use stays, switched off, and only the untouched default address is dropped. `ompStatsUrl`, `ompGatewayUrl` and `ompGatewayKeyFile` are dropped. After proxy mode, the providers the proxy read are the ones monitored, so the bar stays as it was and this computer's other providers show under **Found**. Backups made by 2.3.0 still restore, keys included.
+- **Settings move once.** The first time this version runs, `usageSource`, `cliproxyUrl`, `cliproxyKeyFile`, `costKeeperUrl`, `costKeeperPasswordFile` and `costT3Servers` become entries of `sources`, keeping their saved keys; a proxy set up but not in use stays, switched off, and only the untouched default address is dropped. `ompStatsUrl`, `ompGatewayUrl` and `ompGatewayKeyFile` are dropped. After proxy mode, the providers the proxy read are the ones monitored, so the bar stays as it was and this computer's other providers show under **Found**. Backups made by 2.3 and 2.4 still restore, keys included.
 - **The backend's flags.** `usage-fetch.py --proxy ID=URL` and `--proxy-key-file ID=PATH` replace `--source`, `--cliproxy-url` and `--cliproxy-key-file`, and `--computer ID=HOST` reads another computer (also in `cost-fetch.py`). The payload has no `source` key; it lists `computers` and `proxies`. See the [backend contract](docs/backend-contract.md).
 - **One history for every source.** A proxy's accounts are recorded in `history.json` with the rest; the `cliproxy-<hash>` history folders in the state folder are no longer read and can be deleted.
 
