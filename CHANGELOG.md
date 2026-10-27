@@ -9,6 +9,8 @@ All notable changes to this project will be documented here. The format follows
 ### Added
 
 - **Chips without the period tag.** **Settings → Menu bar → Show limit period** (`barShowPeriods`, on by default) can drop the `5h`, `7d` and `30d` tags from the chips, which then take only the room their figures need.
+- **Costs counts MiniMax, Xiaomi MiMo and Grok billings.** Those subscriptions keep no transcripts of their own, so every message Oh My Pi or OpenCode billed to one of them was dropped. Each now counts under the provider that billed it, priced from the CLI's own recorded cost or the public table. OpenCode 2's `session_message` table is read beside the older `message` table, and a response both repeat counts once. Contributed by @cbayschm74 in #4.
+- **The grok CLI's history as a local cost source.** **Settings → Costs** can read the session totals the grok CLI keeps (`${GROK_HOME:-~/.grok}/sessions/**/usage.json`, `costLocalProviders` value `grok`); it is off by default. Contributed by @cbayschm74 in #4.
 
 ### Fixed
 

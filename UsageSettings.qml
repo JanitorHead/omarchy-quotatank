@@ -1317,7 +1317,7 @@ Column {
 
     Label { text: "Local history"; font.bold: true }
     Repeater {
-      model: [{ id: "codex", name: "Codex CLI" }, { id: "claude", name: "Claude Code" }, { id: "opencode", name: "OpenCode" }]
+      model: [{ id: "codex", name: "Codex CLI" }, { id: "claude", name: "Claude Code" }, { id: "opencode", name: "OpenCode" }, { id: "grok", name: "Grok CLI" }]
       delegate: SwitchRow {
         required property var modelData
         objectName: "costLocal-" + modelData.id
@@ -1326,7 +1326,7 @@ Column {
         onToggled: {
           var current = UsageLogic.listOrEmpty(root.value("costLocalProviders", UsageLogic.DEFAULT_SETTINGS.costLocalProviders))
           var next = []
-          var allowed = ["claude", "codex", "opencode"]
+          var allowed = ["claude", "codex", "opencode", "grok"]
           for (var i = 0; i < allowed.length; i++)
             if (UsageLogic.contains(current, allowed[i]) !== (allowed[i] === modelData.id)) next.push(allowed[i])
           root.set("costLocalProviders", next)

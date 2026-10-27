@@ -17,6 +17,7 @@ import math
 import os
 import sys
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, replace
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -38,9 +39,10 @@ import t3_costs
 
 
 SCHEMA_VERSION = 1
-SCAN_CACHE_VERSION = 8  # v8 stores each record's project folder name and Oh My Pi agent kind.
+SCAN_CACHE_VERSION = 9  # v8 stores each record's project folder name and Oh My Pi agent kind; v9 keeps
+# each record's billing provider and the `opencode`/`grok` origins of CLI-priced responses.
 RATE_CACHE_VERSION = 2  # v1 discarded provider prefixes and could cache conflicting rates.
-PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode")
+PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode", "grok", "minimax", "mimo")
 PROVIDER_NAMES = {
     "claude": "Claude Code",
     "codex": "OpenAI Codex",
@@ -54,6 +56,9 @@ PROVIDER_NAMES = {
     "minimax": "MiniMax Coding Plan",
     "zai": "Z.ai Coding Plan",
     "other": "Other providers",
+    # Subscriptions an Oh My Pi transcript can bill directly.
+    "grok": "Grok CLI",
+    "mimo": "Xiaomi MiMo",
 }
 LITELLM_RATES_URL = (
     "https://raw.githubusercontent.com/BerriAI/litellm/main/"
@@ -148,8 +153,16 @@ def parse_timestamp_ms(value: Any) -> int | None:
         return int(numeric) if numeric > 0 else None
     if not isinstance(value, str):
         return None
+    text = value.strip()
+    # datetime.fromisoformat takes exactly three or six fractional digits before
+    # Python 3.11, and the grok CLI writes nanoseconds: keep microseconds.
+    head, dot, tail = text.partition(".")
+    if dot:
+        rest = tail.lstrip("0123456789")
+        digits = tail[:len(tail) - len(rest)][:6]
+        text = head + "." + digits.ljust(6, "0") + rest
     try:
-        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
+        return int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp() * 1000)
     except ValueError:
         return None
 
@@ -339,7 +352,7 @@ def deserialize_record(row: Any) -> UsageRecord | None:
     if not isinstance(row, list) or len(row) != 14:
         return None
     provider, origin, project, agent = row[10:14]
-    if provider not in PROVIDER_ORDER or origin not in ("local", "omp"):
+    if provider not in PROVIDER_ORDER or origin not in ("local", "omp", "opencode", "grok"):
         return None
     if project_name(project) != project or agent not in ("", *AGENT_KINDS):
         return None
@@ -592,26 +605,40 @@ def parse_claude_file(path: Path, retention_start_ms: int, cursor: TranscriptCur
 # ---------------------------------------------------------------- OpenCode
 #
 # OpenCode keeps one SQLite database per installation instead of JSONL
-# transcripts: usage lives in the JSON `data` column of `message`. Only ids,
-# the model, the working directory, the timestamp, and the token split are
-# streamed out, so prompts and responses never leave SQLite.
+# transcripts: usage lives in the JSON `data` column of its message table.
+# Only ids, the model, the working directory, the timestamp, and the token split
+# are streamed out, so prompts and responses never leave SQLite.
+#
+# OpenCode 2 writes `session_message` and names each session's project in
+# `session_v2`; earlier versions wrote `message` with the project in the row.
+# The newer table repeats the older ids, so it is read first and the older one
+# fills in only rows the newer one does not repeat. Rows name the model and its
+# billing provider in three shapes: `model.id`/`model.providerID`,
+# `model.modelID`, and the older top-level `modelID`/`providerID`.
 
-OPENCODE_SQL = (
+OPENCODE_QUERY = (
     "SELECT id, session_id, time_created,"
-    " CAST(json_extract(data, '$.modelID') AS TEXT),"
+    " CAST(COALESCE(json_extract(data, '$.model.id'), json_extract(data, '$.model.modelID'),"
+    " json_extract(data, '$.modelID')) AS TEXT),"
+    " CAST(COALESCE(json_extract(data, '$.model.providerID'), json_extract(data, '$.providerID')) AS TEXT),"
     " CAST(COALESCE(json_extract(data, '$.tokens.input'), 0) AS INTEGER),"
     " CAST(COALESCE(json_extract(data, '$.tokens.output'), 0) AS INTEGER),"
     " CAST(COALESCE(json_extract(data, '$.tokens.reasoning'), 0) AS INTEGER),"
     " CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER),"
     " CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER),"
     " CAST(COALESCE(json_extract(data, '$.cost'), 0) AS REAL),"
-    " CASE WHEN json_type(data, '$.path.cwd') = 'text' THEN json_extract(data, '$.path.cwd') END"
-    " FROM message"
-    " WHERE data LIKE '%\"role\"%:%\"assistant\"%'"
-    " AND data LIKE '%\"providerID\"%:%\"opencode%'"
-    " AND CASE WHEN json_valid(data) THEN json_extract(data, '$.role') END = 'assistant'"
-    " AND CASE WHEN json_valid(data) THEN json_extract(data, '$.providerID') END LIKE 'opencode%'"
+    " {cwd}"
+    " FROM {table}"
+    " WHERE {condition}"
     " AND time_created >= ?"
+)
+
+OPENCODE_TABLES = (
+    # A row whose data is not JSON is skipped, never allowed to fail the whole query.
+    ("session_message", "type = 'assistant' AND json_valid(data)", "NULL"),
+    ("message", "data LIKE '%\"role\"%:%\"assistant\"%'"
+                " AND CASE WHEN json_valid(data) THEN json_extract(data, '$.role') END = 'assistant'",
+     "CASE WHEN json_type(data, '$.path.cwd') = 'text' THEN json_extract(data, '$.path.cwd') END"),
 )
 
 
@@ -645,6 +672,23 @@ def opencode_signature(path: Path) -> DbSignature | None:
     return DbSignature(size, device, inode, max(stamps))
 
 
+def opencode_projects(connection: sqlite3.Connection, tables: set[str]) -> dict[str, str]:
+    """`session_id` → the working directory beside it. OpenCode 2 names it in `session_v2`, which
+    supersedes the older `session` table when both exist."""
+    projects: dict[str, str] = {}
+    for table in ("session", "session_v2"):
+        if table not in tables:
+            continue
+        try:
+            rows = connection.execute(f"SELECT id, directory FROM {table}")
+        except sqlite3.Error:
+            continue
+        for session_id, directory in rows:
+            if isinstance(session_id, str) and session_id and isinstance(directory, str) and directory:
+                projects[session_id] = directory
+    return projects
+
+
 def parse_opencode_database(path: Path, retention_start_ms: int,
                             cursor: TranscriptCursor | None = None) -> list[UsageRecord] | None:
     # The database is queried, never read positionally, so the transcript
@@ -656,50 +700,139 @@ def parse_opencode_database(path: Path, retention_start_ms: int,
         return None
     try:
         connection.execute("PRAGMA query_only = ON")
-        newest = connection.execute("SELECT MAX(time_created) FROM message").fetchone()
-        unit = 1000 if newest and newest[0] is not None and int(newest[0]) < 1e12 else 1
-        for row in connection.execute(OPENCODE_SQL, (retention_start_ms // unit,)):
-            raw_id, session, created, model, inp, out, reasoning, cache_read, cache_write, recorded, cwd = row
-            if not isinstance(raw_id, str) or not raw_id or created is None:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        projects = opencode_projects(connection, tables)
+        seen: set[str] = set()
+        for table, condition, cwd_column in OPENCODE_TABLES:
+            if table not in tables:
                 continue
-            timestamp = parse_timestamp_ms(int(created) * unit)
-            if timestamp is None:
-                continue
-            uncached, output, reasoned, cached, cache_written = (
-                nonnegative_int(value) for value in (inp, out, reasoning, cache_read, cache_write)
-            )
-            # OpenCode prices each response with the rates of the provider that
-            # served it, which is the only way to price model IDs the public
-            # table cannot disambiguate. A zero is not a price: it means the CLI
-            # had no rate either, so the table gets its turn instead.
-            recorded_cost = finite_number(recorded)
-            if recorded_cost is not None and recorded_cost <= 0:
-                recorded_cost = None
-            record = UsageRecord(
-                provider="opencode",
-                timestamp_ms=timestamp,
-                model=bounded_model(model) or "<unattributed>",
-                session_id=opaque_id("opencode:" + session) if isinstance(session, str) and session else "",
-                uncached_input=uncached,
-                cached_input=cached,
-                cache_creation=cache_written,
-                # OpenCode reports reasoning beside output rather than inside
-                # it, so the output side carries both here.
-                output=output + reasoned,
-                reasoning=reasoned,
-                reported_cost_usd=recorded_cost,
-                dedupe_key=opaque_id("opencode:" + raw_id),
-                project=project_name(cwd),
-            )
-            if record.total_tokens <= 0 or record.timestamp_ms < retention_start_ms:
-                continue
-            if len(records) >= MAX_TRANSCRIPT_RECORDS_PER_FILE:
-                raise TranscriptLimitError("too many usage records in one database")
-            records.append(record)
+            newest = connection.execute(f"SELECT MAX(time_created) FROM {table}").fetchone()
+            unit = 1000 if newest and newest[0] is not None and int(newest[0]) < 1e12 else 1
+            query = OPENCODE_QUERY.format(table=table, condition=condition, cwd=cwd_column)
+            for row in connection.execute(query, (retention_start_ms // unit,)):
+                (raw_id, session, created, model, billed, inp, out, reasoning,
+                 cache_read, cache_write, recorded, cwd) = row
+                if not isinstance(raw_id, str) or not raw_id or created is None or raw_id in seen:
+                    continue
+                seen.add(raw_id)
+                # The CLI runs several subscriptions through one database; each response
+                # is counted under the provider that billed it, and an unsupported one is dropped.
+                provider = billed_provider(billed)
+                if provider is None:
+                    continue
+                timestamp = parse_timestamp_ms(int(created) * unit)
+                if timestamp is None:
+                    continue
+                uncached, output, reasoned, cached, cache_written = (
+                    nonnegative_int(value) for value in (inp, out, reasoning, cache_read, cache_write)
+                )
+                # OpenCode prices each response with the rates of the provider that
+                # served it, which is the only way to price model IDs the public
+                # table cannot disambiguate. A zero is not a price: it means the CLI
+                # had no rate either, so the table gets its turn instead.
+                recorded_cost = finite_number(recorded)
+                if recorded_cost is not None and recorded_cost <= 0:
+                    recorded_cost = None
+                if not isinstance(cwd, str) or not cwd:
+                    cwd = projects.get(session, "") if isinstance(session, str) else ""
+                record = UsageRecord(
+                    provider=provider,
+                    timestamp_ms=timestamp,
+                    model=bounded_model(model) or "<unattributed>",
+                    session_id=opaque_id("opencode:" + session) if isinstance(session, str) and session else "",
+                    uncached_input=uncached,
+                    cached_input=cached,
+                    cache_creation=cache_written,
+                    # OpenCode reports reasoning beside output rather than inside
+                    # it, so the output side carries both here.
+                    output=output + reasoned,
+                    reasoning=reasoned,
+                    reported_cost_usd=recorded_cost,
+                    dedupe_key=opaque_id("opencode:" + raw_id),
+                    origin="opencode",
+                    project=project_name(cwd),
+                )
+                if record.total_tokens <= 0 or record.timestamp_ms < retention_start_ms:
+                    continue
+                if len(records) >= MAX_TRANSCRIPT_RECORDS_PER_FILE:
+                    raise TranscriptLimitError("too many usage records in one database")
+                records.append(record)
     except (sqlite3.Error, ValueError, OverflowError, RecursionError):
         return None
     finally:
         connection.close()
+    return records
+
+
+# ---------------------------------------------------------------- Grok CLI
+#
+# The grok CLI keeps one `usage.json` beside each session, under a
+# percent-encoded project folder. It totals every turn per model and prices it
+# itself: `costUsdTicks` is 10^10 ticks per USD, per the CLI's own documentation.
+
+GROK_TICKS_PER_USD = 10_000_000_000
+
+
+def parse_grok_usage(path: Path, retention_start_ms: int,
+                     cursor: TranscriptCursor | None = None) -> list[UsageRecord] | None:
+    """One grok CLI session's usage: a record per turn and model. The file is read whole, so its
+    size counts against the scan's changed-input budget up front."""
+    try:
+        if cursor is not None:
+            cursor.spend(cursor.stats.st_size)
+        document = read_bounded_json(path, MAX_TRANSCRIPT_FILE_BYTES)
+    except (OSError, ValueError, UnicodeDecodeError, RecursionError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    session = document.get("sessionId")
+    session = session if isinstance(session, str) and session else path.parent.name
+    folder, _ = folder_below(transcript_root("grok"), path)
+    project = project_name(urllib.parse.unquote(folder))
+    records: list[UsageRecord] = []
+    try:
+        turns = document.get("turns")
+        rows_by_turn = turns if isinstance(turns, list) and turns else [document.get("session")]
+        for turn in rows_by_turn:
+            if not isinstance(turn, dict):
+                continue
+            # A session that never finished a turn reports its totals without one.
+            timestamp = parse_timestamp_ms(turn.get("endedAt") or document.get("updatedAt"))
+            if timestamp is None or timestamp < retention_start_ms:
+                continue
+            usage = turn.get("modelUsage")
+            rows = [(name, values) for name, values in usage.items() if isinstance(values, dict)] \
+                if isinstance(usage, dict) else []
+            if not rows:
+                rows = [(turn.get("primaryModelId"), turn)]
+            for model, values in rows:
+                output = nonnegative_int(values.get("outputTokens"))
+                cached = nonnegative_int(values.get("cachedReadTokens"))
+                ticks = finite_number(values.get("costUsdTicks"))
+                record = UsageRecord(
+                    provider="grok",
+                    timestamp_ms=timestamp,
+                    model=bounded_model(model) or "<unattributed>",
+                    session_id=opaque_id("grok:" + session),
+                    # The CLI counts cache reads inside its input tokens, and
+                    # reasoning inside its output tokens.
+                    uncached_input=max(0, nonnegative_int(values.get("inputTokens")) - cached),
+                    cached_input=cached,
+                    cache_creation=nonnegative_int(values.get("cacheCreationTokens")),
+                    output=output,
+                    reasoning=min(output, nonnegative_int(values.get("reasoningTokens"))),
+                    reported_cost_usd=(ticks / GROK_TICKS_PER_USD) if ticks is not None and ticks > 0 else None,
+                    dedupe_key=opaque_id(f"grok:{session}:{turn.get('turnNumber')}:{model}"),
+                    origin="grok",
+                    project=project,
+                )
+                if record.total_tokens <= 0:
+                    continue
+                if len(records) >= MAX_TRANSCRIPT_RECORDS_PER_FILE:
+                    raise TranscriptLimitError("too many usage records in one session")
+                records.append(record)
+    except (OSError, ValueError, OverflowError, RecursionError):
+        return None
     return records
 
 
@@ -715,17 +848,28 @@ def omp_sessions_root() -> Path:
     return Path.home() / ".omp" / "agent" / "sessions"
 
 
-def omp_record_provider(name: Any) -> str | None:
-    """Map the provider that billed an omp message onto its cost source, or None if unsupported."""
+# Subscriptions that keep no transcripts of their own. A message that bills to one of them is its
+# only usage record, so the family word of the billing provider names the cost source: the harness
+# spells them `minimax-code-cn`, `xiaomi`, `xai-oauth`, and OpenCode `minimax-cn`, `mimo-tp`, `xai`.
+SUBSCRIPTION_PROVIDERS = {
+    "minimax": "minimax",
+    "mimo": "mimo", "xiaomi": "mimo",
+    "grok": "grok", "xai": "grok",
+}
+
+
+def billed_provider(name: Any) -> str | None:
+    """Map the provider that billed a message onto its cost source, or None if unsupported."""
     if not isinstance(name, str):
         return None
-    if name.startswith("opencode"):
+    key = name.strip().lower()
+    if key.startswith("opencode"):
         return "opencode"
-    if name == "openai-codex":
+    if key == "openai-codex":
         return "codex"
-    if name == "anthropic":
+    if key == "anthropic":
         return "claude"
-    return None
+    return SUBSCRIPTION_PROVIDERS.get(key.split("-", 1)[0].split("_", 1)[0])
 
 
 def parse_omp_file(path: Path, retention_start_ms: int,
@@ -771,7 +915,7 @@ def parse_omp_file(path: Path, retention_start_ms: int,
                 message = document
             else:
                 continue
-            provider = omp_record_provider(message.get("provider"))
+            provider = billed_provider(message.get("provider"))
             if provider is None:
                 continue
             usage = message.get("usage")
@@ -983,6 +1127,7 @@ PARSERS: dict[str, Callable[..., list[UsageRecord] | None]] = {
     "kimi": parse_kimi_file,
     "opencode": parse_opencode_database,
     "omp": parse_omp_file,
+    "grok": parse_grok_usage,
 }
 
 
@@ -999,6 +1144,8 @@ def transcript_root(provider: str) -> Path:
         return opencode_database_path()
     if provider == "omp":
         return omp_sessions_root()
+    if provider == "grok":
+        return Path(os.environ.get("GROK_HOME") or (Path.home() / ".grok")).expanduser() / "sessions"
     return Path(os.environ.get("KIMI_SHARE_DIR") or (Path.home() / ".kimi")).expanduser() / "sessions"
 
 
@@ -1044,6 +1191,9 @@ def discover_transcripts(
                     name = entry.name
                     if provider == "kimi":
                         if name != "wire.jsonl":
+                            continue
+                    elif provider == "grok":
+                        if name != "usage.json":
                             continue
                     elif not name.endswith(".jsonl"):
                         continue
@@ -2000,7 +2150,7 @@ def omp_stats_outcome(future: Future | None, url: str, local_omp: bool,
 
 def parse_provider_ids(value: str) -> list[str]:
     requested = {item.strip().lower() for item in value.split(",") if item.strip()}
-    return [provider for provider in ("claude", "codex", "opencode") if provider in requested]
+    return [provider for provider in ("claude", "codex", "opencode", "grok") if provider in requested]
 
 
 def build_payload(
@@ -2011,7 +2161,7 @@ def build_payload(
 ) -> dict[str, Any]:
     started = time.monotonic()
     overrides = parse_price_overrides(price_overrides)
-    provider_ids = [p for p in provider_ids if p in ("claude", "codex", "opencode")]
+    provider_ids = [p for p in provider_ids if p in ("claude", "codex", "opencode", "grok")]
     servers = [s for s in t3_costs.parse_servers(t3_servers) if s["enabled"]]
     stamp = int(time.time() * 1000) if now_ms is None else int(now_ms)
     zone = local_zone(zone_name)
@@ -2054,16 +2204,27 @@ def build_payload(
             # aggregation.
             if provider == "omp":
                 # Oh My Pi keeps each message's billing provider, so its records are selected
-                # by origin; each provider's own transcripts never carry them.
-                selected = [r for r in local if r.origin == "omp" and r.provider in provider_ids
+                # by origin; each provider's own transcripts never carry them. Subscriptions
+                # with no local transcripts are counted wherever the harness recorded them.
+                selected = [r for r in local if r.origin == "omp"
+                            and (r.provider in provider_ids or r.provider in SUBSCRIPTION_PROVIDERS.values())
+                            and history_start <= r.timestamp_ms <= stamp]
+            elif provider in ("opencode", "grok"):
+                # A CLI database bills each response to the provider that served it.
+                selected = [r for r in local if r.origin == provider
                             and history_start <= r.timestamp_ms <= stamp]
             else:
-                selected = [r for r in local if r.origin != "omp" and r.provider == provider
+                selected = [r for r in local if r.origin == "local" and r.provider == provider
                             and history_start <= r.timestamp_ms <= stamp]
-            history = [r if r.provider == "opencode" else replace(r, reported_cost_usd=None) for r in selected]
+            # Local sources are repriced from one table so the view is
+            # consistent. OpenCode and the grok CLI are the exception: each has
+            # already priced every response itself, which is the only way to
+            # price model IDs the public table cannot disambiguate. An explicit
+            # custom price still wins in the aggregation.
+            history = [r if r.origin in ("opencode", "grok") else replace(r, reported_cost_usd=None) for r in selected]
             records = [r for r in history if r.timestamp_ms >= start]
             session_counts = None
-            if provider == "omp":
+            if provider in ("omp", "opencode"):
                 session_counts = {p: len({r.session_id for r in records if r.provider == p and r.session_id})
                                   for p in {r.provider for r in records}}
             fp = t3_costs.fingerprint(socket.gethostname(), provider, str(root.resolve()), volume)
@@ -2151,7 +2312,9 @@ def build_payload(
     remote_models = [model for _, model in omp_remote["models"]] if omp_remote is not None else []
     for provider in remote_ids:
         sessions[provider] = None  # omp stats reports no session counts.
-    provider_ids = sorted({c["provider"] for c in candidates if c["provider"] != "omp"} | remote_ids,
+    # A local source reports its own provider; the Oh My Pi source reports each provider its
+    # messages were billed to, so those billings reach the aggregate as their own rows.
+    provider_ids = sorted({p for c in candidates for p in (c.get("providers") or [c["provider"]])} | remote_ids,
                           key=lambda provider: (provider == omp_stats.OTHER_PROVIDER, provider))
     if rates_override is not None:
         rates, pricing = rates_override
