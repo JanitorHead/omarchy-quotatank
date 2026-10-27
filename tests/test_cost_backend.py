@@ -663,6 +663,18 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertEqual((older.provider, older.model, older.project), ("minimax", "MiniMax-M3", "other"))
         self.assertEqual(older.reported_cost_usd, 0.5)
 
+    def test_a_corrupt_open_code_2_row_is_skipped_not_the_database(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "opencode.db"
+            self.write_open_code_2(path, [("ses1", "/tmp")], [
+                self.open_code_2_row("m1", "ses1", "mimo-tp", "mimo-v2.6-pro"),
+                ("m2", "ses1", "assistant", 2, 1_800_000_000_000, 1_800_000_000_000, '{"model": {"id": "trunc'),
+            ])
+            records = costs.parse_opencode_database(path, 0)
+
+        self.assertEqual([r.dedupe_key for r in records or []], [costs.opaque_id("opencode:m1")],
+                         "a row that is not JSON is skipped and the rest still count")
+
     @staticmethod
     def write_grok_session(root: Path, project: str, session: str, turns) -> Path:
         """A grok CLI session: `usage.json` under a percent-encoded project folder."""
@@ -731,6 +743,26 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertEqual((record.uncached_input, record.cached_input, record.output), (40, 10, 5))
         self.assertEqual(record.reported_cost_usd, 0.002)
         self.assertEqual(record.project, "tmp")
+
+    def test_grok_sessions_count_against_the_scan_input_budget(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sessions"
+            turn = {"turnNumber": 1, "endedAt": "2030-01-15T10:00:00Z", "primaryModelId": "grok-4.7-build",
+                    "inputTokens": 20, "outputTokens": 5, "costUsdTicks": 1}
+            paths = [self.write_grok_session(root, "%2Ftmp", name, [turn]) for name in ("sess-1", "sess-2")]
+            size = paths[0].stat().st_size
+            now_ms = int(paths[0].stat().st_mtime * 1000)
+            parser = mock.Mock(wraps=costs.parse_grok_usage)
+            with (
+                mock.patch.object(costs, "transcript_root", return_value=root),
+                mock.patch.object(costs, "MAX_TRANSCRIPT_SCAN_BYTES", size + 1),
+                mock.patch.dict(costs.PARSERS, {"grok": parser}),
+            ):
+                _, coverage = costs.scan_transcripts(["grok"], Path(temporary) / "state", now_ms)
+
+        self.assertEqual(parser.call_count, 1, "a session read whole spends its size, so the next one waits")
+        self.assertEqual(coverage[0]["status"], "partial")
+        self.assertEqual(coverage[0]["skippedFiles"], 1)
 
     def test_omp_harness_maps_tokens_models_and_sessions(self):
         with tempfile.TemporaryDirectory() as temporary:

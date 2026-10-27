@@ -627,7 +627,8 @@ OPENCODE_QUERY = (
 )
 
 OPENCODE_TABLES = (
-    ("session_message", "type = 'assistant'", "NULL"),
+    # A row whose data is not JSON is skipped, never allowed to fail the whole query.
+    ("session_message", "type = 'assistant' AND json_valid(data)", "NULL"),
     ("message", "data LIKE '%\"role\"%:%\"assistant\"%'"
                 " AND CASE WHEN json_valid(data) THEN json_extract(data, '$.role') END = 'assistant'",
      "CASE WHEN json_type(data, '$.path.cwd') = 'text' THEN json_extract(data, '$.path.cwd') END"),
@@ -767,8 +768,11 @@ GROK_TICKS_PER_USD = 10_000_000_000
 
 def parse_grok_usage(path: Path, retention_start_ms: int,
                      cursor: TranscriptCursor | None = None) -> list[UsageRecord] | None:
-    """One grok CLI session's usage: a record per turn and model, read whole (no cursor)."""
+    """One grok CLI session's usage: a record per turn and model. The file is read whole, so its
+    size counts against the scan's changed-input budget up front."""
     try:
+        if cursor is not None:
+            cursor.spend(cursor.stats.st_size)
         document = read_bounded_json(path, MAX_TRANSCRIPT_FILE_BYTES)
     except (OSError, ValueError, UnicodeDecodeError, RecursionError):
         return None
