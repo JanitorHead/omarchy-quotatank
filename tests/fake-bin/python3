@@ -16,4 +16,9 @@ if [[ ${1:-} == */scripts/proxy-activity.py ]]; then
   exec /usr/bin/python3 "$(dirname -- "$0")/../fake_activity.py" "$@"
 fi
 
+if [[ ${1:-} == */scripts/computer-check.py && -n ${QUOTATANK_COMPUTER_LOG:-} ]]; then
+  shift
+  exec /usr/bin/python3 "$(dirname -- "$0")/../fake_computer_check.py" "$@"
+fi
+
 exec /usr/bin/python3 "$@"

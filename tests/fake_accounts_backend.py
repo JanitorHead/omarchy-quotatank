@@ -67,7 +67,7 @@ kimi = {"id": "kimi", "name": "Kimi Code", "status": "ok", "errorKind": "", "mes
         "notice": '<img src="http://127.0.0.1:9/quotatank-markup.png">Suspended',
         "windows": [window("weekly", "Weekly limit", 40, 4 * 86400, WEEK),
                     window("limit-0", "5-hour limit", 12, 9000, SESSION)],
-        "history": {"h24": []}}
+        "history": {"h24": [8.0, 9.0, 10.0, 12.0]}}
 if (markers / "flood").exists():
     kimi["windows"] = [{"id": f"limit-{index}", "label": f"Limit {index}", "used": index % 100, "remaining": 100 - index % 100,
                         "resetsAt": now + 9000, "windowSeconds": None, "detail": ""} for index in range(5000)]

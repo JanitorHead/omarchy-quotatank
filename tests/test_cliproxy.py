@@ -34,16 +34,29 @@ class CliProxyTests(unittest.TestCase):
         self.assertEqual(missing["status"], "error")
         self.assertIn("project ID", missing["message"])
 
-    def test_discovery_ignores_local_filters_and_keeps_unqueried_accounts(self):
+    def test_found_names_the_providers_a_proxy_reads_limits_for_that_have_a_working_account(self):
         entries = [{"provider": "new-provider", "auth_index": "a"},
-                   {"provider": "antigravity", "auth_index": "b", "disabled": True}]
+                   {"provider": "antigravity", "auth_index": "b", "disabled": True},
+                   {"provider": "Claude", "auth_index": "c"}]
         with mock.patch.object(usage, "read_cliproxy_key", return_value="key"), \
                 mock.patch.object(usage.CliProxyClient, "auth_files", return_value=entries), \
                 mock.patch.object(usage.CliProxyClient, "usage") as upstream:
-            rows = usage.collect_cliproxy([], 1, "https://proxy.test", Path("key"), discover=True)
-        self.assertEqual([row["id"] for row in rows], ["antigravity", "new-provider"])
-        self.assertEqual([row["status"] for row in rows], ["disabled", "unsupported"])
+            rows, found, _aliases = usage.collect_cliproxy([], 1, "https://proxy.test", Path("key"))
+        self.assertEqual((rows, found), ([], ["claude"]), "nothing is read for a provider that is not monitored")
         upstream.assert_not_called()
+
+    def test_accounts_read_fine_elsewhere_are_not_queried_again(self):
+        entries = [{"provider": "kimi", "auth_index": "a", "email": "Me@example.com"},
+                   {"provider": "kimi", "auth_index": "b", "email": "other@example.com"}]
+        asked = []
+        with mock.patch.object(usage, "read_cliproxy_key", return_value="key"), \
+                mock.patch.object(usage.CliProxyClient, "auth_files", return_value=entries), \
+                mock.patch.object(usage, "fetch_cliproxy_account",
+                                  side_effect=lambda _id, entry, *_: asked.append(entry["auth_index"]) or usage.base_provider("kimi")):
+            rows, _found, aliases = usage.collect_cliproxy(["kimi"], 1, "https://proxy.test", Path("key"), {"kimi": {"me@example.com"}})
+        self.assertEqual((asked, len(rows[0]["accounts"])), (["b"], 1))
+        self.assertEqual([(alias["id"], alias["account"]) for alias in aliases], [("kimi", "Me@example.com")],
+                         "the account not asked about is still named by its id on the proxy")
 
     def test_new_provider_history_survives_reload(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -179,34 +192,27 @@ class CliProxyTests(unittest.TestCase):
         failed = usage.fetch_cliproxy_account("kimi", {}, client, 1)
         self.assertNotIn("private-key", json.dumps(failed))
 
-    def test_no_enabled_providers_skips_management_entirely(self):
-        with mock.patch.object(usage, "read_cliproxy_key") as key:
-            self.assertEqual(usage.collect_cliproxy([], 1, "invalid", Path("missing")), [])
-        key.assert_not_called()
-
-    def test_missing_accounts_and_failed_configuration_keep_provider_contract(self):
+    def test_a_provider_the_proxy_has_no_account_for_adds_nothing_and_a_bad_key_is_the_proxys_failure(self):
         with mock.patch.object(usage, "read_cliproxy_key", return_value="private-key"), \
                 mock.patch.object(usage.CliProxyClient, "auth_files", return_value=[]):
-            results = usage.collect_cliproxy(["claude", "kimi"], 1, "https://proxy.test", Path("key"))
-        self.assertEqual([row["id"] for row in results], ["claude", "kimi"])
-        self.assertTrue(all(row["errorKind"] == "no_credentials" and row["authCommand"] == "" for row in results))
-        with tempfile.TemporaryDirectory() as temporary:
-            results = usage.collect_cliproxy(["codex"], 1, "https://proxy.test", Path(temporary) / "absent")
-        self.assertEqual(results[0]["errorKind"], "config")
+            self.assertEqual(usage.collect_cliproxy(["claude", "kimi"], 1, "https://proxy.test", Path("key")), ([], [], []))
+        with tempfile.TemporaryDirectory() as temporary, self.assertRaises(usage.ProviderFailure) as raised:
+            usage.collect_cliproxy(["codex"], 1, "https://proxy.test", Path(temporary) / "absent")
+        self.assertEqual(raised.exception.kind, "config")
 
     def test_account_limit_and_shared_deadline(self):
         entries = [{"provider": "kimi", "auth_index": str(i)} for i in range(40)]
         with mock.patch.object(usage, "read_cliproxy_key", return_value="key"), \
                 mock.patch.object(usage.CliProxyClient, "auth_files", return_value=entries), \
                 mock.patch.object(usage, "fetch_cliproxy_account", side_effect=lambda *args: usage.base_provider("kimi")) as fetch:
-            result = usage.collect_cliproxy(["kimi"], 1, "https://proxy.test", Path("key"))[0]
+            result = usage.collect_cliproxy(["kimi"], 1, "https://proxy.test", Path("key"))[0][0]
         self.assertEqual(fetch.call_count, usage.MAX_CLIPROXY_ACCOUNTS)
         self.assertIn("first 32", result["notice"])
         with mock.patch.object(usage, "read_cliproxy_key", return_value="key"), \
                 mock.patch.object(usage.CliProxyClient, "auth_files", return_value=entries[:1]), \
                 mock.patch.object(usage.time, "monotonic", side_effect=[0, 2]), \
                 mock.patch.object(usage, "fetch_cliproxy_account") as fetch:
-            result = usage.collect_cliproxy(["kimi"], 1, "https://proxy.test", Path("key"))[0]
+            result = usage.collect_cliproxy(["kimi"], 1, "https://proxy.test", Path("key"))[0][0]
         self.assertEqual(result["errorKind"], "timeout")
         fetch.assert_not_called()
 
@@ -272,41 +278,36 @@ class CliProxyIntegrationTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "http")
         self.assertEqual(len(calls), 1)
 
-    def test_real_http_cli_pool_selection_and_separate_private_history(self):
+    def test_a_proxys_accounts_join_this_computers_readings_over_real_http(self):
         with tempfile.TemporaryDirectory() as temporary, proxy_server() as (address, calls):
             root = Path(temporary)
             key = root / "management.key"
             key.write_text("private-management-key")
             key.chmod(0o600)
             state = root / "state"
-            state.mkdir()
-            direct_history = state / "history.json"
-            direct_history.write_text('{"direct":"untouched"}')
-            command = [sys.executable, str(BACKEND), "--source", "cliproxy", "--cliproxy-url", address + "/management.html",
-                       "--cliproxy-key-file", str(key), "--state-dir", str(state), "--timeout", "2"]
-            process = subprocess.run(command, capture_output=True, text=True, timeout=10, check=True)
+            command = [sys.executable, str(BACKEND), "--providers", "claude,codex,kimi,gemini",
+                       "--proxy", "p-00000001=" + address + "/management.html", "--proxy-key-file", "p-00000001=" + str(key),
+                       "--state-dir", str(state), "--timeout", "2"]
+            environment = {**os.environ, "HOME": str(root), "XDG_CONFIG_HOME": str(root / "config"), "PATH": "/usr/bin:/bin"}
+            process = subprocess.run(command, capture_output=True, text=True, timeout=20, check=True, env=environment)
             payload = json.loads(process.stdout)
-            claude, codex, gemini, kimi = payload["providers"]
+            claude, codex, kimi, gemini = payload["providers"]
             self.assertTrue(all(row["status"] == "ok" for row in (claude, codex, kimi)))
-            self.assertEqual(gemini["status"], "unsupported")
-            self.assertEqual(gemini["windows"], [])
+            self.assertEqual(gemini["errorKind"], "no_credentials", "a provider the proxy cannot read stays this computer's")
             self.assertEqual(len(claude["accounts"]), 4)
             self.assertEqual(claude["accounts"][3]["status"], "disabled")
+            self.assertEqual(claude["proxy"], {"id": "p-00000001", "name": "CLIProxyAPI"})
             self.assertEqual(claude["account"], "free@example.invalid")
-            self.assertEqual(claude["windows"][0]["remaining"], 75)
-            self.assertEqual((claude["availableCount"], claude["accountCount"]), (2, 4))
-            self.assertIn("2 of 4", claude["notice"])
             self.assertEqual(codex["plan"], "ChatGPT Pro")
             self.assertEqual(kimi["credits"]["remaining"], 100)
-            self.assertEqual(direct_history.read_text(), '{"direct":"untouched"}')
-            histories = list(state.glob("cliproxy-*/history.json"))
-            self.assertEqual(len(histories), 1)
-            history = histories[0]
+            self.assertEqual(payload["proxies"], [{"id": "p-00000001", "status": "ok", "readAt": payload["proxies"][0]["readAt"],
+                                                   "detected": ["claude", "codex", "kimi"]}])
+            history = state / "history.json"
             self.assertEqual(history.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(history.parent.stat().st_mode & 0o777, 0o700)
             self.assertEqual(json.loads(history.read_text())["providers"]["claude"][-1][1], 25)
+            saved = state / "proxies" / "p-00000001.json"
             for secret in ("private-management-key", "private-client-key", "private-token", "claude-available", "chatgpt-account"):
-                self.assertNotIn(secret, process.stdout + process.stderr + history.read_text())
+                self.assertNotIn(secret, process.stdout + process.stderr + history.read_text() + saved.read_text())
             self.assertEqual(len(calls), 6)  # Account list and five quota reads; no model or client-key requests.
             for path, authorization, body in calls:
                 self.assertEqual(authorization, "Bearer private-management-key")
@@ -316,6 +317,21 @@ class CliProxyIntegrationTests(unittest.TestCase):
                     self.assertEqual(body["header"]["Authorization"], "Bearer $TOKEN$")
                     if body["auth_index"] == "codex-account":
                         self.assertEqual(body["header"]["ChatGPT-Account-Id"], "chatgpt-account")
+
+    def test_a_proxy_that_stops_answering_shows_its_last_accounts_as_stale(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            key = root / "management.key"
+            key.write_text("private-management-key")
+            key.chmod(0o600)
+            with proxy_server() as (address, _calls):
+                first = usage.read_proxy("p-00000001", address, key, ["kimi"], 2, {}, root)
+            later = usage.read_proxy("p-00000001", "http://127.0.0.1:9", key, ["kimi"], 1, {}, root)
+            gone = usage.read_proxy("p-00000002", "http://127.0.0.1:9", key, ["kimi"], 1, {}, root)
+        self.assertEqual((first["status"], later["status"], later["readAt"]), ("ok", "stale", first["readAt"]))
+        self.assertEqual(later["providers"], first["providers"])
+        self.assertEqual(later["errorKind"], "network")
+        self.assertEqual((gone["status"], gone["providers"]), ("error", []))
 
     def test_management_redirect_does_not_forward_key(self):
         with proxy_server(redirect=True) as (address, calls):

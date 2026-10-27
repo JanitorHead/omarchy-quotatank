@@ -19,8 +19,11 @@ Item {
   property real cardRadius: 0
   property var motion: null
   property string lastText: ""
+  // An optional button beside the text ("Open Sources"); empty shows none.
+  property string actionText: ""
 
   signal dismissed()
+  signal actionRequested()
 
   onTextChanged: if (text !== "") lastText = text
   Component.onCompleted: if (text !== "") lastText = text
@@ -62,7 +65,7 @@ Item {
       id: noticeText
       objectName: "eventNoticeText"
       anchors.left: parent.left
-      anchors.right: dismiss.left
+      anchors.right: action.visible ? action.left : dismiss.left
       anchors.top: parent.top
       anchors.leftMargin: card.contentLeftInset
       anchors.rightMargin: Style.spacing.sm
@@ -73,6 +76,22 @@ Item {
       font.pixelSize: Style.font.bodySmall
       wrapMode: Text.WordWrap
       lineHeight: 1.1
+    }
+
+    Ui.Button {
+      id: action
+      objectName: "eventNoticeAction"
+      visible: root.actionText !== ""
+      anchors.right: dismiss.left
+      anchors.top: parent.top
+      anchors.topMargin: card.contentTopInset
+      text: root.actionText
+      foreground: root.accent
+      fontFamily: root.fontFamily
+      fontSize: Style.font.bodySmall
+      horizontalPadding: Style.spacing.md
+      verticalPadding: Style.spacing.xxs
+      onClicked: root.actionRequested()
     }
 
     Ui.Button {

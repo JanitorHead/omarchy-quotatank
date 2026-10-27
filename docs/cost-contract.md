@@ -2,10 +2,10 @@
 
 `scripts/cost-fetch.py` writes schema-v1 JSON. Costs combines local Codex/Claude
 history selected by `--providers claude,codex,opencode,grok` with enabled servers in
-`--t3-servers` and, optionally, one omp stats server in `--omp-stats-url` (see
-[Remote omp stats](#remote-omp-stats)). `--t3-servers` is a JSON array of at most four objects:
+`--t3-servers`, and with the transcripts of other computers in `--computer ID=HOST`
+(repeatable, see [Other computers](#other-computers)). `--t3-servers` is a JSON array of at most four objects:
 `{"id":"home","name":"Home T3","url":"https://t3.example","tokenFile":"/private/token","enabled":true}`.
-`costLocalProviders` and `costT3Servers` are independent of quota settings.
+Local providers, other computers and T3 servers are independent of quota settings.
 Legacy `costSource` and `costLocalBackfill` settings are ignored. Keeper is used
 only by quota account activity, through `scripts/keeper_client.py`.
 
@@ -101,12 +101,11 @@ over fresh partial and stale ones, with local preferred on ties. Missing/failed
 sources cannot suppress a healthy duplicate. This identifies shared folders, not
 transcript copies on distinct computers; replicated histories can still overlap.
 
-Top-level `sources` contains `id`, `name`, `kind` (`local`/`t3`/`omp-remote`), optional
+Top-level `sources` contains `id`, `name`, `kind` (`local`/`t3`/`computer`), optional
 `provider` or `providers`, `status` (`ok`, `partial`, `missing`, `failed`, `stale`,
-`unavailable`, `duplicate`, and for omp stats also `error` and `off`), `included`, nullable
+`unavailable`, `duplicate`), `included`, nullable
 `updatedAt` in Unix milliseconds, and safe `message`. Raw source hostnames, paths and server
-error bodies never enter the output/cache; the omp stats entry repeats only the host name of
-the configured URL.
+error bodies never enter the output/cache; a computer's entry names it by its SSH destination.
 
 Normalized remote snapshots are private, keyed by URL, credential identity,
 period and timezone. On failure a snapshot up to 32 days old is reused, clipped
@@ -179,6 +178,21 @@ The dollar fields are API-equivalent estimates, not subscription charges. Nullab
 
 Pricing statuses are `fresh`, `cached`, `unavailable`, or `notNeeded`. Coverage statuses are `ok`, `partial`, `missing`, or `failed`; unreadable files make coverage `partial` or `failed` rather than silently producing a complete-looking total. `scannedFiles` counts readable recent transcript files, including files with no usage-bearing rows, while `skippedFiles` counts files or directories that could not be inspected. `costSource` is `none`, `providerReported`, `modelPriced`, `customPriced`, `mixed`, or `unpriced`. Token totals always include unpriced records from readable files. `reasoningTokens` is informational and is already included in `outputTokens`; it must not be summed again.
 
+## Other computers
+
+`--computer ID=HOST` (`c-` and eight hex digits, then an SSH destination; at most 16) counts
+another computer's transcripts as this computer's. That computer runs this same scanner as a
+reader over SSH, as for limits ([backend contract, Other computers](backend-contract.md#other-computers)):
+`cost-fetch.py --records` with the same `--providers` and days, and this computer's time zone
+so days begin at the same moment on both. It sends the raw records of the window, read with its
+own incremental scan cache in `~/.cache/quotatank/state/` there, compressed and at most 32 MiB,
+within 90 seconds (a first scan reads every transcript; later ones only what changed). Here they
+are priced and aggregated with the local records as one history, so projects, agents, the
+heatmap and the comparison include them. The last good records are kept in
+`computers/<id>-costs.json` in the state folder: a computer that does not answer still counts,
+as `stale`, with a message saying so; one that never answered is `failed`. Each computer's scan
+has its own record ceiling.
+
 ## Projects, agents, heatmap and comparison
 
 These fields are additive to schema v1 (`heatmap` is described below):
@@ -230,77 +244,9 @@ window starts before the 32-day local retention (always for 30D), or when a remo
 remote servers report only the selected period. Error payloads carry empty `projects`/`agents`, empty heatmap
 arrays, and a `null` `previous`.
 
-## Remote omp stats
-
-`--omp-stats-url URL` adds the aggregates of an `omp stats` dashboard (Oh My Pi 18),
-typically running on another computer as `omp stats --host <address> --port <port>`.
-The URL is the server's address alone, `http` or `https`, a host and an optional port,
-with at most a trailing `/`; a path, query, fragment, user name, backslash or whitespace
-is refused (`normalize_server_url` in `scripts/quotatank_common.py`). HTTPS may reach
-any host; plain HTTP only loopback, private (RFC 1918, IPv6 unique-local) and Tailscale
-(`100.64.0.0/10`, `*.ts.net`) addresses or single-label host names. No credential is
-sent, so this is broader than the omp gateway rule. The dashboard has no authentication
-and also serves session transcripts, so `scripts/omp_stats.py` sends exactly four `GET`
-requests and nothing else: `/api/stats/overview`, `/api/stats/providers`,
-`/api/stats/models` and `/api/stats/folders`, each with `?range=24h|7d|30d` for the
-1/7/30-day period. They run concurrently with each other and with the local scan, each
-with a 15-second timeout, a 2 MiB body limit and at most 4,096 rows per list. Redirects
-are refused, the environment's proxy settings are ignored, HTTPS certificates are
-verified, and nothing is cached.
-
-Only counters, omp's own costs, provider and model ids and folder names are read.
-omp provider ids map to Quotatank ids (`anthropic` → `claude`, `openai-codex` →
-`codex`, `opencode-go` → `opencode`, `kimi-code` → `kimi`, `zai`/`zai-coding-plan` →
-`zai`, `google-antigravity` → `antigravity`, `cursor`, `github-copilot` → `copilot`,
-`minimax`/`minimax-code`/`minimax-coding-plan` → `minimax`); every other provider
-counts as `other` ("Other providers"). Remote rows are not filtered by `--providers`.
-
-- `totals` adds `overview.overall`, and each `providers` row the matching
-  `providers.providers` rows. Providers only omp reports get their own rows, `other` last.
-- `periods` add `providers.series`. omp buckets are hourly for 24H and UTC days for
-  7D/30D; each counts in the local bucket that contains its midpoint, so a UTC day lands
-  on the local day holding most of it. omp's windows are rolling (the last 24, 7×24 or
-  30×24 hours), so a bucket may start before the first local bucket; it counts in the
-  first bucket, and a bucket that ends after now counts in the last one. Periods
-  therefore add up to the remote totals. omp reports only a token total per bucket, so
-  period cells gain `totalTokens` without the per-kind split.
-- `models` gains separate rows from `/api/stats/models`, marked `"origin": "omp-remote"`.
-  A model omp did not name is "Unknown model"; rows past 512 fold into "Other models", and past the 48
-  costliest model rows overall, the rest fold into "Other models" per provider.
-- `projects` adds `/api/stats/folders`, named by the last segment of the omp folder
-  name (`-dev-app` → `app`). omp writes `/` as `-`, so a hyphenated project name keeps
-  only its last part; the home folder and unnamed folders count as "Other". Folder
-  names never enter the output.
-- `agents` adds `overview.byAgentType`: omp's `main` (or null) is `main`, every other
-  kind (`subagent`, `advisor`) is `subagent`.
-
-omp priced each request with the rates of the provider that served it, and its buckets
-carry no per-model token split, so remote costs are kept as reported
-(`providerReported`) and neither the public table nor custom prices reprice them.
-Requests omp could not price stay unpriced; an agent row with zero cost counts as
-unpriced because omp reports no unpriced count per agent. Cache savings of remote models
-use the custom or public input and cache-read rates, as for local records; period cells
-gain none. Remote requests count in `remoteRecords`, and every cell or provider with
-remote data reports `sessions: null`.
-
-The `sources` entry has `id` and `kind` `omp-remote`, `name` "Oh My Pi stats", `host`
-(the URL's host name; empty when the URL is absent or invalid), `providers` (the ids it
-supplied) and `status`:
-
-- `off`: no URL is configured.
-- `ok`: the data is included.
-- `error`: nothing is included; `errorKind` is `invalid_url`, `network`, `timeout`,
-  `not_found` (HTTP 404, e.g. an omp without these endpoints), `malformed` (not JSON,
-  unexpected shape or inconsistent counters), `too_large`, or `http` (any other status,
-  including a refused redirect). Like any failed source, it marks empty periods as
-  history `unavailable`.
-- `duplicate`: nothing is included because the URL's host is loopback or resolves,
-  within 2 seconds, to an address of this computer while local omp sessions are being
-  scanned, so the server would repeat local history.
-
 ## Pricing and custom rates
 
-The combined collector uses exact custom model rates, then the public model rate for every source except remote omp stats, whose costs stay as omp reported them (see [Remote omp stats](#remote-omp-stats)). Transcript-reported costs are retained only in the parser cache for compatibility and are cleared before aggregation. `pricing.basis` is `currentBaseRates`; `pricing.customModels` counts configured overrides. Every totals/provider/model/period cell includes `customPricedRecords`, `providerReportedRecords`, `basePricedRecords`, and `variantPricedRecords`. The first three sum to `pricedRecords`; `variantPricedRecords` is a subset of `basePricedRecords` whose bracketed suffix was removed for lookup. Mixed sources or unpriced records yield `costSource: "mixed"`. These fields are additive to schema v1; older payloads without them remain readable.
+The combined collector uses exact custom model rates, then the public model rate for every source. Transcript-reported costs are retained only in the parser cache for compatibility and are cleared before aggregation. `pricing.basis` is `currentBaseRates`; `pricing.customModels` counts configured overrides. Every totals/provider/model/period cell includes `customPricedRecords`, `providerReportedRecords`, `basePricedRecords`, and `variantPricedRecords`. The first three sum to `pricedRecords`; `variantPricedRecords` is a subset of `basePricedRecords` whose bracketed suffix was removed for lookup. Mixed sources or unpriced records yield `costSource: "mixed"`. These fields are additive to schema v1; older payloads without them remain readable.
 
 Public lookup keeps full lowercase provider-qualified IDs and canonical bare names. A bare alias is added only when no canonical entry exists and all qualified entries agree on all four rates. Unknown provider prefixes do not fall back to another provider's price. Bracketed model variants use the base model's rates; current base prices do not account for historical rates, context thresholds, or priority/flex/batch tiers. The UI labels this limitation. Negative, non-finite, or incomplete input/output rates are rejected; missing cache rates use the input rate.
 
@@ -337,7 +283,7 @@ Resource use is bounded at every untrusted input boundary: 16 MiB per transcript
 
 `CostBackend.qml` streams backend stdout into a 4 MiB capped buffer and drains stderr without retaining it. Crossing the output ceiling terminates the process and preserves the last known-good cost document.
 
-The document's lists are bounded by count too, since Costs builds a row per item. After local and omp stats rows are merged (up to 512 groups each), `models` keeps its 48 costliest rows and folds the rest into one "Other models" row per provider; a folded row's totals are exact and its `sessions` is `null`, because one session can use several models. `CostBackend.qml` cuts the parsed document to at most 32 `providers` (also within each period), 64 `models`, 48 `periods`, 16 `projects`, 4 `agents`, 16 `sources` and 32 `coverage` rows (`boundCostPayload` in `UsageLogic.js`).
+The document's lists are bounded by count too, since Costs builds a row per item. After local and T3 rows are merged (up to 512 groups each), `models` keeps its 48 costliest rows and folds the rest into one "Other models" row per provider; a folded row's totals are exact and its `sessions` is `null`, because one session can use several models. `CostBackend.qml` cuts the parsed document to at most 32 `providers` (also within each period), 64 `models`, 48 `periods`, 16 `projects`, 4 `agents`, 16 `sources` and 32 `coverage` rows (`boundCostPayload` in `UsageLogic.js`).
 
 The state directory uses mode `0700` and cache files use `0600`. Corrupt or foreign cache versions cause a cold rebuild, never a broken view. Rate refresh failures fall back to the last cached LiteLLM table; with no usable table, token totals remain available and model-priced costs stay `null`.
 
@@ -351,18 +297,14 @@ directories.
 ## Live omp activity
 
 `scripts/omp-live.py` is a long-running helper that reports Oh My Pi (omp) activity
-as it happens. `--local` follows the local session transcripts, `--stats-url URL`
-follows the live events of an `omp stats` server, and `--accounts` (only with
-`--local`) maps omp credential ids to account ids; `--local` and `--stats-url` may be
-combined. It writes one compact JSON object per line on stdout and flushes each
-line. Every line has `"schemaVersion": 1`; consumers ignore line types they do not
-know.
+as it happens. `--local` is required and follows the local session transcripts;
+`--accounts` (only with `--local`) maps omp credential ids to account ids. It writes
+one compact JSON object per line on stdout and flushes each line. Every line has
+`"schemaVersion": 1`; consumers ignore line types they do not know.
 
 ```json
 {"schemaVersion":1,"heartbeat":true}
 {"schemaVersion":1,"type":"request","source":"local","provider":"claude","model":"claude-opus-5-5","credentialId":7,"costUsd":0.0412,"tokens":18234,"subagent":false,"at":2000000000.123}
-{"schemaVersion":1,"type":"state","source":"remote","state":"live","message":"Live omp activity"}
-{"schemaVersion":1,"type":"activity","source":"remote","version":42,"at":2000000000.5}
 {"schemaVersion":1,"type":"accounts","map":{"7":{"provider":"claude","accountId":"omp-0123456789ab"}}}
 ```
 
@@ -378,12 +320,6 @@ know.
   `subagent` is true for transcripts inside a session folder. `at` is the line's own
   timestamp in epoch seconds (millisecond precision), or the time it was read when
   the line has none.
-- **`state`** describes the stats-server connection and is written only when it
-  changes: `reconnecting` (first with “Connecting to omp stats…”), `live` once an
-  event with a `version` arrived, or `unavailable` when the server has no live
-  events or the URL is not allowed. `message` is fixed, display-safe text.
-- **`activity`** means the server indexed new requests: its event `version` grew. All
-  the growth since the previous 2-second pass is one line with the newest `version`.
 - **`accounts`** maps credential ids to Quotatank providers and account ids. Each
   line replaces the previous map; a reader keeps the last map when none arrives.
   `usage-fetch.py` gives a native reading of the same account `ompAccountId`, so a
@@ -415,23 +351,6 @@ covered over several passes. A pass reads at most 1 MiB; lines longer than 64 Ki
 are skipped whole. At most 4,096 transcripts keep a read position; the least
 recently modified are forgotten first.
 
-The stats URL follows the omp stats rule (see [Remote omp stats](#remote-omp-stats)):
-the server's address alone, HTTPS with certificate verification, or plain HTTP only to
-loopback, private (RFC 1918, IPv6 unique local), Tailscale (`100.64.0.0/10`,
-`*.ts.net`) or single-label hosts. The helper only ever requests `GET /api/events`
-(server-sent events), never the `/api/sessions` or `/api/session/trace` endpoints that
-serve conversation contents. It sends no credentials, uses no proxy and follows no
-redirects. The first event sets the `version` baseline; later increases are reported
-as `activity` by the next pass. The baseline survives reconnects, so activity during an
-outage is still reported once, while a restarted server (counting from 1 again) only
-resets the baseline. Connecting is limited to 10 seconds; a stream silent for 45 seconds
-(the server sends a keep-alive every 15) is reconnected. Lines and events are limited
-to 64 KiB; each `data` line of an event counts its newline too, so empty ones add up.
-Reconnects back off from 2 to 60 seconds and reset after a connection that
-lasted 30 seconds. A 404/405 or a response that is not an event stream is
-`unavailable` and retried every 60 seconds; a disallowed URL is `unavailable` and not
-retried. Error details are never forwarded.
-
 `--accounts` runs `omp usage reset --json --no-extensions` (30-second timeout, 256 KiB
 of output). Without a target that command only lists each Claude and Codex account
 with its saved resets; the helper never adds one, because `omp usage reset
@@ -454,3 +373,11 @@ When the helper stops (SIGTERM, SIGHUP or SIGINT, exit status 128 + the signal; 
 closed stdout), it kills an omp run in progress with its process group first, and the
 kernel kills omp if the helper dies of SIGKILL (see the backend contract's resource
 ceilings).
+
+**On another computer.** `scripts/computer-check.py --live HOST -- --local --accounts` runs this
+helper on another computer (see [Other computers](#other-computers)), over the same shared SSH
+connection, and passes its lines through as they come. The widget follows omp there while
+that computer is switched on under **Settings → Sources**, **Read omp's accounts** is on, and
+the last reading found omp set up there. It puts the computer's id in front
+of the account ids in its `accounts` lines (`c-0011aabb/omp-0123456789ab`), as `usage-fetch.py`
+does for that computer's readings, so live requests mark the right account.

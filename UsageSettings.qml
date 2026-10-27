@@ -20,7 +20,6 @@ Column {
   property color surface: Commons.Color.popups.background
   property string fontFamily: Style.font.family
   property string accountDetails: ""
-  property var proxyProviders: []
   // The local backend's latest payload ({ providers, detected, generatedAt }) and whether a refresh
   // is running: Settings → Providers shows each provider's state from them.
   property var usagePayload: null
@@ -33,7 +32,16 @@ Column {
   readonly property bool saving: keyWriter.running
   property alias priceEditor: prices
   readonly property string proxyName: "CLIProxyAPI"
-  readonly property bool proxyMode: value("usageSource", "direct") === "cliproxy"
+  // The entries of Settings → Sources (UsageLogic.parseSources); a switched-on proxy reads every account.
+  readonly property var sourceEntries: UsageLogic.parseSources(settings)
+  readonly property var proxyEntry: {
+    for (var i = 0; i < sourceEntries.length; i++) if (sourceEntries[i].kind === "proxy") return sourceEntries[i]
+    return null
+  }
+  // Other computers (Settings → Sources → Other computers) and where Sign in and Install open a terminal.
+  readonly property var computerEntries: UsageLogic.sourcesOf(settings, "computer")
+  readonly property var mainComputer: UsageLogic.mainComputer(settings)
+  readonly property string computerCheckPath: decodeURIComponent(String(Qt.resolvedUrl("scripts/computer-check.py")).replace(/^file:\/\//, ""))
   readonly property string quotaMode: String(value("quotaMode", "Used")) === "Remaining" ? "Remaining" : "Used"
   // Each monitored provider is a card like the ones in Limits (same fill, border, and corners), so
   // its switches, key, and Customize read as one block.
@@ -47,40 +55,34 @@ Column {
   readonly property var dismissedProviders: UsageLogic.listOrEmpty(value("dismissedProviders", UsageLogic.DEFAULT_SETTINGS.dismissedProviders))
   readonly property var moneyProviderNames: {
     var names = []
-    if (proxyMode) return names
     for (var i = 0; i < UsageLogic.LOCAL_PROVIDERS.length; i++)
       if (UsageLogic.LOCAL_PROVIDERS[i].money && monitored(UsageLogic.LOCAL_PROVIDERS[i].id)) names.push(UsageLogic.LOCAL_PROVIDERS[i].name)
     return names
   }
   readonly property bool moneyMonitored: moneyProviderNames.length > 0
-  readonly property var providerOptions: UsageLogic.orderProviders(proxyMode ? UsageLogic.listOrEmpty(proxyProviders) : UsageLogic.LOCAL_PROVIDERS, value("providerOrder", "[]"))
-  readonly property var allProviderIds: {
-    var ids = UsageLogic.LOCAL_PROVIDER_IDS.slice()
-    for (var i = 0; i < proxyProviders.length; i++)
-      if (!UsageLogic.contains(ids, proxyProviders[i].id)) ids.push(proxyProviders[i].id)
-    return ids
-  }
+  readonly property var providerOptions: UsageLogic.orderProviders(UsageLogic.LOCAL_PROVIDERS, value("providerOrder", "[]"))
+  readonly property var allProviderIds: UsageLogic.LOCAL_PROVIDER_IDS.slice()
   // Saving a key clears the backend's payload until the next refresh; placing providers from the last
   // payload that arrived keeps the rows from jumping in the meantime.
   property var lastPayload: null
   readonly property var shownReadings: lastPayload ? UsageLogic.listOrEmpty(lastPayload.providers) : []
   readonly property var shownDetected: lastPayload ? UsageLogic.listOrEmpty(lastPayload.detected) : []
-  readonly property var shownInstalled: lastPayload && lastPayload.installed !== undefined ? UsageLogic.listOrEmpty(lastPayload.installed) : null
   // The provider whose sign-in or install was just started from here, until its next good reading.
   property string pendingSetup: ""
   onShownReadingsChanged: {
     var reading = UsageLogic.readingFor(shownReadings, pendingSetup)
     if (pendingSetup !== "" && reading && reading.status === "ok") pendingSetup = ""
   }
-  readonly property var sections: UsageLogic.providerSections(proxyMode ? [] : providerOptions,
+  readonly property var sections: UsageLogic.providerSections(providerOptions,
     enabledProviders, dismissedProviders, shownReadings, shownDetected, settings)
-  // The draggable rows: every proxy provider, or the local providers in use.
-  readonly property var providerRows: proxyMode ? providerOptions : sections.listed
+  // The draggable rows: the providers in use.
+  readonly property var providerRows: sections.listed
   property string providerFilter: ""
   readonly property int moreCount: sections.moreSignIns.length + sections.moreKeys.length
   readonly property var moreSignIns: UsageLogic.filterProviders(sections.moreSignIns, providerFilter)
   readonly property var moreKeys: UsageLogic.filterProviders(sections.moreKeys, providerFilter)
   readonly property var pages: [
+    { id: "sources", title: "Sources", summary: sourcesSummary() },
     { id: "providers", title: "Providers", summary: providersSummary() },
     { id: "bar", title: "Menu bar", summary: menuBarSummary() },
     { id: "alerts", title: "Alerts", summary: alertsSummary() },
@@ -89,6 +91,7 @@ Column {
     { id: "advanced", title: "Advanced", summary: "Refresh every " + Math.round(Number(value("refreshIntervalSec", 900)) / 60) + " min" }
   ]
   readonly property string pageTitle: {
+    if (setupStep > 0) return "Setup · " + setupStep + " of " + setupPages.length
     for (var i = 0; i < pages.length; i++) if (pages[i].id === page) return pages[i].title
     return "Settings"
   }
@@ -99,21 +102,12 @@ Column {
   readonly property int rowMs: reducedMotion ? 0 : (motion ? motion.row : 260)
   readonly property int staggerMs: reducedMotion ? 0 : 60
 
-  // ---- omp (Oh My Pi): its accounts, read here and through its auth gateway (Providers), and its
-  // statistics and live feed from another computer (Costs). The panel passes its live feed in.
-  property var ompActivity: null
+  // ---- omp (Oh My Pi) on this computer: its accounts.
   readonly property var omp: UsageLogic.ompSettings(settings)
   readonly property var ompStatus: lastPayload && lastPayload.omp && typeof lastPayload.omp === "object" ? lastPayload.omp : null
   // true, false, or null while no refresh has said.
   readonly property var ompFound: UsageLogic.ompFound(ompStatus)
   readonly property var ompLocalLine: UsageLogic.ompLocalStatus(ompStatus, omp.local, usageLoading)
-  readonly property var ompRemoteSource: UsageLogic.readingFor(costSources, "omp-remote")
-  readonly property string ompLiveState: ompActivity ? String(ompActivity.state) : ""
-  // How omp stats is reached on the Costs page; only the commands shown depend on it.
-  property string ompStatsVia: "tailscale"
-  readonly property var ompStatsRecipe: UsageLogic.ompStatsRecipe(ompStatsVia)
-  readonly property string usageFetchPath: decodeURIComponent(String(Qt.resolvedUrl("scripts/usage-fetch.py")).replace(/^file:\/\//, ""))
-  readonly property string costFetchPath: decodeURIComponent(String(Qt.resolvedUrl("scripts/cost-fetch.py")).replace(/^file:\/\//, ""))
 
   // Changes are batched per control: { key: value }. The host persists them and reports back
   // through finishSave(), which also commits or discards a staged secret.
@@ -132,7 +126,7 @@ Column {
   }
 
   function monitored(id) {
-    return proxyMode || UsageLogic.contains(enabledProviders, id)
+    return UsageLogic.contains(enabledProviders, id)
   }
 
   function set(key, next) {
@@ -265,7 +259,9 @@ Column {
   function back() {
     if (saving) return
     errorText = ""
-    if (page !== "") { page = ""; Qt.callLater(function() { root.forceActiveFocus() }) }
+    if (setupStep > 1) setupGo(setupStep - 1)
+    else if (setupStep > 0) return
+    else if (page !== "") { page = ""; Qt.callLater(function() { root.forceActiveFocus() }) }
     else closeRequested()
   }
 
@@ -273,16 +269,13 @@ Column {
     discardKey()
     errorText = ""
     priceError = ""
+    setupStep = 0
     page = pageId || ""
     providerFilter = ""
     providerFilterField.text = ""
-    servers.load(String(value("costT3Servers", "[]")))
+    servers.load(UsageLogic.t3ServersJson(settings))
     lastPricesJson = String(value("costPriceOverrides", "{}"))
     prices.begin(lastPricesJson)
-    // Test results describe the moment they ran; opening Settings again starts without them.
-    ompGatewayLines = []
-    ompStatsLines = []
-    ompStatsVia = UsageLogic.ompLoopbackHost(UsageLogic.ompHost(omp.statsUrl)) ? "ssh" : "tailscale"
   }
 
   function focusFirst() { root.forceActiveFocus() }
@@ -323,9 +316,153 @@ Column {
     if (path !== "") {
       var request = {}
       request[settingKey] = path
-      keyRemover.request = request
-      keyRemover.running = true
+      removeFiles(request)
     }
+  }
+
+  // Deletes private files through management-key.py, one request at a time: starting keyRemover again while
+  // it runs would drop the request. Restore's leftover files (removeStaleKeyFiles) go once these are done.
+  property var keyRemovals: []
+  function removeFiles(request) {
+    keyRemovals = keyRemovals.concat([request])
+    nextKeyRemoval()
+  }
+  function nextKeyRemoval() {
+    if (keyRemover.running) return
+    if (keyRemovals.length === 0) {
+      removeStaleKeyFiles()
+      return
+    }
+    keyRemover.request = keyRemovals[0]
+    keyRemovals = keyRemovals.slice(1)
+    keyRemover.running = true
+  }
+
+  // ---- Sources: entries are saved whole, in place (UsageLogic.sourcesWith).
+  function setSource(entry) { set("sources", UsageLogic.sourcesWith(settings, entry.id, entry)) }
+  function updateSource(entry, key, next) {
+    if (!entry) return
+    var changed = Object.assign({}, entry)
+    changed[key] = next
+    setSource(changed)
+  }
+  // Forgets a source and deletes the private files it named.
+  function removeSource(entry) {
+    if (!entry) return
+    set("sources", UsageLogic.sourcesWith(settings, entry.id, null))
+    var request = {}
+    if (entry.keyFile) request["proxyKey_" + entry.id] = entry.keyFile
+    if (entry.keeperPasswordFile) request["keeperPassword_" + entry.id] = entry.keeperPasswordFile
+    if (Object.keys(request).length > 0) removeFiles(request)
+  }
+  // A source's secret (`field` names where its path is kept), written privately by management-key.py.
+  function saveSourceKey(entry, field, settingKey, secret) {
+    if (!entry) return
+    var keys = {}, previous = {}
+    keys[settingKey] = secret
+    previous[settingKey] = entry[field] || ""
+    var id = entry.id
+    stageKeys(keys, previous, function(paths) {
+      var current = null
+      for (var i = 0; i < root.sourceEntries.length; i++) if (root.sourceEntries[i].id === id) current = root.sourceEntries[i]
+      if (paths[settingKey] && current) root.updateSource(current, field, paths[settingKey])
+    })
+  }
+  function removeSourceKey(entry, field, settingKey) {
+    if (!entry) return
+    var path = entry[field] || ""
+    updateSource(entry, field, "")
+    if (path === "") return
+    var request = {}
+    request[settingKey] = path
+    removeFiles(request)
+  }
+
+  // ---- Other computers: a Test connects, copies the readers and reads once (scripts/computer-check.py);
+  // a computer is added once it answered. One Test runs at a time.
+  property string newComputerHost: ""
+  property string computerTesting: ""
+  property string computerTested: ""
+  property var computerTestResult: ({ ok: false, addable: false, fix: "", lines: [] })
+  property var computerSuggestions: []
+  // Suggestions not added yet.
+  readonly property var freshSuggestions: computerSuggestions.filter(function(entry) {
+    return !computerEntries.some(function(known) { return known.host === entry.host })
+  })
+
+  function clockText(seconds) { return Qt.formatDateTime(new Date(seconds * 1000), "HH:mm") }
+
+  function computerHostProblem(text) {
+    var host = String(text || "").trim()
+    if (host === "") return ""
+    if (!UsageLogic.validDestination(host))
+      return "Enter a name from ~/.ssh/config or user@name: letters, digits, dots, dashes and underscores. Set ports and options in ~/.ssh/config."
+    if (computerEntries.some(function(entry) { return entry.host === host })) return host + " is already added."
+    return ""
+  }
+
+  function testComputer(host) {
+    if (computerProbe.active || !UsageLogic.validDestination(host)) return
+    computerTesting = host
+    computerTested = ""
+    computerProbe.start(["python3", computerCheckPath, "--test", host, "--providers", enabledProviders.join(","),
+      "--omp", omp.local ? "local" : "off"])
+  }
+
+  function addComputer(host) {
+    if (computerHostProblem(host) !== "" || host === "") return
+    setSource({ id: UsageLogic.newSourceId("computer", sourceEntries), kind: "computer", on: true, host: host })
+    newComputerHost = ""
+  }
+
+  // Forgets the computer here and, in the background, deletes Quotatank's readers there. Removals run one
+  // after another: a Process started again while it runs would drop the second.
+  property var computerRemovals: []
+  function removeComputer(entry) {
+    if (!entry) return
+    var changes = { sources: UsageLogic.sourcesWith(settings, entry.id, null) }
+    if (String(value("mainComputer", "")) === entry.id) changes.mainComputer = ""
+    setMany(changes)
+    if (computerTested === entry.host) computerTested = ""
+    computerRemovals = computerRemovals.concat([["python3", computerCheckPath, "--remove", entry.host, "--id", entry.id]])
+    nextComputerRemoval()
+  }
+  function nextComputerRemoval() {
+    if (computerRemover.running || computerRemovals.length === 0) return
+    computerRemover.command = computerRemovals[0]
+    computerRemovals = computerRemovals.slice(1)
+    computerRemover.running = true
+  }
+
+  function computersSummary() { return UsageLogic.computersSummary(settings, lastPayload) }
+
+  Probe {
+    id: computerProbe
+    timeoutMs: UsageLogic.COMPUTER_TEST_SECONDS * 1000
+    onFinished: function(reply) {
+      root.computerTestResult = UsageLogic.computerTestResult(reply, root.computerTesting)
+      root.computerTested = root.computerTesting
+      root.computerTesting = ""
+    }
+  }
+
+  Probe {
+    id: suggestProbe
+    timeoutMs: 10000
+    onFinished: function(reply) {
+      root.computerSuggestions = reply ? UsageLogic.listOrEmpty(reply.suggestions).filter(function(entry) {
+        return entry && UsageLogic.validDestination(entry.host)
+      }) : []
+    }
+  }
+  // SSH config and Tailscale are read each time Sources opens: computers come and go.
+  onPageChanged: if (page === "sources" && !suggestProbe.active) suggestProbe.start(["python3", computerCheckPath, "--suggest"])
+
+  Process {
+    id: computerRemover
+    stdout: SplitParser { onRead: function(data) {} }
+    stderr: SplitParser { splitMarker: "" }
+    onRunningChanged: if (!running) Qt.callLater(root.nextComputerRemoval)
   }
 
   // Forgets one of a provider's extra keys and deletes its private file.
@@ -333,8 +470,7 @@ Column {
     set("extraKeys", UsageLogic.removeExtraKey(value("extraKeys", "{}"), providerId, key.id))
     var request = {}
     request["extraKey_" + providerId + "_" + key.id] = key.file
-    keyRemover.request = request
-    keyRemover.running = true
+    removeFiles(request)
   }
 
   function validSecret(text) {
@@ -394,16 +530,16 @@ Column {
       objectName: "settingsBackButton"
       anchors.left: parent.left
       anchors.verticalCenter: parent.verticalCenter
-      visible: root.page !== ""
-      text: "‹ Settings"
+      visible: root.setupStep > 0 ? root.setupStep > 1 : root.page !== ""
+      text: root.setupStep > 0 ? "‹ Back" : "‹ Settings"
       foreground: root.foreground
       fontFamily: root.fontFamily
       fontSize: Style.font.bodySmall
       horizontalPadding: Style.spacing.sm
       verticalPadding: Style.spacing.xs
       focusable: true
-      Accessible.name: "Back to settings"
-      onClicked: root.back()
+      Accessible.name: root.setupStep > 0 ? "Previous setup step" : "Back to settings"
+      onClicked: root.setupStep > 1 ? root.setupGo(root.setupStep - 1) : root.back()
       onActiveFocusChanged: if (activeFocus) root.revealRequested(backButton)
     }
 
@@ -427,11 +563,11 @@ Column {
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
       iconText: "󰅖"
-      tooltipText: "Close settings"
+      tooltipText: root.setupStep > 0 ? "Skip setup" : "Close settings"
       foreground: root.foreground
       fontFamily: root.fontFamily
       focusable: true
-      onClicked: root.closeRequested()
+      onClicked: root.setupStep > 0 ? root.finishSetup() : root.closeRequested()
       onActiveFocusChanged: if (activeFocus) root.revealRequested(closeButton)
     }
   }
@@ -444,6 +580,12 @@ Column {
     color: root.urgent
     font.family: root.fontFamily
     font.pixelSize: Style.font.caption
+  }
+
+  Hint {
+    objectName: "setupIntro"
+    visible: root.setupStep > 0
+    text: root.setupStep > 0 ? root.setupIntros[root.setupStep - 1] : ""
   }
 
   // ---- index
@@ -466,79 +608,385 @@ Column {
     Hint { topPadding: Style.spacing.lg; text: "Changes apply as you make them." }
   }
 
+  // ---- Sources: this computer, then the entries of the `sources` setting.
+  Column {
+    objectName: "sourcesPage"
+    visible: root.page === "sources"
+    width: parent.width
+    spacing: Style.spacing.lg
+
+    Column {
+      objectName: "sourceThisComputer"
+      width: parent.width
+      spacing: Style.spacing.xxs
+      Label { text: "This computer"; font.bold: true }
+      StatusLine { objectName: "sourceThisComputerOmp"; line: root.ompLocalLine }
+      Hint { text: "Its sign-ins, API keys and agent history. Providers lists what was found here." }
+    }
+    Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
+
+    SettingsSection {
+      id: computersSection
+      objectName: "computersSection"
+      width: parent.width
+      title: "Other computers"
+      summary: root.computersSummary()
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onRevealRequested: function(item) { root.revealRequested(item) }
+
+      Hint {
+        text: "Read the sign-ins, limits and agent history of another computer you reach over SSH with a key, "
+          + "such as the desktop you work on from a laptop. Quotatank copies its readers to ~/.cache/quotatank there and changes nothing else."
+      }
+      Repeater {
+        model: root.computerEntries
+        delegate: Column {
+          id: computerRow
+          required property var modelData
+          required property int index
+          // Not `state`: that is Item's own property, and Qt 6.12's qmllint refuses the override.
+          readonly property var answer: UsageLogic.computerState(root.lastPayload, modelData.id)
+          width: parent.width
+          spacing: Style.spacing.sm
+          SwitchRow {
+            objectName: "computerOn-" + computerRow.index
+            label: computerRow.modelData.host
+            checked: computerRow.modelData.on
+            onToggled: root.updateSource(computerRow.modelData, "on", !computerRow.modelData.on)
+          }
+          StatusLine {
+            objectName: "computerStatus-" + computerRow.index
+            line: UsageLogic.computerLine(computerRow.modelData, computerRow.answer, root.clockText)
+          }
+          CommandBlock {
+            objectName: "computerFix-" + computerRow.index
+            visible: computerRow.modelData.on && !!computerRow.answer && computerRow.answer.status !== "ok"
+              && /^ssh/.test(String(computerRow.answer.fix || ""))
+            command: computerRow.answer ? String(computerRow.answer.fix || "") : ""
+          }
+          TestBlock {
+            objectName: "computerTest-" + computerRow.index
+            running: root.computerTesting === computerRow.modelData.host && computerProbe.active
+            waitingText: "Connecting to " + computerRow.modelData.host + "…"
+            lines: root.computerTested === computerRow.modelData.host ? root.computerTestResult.lines : []
+            onRequested: root.testComputer(computerRow.modelData.host)
+          }
+          Ui.Button {
+            objectName: "computerRemove-" + computerRow.index
+            text: "Remove " + computerRow.modelData.host
+            foreground: root.urgent
+            fontFamily: root.fontFamily
+            focusable: true
+            onClicked: root.removeComputer(computerRow.modelData)
+          }
+          Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
+        }
+      }
+
+      Column {
+        objectName: "addComputer"
+        // Every kind of source counts toward the limit parseSources reads back.
+        visible: root.sourceEntries.length < UsageLogic.SOURCE_LIMIT
+        width: parent.width
+        spacing: Style.spacing.sm
+        Label { text: "Add a computer"; font.bold: true }
+        TextRow {
+          id: computerHostField
+          objectName: "computerHost"
+          label: "SSH destination"
+          placeholder: "devbox or you@devbox"
+          maximumLength: 255
+          source: root.newComputerHost
+          validate: function(text) { return root.computerHostProblem(text) }
+          onApplied: function(text) { root.newComputerHost = text }
+        }
+        Flow {
+          objectName: "computerSuggestions"
+          visible: root.freshSuggestions.length > 0
+          width: parent.width
+          spacing: Style.spacing.sm
+          Repeater {
+            model: root.freshSuggestions
+            delegate: Ui.Button {
+              required property var modelData
+              objectName: "computerSuggestion-" + modelData.host
+              text: modelData.host
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              focusable: true
+              tooltipText: modelData.via === "tailscale" ? "On your tailnet" : "In ~/.ssh/config"
+              onClicked: { root.newComputerHost = modelData.host; root.testComputer(modelData.host) }
+            }
+          }
+        }
+        TestBlock {
+          objectName: "computerAddTest"
+          ready: root.newComputerHost !== "" && root.computerHostProblem(root.newComputerHost) === ""
+          blockedReason: root.newComputerHost === "" ? "Enter the computer's SSH destination, or pick one above, to test it."
+            : root.computerHostProblem(root.newComputerHost)
+          running: root.computerTesting === root.newComputerHost && computerProbe.active
+          waitingText: "Connecting to " + root.newComputerHost + " and copying Quotatank's readers…"
+          lines: root.computerTested !== "" && root.computerTested === root.newComputerHost ? root.computerTestResult.lines : []
+          onRequested: root.testComputer(root.newComputerHost)
+        }
+        CommandBlock {
+          objectName: "computerAddFix"
+          visible: root.computerTested === root.newComputerHost && !computerProbe.active && /^ssh/.test(root.computerTestResult.fix)
+          command: root.computerTestResult.fix
+        }
+        Ui.Button {
+          objectName: "computerAdd"
+          visible: root.computerTested !== "" && root.computerTested === root.newComputerHost && !computerProbe.active
+            && root.computerTestResult.addable
+          text: root.computerTestResult.ok ? "Add " + root.newComputerHost : "Add " + root.newComputerHost + " anyway"
+          bordered: true
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          focusable: true
+          onClicked: root.addComputer(root.newComputerHost)
+        }
+      }
+
+      SelectRow {
+        objectName: "mainComputer"
+        visible: root.computerEntries.some(function(entry) { return entry.on })
+        label: "Main computer"
+        options: UsageLogic.mainComputerOptions(root.settings)
+        value: String(root.value("mainComputer", ""))
+        onChanged: function(next) { root.set("mainComputer", next) }
+      }
+      Hint {
+        visible: root.computerEntries.some(function(entry) { return entry.on })
+        text: "Sign in and Install open a terminal on the main computer. Use switches Omarchy logins on this computer only."
+      }
+    }
+    Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
+
+    SettingsSection {
+      id: proxySection
+      objectName: "proxySection"
+      width: parent.width
+      title: root.proxyName
+      summary: !root.proxyEntry ? "Not set up" : !root.proxyEntry.on ? "Off" : root.proxyEntry.url
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onRevealRequested: function(item) { root.revealRequested(item) }
+
+      Hint {
+        text: "Reads the Claude, Codex, Kimi and Antigravity accounts a " + root.proxyName + " server holds, beside this "
+          + "computer's and the other computers'. An account this computer already read fine is not asked for again."
+      }
+      Ui.Button {
+        objectName: "addProxy"
+        visible: !root.proxyEntry && root.sourceEntries.length < UsageLogic.SOURCE_LIMIT
+        text: "Add a proxy"
+        bordered: true
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        focusable: true
+        onClicked: root.setSource({ id: UsageLogic.newSourceId("proxy", root.sourceEntries), kind: "proxy", on: true,
+          url: "http://127.0.0.1:8317", keyFile: "", keeperUrl: "", keeperPasswordFile: "" })
+      }
+      Column {
+        visible: !!root.proxyEntry
+        width: parent.width
+        spacing: Style.spacing.lg
+
+        SwitchRow {
+          objectName: "proxyOn"
+          label: "Read accounts from " + root.proxyName
+          checked: !!root.proxyEntry && root.proxyEntry.on
+          onToggled: root.updateSource(root.proxyEntry, "on", !checked)
+        }
+        StatusLine {
+          objectName: "proxyStatus"
+          line: UsageLogic.computerLine(root.proxyEntry, UsageLogic.proxyState(root.lastPayload, root.proxyEntry ? root.proxyEntry.id : ""),
+            root.clockText)
+        }
+        TextRow {
+          id: proxyUrlField
+          objectName: "proxyUrl"
+          label: "Server URL"
+          placeholder: "http://127.0.0.1:8317"
+          source: root.proxyEntry ? root.proxyEntry.url : ""
+          validate: function(text) {
+            return UsageLogic.secretServerUrlProblem(text, "Enter an HTTP or HTTPS server URL without credentials, query, or fragment.")
+          }
+          onApplied: function(text) { root.updateSource(root.proxyEntry, "url", text) }
+        }
+        KeyRow {
+          id: managementCredential
+          objectName: "managementKeyRow"
+          label: "Management API key"
+          settingKey: root.proxyEntry ? "proxyKey_" + root.proxyEntry.id : ""
+          savedPath: root.proxyEntry ? root.proxyEntry.keyFile : ""
+          hint: "The key is saved privately on this device and lets the widget list the proxy's providers and accounts."
+          onSaveKey: function(secret) { root.saveSourceKey(root.proxyEntry, "keyFile", settingKey, secret) }
+          onRemoveKey: root.removeSourceKey(root.proxyEntry, "keyFile", settingKey)
+        }
+        Hint { text: "CPA Usage Keeper tells which account served the latest request. Without it, every account still gets its own card." }
+        TextRow {
+          id: keeperUrlField
+          objectName: "keeperUrl"
+          label: "CPA Usage Keeper URL"
+          placeholder: "https://proxy.example.com/keeper"
+          source: root.proxyEntry ? root.proxyEntry.keeperUrl : ""
+          validate: function(text) {
+            return text === "" ? "" : UsageLogic.secretServerUrlProblem(text, "Enter the Keeper HTTP or HTTPS URL, or leave it empty.")
+          }
+          onApplied: function(text) { root.updateSource(root.proxyEntry, "keeperUrl", text) }
+        }
+        KeyRow {
+          id: keeperCredential
+          objectName: "keeperPasswordRow"
+          label: "Keeper login password"
+          settingKey: root.proxyEntry ? "keeperPassword_" + root.proxyEntry.id : ""
+          savedPath: root.proxyEntry ? root.proxyEntry.keeperPasswordFile : ""
+          onSaveKey: function(secret) { root.saveSourceKey(root.proxyEntry, "keeperPasswordFile", settingKey, secret) }
+          onRemoveKey: root.removeSourceKey(root.proxyEntry, "keeperPasswordFile", settingKey)
+        }
+        Ui.Button {
+          objectName: "removeProxy"
+          text: "Remove proxy"
+          foreground: root.urgent
+          fontFamily: root.fontFamily
+          focusable: true
+          onClicked: root.removeSource(root.proxyEntry)
+        }
+      }
+    }
+
+    SettingsSection {
+      id: serverSection
+      objectName: "remoteServersSection"
+      width: parent.width
+      title: "T3 Code servers"
+      summary: servers.count ? servers.count + (servers.count === 1 ? " server" : " servers") : "None"
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onRevealRequested: function(item) { root.revealRequested(item) }
+      Hint { text: "Costs from other computers running T3 Code (costs only). A server is saved once it has a name and a URL." }
+      Repeater {
+        id: serverRepeater
+        model: servers
+        delegate: Column {
+          id: serverRow
+          required property int index
+          required property string serverId
+          required property string name
+          required property string url
+          required property string tokenFile
+          required property bool included
+          width: parent.width
+          spacing: Style.spacing.md
+          Row {
+            width: parent.width
+            Label { width: parent.width - remoteToggle.width; text: serverRow.name || "New server"; anchors.verticalCenter: parent.verticalCenter; font.bold: true }
+            Toggle {
+              id: remoteToggle
+              objectName: "t3Included-" + serverRow.index
+              checked: serverRow.included
+              Accessible.name: "Include " + (serverRow.name || "this server")
+              onToggled: servers.update(serverRow.index, "included", !checked)
+            }
+          }
+          TextRow {
+            objectName: "t3Name-" + serverRow.index
+            label: "Name"
+            placeholder: "Office desktop"
+            source: serverRow.name
+            maximumLength: 80
+            validate: function(text) { return text === "" || /[\x00-\x1f]/.test(text) ? "Give the server a name." : "" }
+            onApplied: function(text) { servers.update(serverRow.index, "name", text) }
+          }
+          TextRow {
+            objectName: "t3Url-" + serverRow.index
+            label: "URL"
+            placeholder: "https://t3.example.com"
+            source: serverRow.url
+            maximumLength: 4096
+            validate: function(text) {
+              return UsageLogic.secretServerUrlProblem(text, "Enter an HTTP or HTTPS URL without credentials, query, or fragment.")
+            }
+            onApplied: function(text) { servers.update(serverRow.index, "url", text) }
+          }
+          KeyRow {
+            objectName: "t3Credential-" + serverRow.index
+            label: "Connection token"
+            settingKey: "t3Token_" + serverRow.serverId
+            savedPath: serverRow.tokenFile
+            blockedReason: serverRow.name.trim() === "" || serverRow.url.trim() === "" ? "Enter a name and URL before saving a token." : ""
+            onSaveKey: function(secret) {
+              var keys = {}, previous = {}
+              keys["t3Token_" + serverRow.serverId] = secret
+              previous["t3Token_" + serverRow.serverId] = serverRow.tokenFile
+              var index = serverRow.index
+              root.stageKeys(keys, previous, function(paths) {
+                var path = paths["t3Token_" + servers.get(index).serverId]
+                if (path) servers.update(index, "tokenFile", path)
+              })
+            }
+            onRemoveKey: {
+              var path = serverRow.tokenFile
+              servers.update(serverRow.index, "tokenFile", "")
+              if (path !== "") {
+                var request = {}
+                request["t3Token_" + serverRow.serverId] = path
+                root.removeFiles(request)
+              }
+            }
+          }
+          Ui.Button {
+            text: "Remove server"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            focusable: true
+            onClicked: servers.removeServer(serverRow.index)
+            onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+          }
+          Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
+        }
+      }
+      Ui.Button {
+        objectName: "addT3Server"
+        text: "Add T3 server"
+        enabled: servers.count < 4 && root.sourceEntries.length < UsageLogic.SOURCE_LIMIT
+        bordered: true
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        focusable: true
+        onClicked: servers.addServer()
+        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
+      }
+    }
+  }
+
   // ---- Providers
   Column {
     visible: root.page === "providers"
     width: parent.width
     spacing: Style.spacing.lg
 
-    SelectRow {
-      id: sourceControl
-      objectName: "usageSourceControl"
-      label: "Source"
-      options: [{ value: "direct", label: "Local sign-ins" }, { value: "cliproxy", label: root.proxyName }]
-      value: String(root.value("usageSource", "direct"))
-      onChanged: function(next) { root.set("usageSource", next) }
+    Hint {
+      objectName: "providersSourceHint"
+      text: "Limits come from the CLIs, apps, and IDEs you are signed in to, API keys saved here or set in the environment, "
+        + "and the other computers and proxy under Sources."
     }
-    Hint { text: root.proxyMode ? "Limits come from every account on your " + root.proxyName + " server." : "Limits come from the CLIs, apps, and IDEs you are signed in to on this computer, plus API keys saved here or set in the environment." }
-
-    // Like the proxy's settings below, the source ends with a rule before the providers.
-    Ui.PanelSeparator { visible: !root.proxyMode; width: parent.width; foreground: root.foreground }
-
-    Column {
-      visible: root.proxyMode
-      width: parent.width
-      spacing: Style.spacing.lg
-
-      TextRow {
-        id: proxyUrlField
-        objectName: "cliproxyUrl"
-        label: root.proxyName + " server URL"
-        placeholder: "http://127.0.0.1:8317"
-        source: String(root.value("cliproxyUrl", "http://127.0.0.1:8317"))
-        validate: function(text) {
-          return UsageLogic.secretServerUrlProblem(text, "Enter an HTTP or HTTPS server URL without credentials, query, or fragment.")
-        }
-        onApplied: function(text) { root.set("cliproxyUrl", text) }
-      }
-      KeyRow {
-        id: managementCredential
-        objectName: "managementKeyRow"
-        label: "Management API key"
-        settingKey: "cliproxyKeyFile"
-        hint: "The key is saved privately on this device and lets the widget list the proxy's providers and accounts."
-      }
-      Hint { text: "CPA Usage Keeper tells which account served the latest request. Without it, every account still gets its own card." }
-      TextRow {
-        id: keeperUrlField
-        objectName: "costKeeperUrl"
-        label: "CPA Usage Keeper URL"
-        placeholder: "https://proxy.example.com/keeper"
-        source: String(root.value("costKeeperUrl", ""))
-        validate: function(text) {
-          return text === "" ? "" : UsageLogic.secretServerUrlProblem(text, "Enter the Keeper HTTP or HTTPS URL, or leave it empty.")
-        }
-        onApplied: function(text) { root.set("costKeeperUrl", text) }
-      }
-      KeyRow {
-        id: keeperCredential
-        objectName: "keeperPasswordRow"
-        label: "Keeper login password"
-        settingKey: "costKeeperPasswordFile"
-      }
-      Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
-    }
+    Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
 
     // One click to monitor what is already set up here; Ignore stops suggesting it.
     Column {
       objectName: "foundProviders"
-      visible: !root.proxyMode && root.sections.found.length > 0
+      visible: root.sections.found.length > 0
       width: parent.width
       spacing: Style.spacing.md
 
-      Label { text: "Found on this computer"; font.bold: true }
+      Label { text: "Found"; font.bold: true }
       Repeater {
-        model: root.proxyMode ? [] : root.sections.found
+        model: root.sections.found
         delegate: Row {
           id: foundRow
           required property var modelData
@@ -589,12 +1037,12 @@ Column {
       width: parent.width
       leftPadding: root.providerCardInset
       rightPadding: root.providerCardInset
-      Label { width: parent.width - parent.leftPadding - parent.rightPadding - monitorHeading.width - barHeading.width; text: root.proxyMode ? "Provider" : "Monitored"; font.bold: true }
-      Label { id: monitorHeading; visible: !root.proxyMode; width: visible ? Style.space(82) : 0; text: "Monitor"; horizontalAlignment: Text.AlignHCenter }
+      Label { width: parent.width - parent.leftPadding - parent.rightPadding - monitorHeading.width - barHeading.width; text: "Monitored"; font.bold: true }
+      Label { id: monitorHeading; width: Style.space(82); text: "Monitor"; horizontalAlignment: Text.AlignHCenter }
       Label { id: barHeading; visible: root.percentageDisplay; width: visible ? Style.space(82) : 0; text: "Menu bar"; horizontalAlignment: Text.AlignHCenter }
     }
     Hint {
-      visible: !root.proxyMode && root.providerRows.length === 0
+      visible: root.providerRows.length === 0
       text: "Nothing monitored is set up yet. Sign in to a provider's CLI or app, or turn one on below."
     }
 
@@ -619,11 +1067,11 @@ Column {
         required property string name
         required property bool money
         required property int index
-        readonly property bool on: root.proxyMode || UsageLogic.contains(root.enabledProviders, providerId)
-        readonly property var entry: root.proxyMode ? null : UsageLogic.localProvider(providerId)
+        readonly property bool on: UsageLogic.contains(root.enabledProviders, providerId)
+        readonly property var entry: UsageLogic.localProvider(providerId)
         readonly property bool hasKey: UsageLogic.keySaved(root.settings, providerId)
         readonly property var reading: UsageLogic.readingFor(root.shownReadings, providerId)
-        readonly property var setup: reading ? UsageLogic.setupAction(entry, reading, root.shownInstalled) : UsageLogic.setupAction(null, null, null)
+        readonly property var setup: reading ? UsageLogic.setupActionFor(entry, reading, root.lastPayload, root.mainComputer) : UsageLogic.setupAction(null, null, null)
         readonly property var status: entry ? UsageLogic.providerStatus(entry, reading, hasKey, root.usageLoading,
           setup.kind === "signin" || setup.kind === "install") : null
         // A provider that also has a sign-in of its own only needs the editor while that sign-in is
@@ -632,7 +1080,7 @@ Column {
           && (entry.auth === "key" || hasKey || !reading || reading.status !== "ok")
         readonly property bool dragging: providerList.draggingId === providerId
         // This provider's accounts in the last reading (Omarchy sign-ins, extra keys, omp, a proxy).
-        readonly property var accountReading: root.proxyMode ? UsageLogic.readingFor(root.proxyProviders, providerId) : reading
+        readonly property var accountReading: reading
         readonly property var accountList: accountReading ? UsageLogic.listOrEmpty(accountReading.accounts) : []
         readonly property int accountCount: accountList.length
         readonly property var hiddenIds: UsageLogic.parseHiddenAccounts(root.value("hiddenAccounts", "{}"))[providerId] || []
@@ -748,7 +1196,6 @@ Column {
             }
             Toggle {
               id: monitorSwitch
-              visible: !root.proxyMode
               width: visible ? Style.space(82) : 0
               anchors.top: parent.top
               anchors.topMargin: (providerHeader.band - implicitHeight) / 2
@@ -909,7 +1356,7 @@ Column {
     }
     Hint {
       visible: root.providerRows.length > 0
-      text: root.proxyMode ? "Every provider on the server is monitored. Choose which ones get a menu bar chip, and open Customize to read one differently." : "Monitor reads a provider and shows it in Limits. Menu bar adds its chip to the bar. Customize overrides the defaults for one provider."
+      text: "Monitor reads a provider and shows it in Limits. Menu bar adds its chip to the bar. Customize overrides the defaults for one provider."
     }
 
     // Monitored sign-ins that are not signed in: they appear on their own once they are, so they
@@ -917,7 +1364,7 @@ Column {
     SettingsSection {
       id: waitingSection
       objectName: "waitingProviders"
-      visible: !root.proxyMode && root.sections.waiting.length > 0
+      visible: root.sections.waiting.length > 0
       width: parent.width
       title: "Waiting for a sign-in"
       summary: String(root.sections.waiting.length)
@@ -927,11 +1374,11 @@ Column {
 
       Hint { text: "Monitored, and shown in Limits as soon as you sign in. Turn off the ones you do not use." }
       Repeater {
-        model: root.proxyMode ? [] : root.sections.waiting
+        model: root.sections.waiting
         delegate: ProviderOption {
           id: waitingOption
-          readonly property var setup: UsageLogic.setupAction(waitingOption.modelData,
-            UsageLogic.readingFor(root.shownReadings, waitingOption.modelData.id), root.shownInstalled)
+          readonly property var setup: UsageLogic.setupActionFor(waitingOption.modelData,
+            UsageLogic.readingFor(root.shownReadings, waitingOption.modelData.id), root.lastPayload, root.mainComputer)
           hint: UsageLogic.providerStatus(waitingOption.modelData,
             UsageLogic.readingFor(root.shownReadings, waitingOption.modelData.id), false, root.usageLoading,
             setup.kind === "signin" || setup.kind === "install").text
@@ -943,7 +1390,7 @@ Column {
     SettingsSection {
       id: moreSection
       objectName: "moreProviders"
-      visible: !root.proxyMode && root.moreCount > 0
+      visible: root.moreCount > 0
       width: parent.width
       title: "More providers"
       summary: String(root.moreCount)
@@ -966,12 +1413,12 @@ Column {
       }
       Label { visible: root.moreSignIns.length > 0; text: "Sign-ins"; font.bold: true }
       Repeater {
-        model: root.proxyMode ? [] : root.moreSignIns
+        model: root.moreSignIns
         delegate: ProviderOption {}
       }
       Label { visible: root.moreKeys.length > 0; text: "API keys"; font.bold: true; topPadding: Style.spacing.md }
       Repeater {
-        model: root.proxyMode ? [] : root.moreKeys
+        model: root.moreKeys
         delegate: ProviderOption {}
       }
       Hint {
@@ -980,14 +1427,12 @@ Column {
       }
     }
 
-    // omp (Oh My Pi) signs in to accounts of its own. Read here, they join the providers above; through
-    // omp's auth gateway, so do the accounts of omp on another computer. It comes after the providers it
-    // adds to, so Monitored opens the page.
-    Ui.PanelSeparator { visible: !root.proxyMode; width: parent.width; foreground: root.foreground }
+    // omp (Oh My Pi) signs in to accounts of its own. Read here, they join the providers above. It comes
+    // after the providers it adds to, so Monitored opens the page.
+    Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
     Column {
       id: ompSource
       objectName: "ompSource"
-      visible: !root.proxyMode
       width: parent.width
       spacing: Style.spacing.md
 
@@ -1008,60 +1453,12 @@ Column {
         objectName: "ompLocalHint"
         readonly property string failure: root.ompLocalLine.tone === "error" ? UsageLogic.ompLocalMessage(root.ompStatus) : ""
         text: root.ompFound === false && root.omp.local
-          ? "Install omp to add the accounts it signs in to, or read omp on another computer below."
+          ? "Install omp to add the accounts it signs in to."
           : failure !== "" ? failure
           : root.omp.local && root.ompStatus && root.ompStatus.local === "unused"
           ? "Once you sign in to an account in omp, its accounts join the providers above. Until then Quotatank does not run omp."
           : "Adds the accounts omp signs in to, with their limits, from omp usage on this computer. An account you also use here shows once."
         color: failure !== "" ? root.urgent : Qt.darker(root.foreground, 1.5)
-      }
-
-      SettingsSection {
-        id: ompGatewaySection
-        objectName: "ompGatewaySection"
-        width: parent.width
-        // Under the "omp" heading the name needs no repeating, which leaves the summary room.
-        title: "On another computer (limits)"
-        summary: UsageLogic.ompGatewaySummary(root.settings, root.ompStatus)
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        onRevealRequested: function(item) { root.revealRequested(item) }
-
-        Hint { text: "Reads the limits of the accounts omp uses on another computer, through omp's auth gateway. Set it up only if you already run the gateway there; without it, limits come from this computer." }
-        WhereLabel { text: "On the other computer" }
-        Repeater {
-          model: UsageLogic.ompGatewayRecipe()
-          delegate: CommandBlock {
-            required property var modelData
-            required property int index
-            objectName: "ompGatewayCommand-" + index
-            command: modelData.command
-          }
-        }
-        TextRow {
-          objectName: "ompGatewayUrl"
-          label: "Gateway URL"
-          placeholder: "http://100.x.y.z:" + UsageLogic.OMP_GATEWAY_PORT
-          source: root.omp.gatewayUrl
-          validate: function(text) { return UsageLogic.ompServerUrlProblem(text, true) }
-          onApplied: function(text) { root.set("ompGatewayUrl", text) }
-        }
-        KeyRow {
-          objectName: "ompGatewayToken"
-          label: "Gateway token"
-          settingKey: "ompGatewayKeyFile"
-          hint: "This token can also send model requests. Quotatank only asks the gateway for /v1/usage, sends the token over plain HTTP only to this computer or over Tailscale, keeps it in a private file, and never shows it again."
-        }
-        TestBlock {
-          objectName: "ompGatewayTest"
-          ready: root.omp.gatewayUrl !== "" && root.omp.gatewayKeyFile !== "" && UsageLogic.ompServerUrlProblem(root.omp.gatewayUrl, true) === ""
-          blockedReason: root.omp.gatewayUrl === "" ? "Enter the gateway URL and save its token to test it."
-            : root.omp.gatewayKeyFile === "" ? "Save the gateway token to test it." : ""
-          running: gatewayProbe.active
-          waitingText: "Asking the gateway" + UsageLogic.ompOnHost(root.omp.gatewayUrl) + "…"
-          lines: root.ompGatewayLines
-          onRequested: root.testOmpGateway()
-        }
       }
     }
   }
@@ -1361,243 +1758,6 @@ Column {
     Hint { text: "Include sessions recorded on this computer; omp's sessions count for the providers turned on above. Costs are an estimate of API value, not subscription spend." }
 
     SettingsSection {
-      id: serverSection
-      objectName: "remoteServersSection"
-      width: parent.width
-      title: "Remote T3 servers"
-      summary: servers.count ? servers.count + (servers.count === 1 ? " server" : " servers") : "None"
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      onRevealRequested: function(item) { root.revealRequested(item) }
-      Hint { text: "Include history from other computers running T3 Code. A server is saved once it has a name and a URL." }
-      Label { visible: servers.loadError !== ""; text: servers.loadError; color: root.urgent }
-      Ui.Button {
-        visible: servers.loadError !== ""
-        text: "Remove invalid server settings"
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        focusable: true
-        onClicked: { servers.clear(); servers.loadError = ""; root.set("costT3Servers", "[]") }
-      }
-      Repeater {
-        id: serverRepeater
-        model: servers
-        delegate: Column {
-          id: serverRow
-          required property int index
-          required property string serverId
-          required property string name
-          required property string url
-          required property string tokenFile
-          required property bool included
-          width: parent.width
-          spacing: Style.spacing.md
-          Row {
-            width: parent.width
-            Label { width: parent.width - remoteToggle.width; text: serverRow.name || "New server"; anchors.verticalCenter: parent.verticalCenter; font.bold: true }
-            Toggle {
-              id: remoteToggle
-              objectName: "t3Included-" + serverRow.index
-              checked: serverRow.included
-              Accessible.name: "Include " + (serverRow.name || "this server")
-              onToggled: servers.update(serverRow.index, "included", !checked)
-            }
-          }
-          TextRow {
-            objectName: "t3Name-" + serverRow.index
-            label: "Name"
-            placeholder: "Office desktop"
-            source: serverRow.name
-            maximumLength: 80
-            validate: function(text) { return text === "" || /[\x00-\x1f]/.test(text) ? "Give the server a name." : "" }
-            onApplied: function(text) { servers.update(serverRow.index, "name", text) }
-          }
-          TextRow {
-            objectName: "t3Url-" + serverRow.index
-            label: "URL"
-            placeholder: "https://t3.example.com"
-            source: serverRow.url
-            maximumLength: 4096
-            validate: function(text) {
-              return UsageLogic.secretServerUrlProblem(text, "Enter an HTTP or HTTPS URL without credentials, query, or fragment.")
-            }
-            onApplied: function(text) { servers.update(serverRow.index, "url", text) }
-          }
-          KeyRow {
-            objectName: "t3Credential-" + serverRow.index
-            label: "Connection token"
-            settingKey: "t3Token_" + serverRow.serverId
-            savedPath: serverRow.tokenFile
-            blockedReason: serverRow.name.trim() === "" || serverRow.url.trim() === "" ? "Enter a name and URL before saving a token." : ""
-            onSaveKey: function(secret) {
-              var keys = {}, previous = {}
-              keys["t3Token_" + serverRow.serverId] = secret
-              previous["t3Token_" + serverRow.serverId] = serverRow.tokenFile
-              var index = serverRow.index
-              root.stageKeys(keys, previous, function(paths) {
-                var path = paths["t3Token_" + servers.get(index).serverId]
-                if (path) servers.update(index, "tokenFile", path)
-              })
-            }
-            onRemoveKey: {
-              var path = serverRow.tokenFile
-              servers.update(serverRow.index, "tokenFile", "")
-              if (path !== "") {
-                var request = {}
-                request["t3Token_" + serverRow.serverId] = path
-                keyRemover.request = request
-                keyRemover.running = true
-              }
-            }
-          }
-          Ui.Button {
-            text: "Remove server"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            focusable: true
-            onClicked: servers.removeServer(serverRow.index)
-            onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-          }
-          Ui.PanelSeparator { width: parent.width; foreground: root.foreground }
-        }
-      }
-      Ui.Button {
-        objectName: "addT3Server"
-        text: "Add T3 server"
-        enabled: servers.count < 4 && servers.loadError === ""
-        bordered: true
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        focusable: true
-        onClicked: servers.addServer()
-        onActiveFocusChanged: if (activeFocus) root.revealRequested(this)
-      }
-    }
-
-    // omp stats, omp's own dashboard, on another computer: its costs and live activity, never credentials.
-    SettingsSection {
-      id: ompStatsSection
-      objectName: "ompStatsSection"
-      width: parent.width
-      title: "omp on another computer"
-      summary: UsageLogic.ompStatsSummary(root.settings, root.ompRemoteSource, root.ompLiveState)
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      onRevealRequested: function(item) { root.revealRequested(item) }
-
-      Hint { text: "Costs and live activity from omp's dashboard, omp stats, on another computer. Quotatank reads only its statistics and live feed: it never sees credentials and cannot spend quota." }
-      Item {
-        width: parent.width
-        implicitHeight: Math.max(viaLabel.implicitHeight, viaGroup.implicitHeight)
-        height: implicitHeight
-        Label {
-          id: viaLabel
-          width: parent.width - viaGroup.width - Style.spacing.md
-          anchors.verticalCenter: parent.verticalCenter
-          text: "How to reach it"
-        }
-        Ui.ButtonGroup {
-          id: viaGroup
-          objectName: "ompStatsVia"
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          spacing: Style.spacing.sm
-          options: [{ value: "tailscale", label: "Tailscale" }, { value: "ssh", label: "SSH tunnel" }]
-          value: root.ompStatsVia
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          fontSize: Style.font.caption
-          Accessible.name: "How to reach omp stats: " + (root.ompStatsVia === "ssh" ? "SSH tunnel" : "Tailscale")
-          onChanged: function(next) { root.ompStatsVia = next }
-          onActiveFocusChanged: if (activeFocus) root.revealRequested(viaGroup)
-        }
-      }
-      Column {
-        id: viaSteps
-        objectName: "ompStatsSteps"
-        width: parent.width
-        spacing: Style.spacing.sm
-        // Another way's commands fade in, so the switch is seen.
-        Connections {
-          target: root
-          function onOmpStatsViaChanged() { viaFade.restart() }
-        }
-        OpacityAnimator { id: viaFade; target: viaSteps; from: 0; to: 1; duration: root.microMs; easing.type: Easing.OutCubic }
-        Repeater {
-          model: root.ompStatsRecipe.steps
-          delegate: Column {
-            id: viaStep
-            required property var modelData
-            required property int index
-            width: viaSteps.width
-            spacing: Style.spacing.xs
-            WhereLabel { text: viaStep.modelData.where === "here" ? "On this computer" : "On the other computer" }
-            CommandBlock { objectName: "ompStatsCommand-" + viaStep.index; command: viaStep.modelData.command }
-          }
-        }
-        Hint {
-          text: root.ompStatsVia === "ssh" ? "Put that computer's SSH name in place of other-computer, then enter " + root.ompStatsRecipe.url + " below."
-            : "Then enter that computer's Tailscale name below."
-        }
-      }
-      UsageDisclosure {
-        id: ompUnitToggle
-        objectName: "ompStatsUnitToggle"
-        width: parent.width
-        text: root.ompStatsVia === "ssh" ? "Start both with the computers" : "Start it with the computer"
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        onActiveFocusChanged: if (activeFocus) root.revealRequested(ompUnitToggle)
-      }
-      Column {
-        id: ompUnits
-        objectName: "ompStatsUnits"
-        visible: ompUnitToggle.checked
-        width: parent.width
-        spacing: Style.spacing.md
-        Repeater {
-          model: ompUnitToggle.checked ? root.ompStatsRecipe.units : []
-          delegate: Column {
-            id: unitStep
-            required property var modelData
-            required property int index
-            width: ompUnits.width
-            spacing: Style.spacing.xs
-            WhereLabel { text: (unitStep.modelData.where === "here" ? "On this computer" : "On the other computer") + ", save this unit" }
-            CommandBlock { objectName: "ompStatsUnit-" + unitStep.index; command: unitStep.modelData.text }
-            WhereLabel { text: "Then start it, now and at every login" }
-            CommandBlock { objectName: "ompStatsEnable-" + unitStep.index; command: unitStep.modelData.enable }
-          }
-        }
-        Hint { text: "Units find omp through your login shell's PATH. If one does not start, put the path that command -v omp prints in place of omp." }
-      }
-      Warning {
-        objectName: "ompStatsWarning"
-        text: "The dashboard also serves your conversations. Keep it on Tailscale or behind an SSH tunnel, never on an open network."
-      }
-      TextRow {
-        objectName: "ompStatsUrl"
-        label: "Dashboard URL"
-        placeholder: root.ompStatsRecipe.url
-        source: root.omp.statsUrl
-        validate: function(text) { return UsageLogic.ompServerUrlProblem(text) }
-        onApplied: function(text) { root.set("ompStatsUrl", text) }
-      }
-      TestBlock {
-        objectName: "ompStatsTest"
-        ready: root.omp.statsUrl !== "" && UsageLogic.ompServerUrlProblem(root.omp.statsUrl) === ""
-        blockedReason: root.omp.statsUrl === "" ? "Enter the dashboard URL to test it." : ""
-        running: statsProbe.active
-        waitingText: "Asking omp stats" + UsageLogic.ompOnHost(root.omp.statsUrl) + "…"
-        lines: root.ompStatsLines
-        // The live feed follows the saved URL; its line keeps up with it after the test.
-        liveLine: root.ompStatsLines.length > 0 && root.ompStatsLines[0].tone === "ok"
-          ? UsageLogic.ompLiveFeedLine(root.ompLiveState, root.ompActivity ? root.ompActivity.message : "") : null
-        onRequested: root.testOmpStats()
-      }
-    }
-
-    SettingsSection {
       id: priceSection
       objectName: "customPricesSection"
       width: parent.width
@@ -1657,6 +1817,23 @@ Column {
       onApplied: function(minutes) { root.set("refreshIntervalSec", Math.round(minutes * 60)) }
     }
     Hint { text: "How often limits are read. Refresh any time with R or the refresh button." }
+
+    Column {
+      width: parent.width
+      spacing: Style.spacing.sm
+      Label { text: "Setup"; font.bold: true }
+      Hint { text: "Walk through sources, providers and the menu bar again. The explanations in Limits and Costs come back too." }
+      Ui.Button {
+        objectName: "runSetupAgain"
+        text: "Run setup again"
+        bordered: true
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        fontSize: Style.font.bodySmall
+        focusable: true
+        onClicked: root.runSetupAgain()
+      }
+    }
 
     SettingsSection {
       objectName: "diagnosticsSection"
@@ -1718,7 +1895,7 @@ Column {
         width: parent.width
         spacing: Style.spacing.md
         Label { text: "Reset every setting to its default?"; font.bold: true }
-        Hint { text: "Providers, menu bar, alerts, display, refresh, and cost sources go back to their defaults, including provider order and Customize overrides. Your source, server URLs, saved keys and tokens, T3 servers, and custom prices are kept." }
+        Hint { text: "Providers, menu bar, alerts, display, refresh, and cost sources go back to their defaults, including provider order and Customize overrides. Your sources, saved keys and tokens, and custom prices are kept." }
         Row {
           spacing: Style.spacing.md
           Ui.Button {
@@ -1750,8 +1927,53 @@ Column {
     }
   }
 
+  // ---- setup: the first open walks three pages, Sources, Providers and Menu bar, then lands on Limits.
+  Row {
+    objectName: "setupFooter"
+    visible: root.setupStep > 0
+    width: parent.width
+    layoutDirection: Qt.RightToLeft
+    spacing: Style.spacing.md
+    Ui.Button {
+      objectName: "setupNext"
+      text: root.setupStep < root.setupPages.length ? "Next" : "Done"
+      bordered: true
+      selected: true
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      focusable: true
+      onClicked: root.setupStep < root.setupPages.length ? root.setupGo(root.setupStep + 1) : root.finishSetup()
+    }
+  }
+
   function resetToDefaults() {
     setMany(JSON.parse(JSON.stringify(UsageLogic.DEFAULT_SETTINGS)))
+  }
+
+  readonly property var setupPages: ["sources", "providers", "bar"]
+  // 1 to 3 while setup runs, else 0.
+  property int setupStep: 0
+  readonly property var setupIntros: [
+    "Where your agents run. This computer is read already; add another computer or a proxy if your agents run there too.",
+    "What was found. Monitor the providers you use: they show in Limits.",
+    "The menu bar. Choose chips or an icon, and which providers get a chip."
+  ]
+  signal setupFinished()
+
+  function beginSetup() { begin(""); setupGo(1) }
+  function setupGo(step) {
+    setupStep = step
+    page = setupPages[step - 1]
+  }
+  function finishSetup() {
+    setupStep = 0
+    page = ""
+    set("setupDone", true)
+    setupFinished()
+  }
+  function runSetupAgain() {
+    setMany({ setupDone: false, hintsDismissed: "[]" })
+    beginSetup()
   }
 
   // ---- backup: scripts/backup.py encrypts settings and saved keys with gpg; secrets cross only its stdin
@@ -1807,7 +2029,7 @@ Column {
   }
   Connections {
     target: keyRemover
-    function onRunningChanged() { if (!keyRemover.running) Qt.callLater(root.removeStaleKeyFiles) }
+    function onRunningChanged() { if (!keyRemover.running) Qt.callLater(root.nextKeyRemoval) }
   }
 
   // A partial restore (keys or preferences only) leaves the rest as it is, so only files that the merged
@@ -1838,34 +2060,26 @@ Column {
     var labels = { ok: "Included", partial: "Partial history", stale: "Saved history · offline",
       missing: "No transcripts", failed: "Unavailable", unavailable: "Unavailable", error: "Unavailable",
       off: "Off", duplicate: "Already included" }
-    var name = source.id === "local-omp" ? "omp sessions on this computer"
-      : source.id === "omp-remote" ? "omp stats" + UsageLogic.ompPlace(source.host) : source.name
+    var name = source.id === "local-omp" ? "omp sessions on this computer" : source.name
     var text = name + " · " + (labels[source.status] || source.status)
     if (source.status === "stale" && source.updatedAt)
       text += " · " + Qt.formatDateTime(new Date(Number(source.updatedAt)), "MMM d, HH:mm")
     return text
   }
 
-  // ---- T3 servers: edited locally, persisted whenever every row is complete
+  // ---- T3 servers (the t3 entries of `sources`): edited locally, persisted whenever every row is complete
   ListModel {
     id: servers
-    property string loadError: ""
     property string lastJson: "[]"
 
+    // `raw` is UsageLogic.t3ServersJson: checked rows, so nothing here can fail.
     function load(raw) {
       if (raw === lastJson) return
       clear()
-      loadError = ""
       lastJson = raw
-      try {
-        var rows = JSON.parse(raw)
-        if (!Array.isArray(rows) || rows.length > 4) throw new Error()
-        for (var i = 0; i < rows.length; i++) {
-          var row = rows[i]
-          if (!row || typeof row.id !== "string" || typeof row.url !== "string" || typeof row.name !== "string") throw new Error()
-          append({ serverId: row.id, name: row.name, url: row.url, tokenFile: String(row.tokenFile || ""), included: row.enabled !== false })
-        }
-      } catch (error) { loadError = "Saved T3 settings are invalid. Remove them to configure servers again." }
+      var rows = JSON.parse(raw)
+      for (var i = 0; i < rows.length && i < 4; i++)
+        append({ serverId: rows[i].id, name: rows[i].name, url: rows[i].url, tokenFile: rows[i].tokenFile, included: rows[i].enabled })
     }
     function addServer() {
       if (count >= 4) return
@@ -1876,83 +2090,34 @@ Column {
       setProperty(index, key, value)
       persist()
     }
+    // The server's token file goes with it, as Remove token does.
     function removeServer(index) {
+      var row = get(index)
+      var request = {}
+      if (row.tokenFile !== "") request["t3Token_" + row.serverId] = row.tokenFile
       remove(index)
       persist()
+      if (Object.keys(request).length > 0) root.removeFiles(request)
     }
     // Rows without a name or URL are kept on screen but not saved, so a half-typed server never
-    // reaches the scanner.
+    // reaches the scanner. The T3 entries follow the other sources.
     function persist() {
-      var rows = []
+      var entries = root.sourceEntries.filter(function(entry) { return entry.kind !== "t3" })
       for (var i = 0; i < count; i++) {
         var row = get(i)
         if (row.name.trim() === "" || row.url.trim() === "") continue
-        rows.push({ id: row.serverId, name: row.name.trim(), url: row.url.trim(), tokenFile: row.tokenFile, enabled: row.included })
+        entries.push({ id: row.serverId, kind: "t3", on: row.included, name: row.name.trim(), url: row.url.trim(), tokenFile: row.tokenFile })
       }
-      lastJson = JSON.stringify(rows)
-      if (lastJson !== String(root.value("costT3Servers", "[]"))) root.set("costT3Servers", lastJson)
+      var next = JSON.stringify(entries)
+      lastJson = UsageLogic.t3ServersJson({ sources: next })
+      if (next !== JSON.stringify(root.sourceEntries)) root.set("sources", next)
     }
   }
   property string lastPricesJson: ""
   onSettingsChanged: {
-    servers.load(String(value("costT3Servers", "[]")))
+    servers.load(UsageLogic.t3ServersJson(settings))
     var raw = String(value("costPriceOverrides", "{}"))
     if (raw !== lastPricesJson) { lastPricesJson = raw; prices.begin(raw) }
-    forgetStaleOmpTests()
-  }
-
-  // ---- omp: Test buttons run a backend once with only omp's flags, in a process bounded in time and
-  // output, and say what it found. The lines are kept while the address and token they tested stay.
-  property var ompGatewayLines: []
-  property var ompStatsLines: []
-  property string ompGatewayTested: ""
-  property string ompStatsTested: ""
-
-  // Read from `settings` itself: this also runs from onSettingsChanged, before `omp` has caught up.
-  function ompGatewayKey() {
-    var current = UsageLogic.ompSettings(settings)
-    return JSON.stringify([current.gatewayUrl, current.gatewayKeyFile])
-  }
-
-  function forgetStaleOmpTests() {
-    if (ompGatewayTested !== "" && ompGatewayTested !== ompGatewayKey()) { ompGatewayLines = []; ompGatewayTested = "" }
-    if (ompStatsTested !== "" && ompStatsTested !== UsageLogic.ompSettings(settings).statsUrl) { ompStatsLines = []; ompStatsTested = "" }
-  }
-
-  // usage-fetch.py reads only omp's gateway (--omp-only skips every other source and the history), for
-  // every provider omp signs in to, so the result names all the gateway has.
-  function testOmpGateway() {
-    if (gatewayProbe.active || omp.gatewayUrl === "" || omp.gatewayKeyFile === "") return
-    ompGatewayLines = []
-    ompGatewayTested = ompGatewayKey()
-    gatewayProbe.start(["python3", usageFetchPath, "--providers", UsageLogic.OMP_PROVIDER_IDS.join(","), "--source", "direct",
-      "--timeout", "12", "--omp-only", "--omp-gateway-url", omp.gatewayUrl, "--omp-gateway-key-file", omp.gatewayKeyFile])
-  }
-
-  // cost-fetch.py reads only omp stats (no local providers, no T3 server) for the last 7 days.
-  function testOmpStats() {
-    if (statsProbe.active || omp.statsUrl === "") return
-    ompStatsLines = []
-    ompStatsTested = omp.statsUrl
-    statsProbe.start(["python3", costFetchPath, "--providers", "", "--days", "7", "--timeout", "15", "--t3-servers", "[]",
-      "--price-overrides", prices.loadError === "" ? String(value("costPriceOverrides", "{}")) : "{}", "--omp-stats-url", omp.statsUrl])
-  }
-
-  Probe {
-    id: gatewayProbe
-    timeoutMs: 40000
-    onFinished: function(reply) {
-      if (root.ompGatewayTested === root.ompGatewayKey())
-        root.ompGatewayLines = UsageLogic.ompGatewayTestLines(reply, root.omp.gatewayUrl, root.enabledProviders)
-    }
-  }
-
-  Probe {
-    id: statsProbe
-    timeoutMs: 75000
-    onFinished: function(reply) {
-      if (root.ompStatsTested === root.omp.statsUrl) root.ompStatsLines = UsageLogic.ompStatsTestLines(reply, root.omp.statsUrl)
-    }
   }
 
   // Copy writes the clipboard with wl-copy in its own process, the way a paste reads it with wl-paste:
@@ -2003,11 +2168,6 @@ Column {
   component Hint: Label {
     color: Qt.darker(root.foreground, 1.5)
     font.pixelSize: Style.font.caption
-  }
-
-  // Where the command below it runs ("On the other computer").
-  component WhereLabel: Hint {
-    topPadding: Style.spacing.xs
   }
 
   // A state mark and one line of status: a filled dot while something is found (accent) or failing
@@ -2110,24 +2270,6 @@ Column {
     Timer { id: copiedReset; interval: 1600; onTriggered: { commandBlock.copied = false; commandBlock.failed = false } }
   }
 
-  // A caution in running text, marked by a bar in the alert colour.
-  component Warning: Item {
-    id: warning
-    property string text: ""
-    width: parent.width
-    implicitHeight: warningText.implicitHeight
-    height: implicitHeight
-    Rectangle { width: Style.space(2); height: parent.height; color: root.urgent }
-    Label {
-      id: warningText
-      objectName: warning.objectName + "Text"
-      x: Style.space(2) + Style.spacing.md
-      width: parent.width - x
-      text: warning.text
-      font.pixelSize: Style.font.caption
-    }
-  }
-
   // One finding of a Test: ✓ in the accent colour, ✕ and the text in the alert colour, › for a note.
   // It fades and rises in after `delay`, so a result's lines arrive one after another.
   component ResultLine: Item {
@@ -2140,7 +2282,8 @@ Column {
       lift.y = Style.space(3)
       appear.restart()
     }
-    width: parent.width
+    // A line of a row that is being removed (a removed computer) has no parent while it is destroyed.
+    width: parent ? parent.width : 0
     implicitHeight: resultText.implicitHeight
     height: implicitHeight
     transform: Translate { id: lift }
@@ -2177,8 +2320,7 @@ Column {
   }
 
   // A Test button and what the test found: after 300 ms without an answer a spinner says what it is
-  // waiting for; then one line per finding. `liveLine` follows something that keeps changing after the
-  // test, such as omp's live feed.
+  // waiting for; then one line per finding.
   component TestBlock: Column {
     id: test
     property bool running: false
@@ -2186,7 +2328,6 @@ Column {
     property string blockedReason: ""
     property string waitingText: "Testing…"
     property var lines: []
-    property var liveLine: null
     property bool slow: false
     signal requested()
     width: parent.width
@@ -2254,12 +2395,6 @@ Column {
         line: modelData
         delay: index * root.staggerMs
       }
-    }
-    ResultLine {
-      objectName: test.objectName + "Live"
-      visible: !test.running && test.lines.length > 0 && test.liveLine !== null
-      line: test.liveLine || ({ tone: "info", text: "" })
-      delay: test.lines.length * root.staggerMs
     }
   }
 
@@ -2535,6 +2670,9 @@ Column {
     readonly property bool saved: savedPath !== ""
     property bool changing: false
     property string error: ""
+    // A key whose path lives in a row of a JSON setting (a source's key, a T3 token): the owner saves it
+    // through these signals; otherwise the key is its own `settingKey` setting.
+    readonly property bool rowOwned: /^(?:t3Token|proxyKey|keeperPassword)_/.test(settingKey)
     signal saveKey(string secret)
     signal removeKey()
     property string blockedReason: ""
@@ -2547,7 +2685,7 @@ Column {
       if (!root.validSecret(secretField.text)) { error = "Enter the key using ASCII characters."; return }
       error = ""
       var secret = secretField.text.trim()
-      if (keyRow.settingKey.indexOf("t3Token_") === 0) { keyRow.saveKey(secret); return }
+      if (keyRow.rowOwned) { keyRow.saveKey(secret); return }
       var keys = {}, previous = {}
       keys[keyRow.settingKey] = secret
       previous[keyRow.settingKey] = keyRow.savedPath
@@ -2579,7 +2717,7 @@ Column {
         fontSize: Style.font.bodySmall
         focusable: true
         onClicked: {
-          if (keyRow.settingKey.indexOf("t3Token_") === 0) keyRow.removeKey()
+          if (keyRow.rowOwned) keyRow.removeKey()
           else root.removeKey(keyRow.settingKey)
         }
         onActiveFocusChanged: if (activeFocus) root.revealRequested(removeButton)
@@ -3023,9 +3161,9 @@ Column {
     // monitored has no reading to wait for.
     property bool needsReading: false
     readonly property var action: needsReading && !reading
-      ? UsageLogic.setupAction(null, null, null) : UsageLogic.setupAction(entry, reading, root.shownInstalled)
+      ? UsageLogic.setupAction(null, null, null) : UsageLogic.setupActionFor(entry, reading, root.lastPayload, root.mainComputer)
     readonly property bool pending: !!entry && root.pendingSetup === entry.id
-    visible: !root.proxyMode && action.kind !== ""
+    visible: action.kind !== ""
     spacing: Style.spacing.sm
 
     Ui.Button {
@@ -3191,7 +3329,7 @@ Column {
 
   // ---- index summaries: what each page is set to, so the index already answers most questions
   function providersSummary() {
-    var rows = proxyMode ? providerOptions : sections.listed
+    var rows = sections.listed
     var names = []
     var shown = 0
     for (var i = 0; i < rows.length; i++) {
@@ -3200,14 +3338,14 @@ Column {
       names.push(UsageLogic.providerShortName(rows[i]))
       if (UsageLogic.contains(barProviders, id)) shown++
     }
-    var found = proxyMode ? 0 : sections.found.length
+    var found = sections.found.length
     if (names.length === 0)
-      return proxyMode ? proxyName + " · no providers yet" : found > 0 ? found + " found on this computer" : "Nothing set up yet"
+      return found > 0 ? found + " found" : "Nothing set up yet"
     var list = names.length <= 3 ? names.join(", ") : names.slice(0, 2).join(", ") + " +" + (names.length - 2)
     var customized = customizedCount()
-    // omp counts once it adds accounts: read here, or through its gateway.
-    var ompAdds = !proxyMode && ompStatus && (ompStatus.local === "ok" || ompStatus.gateway === "ok")
-    return (proxyMode ? proxyName + " · " : "") + list + (percentageDisplay ? " · " + shown + " in menu bar" : "")
+    // omp counts once it adds accounts read here.
+    var ompAdds = ompStatus && ompStatus.local === "ok"
+    return list + (percentageDisplay ? " · " + shown + " in menu bar" : "")
       + (customized > 0 ? " · " + customized + " customized" : "") + (found > 0 ? " · " + found + " found" : "")
       + (ompAdds ? " · omp" : "")
   }
@@ -3281,9 +3419,15 @@ Column {
     var parts = []
     for (var i = 0; i < local.length; i++) if (names[local[i]]) parts.push(names[local[i]])
     var text = parts.length ? parts.join(", ") : "No local history"
-    if (servers.count > 0) text += " · " + servers.count + (servers.count === 1 ? " server" : " servers")
     if (prices.priceCount > 0) text += " · " + prices.priceCount + " custom " + (prices.priceCount === 1 ? "price" : "prices")
-    if (omp.statsUrl !== "") text += " · omp stats" + UsageLogic.ompPlace(omp.statsUrl)
     return text
+  }
+
+  function sourcesSummary() {
+    var parts = ["This computer"]
+    computerEntries.forEach(function(entry) { if (entry.on) parts.push(entry.host) })
+    if (proxyEntry && proxyEntry.on) parts.push(proxyName)
+    if (servers.count > 0) parts.push(servers.count + (servers.count === 1 ? " T3 server" : " T3 servers"))
+    return parts.length > 4 ? parts.slice(0, 3).join(", ") + " and " + (parts.length - 3) + " more" : parts.join(", ")
   }
 }

@@ -80,7 +80,7 @@ referent. A renamed directory stays pinned, so replacing a pathname with a symli
 cannot redirect the write, permission change, or cleanup. This does not isolate
 the plugin from another process already running as the same user or as root.
 
-In CLIProxyAPI mode, the plugin reads a user-owned management key file with
+For a CLIProxyAPI source, the plugin reads a user-owned management key file with
 private permissions (default: `$XDG_CONFIG_HOME/omarchy/quotatank/cliproxy.key`,
 where `XDG_CONFIG_HOME` defaults to `~/.config`). This user-provided credential
 is separate from generated state. The key is sent only to the configured
@@ -89,13 +89,13 @@ Upstream provider tokens stay on CLIProxyAPI, which substitutes `$TOKEN$` for
 quota calls and explicitly confirmed Codex and Claude banked-reset actions. Management responses and account checks are bounded.
 The backend never downloads auth files or stores their raw metadata. The backend does not request client API keys or the model catalog.
 
-Four secrets go to servers the user names: the CLIProxyAPI management key, the CPA
-Usage Keeper password and the session cookie it earns, T3 connection and access
-tokens, and the omp gateway token. Each goes over HTTPS with the server's certificate
-verified, or over plain HTTP only to this computer (a loopback address or `localhost`)
-or through Tailscale to the computer the address names (below, under omp). Environment
-proxies are ignored for them. Settings refuse other plain-HTTP addresses for these
-servers, and the helpers refuse them again before anything is sent.
+Three secrets go to servers the user names: the CLIProxyAPI management key, the CPA
+Usage Keeper password and the session cookie it earns, and T3 connection and access
+tokens. Each goes over HTTPS with the server's certificate verified, or over plain HTTP
+only to this computer (a loopback address or `localhost`) or through Tailscale to the
+computer the address names (below). Environment proxies are ignored for them. Settings
+refuse other plain-HTTP addresses for these servers, and the helpers refuse them again
+before anything is sent.
 
 On this computer, any account can listen on a free port above 1023, for one while the
 server a secret is meant for is stopped. So a connection to a loopback address carries
@@ -109,7 +109,7 @@ one the kernel does not list within half a second, gets a closed connection and
 nothing else, and the widget says so. Root and this user are trusted anyway: they can
 read the secret's file. A server run as a separate service account needs HTTPS.
 
-In local mode, each provider reads only its own tool's credential (a CLI, app, or
+On this computer, each provider reads only its own tool's credential (a CLI, app, or
 IDE sign-in, a key in its environment variable, or a key saved from settings), and
 sends it only to that provider's API. Credential files and SQLite stores are read
 size-bounded and read-only; nothing is written back, rotated, or deleted. Two
@@ -185,18 +185,11 @@ time. Prompts, responses, tool output, paths and session ids never leave the hel
 Symlinks, FIFOs and lines over 64 KiB are skipped, and each pass is capped in files and
 bytes.
 
-On another computer, Quotatank reads two services the user starts there. From an
-`omp stats` dashboard it requests only `/api/stats/overview`, `/providers`, `/models`,
-`/folders` and the `/api/events` feed; that dashboard has no authentication and also
-serves conversations, so the settings say to keep it on Tailscale or behind an SSH tunnel.
-From an omp auth gateway it requests only `/v1/usage`. The gateway token can also send
-model requests: it is saved like the management key (stdin to `management-key.py`, a
-`0600` file, only the path in settings) and follows the rule for secrets above. Over
-Tailscale, an address in Tailscale's range is not enough, since other networks hand
+Over Tailscale, an address in Tailscale's range is not enough, since other networks hand
 out `100.64.0.0/10` too: tailscaled, listening from the same network namespace, must say
 it is connected with its own TUN interface and that a computer it knows has the address
 (and, for a name, that MagicDNS name), and the connection is bound to that interface.
-Names that resolve to loopback are refused, so a DNS server cannot hand the token to a
+Names that resolve to loopback are refused, so a DNS server cannot hand a secret to a
 local program. Anything else needs HTTPS.
 
 This protects the secrets from the networks the computer joins (their addresses, DHCP,
@@ -207,8 +200,23 @@ remains: if the server's computer leaves the tailnet in the moment between the c
 and the connection while an exit node or a subnet route covers its address, Tailscale
 routes the connection there. Only a tailnet administrator can remove a computer, and
 only HTTPS pins a remote server's identity.
-omp URLs are a scheme, a host and an optional port only, redirects are refused,
-environment proxies are ignored for these requests, and bodies and event lines are capped.
+
+Other computers (Settings → Sources) are read over the user's own SSH
+(`scripts/quotatank_remote.py`), with keys only (`BatchMode=yes`), known host keys only
+(`StrictHostKeyChecking=yes`, so a new or changed key is never accepted for the user), and
+one shared connection per computer whose control socket lives in a private runtime folder.
+No secret is sent over it: the readers there use that computer's own sign-ins, exactly as
+they do here. The destination is one argv element after `--` and may not start with `-`,
+so it cannot become an ssh option; the remote command is a fixed `sh -c` script whose only
+inserted values are checked (bundle id, script name, arguments limited to characters no
+shell treats specially). The readers are copied as a tar of the plugin's own scripts into
+`~/.cache/quotatank/readers/<bundle>/` there, private (`umask 077`), and checked against
+their bundle id (a SHA-256 over their names and contents) before they are marked ready;
+their state stays in `~/.cache/quotatank/state/`, and **Remove** deletes
+`~/.cache/quotatank/` there and the copies of its readings here. Each run has a timeout
+and an output ceiling (8 MiB; error output is cut to 4,000 characters), and an answer is
+parsed as JSON and checked before use. Anyone who can run programs as that user on that
+computer can change what it reports, which the widget shows as plain text.
 
 Three desktop actions run only when the user asks: **Use** on an Omarchy account runs
 `omarchy agent account use <provider> <id>` (Omarchy changes which login new sessions use;

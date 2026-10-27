@@ -42,9 +42,12 @@
       ],
       "providerOrder": "[]",
       "dismissedProviders": [],
-      "usageSource": "direct",
-      "cliproxyUrl": "http://127.0.0.1:8317",
-      "cliproxyKeyFile": "",
+      "sources": "[]",
+      "mainComputer": "",
+      "sourcesVersion": 0,
+      "sourcesNotice": "",
+      "setupDone": true,
+      "hintsDismissed": "[]",
       "factoryKeyFile": "",
       "ampKeyFile": "",
       "kiloKeyFile": "",
@@ -155,19 +158,13 @@
       "creditWarningUsd": 5,
       "creditCriticalUsd": 1,
       "costPriceOverrides": "{}",
-      "costKeeperUrl": "",
-      "costKeeperPasswordFile": "",
       "costLocalProviders": [
         "claude",
         "codex",
         "opencode"
       ],
-      "costT3Servers": "[]",
       "extraKeys": "{}",
       "ompLocal": true,
-      "ompGatewayUrl": "",
-      "ompGatewayKeyFile": "",
-      "ompStatsUrl": "",
       "barAccountMode": "dots",
       "motion": "system",
       "accountModes": "{}",
@@ -175,29 +172,46 @@
     },
     "schema": [
       {
-        "key": "usageSource",
-        "type": "enum",
-        "label": "Quota source",
-        "options": [
-          "direct",
-          "cliproxy"
-        ],
-        "defaultValue": "direct",
-        "description": "Read local CLI sign-ins or query CLIProxyAPI accounts. Costs has its own source setting."
+        "key": "sources",
+        "type": "string",
+        "label": "Sources",
+        "defaultValue": "[]",
+        "description": "Managed by Settings → Sources. Where Quotatank reads from besides this computer, in order: other computers (an SSH destination), CLIProxyAPI proxies (with their CPA Usage Keeper) and T3 Code servers, as JSON with private key file references."
       },
       {
-        "key": "cliproxyUrl",
+        "key": "mainComputer",
         "type": "string",
-        "label": "CLIProxyAPI server URL",
-        "defaultValue": "http://127.0.0.1:8317",
-        "description": "Server, management.html, or /v0/management URL. HTTPS certificates are verified."
-      },
-      {
-        "key": "cliproxyKeyFile",
-        "type": "string",
-        "label": "Proxy management key file",
+        "label": "Main computer",
         "defaultValue": "",
-        "description": "Managed automatically by the settings menu when saving a Management API key. Advanced users can supply an existing private key file path here."
+        "description": "Managed by Settings → Sources. Where Sign in and Install open a terminal: empty for automatic (the only other computer, else this one), \"this\", or a computer's source id."
+      },
+      {
+        "key": "sourcesVersion",
+        "type": "integer",
+        "label": "Sources settings version",
+        "defaultValue": 0,
+        "description": "Managed automatically. 1 once the source settings of Quotatank 2.3 and older were moved to Sources."
+      },
+      {
+        "key": "sourcesNotice",
+        "type": "string",
+        "label": "Pending Sources notice",
+        "defaultValue": "",
+        "description": "Managed automatically. \"ompRemote\" while the notice that omp on another computer now uses SSH waits to be read."
+      },
+      {
+        "key": "setupDone",
+        "type": "boolean",
+        "label": "Setup done",
+        "defaultValue": true,
+        "description": "Managed automatically. False on a fresh install, until its setup finishes, and after Settings → Advanced → Run setup again."
+      },
+      {
+        "key": "hintsDismissed",
+        "type": "string",
+        "label": "Dismissed hints",
+        "defaultValue": "[]",
+        "description": "Managed automatically. JSON list of the explanations already dismissed: accounts, runway, forecast, heatmap."
       },
       {
         "key": "factoryKeyFile",
@@ -1365,20 +1379,6 @@
         "description": "Managed by Custom model prices in Costs settings. Exact model IDs mapped to USD-per-million input/output and optional cache rates as JSON."
       },
       {
-        "key": "costKeeperUrl",
-        "type": "string",
-        "label": "CPA Usage Keeper URL",
-        "defaultValue": "",
-        "description": "Optional Keeper URL for CLIProxyAPI account activity. Not used for Costs."
-      },
-      {
-        "key": "costKeeperPasswordFile",
-        "type": "string",
-        "label": "Keeper password file",
-        "defaultValue": "",
-        "description": "Managed privately when saving the Keeper login password in settings. Advanced users can supply a private password file."
-      },
-      {
         "key": "costLocalProviders",
         "type": "multiselect",
         "label": "Local cost sources",
@@ -1403,13 +1403,6 @@
         ]
       },
       {
-        "key": "costT3Servers",
-        "type": "string",
-        "label": "T3 Code cost servers",
-        "defaultValue": "[]",
-        "description": "Managed by Costs settings. Remote servers with private token file references."
-      },
-      {
         "key": "extraKeys",
         "type": "string",
         "label": "Further API keys",
@@ -1422,27 +1415,6 @@
         "label": "Read omp's accounts",
         "defaultValue": true,
         "description": "Read the accounts omp (Oh My Pi) is signed in to on this computer, and follow its sessions for live activity."
-      },
-      {
-        "key": "ompGatewayUrl",
-        "type": "string",
-        "label": "omp gateway URL",
-        "defaultValue": "",
-        "description": "Managed by Settings → Providers → Source → omp. An omp auth gateway on another computer; only its /v1/usage endpoint is read."
-      },
-      {
-        "key": "ompGatewayKeyFile",
-        "type": "string",
-        "label": "omp gateway token file",
-        "defaultValue": "",
-        "description": "Managed automatically when you save the omp gateway token in settings. Private token file reference."
-      },
-      {
-        "key": "ompStatsUrl",
-        "type": "string",
-        "label": "omp stats URL",
-        "defaultValue": "",
-        "description": "Managed by Settings → Costs. An omp stats dashboard on another computer; only its /api/stats aggregates and live feed are read."
       },
       {
         "key": "barAccountMode",

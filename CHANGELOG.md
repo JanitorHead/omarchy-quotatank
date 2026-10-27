@@ -4,6 +4,25 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **Settings → Sources.** One page says where your agents run: this computer, **other computers**, **CLIProxyAPI** servers and **T3 Code** servers, each with its own switch. Every source is read together: an account read in two places is one row, the more reliable reading first (this computer, the other computers, then proxies), and when a reading fails another source's reading of the same account stands in and names where it came from.
+- **Other computers over SSH.** Add a computer you reach with an SSH key, typed or picked from your SSH config and Tailscale peers. Its **Test** connects, checks Python, copies Quotatank's readers to `~/.cache/quotatank` there and reads once; a step that fails says why and gives the command that fixes it. Its sign-ins, keys, omp accounts and transcripts then count with this computer's, omp's requests there mark their accounts as spending live, and a computer that stops answering keeps its last readings, marked stale. **Main computer** chooses where **Sign in** and **Install** open their terminal. **Remove** deletes what Quotatank put there.
+- **First-run setup.** A fresh install opens a three-step setup, Sources, Providers and Menu bar, with the same Tests as Settings, then lands on Limits. Settings carried over skip it; **Settings → Advanced → Run setup again** starts it over.
+- **Hints.** The first time the account list, the forecast dashes, the runway or the Costs heatmap appears, one line explains it; Limits shows one at a time, and **Got it** dismisses it for good (`hintsDismissed`).
+- **A single account's trend.** A provider read with one account that has limits shows its 24-hour trend and **spending now** beside the headline.
+
+### Changed
+
+- **No more proxy mode.** A CLIProxyAPI server no longer replaces this computer: its Claude, Codex, Kimi and Antigravity accounts join the providers you monitor, with one **Monitor** switch per provider for every source, and an account this computer already read fine is not asked for again. Its rows say **via proxy**, as another computer's say **on devbox**. Providers the proxy cannot read quotas for are no longer listed as unsupported. A proxy that stops answering keeps its last accounts, marked stale, and banked resets go through the proxy that read the account.
+- **omp on another computer is read over SSH.** The `omp stats` dashboard and the omp auth gateway readers are gone: add that computer under **Settings → Sources** instead. After the update, a notice in Limits says so when they were set up.
+- **CPA Usage Keeper belongs to its proxy** under **Settings → Sources**, and never feeds Costs. T3 Code servers moved there from **Settings → Costs**.
+- **Settings move once.** The first time this version runs, `usageSource`, `cliproxyUrl`, `cliproxyKeyFile`, `costKeeperUrl`, `costKeeperPasswordFile` and `costT3Servers` become entries of `sources`, keeping their saved keys; a proxy set up but not in use stays, switched off, and only the untouched default address is dropped. `ompStatsUrl`, `ompGatewayUrl` and `ompGatewayKeyFile` are dropped. After proxy mode, the providers the proxy read are the ones monitored, so the bar stays as it was and this computer's other providers show under **Found**. Backups made by 2.3.0 still restore, keys included.
+- **The backend's flags.** `usage-fetch.py --proxy ID=URL` and `--proxy-key-file ID=PATH` replace `--source`, `--cliproxy-url` and `--cliproxy-key-file`, and `--computer ID=HOST` reads another computer (also in `cost-fetch.py`). The payload has no `source` key; it lists `computers` and `proxies`. See the [backend contract](docs/backend-contract.md).
+- **One history for every source.** A proxy's accounts are recorded in `history.json` with the rest; the `cliproxy-<hash>` history folders in the state folder are no longer read and can be deleted.
+
 ## 2.4.0
 
 ### Added

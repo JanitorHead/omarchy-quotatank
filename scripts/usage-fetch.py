@@ -46,11 +46,12 @@ from xml.etree import ElementTree
 sys.dont_write_bytecode = True
 
 from quotatank_common import (
-    FOREIGN_LOCAL_SERVER, OMP_PROVIDERS, PLAIN_HTTP_SECRET, SECRET_LOOKUP_SECONDS, CheckedAddresses,
-    ForeignLocalServer, atomic_write_json, clean_message, config_folder, foreign_local_server, omp_account_id,
+    FOREIGN_LOCAL_SERVER, OMP_PROVIDERS, PLAIN_HTTP_SECRET, SECRET_LOOKUP_SECONDS, ForeignLocalServer,
+    atomic_write_json, clean_message, config_folder, foreign_local_server, omp_account_id,
     open_private_directory, open_tcp, move_legacy_folders, opencode_data_root, opencode_database_path,
-    plain_http_token_routes, read_capped, resolve_host, secret_opener, split_server_url, state_folder,
+    read_capped, secret_opener, state_folder,
 )
+import quotatank_remote
 
 SCHEMA_VERSION = 1
 # Every provider the collector can read, in the order the widget lists them by default. Plan
@@ -396,17 +397,15 @@ class NoRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = None,
-              opener: urllib.request.OpenerDirector | None = None) -> Any:
-    """GET, or POST `body` as JSON when given. Redirects are refused and responses are size-capped. `opener`
-    replaces the default one, which refuses redirects and follows the environment's proxy settings."""
+def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = None) -> Any:
+    """GET, or POST `body` as JSON when given. Redirects are refused and responses are size-capped."""
     data = None if body is None else json.dumps(body, separators=(",", ":")).encode("utf-8")
     if data is not None and not any(name.lower() == "content-type" for name in headers):
         headers = {**headers, "Content-Type": "application/json"}
     request = urllib.request.Request(url, data=data, headers=headers, method="GET" if data is None else "POST")
     deadline = time.monotonic() + timeout
     try:
-        with (opener or urllib.request.build_opener(NoRedirects())).open(request, timeout=timeout) as response:
+        with urllib.request.build_opener(NoRedirects()).open(request, timeout=timeout) as response:
             raw = read_capped(response, MAX_HTTP_RESPONSE_BYTES, deadline)
             if len(raw) > MAX_HTTP_RESPONSE_BYTES:
                 raise ProviderFailure(
@@ -423,8 +422,6 @@ def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = Non
         failure.http_status = exc.code
         raise failure from None
     except (TimeoutError, urllib.error.URLError, OSError) as exc:
-        if foreign_local_server(exc):
-            raise ProviderFailure("foreign", FOREIGN_LOCAL_SERVER) from None
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
             raise ProviderFailure("timeout", "The usage request timed out.") from None
@@ -7438,8 +7435,9 @@ def cliproxy_key_path() -> Path:
     return config_folder() / "cliproxy.key"
 
 
-def read_private_key(path: Path, name: str = "Proxy management key") -> str:
-    """One ASCII secret from a regular 0600 file owned by the user; the error names `name`, never the secret."""
+def read_private_key(path: Path, name: str, page: str = "Providers") -> str:
+    """One ASCII secret from a regular 0600 file owned by the user; the error names `name` and the Settings `page`
+    that saves it, never the secret."""
     try:
         # NONBLOCK also prevents a misconfigured FIFO from stalling the poll.
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -7451,7 +7449,7 @@ def read_private_key(path: Path, name: str = "Proxy management key") -> str:
         finally:
             os.close(fd)
     except OSError:
-        raise ProviderFailure("config", f"{name} could not be read. Enter it again under Settings → Providers.") from None
+        raise ProviderFailure("config", f"{name} could not be read. Enter it again under Settings → {page}.") from None
     try:
         key = raw.decode("utf-8").strip()
     except UnicodeDecodeError:
@@ -7462,7 +7460,7 @@ def read_private_key(path: Path, name: str = "Proxy management key") -> str:
 
 
 def read_cliproxy_key(path: Path) -> str:
-    return read_private_key(path, "Proxy management key")
+    return read_private_key(path, "Proxy management key", "Sources")
 
 
 def normalize_cliproxy_url(address: str) -> str:
@@ -7677,9 +7675,6 @@ def fetch_cliproxy_account(provider_id: str, entry: dict[str, Any], client: CliP
     if entry.get("disabled") is True or entry.get("status") == "disabled":
         result.update(status="disabled", notice="This account is paused in CLIProxyAPI.")
         return result
-    if provider_id not in CLIPROXY_QUOTA_PROVIDERS:
-        result.update(status="unsupported", notice="This provider does not expose a supported quota lookup.")
-        return result
     try:
         if provider_id == "claude":
             payload = client.usage(entry, CLAUDE_USAGE_URL,
@@ -7720,35 +7715,46 @@ def fetch_cliproxy_account(provider_id: str, entry: dict[str, Any], client: CliP
     return result
 
 
+def proxy_provider_id(entry: dict[str, Any]) -> str:
+    """The provider of a proxy account; the ones whose limits a proxy reads (CLIPROXY_QUOTA_PROVIDERS) have
+    Quotatank's ids already."""
+    return str(entry.get("provider") or entry.get("type") or "").strip().lower()
+
+
+def proxy_entry_enabled(entry: dict[str, Any]) -> bool:
+    return entry.get("disabled") is not True and entry.get("status") != "disabled"
+
+
 def collect_cliproxy(provider_ids: list[str], timeout: float, address: str, key_path: Path,
-                     discover: bool = False) -> list[dict[str, Any]]:
-    if not provider_ids and not discover:
-        return []
-    overall_deadline = time.monotonic() + timeout if discover else None
-    try:
-        client = CliProxyClient(address, read_cliproxy_key(key_path))
-        entries = client.auth_files(timeout)
-    except ProviderFailure as exc:
-        if discover:
-            provider_ids = ["cliproxy"]
-        return [dict(error_provider(provider_id, exc.kind, exc.message),
-                     source="CLIProxyAPI management API", authCommand="") for provider_id in provider_ids]
+                     healthy: dict[str, set[str]] | None = None
+                     ) -> tuple[list[dict[str, Any]], list[str], list[dict[str, str]]]:
+    """The proxy's accounts for `provider_ids` (one result per provider it has accounts for, each listed under
+    `accounts`), the providers it has a working account for, and the accounts it was not asked about: an account
+    `healthy` names (provider id → emails read fine from another source this refresh) is not queried again, but
+    its id on the proxy is returned (`{"id", "accountId", "account"}`), since the proxy's live activity names it
+    so. Raises ProviderFailure when the proxy cannot be listed."""
+    deadline = time.monotonic() + timeout
+    client = CliProxyClient(address, read_cliproxy_key(key_path))
+    entries = [entry for entry in client.auth_files(timeout) if isinstance(entry, dict)]
+    found = sorted({provider_id for entry in entries if proxy_entry_enabled(entry)
+                    and (provider_id := proxy_provider_id(entry)) in CLIPROXY_QUOTA_PROVIDERS})
+    skip = healthy or {}
+    wanted = [provider_id for provider_id in provider_ids if provider_id in CLIPROXY_QUOTA_PROVIDERS]
 
-    if discover:
-        discovered = {str(entry.get("provider") or entry.get("type") or "unknown").lower() for entry in entries}
-        provider_ids = sorted(provider for provider in discovered if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", provider))
-        if len(provider_ids) > MAX_CLIPROXY_PROVIDERS:
-            provider_ids = provider_ids[:MAX_CLIPROXY_PROVIDERS]
-    discovery_deadline = overall_deadline if discover else None
+    def skipped(entry: dict[str, Any], provider_id: str) -> bool:
+        return account_email({"account": entry.get("email")}) in skip.get(provider_id, set())
 
-    def fetch(provider_id: str) -> dict[str, Any]:
-        matching = [entry for entry in entries
-                    if str(entry.get("provider") or entry.get("type") or "").lower() == provider_id
-                    and (discover or (entry.get("disabled") is not True and entry.get("status") != "disabled"))]
+    aliases = []
+    for entry in entries:
+        if (provider_id := proxy_provider_id(entry)) in wanted and skipped(entry, provider_id):
+            record = cliproxy_account_record(provider_id, entry)
+            aliases.append({"id": provider_id, "accountId": record["accountId"], "account": record["account"]})
+
+    def fetch(provider_id: str) -> dict[str, Any] | None:
+        matching = [entry for entry in entries if proxy_provider_id(entry) == provider_id
+                    and not skipped(entry, provider_id)]
         if not matching:
-            return dict(error_provider(provider_id, "no_credentials", "No enabled account was found. Add a sign-in through CLIProxyAPI, then refresh."),
-                        source="CLIProxyAPI management API", authCommand="")
-        deadline = discovery_deadline if discover else time.monotonic() + timeout
+            return None
 
         def account(entry: dict[str, Any]) -> dict[str, Any]:
             remaining = deadline - time.monotonic()
@@ -7764,25 +7770,20 @@ def collect_cliproxy(provider_ids: list[str], timeout: float, address: str, key_
         # Select by the binding window, never sum unrelated percentages.
         active = [reading for reading in readings if reading["status"] != "disabled"]
         best = dict(max(successful, key=lambda reading: 100 - used if (used := dynamic_window_used(reading)) is not None else -1) if successful else (active or readings)[0])
-        if discover:
-            best["accounts"] = readings
+        best["accounts"] = readings
         best["accountCount"] = len(matching)
         best["availableCount"] = len(successful)
         notes = [best["notice"]] if best["notice"] else []
-        if len(matching) > 1 and best["status"] not in ("disabled", "unsupported"):
-            notes.append(f"{len(successful)} of {len(matching)} accounts checked successfully. Showing the account with the most remaining quota." if successful
-                         else f"None of {len(matching)} accounts could be checked.")
         if len(matching) > MAX_CLIPROXY_ACCOUNTS:
             notes.append(f"Only the first {MAX_CLIPROXY_ACCOUNTS} accounts were checked.")
         best["notice"] = " ".join(notes)
-        if best["status"] == "error" and len(matching) > 1:
-            best["message"] += f" All {len(readings)} checked accounts failed."
         return best
 
-    if not provider_ids:
-        return []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(provider_ids))) as pool:
-        return list(pool.map(fetch, provider_ids))
+    if not wanted:
+        return [], found, aliases
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(wanted))) as pool:
+        results = list(pool.map(fetch, wanted))
+    return [result for result in results if result is not None], found, aliases
 
 
 # --------------------------------------------------------------- History
@@ -8071,7 +8072,9 @@ def update_and_attach_history(
     path = history_path(state_dir)
     history = load_history(path)
     readings = series_readings(providers)
-    changed = record_history(history, readings, stamp)
+    # A stale reading repeats an old answer and a stand-in is another source's: neither is this reading's use.
+    changed = record_history(history, {key: reading for key, reading in readings.items()
+                                       if not reading.get("stale") and not reading.get("standIn")}, stamp)
     if prune_account_series(history, readings):
         changed = True
     accounts_of: dict[str, list[str]] = {}
@@ -8287,15 +8290,13 @@ def parse_extra_keys(values: list[str]) -> dict[str, list[tuple[str, Path]]]:
 
 
 # --------------------------------------------------------------- omp
-# omp (Oh My Pi) keeps its own subscription sign-ins and reports their limits: on this computer with
-# `omp usage --json`, and remotely through its auth gateway's `GET /v1/usage`. Each omp account joins the provider
-# it belongs to as an `accounts` entry; omp is a source, never a provider of its own. The gateway token can also
-# spend model quota, so `/v1/usage` is the only path ever requested with it. omp runs only where it has set
-# itself up already (omp_set_up): its first run creates omp's state, which is the user's to start.
+# omp (Oh My Pi) keeps its own subscription sign-ins and reports their limits on this computer with
+# `omp usage --json`. Each omp account joins the provider it belongs to as an `accounts` entry; omp is a source,
+# never a provider of its own. omp runs only where it has set itself up already (omp_set_up): its first run
+# creates omp's state, which is the user's to start.
 OMP_USAGE_ARGUMENTS = ("usage", "--json", "--no-extensions")
 OMP_USAGE_TIMEOUT = 45.0
 OMP_VERSION_TIMEOUT = 5.0
-OMP_LOOKUP_TIMEOUT = 2.0
 # The folder omp runs in, inside Quotatank's state folder.
 OMP_WORKDIR = "omp-workdir"
 # `omp --version` prints "omp/18.11.0".
@@ -8313,22 +8314,11 @@ OMP_WINDOW_SECONDS = {"5h": FIVE_HOURS, "1d": ONE_DAY, "7d": SEVEN_DAYS, "1w": S
 OMP_UNREAD_KINDS = frozenset({"no_credentials", "cli_unavailable"})
 OMP_SIGN_IN_AGAIN = "omp can't renew this sign-in. Sign in again in omp."
 OMP_NOT_SET_UP = "omp is installed but not set up on this computer."
-OMP_GATEWAY_URL_RULE = ("The omp gateway URL must be the gateway's address alone, https://host:port or plain HTTP to "
-                        "this computer or a Tailscale address, without a path, user name, query or fragment.")
-OMP_GATEWAY_PLAIN_HTTP = "The omp gateway token goes over " + PLAIN_HTTP_SECRET
-OMP_GATEWAY_FAILURES = {
-    "expired": "The omp gateway refused the token.",
-    "rate_limited": "The omp gateway is rate limiting usage checks.",
-    "timeout": "The omp gateway did not answer in time.",
-    "network": "Could not reach the omp gateway. Check its URL, the network and its TLS certificate.",
-    "malformed": "The omp gateway returned unreadable usage data.",
-    "foreign": "The omp gateway's port on this computer belongs to another account, so the token was not sent.",
-}
-# What each source reports when the merge cannot take its data (merge_omp_safely).
-OMP_UNREADABLE = {"local": "omp usage returned unreadable data.", "gateway": OMP_GATEWAY_FAILURES["malformed"]}
+# What omp reports when its data cannot be read, or cannot be merged (merge_omp_safely).
+OMP_UNREADABLE = "omp usage returned unreadable data."
 # (email in lower case, omp's account id, omp's org id), each "" when omp gives none.
 OmpIdentity = tuple[str, str, str]
-# One omp source's result: (status, message, document); the document is None unless the status is "ok".
+# The result of reading omp: (status, message, document); the document is None unless the status is "ok".
 OmpRead = tuple[str, str, dict[str, Any] | None]
 
 
@@ -8375,16 +8365,15 @@ def omp_version(omp: str, state_dir: Path | None = None) -> str:
     return match.group(1).decode("ascii") if match else ""
 
 
-def omp_document(payload: Any, message: str) -> dict[str, Any]:
-    """An omp usage document, from the CLI's output or a decoded gateway body: an object listing `reports`."""
-    if isinstance(payload, bytes):
-        try:
-            payload = json.loads(payload)
-        except (ValueError, RecursionError):
-            raise ProviderFailure("malformed", message) from None
-    if not isinstance(payload, dict) or not isinstance(payload.get("reports"), list):
-        raise ProviderFailure("malformed", message)
-    return payload
+def omp_document(output: bytes) -> dict[str, Any]:
+    """The omp usage document in the CLI's output: an object listing `reports`."""
+    try:
+        document = json.loads(output)
+    except (ValueError, RecursionError):
+        raise ProviderFailure("malformed", OMP_UNREADABLE) from None
+    if not isinstance(document, dict) or not isinstance(document.get("reports"), list):
+        raise ProviderFailure("malformed", OMP_UNREADABLE)
+    return document
 
 
 def read_omp_local(omp: str, state_dir: Path | None = None) -> OmpRead:
@@ -8393,7 +8382,7 @@ def read_omp_local(omp: str, state_dir: Path | None = None) -> OmpRead:
         code, output = run_omp(omp, OMP_USAGE_ARGUMENTS, OMP_USAGE_TIMEOUT, MAX_OMP_OUTPUT_BYTES, state_dir)
         if code != 0:
             return "error", f"omp usage exited with status {code}.", None
-        return "ok", "", omp_document(output, "omp usage returned unreadable data.")
+        return "ok", "", omp_document(output)
     except TimeoutError:
         return "error", "omp usage did not finish in time.", None
     except ValueError:
@@ -8404,42 +8393,6 @@ def read_omp_local(omp: str, state_dir: Path | None = None) -> OmpRead:
         return "error", exc.message, None
     except Exception:
         return "error", "omp usage could not be read.", None
-
-
-def read_omp_gateway(address: str, key_file: Path | None, timeout: float) -> OmpRead:
-    """("ok", "", document) from an omp gateway's `GET /v1/usage`, else ("error", message, None).
-
-    The token goes over HTTPS, or over plain HTTP only to this computer or through Tailscale to the computer
-    the address names (plain_http_token_routes), and then only along the routes checked; on this computer, only
-    to a server that belongs to this user or root (open_tcp). Proxy settings are ignored."""
-    try:
-        parts = split_server_url(address)
-    except ValueError:
-        return "error", OMP_GATEWAY_URL_RULE, None
-    handlers: list[Any] = [urllib.request.ProxyHandler({}), NoRedirects()]
-    if parts.scheme == "http":
-        addresses = resolve_host(parts.hostname, OMP_LOOKUP_TIMEOUT)
-        if not addresses:
-            return "error", OMP_GATEWAY_FAILURES["network"], None
-        routes = plain_http_token_routes(parts.hostname, addresses, OMP_LOOKUP_TIMEOUT)
-        if routes is None:
-            return "error", OMP_GATEWAY_PLAIN_HTTP, None
-        handlers.append(CheckedAddresses(routes))
-    try:
-        headers = {"Accept": "application/json"}
-        if key_file is not None:
-            headers["Authorization"] = "Bearer " + read_private_key(key_file, "omp gateway token")
-        body = http_json(urllib.parse.urlunsplit(parts) + "/v1/usage", headers, timeout,
-                         opener=urllib.request.build_opener(*handlers))
-        return "ok", "", omp_document(body, OMP_GATEWAY_FAILURES["malformed"])
-    except ProviderFailure as exc:
-        if exc.kind == "expired" and key_file is None:
-            return "error", "The omp gateway asks for a token.", None
-        if exc.kind == "http":
-            return "error", f"The omp gateway answered HTTP {exc.http_status}.", None
-        return "error", OMP_GATEWAY_FAILURES.get(exc.kind, exc.message), None
-    except Exception:
-        return "error", "The omp gateway could not be read.", None
 
 
 def omp_text(value: Any, limit: int = 120) -> str:
@@ -8579,7 +8532,7 @@ def omp_rows(document: dict[str, Any], key: str, provider_ids: list[str]) -> Ite
 def omp_accounts(documents: list[dict[str, Any]],
                  provider_ids: list[str]) -> list[tuple[str, OmpIdentity, dict[str, Any]]]:
     """(provider id, identity, entry) for each omp account of a requested provider: the reports of every document,
-    then their disabled sign-ins. An account seen twice, say by this computer's omp and by a gateway, is kept once.
+    then their disabled sign-ins. An account listed twice is kept once.
 
     `accountId` is omp_account_id of the omp provider and the email, else omp's account id, else the row's
     position. A later account with the same id (one email in two orgs) gets `-2`, `-3`, … in that order."""
@@ -8622,12 +8575,10 @@ def omp_pool(capacity: Any, provider_id: str) -> dict[str, Any] | None:
     return {"source": "omp", "windows": windows} if windows else None
 
 
-def native_origin(provider: dict[str, Any], reading: dict[str, Any], cliproxy: bool) -> str:
+def native_origin(provider: dict[str, Any], reading: dict[str, Any]) -> str:
     """The `origin` of a native reading: its own, else the kind of reading the provider made."""
     if reading.get("origin"):
         return reading["origin"]
-    if cliproxy:
-        return "proxy"
     if provider["id"] in KEYED_FETCHERS:
         return "key"
     return "omarchy" if "accounts" in provider else "signin"
@@ -8675,7 +8626,7 @@ def same_limits(native: dict[str, Any], entry: dict[str, Any]) -> bool:
 
 
 def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
-                       accounts: list[tuple[OmpIdentity, dict[str, Any]]], cliproxy: bool) -> dict[str, Any] | None:
+                       accounts: list[tuple[OmpIdentity, dict[str, Any]]]) -> dict[str, Any] | None:
     """The provider's result with its omp accounts merged in (backend contract, "omp accounts")."""
     entries = [entry for _identity, entry in accounts]
     if provider is None or (provider.get("errorKind") in OMP_UNREAD_KINDS and "accounts" not in provider):
@@ -8697,40 +8648,46 @@ def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
             matches = [native for native in natives if twin is not None and (native is twin or (
                 twin.get("accountId") and native.get("accountId") == twin.get("accountId")))]
         for native in matches:
-            native["origins"] = [native_origin(provider, native, cliproxy), "omp"]
+            native["origins"] = [native_origin(provider, native), "omp"]
             native.setdefault("ompAccountId", entry["accountId"])
             if native["status"] != "ok" and entry["status"] == "ok":
                 stand_in_omp_reading(native, entry)
         if not matches:
             added.append(entry)
-    if added:
-        single_native = "accounts" not in provider
-        if single_native:
-            provider.update(accountId="primary" if provider_id in KEYED_FETCHERS else PRIMARY_ACCOUNT_ID,
-                            active=True, primary=True, origin=native_origin(provider, provider, cliproxy))
-            provider["accounts"] = [copy.deepcopy(provider)]
-        provider["accounts"].extend(added)
-        healthy = next((position for position, entry in enumerate(provider["accounts"]) if entry["status"] == "ok"), None)
-        # A broken single sign-in (expired, signed out) should not hide omp accounts that work: the first healthy
-        # one leads. Omarchy's in-use login keeps the lead even when it fails, since that is what new sessions use.
-        if single_native and provider["status"] != "ok" and healthy is not None:
-            for position, entry in enumerate(provider["accounts"]):
-                entry["active"] = position == healthy
-            return summarize_accounts(provider["accounts"], healthy)
-        for entry in (provider, *provider["accounts"]):
-            entry["accountCount"] = len(provider["accounts"])
+    return add_accounts(provider, provider_id, added) if added else provider
+
+
+def add_accounts(provider: dict[str, Any], provider_id: str, added: list[dict[str, Any]]) -> dict[str, Any]:
+    """`provider` with the readings of other accounts listed after its own, in place where it can be."""
+    single_native = "accounts" not in provider
+    if single_native:
+        # A reading from another computer keeps its prefixed id: no two computers share an account id.
+        provider.update(accountId=provider.get("accountId") or ("primary" if provider_id in KEYED_FETCHERS
+                                                                else PRIMARY_ACCOUNT_ID),
+                        active=True, primary=True, origin=native_origin(provider, provider))
+        provider["accounts"] = [copy.deepcopy(provider)]
+    provider["accounts"].extend(added)
+    healthy = next((position for position, entry in enumerate(provider["accounts"]) if entry["status"] == "ok"), None)
+    # A broken single sign-in (expired, signed out) should not hide other accounts that work: the first healthy
+    # one leads. Omarchy's in-use login keeps the lead even when it fails, since that is what new sessions use.
+    if single_native and provider["status"] != "ok" and healthy is not None:
+        for position, entry in enumerate(provider["accounts"]):
+            entry["active"] = position == healthy
+        return summarize_accounts(provider["accounts"], healthy)
+    for entry in (provider, *provider["accounts"]):
+        entry["accountCount"] = len(provider["accounts"])
     return provider
 
 
 def merge_omp(providers: list[dict[str, Any]], provider_ids: list[str], documents: list[dict[str, Any]],
-              capacity: Any, cliproxy: bool) -> int:
+              capacity: Any) -> int:
     """Merge omp's accounts and pools into the requested providers, in place; returns how many accounts merged.
-    A requested provider without a result of its own (proxy mode, --omp-only) is made of its omp accounts."""
+    A requested provider without a result of its own is made of its omp accounts."""
     accounts = omp_accounts(documents, provider_ids)
     for provider_id in provider_ids:
         position = next((index for index, provider in enumerate(providers) if provider.get("id") == provider_id), None)
         mine = [(identity, entry) for owner, identity, entry in accounts if owner == provider_id]
-        merged = merge_omp_provider(providers[position] if position is not None else None, provider_id, mine, cliproxy)
+        merged = merge_omp_provider(providers[position] if position is not None else None, provider_id, mine)
         if merged is None:
             continue
         pool = omp_pool(capacity, provider_id)
@@ -8743,37 +8700,330 @@ def merge_omp(providers: list[dict[str, Any]], provider_ids: list[str], document
     return len(accounts)
 
 
-def merge_omp_safely(providers: list[dict[str, Any]], provider_ids: list[str], reads: dict[str, OmpRead],
-                     cliproxy: bool) -> tuple[list[dict[str, Any]], int, dict[str, OmpRead]]:
+def merge_omp_safely(providers: list[dict[str, Any]], provider_ids: list[str],
+                     read: OmpRead) -> tuple[list[dict[str, Any]], int, OmpRead]:
     """merge_omp on a copy of `providers`, so that omp data the merge cannot take never costs a native reading.
 
-    `reads` maps "local" and "gateway" to (status, message, document). When the merge fails, the sources that
-    merge on their own are kept and each other one becomes an error: omp's data was unreadable. Returns the
-    providers, how many omp accounts merged, and the reads."""
-    def merge(names: list[str]) -> tuple[list[dict[str, Any]], int] | None:
-        candidate = copy.deepcopy(providers)
-        local = reads["local"][2] if "local" in names else None
-        try:
-            count = merge_omp(candidate, provider_ids, [reads[name][2] for name in names],
-                              local.get("capacity") if local else None, cliproxy)
-        except Exception:
-            return None
-        return candidate, count
+    `read` is omp's (status, message, document). When the merge fails, the read becomes an error: omp's data was
+    unreadable. Returns the providers, how many omp accounts merged, and the read."""
+    document = read[2]
+    if document is None:
+        return providers, 0, read
+    candidate = copy.deepcopy(providers)
+    try:
+        count = merge_omp(candidate, provider_ids, [document], document.get("capacity"))
+    except Exception:
+        return providers, 0, ("error", OMP_UNREADABLE, None)
+    return candidate, count, read
 
-    usable = [name for name, (_status, _message, document) in reads.items() if document is not None]
-    if not usable:
-        return providers, 0, reads
-    result = merge(usable)
-    if result is None and len(usable) > 1:
-        alone = {name: merge([name]) for name in usable}
-        usable = [name for name, outcome in alone.items() if outcome is not None]
-        # Two sources that merge alone but not together cannot be told apart: neither is kept.
-        result = alone[usable[0]] if len(usable) == 1 else None
-    if result is None:
-        usable, result = [], (providers, 0)
-    reads = {name: read if read[2] is None or name in usable else ("error", OMP_UNREADABLE[name], None)
-             for name, read in reads.items()}
-    return result[0], result[1], reads
+
+# --------------------------------------------------------------- Other computers
+# Another computer is read over SSH by this same collector, run there as a reader (scripts/quotatank_remote.py),
+# and its readings merge with this computer's (backend contract, "Other computers"). Each computer's last good
+# answer is kept, so one that stops answering shows its last readings as stale instead of an error.
+COMPUTER_ID = re.compile(r"c-[0-9a-f]{8}")
+MAX_COMPUTERS = 16
+PROXY_ID = re.compile(r"p-[0-9a-f]{8}")
+MAX_PROXIES = 4
+NOT_SET_UP_KINDS = frozenset({"no_credentials", "cli_unavailable"})
+READING_FIELDS = ("status", "errorKind", "message", "windows", "credits", "source", "fetchedAt", "plan")
+
+
+def parse_computers(values: list[str]) -> list[tuple[str, str]]:
+    """`--computer ID=HOST` pairs, in order; malformed ids or destinations and repeated ids are ignored."""
+    computers: list[tuple[str, str]] = []
+    for value in values:
+        computer_id, separator, host = str(value).partition("=")
+        if (separator and COMPUTER_ID.fullmatch(computer_id) and quotatank_remote.valid_destination(host)
+                and all(known != computer_id for known, _host in computers)):
+            computers.append((computer_id, host))
+    return computers[:MAX_COMPUTERS]
+
+
+def computer_cache_path(state_dir: Path | None, computer_id: str) -> Path:
+    return (state_dir or state_folder()) / "computers" / f"{computer_id}.json"
+
+
+def computer_answer(payload: Any, provider_ids: list[str]) -> dict[str, Any]:
+    """The parts of a reader's payload this computer uses, checked: unknown providers and odd shapes are left out."""
+    if not isinstance(payload, dict) or payload.get("backendError") or not isinstance(payload.get("providers"), list):
+        raise quotatank_remote.RemoteFailure("failed", clean_message(payload.get("backendError") if isinstance(
+            payload, dict) else "") or "Quotatank's reader there sent an answer this version cannot read.")
+    wanted = set(provider_ids)
+    providers = [provider for provider in payload["providers"] if isinstance(provider, dict)
+                 and provider.get("id") in wanted and isinstance(provider.get("status"), str)]
+    names = lambda key: [item for item in payload.get(key) or [] if isinstance(item, str) and item in PROVIDER_ORDER]
+    omp = payload.get("omp") if isinstance(payload.get("omp"), dict) else {}
+    return {"providers": providers, "installed": names("installed"), "detected": names("detected"),
+            "omp": {key: omp[key] for key in ("local", "installed", "localAccounts", "version") if key in omp}}
+
+
+def read_computer(computer_id: str, host: str, provider_ids: list[str], timeout: float, omp_local: bool,
+                  state_dir: Path | None) -> dict[str, Any]:
+    """One computer's answer: fresh, else its last good one marked stale, else the failure alone."""
+    args = ["--reader", "--providers=" + ",".join(provider_ids), "--timeout", str(round(timeout)),
+            "--omp", "local" if omp_local else "off"]
+    path = computer_cache_path(state_dir, computer_id)
+    # omp usage there may take up to 45 s, as here; the connection itself gets 8 s.
+    seconds = 55.0 if omp_local else timeout + 20.0
+    try:
+        try:
+            answer = computer_answer(quotatank_remote.run_reader(host, "usage-fetch.py", args, seconds), provider_ids)
+        except (OSError, ValueError) as exc:
+            # Failing here (the runtime folder, the readers' files, starting ssh) must not cost the other sources.
+            raise quotatank_remote.RemoteFailure("failed", f"Could not start ssh for {host} on this computer.", "") from exc
+    except quotatank_remote.RemoteFailure as failure:
+        state = {"id": computer_id, "host": host, "status": "error", **failure.as_dict()}
+        try:
+            saved = json.loads(path.read_text("utf-8"))
+            answer = computer_answer(saved["answer"], provider_ids)
+            state.update(status="stale", readAt=str(saved["readAt"]))
+        except (OSError, ValueError, KeyError, TypeError, quotatank_remote.RemoteFailure):
+            return {**state, "providers": [], "installed": [], "detected": [], "omp": {}}
+        return {**state, **answer}
+    read_at = now_iso()
+    try:
+        atomic_write_json(path, {"readAt": read_at, "answer": answer})
+    except OSError:
+        pass  # Without a saved copy the computer is only an error the next time it does not answer.
+    return {"id": computer_id, "host": host, "status": "ok", "readAt": read_at, **answer}
+
+
+def readings_of(provider: dict[str, Any]) -> list[dict[str, Any]]:
+    accounts = provider.get("accounts")
+    return [entry for entry in accounts if isinstance(entry, dict)] if isinstance(accounts, list) else [provider]
+
+
+def mark_computer(provider: dict[str, Any], computer: dict[str, Any]) -> dict[str, Any]:
+    """Name the source on every reading of `provider`: another computer (`computer`), whose accounts get ids no
+    other computer shares, or a proxy (`proxy`, ids from "p-"), whose account ids are its own already."""
+    proxy = computer["id"].startswith("p-")
+    single = "accounts" not in provider
+    for reading in [provider, *([] if single else readings_of(provider))]:
+        reading["proxy" if proxy else "computer"] = {"id": computer["id"], "name": computer["host"]}
+        if computer["status"] == "stale":
+            reading.update(stale=True, readAt=computer["readAt"])
+        if proxy:
+            continue
+        for key in ("accountId", "ompAccountId"):
+            if isinstance(reading.get(key), str) and reading[key]:
+                reading[key] = computer["id"] + "/" + reading[key]
+    if single and not proxy:
+        provider["accountId"] = computer["id"] + "/" + (
+            "primary" if provider["id"] in KEYED_FETCHERS else PRIMARY_ACCOUNT_ID)
+    return provider
+
+
+def not_set_up(provider: dict[str, Any]) -> bool:
+    return provider.get("errorKind") in NOT_SET_UP_KINDS and "accounts" not in provider
+
+
+def same_account(native: dict[str, Any], entry: dict[str, Any]) -> bool:
+    """Two readings of one account: the same email and plan (or the same email when a plan is missing); readings
+    without an email match by their limits (same_limits), or, for API keys, by the same balance and limits to
+    the cent: one key set on two computers."""
+    email = str(native.get("account") or "").strip().lower()
+    other = str(entry.get("account") or "").strip().lower()
+    if email or other:
+        plans = {str(reading.get("plan") or "").strip().lower() for reading in (native, entry)}
+        return email == other and (len(plans) == 1 or "" in plans)
+    return same_limits(native, entry) or same_key_reading(native, entry)
+
+
+def account_email(reading: dict[str, Any]) -> str:
+    """The reading's email, lowercased; "" when its account names no email (a label, a key)."""
+    account = str(reading.get("account") or "").strip().lower()
+    return account if "@" in account else ""
+
+
+def same_proxy_account(native: dict[str, Any], entry: dict[str, Any]) -> bool:
+    """A proxy's reading of an account read elsewhere: the same email (a proxy names plans its own way), else,
+    without an email, the same limits."""
+    email = account_email(entry)
+    return account_email(native) == email if email else same_limits(native, entry)
+
+
+def same_key_reading(native: dict[str, Any], entry: dict[str, Any]) -> bool:
+    if native.get("status") != "ok" or entry.get("status") != "ok" or entry.get("id") not in KEYED_FETCHERS:
+        return False
+    def figures(reading: dict[str, Any]) -> Any:
+        windows = [(window.get("id"), window.get("used"), window.get("limit"), window.get("resetsAt"))
+                   for window in dict_list(reading.get("windows"))]
+        return reading.get("plan"), reading.get("credits"), windows
+    mine = figures(native)
+    return (bool(mine[1]) or bool(mine[2])) and mine == figures(entry)
+
+
+def unusable(reading: dict[str, Any]) -> bool:
+    return reading.get("status") != "ok" or bool(reading.get("stale"))
+
+
+def stand_in(native: dict[str, Any], entry: dict[str, Any]) -> None:
+    """A preferred reading that failed (or went stale) shows another source's reading of the same account, which
+    names where it came from; the preferred one's failure becomes the notice."""
+    failure = native.get("message") if native.get("status") != "ok" else ""
+    for key in READING_FIELDS:
+        if key in entry:
+            native[key] = copy.deepcopy(entry[key])
+        elif key != "plan":
+            native.pop(key, None)
+    # The source, and its id for the account: a reset through a proxy names the account that way.
+    native["standIn"] = {**(entry.get("computer") or entry["proxy"]), "accountId": str(entry.get("accountId") or "")}
+    native["notice"] = failure or entry.get("notice") or ""
+    for key in ("stale", "readAt"):
+        if key in entry:
+            native[key] = entry[key]
+        else:
+            native.pop(key, None)
+
+
+def merge_computer_provider(ours: dict[str, Any] | None, theirs: dict[str, Any]) -> dict[str, Any]:
+    """This side's result for one provider with another source's (a computer's or a proxy's) merged in. This
+    side is preferred."""
+    if not_set_up(theirs):
+        return ours if ours is not None else theirs
+    if ours is None or not_set_up(ours):
+        return theirs
+    natives = readings_of(ours)
+    added = []
+    stood_in = False
+    match_rule = same_proxy_account if "proxy" in theirs else same_account
+    for entry in readings_of(theirs):
+        match = next((native for native in natives if match_rule(native, entry)), None)
+        if match is None:
+            entry["active"] = False
+            added.append(entry)
+            continue
+        # Live requests there (omp on that computer, the proxy's activity) name the account by its ids there.
+        add_live_ids(match, [entry.get("accountId"), entry.get("ompAccountId")])
+        if unusable(match) and entry.get("status") == "ok" and not (entry.get("stale") and match.get("stale")):
+            stand_in(match, entry)
+            stood_in = True
+        elif "proxy" in entry and entry.get("status") == "error" and not unusable(match):
+            # Read fine elsewhere: the proxy's failure is a note, not the account's state.
+            note = "CLIProxyAPI could not read it: " + str(entry.get("message") or "no answer.")
+            match["notice"] = " ".join(part for part in (str(match.get("notice") or ""), note) if part)
+    if stood_in and "accounts" in ours:
+        # The summary is a copy of the leading account: it follows that account's stand-in.
+        lead = next((entry for entry in ours["accounts"] if entry.get("active")), ours["accounts"][0])
+        for key in (*READING_FIELDS, "standIn", "notice", "stale", "readAt", "errorKind"):
+            if key in lead:
+                ours[key] = copy.deepcopy(lead[key])
+            else:
+                ours.pop(key, None)
+    return add_accounts(ours, ours["id"], added) if added else ours
+
+
+MAX_LIVE_IDS = 4
+
+
+def add_live_ids(reading: dict[str, Any], ids: list[Any]) -> None:
+    """Note on `reading` the ids another source knows its account by (`liveIds`), at most MAX_LIVE_IDS."""
+    known = reading.setdefault("liveIds", [])
+    for value in ids:
+        if isinstance(value, str) and value and value not in known and len(known) < MAX_LIVE_IDS:
+            known.append(value)
+
+
+def merge_computers(providers: list[dict[str, Any]], provider_ids: list[str], computers: list[dict[str, Any]]) -> None:
+    """Merge every other source's readings into `providers`, in place, in order: computers, then proxies."""
+    for computer in computers:
+        for theirs in computer["providers"]:
+            if theirs["id"] not in provider_ids:
+                continue
+            theirs = mark_computer(copy.deepcopy(theirs), computer)
+            position = next((index for index, provider in enumerate(providers) if provider.get("id") == theirs["id"]), None)
+            merged = merge_computer_provider(providers[position] if position is not None else None, theirs)
+            if position is None:
+                providers.append(merged)
+            else:
+                providers[position] = merged
+        # A proxy was not asked about accounts read fine here, but its live activity still names them by its ids.
+        for alias in computer.get("aliases") or []:
+            provider = next((row for row in providers if row.get("id") == alias["id"]), None)
+            email = account_email(alias)
+            reading = next((reading for reading in readings_of(provider) if account_email(reading) == email),
+                           None) if provider is not None and email else None
+            if reading is not None:
+                add_live_ids(reading, [alias["accountId"]])
+
+
+def computer_state(computer: dict[str, Any]) -> dict[str, Any]:
+    """What the payload says about a computer (`computers` in the backend contract)."""
+    keys = ("id", "host", "status", "readAt", "kind", "message", "fix", "installed", "detected", "omp")
+    return {key: computer[key] for key in keys if key in computer}
+
+
+def parse_proxies(urls: list[str], key_files: list[str]) -> list[tuple[str, str, Path | None]]:
+    """`--proxy ID=URL` and `--proxy-key-file ID=PATH` as (id, url, key file), in order; malformed or repeated
+    ids are ignored."""
+    keys: dict[str, Path] = {}
+    for value in key_files:
+        proxy_id, separator, path = str(value).partition("=")
+        if separator and PROXY_ID.fullmatch(proxy_id) and path.strip():
+            keys[proxy_id] = Path(path.strip()).expanduser()
+    proxies: list[tuple[str, str, Path | None]] = []
+    for value in urls:
+        proxy_id, separator, url = str(value).partition("=")
+        if separator and PROXY_ID.fullmatch(proxy_id) and url.strip() and all(known != proxy_id for known, *_ in proxies):
+            proxies.append((proxy_id, url.strip(), keys.get(proxy_id)))
+    return proxies[:MAX_PROXIES]
+
+
+def proxy_cache_path(state_dir: Path | None, proxy_id: str) -> Path:
+    return (state_dir or state_folder()) / "proxies" / f"{proxy_id}.json"
+
+
+def proxy_answer(saved: Any, provider_ids: list[str]) -> dict[str, Any]:
+    if not isinstance(saved, dict) or not isinstance(saved.get("providers"), list):
+        raise ValueError("not a saved proxy answer")
+    wanted = set(provider_ids)
+    return {"providers": [provider for provider in saved["providers"] if isinstance(provider, dict)
+                          and provider.get("id") in wanted and isinstance(provider.get("status"), str)],
+            "detected": [item for item in saved.get("detected") or [] if item in CLIPROXY_QUOTA_PROVIDERS]}
+
+
+def read_proxy(proxy_id: str, url: str, key_file: Path | None, provider_ids: list[str], timeout: float,
+               healthy: dict[str, set[str]], state_dir: Path | None) -> dict[str, Any]:
+    """One proxy's answer, shaped like another computer's: fresh, else its last good one marked stale, else the
+    failure alone. Accounts `healthy` names are read elsewhere already and are not queried."""
+    path = proxy_cache_path(state_dir, proxy_id)
+    state = {"id": proxy_id, "host": "CLIProxyAPI", "kind": "proxy"}
+    try:
+        providers, found, aliases = collect_cliproxy(provider_ids, timeout, url, key_file or cliproxy_key_path(), healthy)
+    except Exception as exc:
+        failure = exc if isinstance(exc, ProviderFailure) else ProviderFailure("internal", "Could not read CLIProxyAPI's accounts.")
+        state.update(status="error", errorKind=failure.kind, message=failure.message)
+        try:
+            saved = json.loads(path.read_text("utf-8"))
+            answer = proxy_answer(saved["answer"], provider_ids)
+            state.update(status="stale", readAt=str(saved["readAt"]))
+        except (OSError, ValueError, KeyError, TypeError):
+            return {**state, "providers": [], "detected": []}
+        return {**state, **answer}
+    read_at = now_iso()
+    answer = {"providers": providers, "detected": found}
+    try:
+        atomic_write_json(path, {"readAt": read_at, "answer": answer})
+    except OSError:
+        pass  # Without a saved copy the proxy is only an error the next time it does not answer.
+    return {**state, "status": "ok", "readAt": read_at, **answer, "aliases": aliases}
+
+
+def healthy_accounts(providers: list[dict[str, Any]]) -> dict[str, set[str]]:
+    """Provider id → emails of the accounts read fine: a proxy need not query them again."""
+    healthy: dict[str, set[str]] = {}
+    for provider in providers:
+        for reading in readings_of(provider):
+            if reading.get("status") == "ok" and not reading.get("stale") and (email := account_email(reading)):
+                healthy.setdefault(str(provider.get("id")), set()).add(email)
+    return healthy
+
+
+def proxy_state(proxy: dict[str, Any]) -> dict[str, Any]:
+    """What the payload says about a proxy (`proxies` in the backend contract)."""
+    keys = ("id", "status", "readAt", "errorKind", "message", "detected")
+    return {key: proxy[key] for key in keys if key in proxy}
 
 
 # --------------------------------------------------------------- Orchestration
@@ -8881,31 +9131,27 @@ def bound_providers(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def build_payload(
     provider_ids: list[str], timeout: float, state_dir: Path | None,
-    source: str = "direct", cliproxy_url: str = "http://127.0.0.1:8317",
-    key_file: Path | None = None, key_files: dict[str, Path] | None = None,
+    key_files: dict[str, Path] | None = None,
     extra_keys: dict[str, list[tuple[str, Path]]] | None = None,
-    omp_local: bool = False, omp_gateway_url: str = "", omp_gateway_key_file: Path | None = None,
-    omp_only: bool = False,
+    omp_local: bool = False, computers: list[tuple[str, str]] | None = None, reader: bool = False,
+    proxies: list[tuple[str, str, Path | None]] | None = None,
 ) -> dict[str, Any]:
     omp = omp_executable()
     reads_local = omp_local and omp is not None and omp_set_up()
-    # omp takes longer than most providers, so it is read while they are.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+    computers = [] if reader else (computers or [])
+    proxies = [] if reader else (proxies or [])
+    base_state = history_path(state_dir).parent
+    # omp and other computers take longer than most providers, so they are read while the providers are. A
+    # proxy is read once this computer's providers are, so it skips the accounts read fine here.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2 + len(computers) + len(proxies)) as pool:
         local = pool.submit(read_omp_local, omp, state_dir) if reads_local else None
         version = pool.submit(omp_version, omp, state_dir) if reads_local else None
-        gateway = pool.submit(read_omp_gateway, omp_gateway_url, omp_gateway_key_file, timeout) if omp_gateway_url else None
-        if omp_only:
-            providers: list[dict[str, Any]] = []
-        elif source == "cliproxy":
-            providers = collect_cliproxy(provider_ids, timeout, cliproxy_url, key_file or cliproxy_key_path(), discover=True)
-            try:
-                server = normalize_cliproxy_url(cliproxy_url)
-            except ProviderFailure:
-                server = "invalid"
-            server_id = hashlib.sha256(server.encode("utf-8")).hexdigest()[:16]
-            state_dir = history_path(state_dir).parent / ("cliproxy-" + server_id)
-        else:
-            providers = collect_providers(provider_ids, timeout, key_files, extra_keys)
+        remote = [pool.submit(read_computer, computer_id, host, provider_ids, timeout, omp_local, base_state)
+                  for computer_id, host in computers]
+        providers = collect_providers(provider_ids, timeout, key_files, extra_keys)
+        healthy = healthy_accounts(providers)
+        proxied = [pool.submit(read_proxy, proxy_id, url, key_file, provider_ids, timeout, healthy, base_state)
+                   for proxy_id, url, key_file in proxies]
         if local:
             local_read = local.result()
         elif not omp_local:
@@ -8914,31 +9160,35 @@ def build_payload(
             local_read = ("missing", "omp was not found on this computer.", None)
         else:
             local_read = ("unused", OMP_NOT_SET_UP, None)
-        gateway_read = gateway.result() if gateway else ("off", "", None)
         omp_release = version.result() if version else ""
-    providers, merged, reads = merge_omp_safely(providers, provider_ids, {"local": local_read, "gateway": gateway_read},
-                                                source == "cliproxy")
-    local_read, gateway_read = reads["local"], reads["gateway"]
+        answers = [future.result() for future in remote]
+        proxy_answers = [future.result() for future in proxied]
+    providers, merged, local_read = merge_omp_safely(providers, provider_ids, local_read)
+    # Proxies are the least preferred source.
+    merge_computers(providers, provider_ids, [*answers, *proxy_answers])
     providers = bound_providers(providers)
-    if not omp_only:
+    if not reader:
         update_and_attach_history(providers, state_dir)
     omp_summary = {
-        "local": local_read[0], "gateway": gateway_read[0],
-        "message": clean_message(" ".join(message for _, message, _ in reads.values() if message)),
-        "accounts": merged, "localAccounts": omp_account_count(local_read[2], provider_ids),
-        "gatewayAccounts": omp_account_count(gateway_read[2], provider_ids), "installed": omp is not None,
+        "local": local_read[0], "message": clean_message(local_read[1]), "accounts": merged,
+        "localAccounts": omp_account_count(local_read[2], provider_ids), "installed": omp is not None,
     }
     if omp_release:
         omp_summary["version"] = omp_release
-    return {
+    payload = {
         "schemaVersion": SCHEMA_VERSION,
         "generatedAt": now_iso(),
         "providers": providers,
-        "source": source,
-        "detected": detected_providers(),
+        "detected": list(dict.fromkeys([*detected_providers(),
+                                        *(item for answer in [*answers, *proxy_answers] for item in answer["detected"])])),
         "installed": installed_providers(),
         "omp": omp_summary,
     }
+    if computers:
+        payload["computers"] = [computer_state(answer) for answer in answers]
+    if proxies:
+        payload["proxies"] = [proxy_state(answer) for answer in proxy_answers]
+    return payload
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -8946,9 +9196,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--providers", default=",".join(PROVIDER_ORDER))
     parser.add_argument("--timeout", type=float, default=12.0)
     parser.add_argument("--state-dir", type=Path)
-    parser.add_argument("--source", choices=("direct", "cliproxy"), default="direct")
-    parser.add_argument("--cliproxy-url", default=os.environ.get("CLIPROXY_API_URL") or "http://127.0.0.1:8317")
-    parser.add_argument("--cliproxy-key-file", type=lambda value: Path(value).expanduser())
+    parser.add_argument("--proxy", action="append", default=[], metavar="ID=URL",
+                        help="A CLIProxyAPI server whose accounts are read too (p- and eight hex digits, then its URL).")
+    parser.add_argument("--proxy-key-file", action="append", default=[], metavar="ID=PATH",
+                        help="The file holding that proxy's management key.")
     parser.add_argument("--key-file", action="append", default=[], metavar="PROVIDER=PATH",
                         help="Private key file saved from widget settings for an API-key provider.")
     parser.add_argument("--extra-key", action="append", default=[], metavar="PROVIDER=KEYID=PATH",
@@ -8956,12 +9207,10 @@ def main(argv: list[str] | None = None) -> int:
                              "KEYID is the id of a key saved in widget settings (k- and eight hex digits).")
     parser.add_argument("--omp", choices=("off", "local"), default="off",
                         help="local: add the accounts omp (Oh My Pi) signs in to, from `omp usage --json`.")
-    parser.add_argument("--omp-gateway-url", default="",
-                        help="An omp auth gateway whose GET /v1/usage lists more omp accounts.")
-    parser.add_argument("--omp-gateway-key-file", type=lambda value: Path(value).expanduser(),
-                        help="Private file with the omp gateway's token.")
-    parser.add_argument("--omp-only", action="store_true",
-                        help="Read only omp's accounts: no provider is queried and no history is written.")
+    parser.add_argument("--computer", action="append", default=[], metavar="ID=HOST",
+                        help="Another computer to read over SSH (c- and eight hex digits, then its SSH destination).")
+    parser.add_argument("--reader", action="store_true",
+                        help="Run as another computer's reader: no history is read or written.")
     args = parser.parse_args(argv)
 
     provider_ids = parse_provider_ids(args.providers)
@@ -8969,10 +9218,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         key_files = parse_key_files(args.key_file)
         extra_keys = parse_extra_keys(args.extra_key)
-        payload = build_payload(provider_ids, timeout, args.state_dir, args.source, args.cliproxy_url,
-                                args.cliproxy_key_file, key_files, extra_keys, omp_local=args.omp == "local",
-                                omp_gateway_url=args.omp_gateway_url.strip(),
-                                omp_gateway_key_file=args.omp_gateway_key_file, omp_only=args.omp_only)
+        payload = build_payload(provider_ids, timeout, args.state_dir, key_files, extra_keys, omp_local=args.omp == "local",
+                                computers=parse_computers(args.computer), reader=args.reader,
+                                proxies=parse_proxies(args.proxy, args.proxy_key_file))
     except Exception as exc:
         payload = {
             "schemaVersion": SCHEMA_VERSION,

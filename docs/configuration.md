@@ -70,9 +70,9 @@ Each of these is off until turned on under **Settings → Providers**. Save a ke
 
 A key is only ever sent to its own provider. Where a company runs an international and a China platform (Z.ai/BigModel, MiniMax, Moonshot), the international host is asked first and the other one only when the key is rejected.
 
-### Found on this computer
+### Found
 
-Every refresh also checks, without any network call, which providers are set up here: a credential file or IDE quota file exists, a key is in the environment or saved, or the Antigravity language server is running. Settings lists those that are not monitored under **Found on this computer**, with **Monitor** and **Ignore**, and Limits mentions them in one line until each is handled. **Ignore** adds the provider to `dismissedProviders`.
+Every refresh also checks, without any network call, which providers are set up here: a credential file or IDE quota file exists, a key is in the environment or saved, or the Antigravity language server is running. The other computers and proxies report theirs. Settings lists those that are not monitored under **Providers → Found**, with **Monitor** and **Ignore**, and Limits mentions them in one line until each is handled. **Ignore** adds the provider to `dismissedProviders`.
 
 ### Sign in and install from Settings
 
@@ -90,7 +90,7 @@ The OpenCode provider reads the sign-in OpenCode saved, and never renews or rewr
 
 ### OpenRouter
 
-OpenRouter has no CLI sign-in and is off by default. Turn on its **Monitor** switch under **Settings → Providers**, then paste a key in the **API key** editor that appears under it and press **Save**. OpenRouter is read only in local mode; CLIProxyAPI does not report it.
+OpenRouter has no CLI sign-in and is off by default. Turn on its **Monitor** switch under **Settings → Providers**, then paste a key in the **API key** editor that appears under it and press **Save**. CLIProxyAPI does not report it.
 
 OpenRouter is measured in money as well as limits:
 
@@ -104,15 +104,25 @@ OpenRouter is measured in money as well as limits:
 
 DeepSeek's platform is prepaid, so it is measured in money only. Turn on its **Monitor** switch under **Settings → Providers** and save an API key the same way as for OpenRouter (`DEEPSEEK_API_KEY` and `DEEPSEEK_API_KEY_FILE` are honored). The widget reads `GET /user/balance`: the total balance becomes **Can spend now** and leads the tile, chip, headline, and **Balance** card, which also lists the granted and topped-up amounts. DeepSeek reports a balance per currency; the USD one is preferred and a CNY-only account shows yuan (`¥80.00`). DeepSeek has no limits that reset and no spend history, so there is no limit card and no runway line; when the platform reports that calls are refused, a notice under the headline says the balance needs topping up. Low-balance alerts apply to the balance as it is reported.
 
-### CLIProxyAPI
+### Sources
 
-Open the Quotatank popup, click the **gear**, and open **Providers**. Select **CLIProxyAPI** under **Source** to discover all providers and accounts managed by [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). Local CLI sign-ins are not needed for this source. The default `direct` source retains the existing behavior. The source applies as soon as it is chosen; the server URL saves when you finish editing it, and the management key when you press its **Save**.
+**Settings → Sources** says where your agents run: this computer, other computers you reach over SSH, CLIProxyAPI servers, and T3 Code servers. Every source is read together: the same account read in two places is one row, the more reliable reading first (this computer, then the other computers in order, then proxies), and a reading that failed is stood in for by another source's reading of that account, which names where it came from. Each source has its own switch, and changes apply as you make them.
 
-Set **CLIProxyAPI server URL** to your server address (default `http://127.0.0.1:8317`). Dashboard URLs ending in `/management.html`, management API URLs ending in `/v0/management` or `/v0/management/auth-files`, and reverse-proxy path prefixes are accepted. HTTPS certificates are verified; redirects are rejected. Plain HTTP carries the management key only to this computer or over Tailscale, as for the omp gateway; on this computer, CLIProxyAPI must run as you (or root, as Docker's port forwarding does), and a server another account runs gets nothing. A proxy on another network needs HTTPS.
+**This computer** is always read: its sign-ins, API keys and agent history. **Settings → Providers** lists what was found here.
 
-Enter the server's **Management API key** in the masked settings field and click **Save**. Use the plaintext key accepted by the management panel, not a client API key or a bcrypt hash from the server configuration. The widget stores it automatically in a private file with permissions `0600`; you do not need to create or choose a file. Leave the field blank to keep your existing key. The saved key is never loaded back into the form, and Cancel discards an entered key.
+#### Other computers
 
-For terminal-only configuration, you can still supply a key file with `cliproxyKeyFile`. The default file is `${XDG_CONFIG_HOME:-~/.config}/omarchy/quotatank/cliproxy.key`. To create it without putting the key in shell history:
+Add a computer you reach over SSH with a key, such as the desktop you work on from a laptop. Enter its SSH destination (`devbox` or `user@devbox`; ports and options belong in `~/.ssh/config`), or pick one of the suggestions, which come from your SSH configuration and your Tailscale peers, and press **Test**. The Test connects, checks that Python 3 is there, copies Quotatank's readers to `~/.cache/quotatank` on that computer, and reads it once; each step that fails says why and gives the command that fixes it (accept its host key, load your key into the agent, and so on). Quotatank changes nothing else there and passes no setting to its shell as text. **Add** keeps the computer once its Test answered; **Remove** deletes what Quotatank put there and the readings it saved here.
+
+A computer's sign-ins, API keys, omp accounts and agent history count as this computer's: Limits shows its accounts beside yours, with the computer's name in the detail, Costs adds its transcripts, and omp's requests there mark their accounts as spending. SSH runs with keys only and known host keys only, one shared connection per computer; a computer that does not answer keeps showing its last readings, marked stale. Up to 16 computers are read.
+
+**Main computer** decides where **Sign in** and **Install** open their terminal: automatic (the only other computer, else this one), this computer, or one of the others. **Use** switches Omarchy logins on this computer only.
+
+#### CLIProxyAPI
+
+A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) server adds the Claude, Codex, Kimi and Antigravity accounts it holds, for the providers you monitor, beside this computer's and the other computers'. An account this computer already read fine is not asked for again. Choose **Add a proxy**, set its URL (default `http://127.0.0.1:8317`), and save its **Management API key**. Dashboard URLs ending in `/management.html`, management API URLs ending in `/v0/management` or `/v0/management/auth-files`, and reverse-proxy path prefixes are accepted. HTTPS certificates are verified; redirects are rejected. Plain HTTP carries the management key only to this computer or over Tailscale; on this computer, CLIProxyAPI must run as you (or root, as Docker's port forwarding does), and a server another account runs gets nothing. A proxy on another network needs HTTPS, and a remote server must permit remote management.
+
+Use the plaintext key the management panel accepts, not a client API key or a bcrypt hash from the server configuration. It is saved in a private file (`0600`); the saved key is never loaded back into the form. Without a saved key, `CLIPROXY_API_KEY_FILE` or `${XDG_CONFIG_HOME:-~/.config}/omarchy/quotatank/cliproxy.key` is used. To create that file without putting the key in shell history:
 
 ```bash
 install -d -m 700 "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/quotatank"
@@ -120,64 +130,43 @@ install -d -m 700 "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/quotatank"
  printf '%s\n' "$proxy_key" > "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/quotatank/cliproxy.key")
 ```
 
-Enable the source:
+The collector lists the managed accounts and asks CLIProxyAPI to make read-only upstream quota calls using `$TOKEN$` substitution; provider tokens stay on the server. Antigravity needs the account's project ID. Paused accounts stay visible without being queried. A proxy that stops answering keeps showing its last accounts, marked stale, and the proxy section says what went wrong; when the proxy cannot read an account another source read fine, that account only gets a note.
 
-```bash
-omarchy bar set janitorhead.quotatank usageSource cliproxy
-omarchy bar set janitorhead.quotatank cliproxyUrl https://proxy.example.com
-```
+Each proxy account is its own row in Limits, with its label, plan, limits and resets; percentages are never added across accounts. Codex shows the overall weekly limit first, with **Codex Pro · 20×** and **Codex Pro · 5×** taken from the reported plan tier, and a badge with its banked manual resets, including zero. At most 32 accounts per provider are checked, four at a time, with a shared deadline.
 
-The collector lists managed accounts and asks CLIProxyAPI to make read-only upstream quota calls using `$TOKEN$` substitution. Provider tokens stay on the server. All managed providers are discovered automatically, independently of the local CLI provider selection. Claude, Codex, Kimi, and Antigravity have quota lookups; other providers stay visible with an explicit unsupported-quota notice. Antigravity requires the account’s project ID. Paused accounts remain browsable without being queried. Remote servers must permit remote management access.
+Click a nonzero **banked resets** badge on a proxy account to review its reset credits. The confirmation shows each reset's effect and expiry, selects the earliest expiry first (non-expiring credits last), and lets you choose another credit before **Apply reset**. It spends one credit on that account only, through the proxy that read it, then refreshes usage. Confirmations expire after two minutes and are dismissed when the connection changes. If the outcome is uncertain, **Retry same reset** reuses the original request identifier; closing the popup keeps that retry while the widget stays loaded. The upstream reset endpoints are internal ChatGPT APIs and may change.
 
-**Limits** shows every connected account for the selected provider as a separate card, with its own account label, plan, remaining quota, and reset time. Per-model token counts live in **Costs** (isolate the provider, then **Breakdown → Model** with the **Tokens** metric). Codex defaults to the overall weekly limit, with **Codex Pro · 20×** and **Codex Pro · 5×** labels taken from the reported plan tier. A badge beside each Codex plan shows its banked manual resets, including zero; the badge is hidden when the count is unavailable. For example, three connected Codex subscriptions produce three account cards. **Show additional limits** reveals session, model-specific, and other windows. Monthly-only plans show their monthly allowance; accounts without a weekly/monthly allowance show their first reported window. Paused and failed accounts stay visible with their own status. Percentages are never added across accounts.
+Claude's banked resets (resets of the 5-hour and weekly limits that Anthropic grants, such as a launch reset) show only while the account has one: on its row badge for a proxy account, otherwise in a **banked reset** card under the limits, with when the next one expires. **Apply…** opens the same confirmation; it offers the reset Claude spends next, and **Apply reset** spends it on that account only. When Claude holds the reset back, the card says why (`Usable once you reach a limit.`, a cooldown, a pause) and has no button. Accounts read only through omp show the count but are applied in omp (`omp usage reset`), which holds their sign-in. Claude offers these resets only to Claude Code, so its usage, profile and reset requests identify as Claude Code. The reset endpoints are internal Anthropic APIs and may change.
 
-In CLIProxyAPI mode, click a nonzero **banked resets** badge to review that account's current reset credits. The confirmation shows each reset's effect and expiry, selects the earliest expiry first (non-expiring credits last), and lets you choose another credit before clicking **Apply reset**. Account labels respect **Hide account emails**. The action spends one selected credit only on that account, then refreshes usage. Confirmations expire after two minutes and are dismissed when the configured connection changes. If the outcome is uncertain, **Retry same reset** reuses the original request identifier; closing the popup preserves that retry while the widget remains loaded. The upstream reset endpoints are internal ChatGPT APIs and may change.
+**CPA Usage Keeper** is optional: with its URL and password on the proxy, Quotatank learns which proxy account served the latest request, every 15 seconds, and the chip follows that account. Round-robin and concurrent requests can use different accounts, so this names the most recent request, not the next one; without it, every account still gets its own row and the chip shows the account closest to its limit. Keeper never feeds Costs. See [deployment](keeper-deployment.md).
 
-Claude's banked resets (resets of the 5-hour and weekly limits that Anthropic grants, such as a launch reset) show only while the account has one: on its row badge in CLIProxyAPI mode, and otherwise in a **banked reset** card under the limits, with when the next one expires. **Apply…** opens the same confirmation; it offers the reset Claude spends next, and **Apply reset** spends it on that account only. When Claude holds the reset back, the card says why (`Usable once you reach a limit.`, a cooldown, a pause) and has no button. Accounts read only through omp show the count but are applied in omp (`omp usage reset`), which holds their sign-in. Claude offers these resets only to Claude Code, so its usage, profile and reset requests identify as Claude Code. The reset endpoints are internal Anthropic APIs and may change.
+#### T3 Code servers
 
-Provider buttons wrap to fit the panel. Failed refreshes preserve the last known reading in memory with a stale-data notice; switching servers clears those readings. At most 32 accounts per provider are checked, with four concurrent checks per provider and a shared deadline. In **Percentages** menubar mode, each provider shows only its icon and the quota figure chosen under **Show limits as**; account names appear in the tooltip. When the last-used account is known, the percentage belongs to that account. Account activity refreshes every 15 seconds through the configured CPA Usage Keeper, independently of quota refreshes and the Costs source. Configure the Keeper URL and password in settings for the same proxy. Hover for the last recorded request time. Round-robin and concurrent requests can use different accounts, so this identifies the most recently recorded request, not a guaranteed account for the next request. Without matching activity, or when account timestamps are tied, the bar still shows the best-capacity account’s quota. The tooltip identifies this pool summary and explains that the last-used account is unknown. Failed activity refreshes retain the last-known account with a tooltip notice. Icon mode includes last-used details in its tooltip.
+Costs from other computers running [T3 Code](https://github.com/pingdotgg/t3code) (costs only). Choose **Add T3 server**, enter a name, its HTTP(S) base URL, and its connection token; the server is saved once it has a name and a URL, and the token when you press **Save**. Up to four servers are included in the 24H, 7D, and 30D totals. Use a server with usage contract version 4 or 5. T3 may exchange a connection token for an access token; rejected or expired credentials produce a reconnect notice. Tokens go over HTTPS, or over plain HTTP only to this computer (to a T3 server running as you) or over Tailscale.
 
-**Hide account emails** is enabled by default. Account cards and menubar tooltips use numbered labels (Account 1, Account 2, …), and account identities are omitted from the settings details. Turn it off under **Settings → Display** to show usernames/email addresses. This is a display preference; quota collection continues normally.
+T3 scans the Codex and Claude transcripts readable on its server, **including sessions started outside T3**. Identical transcript folders reported by several sources are counted once; copies on different machines cannot reliably be identified as the same history.
 
-Proxy quota history continues to record the best-capacity pool summary and is stored separately for each server under `cliproxy-<server-hash>/history.json` in the normal state directory. It never mixes with direct-CLI history. Costs sources are configured separately using the gear on Costs.
+### Cost history
 
-### Local and remote cost history
-
-Open **Costs → gear** to configure sources and prices. Local **Codex CLI** and
+Open **Costs → gear** to configure the local history and prices. Local **Codex CLI** and
 **Claude Code CLI** history are enabled by default, independently of the quota
-providers. Enable or disable either source in Costs settings.
-
-Choose **Add T3 server**, enter a name, its HTTP(S) base URL, and its connection
-token, then **Save**. Up to four enabled servers are included automatically in
-24H, 7D, and 30D totals. Use a compatible [T3 Code](https://github.com/pingdotgg/t3code)
-server with usage contract version 4 or 5. Tokens are stored in private files;
-blank token fields preserve saved credentials. T3 may exchange a connection
-token for an access token; rejected or expired credentials produce a reconnect
-notice. Use a fresh connection token when prompted by the source status. Tokens
-go over HTTPS, or over plain HTTP only to this computer (to a T3 server running as
-you) or over Tailscale; a T3 server on another network needs HTTPS.
-
-T3 scans Codex and Claude transcripts readable on its server, **including
-sessions started outside T3**. Another computer contributes only when its
-history is available through a configured server. Identical transcript folders
-reported by local and remote sources, or multiple T3 servers, are counted once.
-Copies on different machines cannot reliably be identified as the same history.
+providers. The other computers under **Settings → Sources** add their transcripts, and
+T3 Code servers their totals.
 
 The **Last scan** section in Costs settings shows included, partial, missing, duplicate, or unavailable history.
-When a T3 server is offline, its last usable snapshot for that period and timezone
-is retained with a timestamp. Stale snapshots can miss new activity and boundary
+When a T3 server or another computer is offline, its last usable data is
+retained with a timestamp. Stale snapshots can miss new activity and boundary
 hours; empty unknown chart periods are marked as unavailable. Session counts are
 omitted when stale summaries cannot provide an accurate count. No app or provider
 filter is needed: all enabled cost sources contribute together.
 
-Costs does not read CLIProxyAPI or Keeper. Keeper remains optional for the quota
-menubar’s last-used account feature; see [deployment](keeper-deployment.md).
+Costs does not read CLIProxyAPI or Keeper.
 An Oh My Pi run counts when it keeps its session, tool-free runs included (such
 as review work another agent sends to a provider through omp): it lands in the
 Oh My Pi transcripts like an interactive one. A run made with `--no-session`
 writes no transcript, so its use shows only in that provider's limits.
 
-For standalone quota backend use, `--source cliproxy`, `--cliproxy-url`, and `--cliproxy-key-file` are available. `CLIPROXY_API_URL` supplies the URL when the CLI flag is omitted, and `CLIPROXY_API_KEY_FILE` supplies the key path when neither the widget nor the CLI sets one. Keys are never passed as command-line arguments or saved in widget settings.
+For standalone quota backend use, `--proxy ID=URL` and `--proxy-key-file ID=PATH` read a proxy, and `--computer ID=HOST` another computer ([backend contract](backend-contract.md#other-computers)). `CLIPROXY_API_KEY_FILE` supplies a proxy's key path when no `--proxy-key-file` names one. Keys are never passed as command-line arguments or saved in widget settings.
 
 No credential is printed or included in display errors. T3 access tokens are cached in separate private authentication files; usage snapshots contain only accounting metadata and hashed folder identities. State is XDG-aware: the plugin directory uses mode `0700` and its files use `0600`.
 
@@ -193,22 +182,29 @@ Quotatank 1.x kept its keys and state in `omarchy/model-usage`. The first 2.0 ba
 
 ## Settings
 
-Open the popup and click the **gear** beside Refresh. Settings is an index of six pages: **Providers**, **Menu bar**, **Alerts**, **Display**, **Costs**, and **Advanced**. Each index row shows what that page is set to, so most questions are answered before opening it. The gear in the Costs tab opens the **Costs** page directly. Settings stay available when no providers are enabled.
+Open the popup and click the **gear** beside Refresh. Settings is an index of seven pages: **Sources**, **Providers**, **Menu bar**, **Alerts**, **Display**, **Costs**, and **Advanced**. Each index row shows what that page is set to, so most questions are answered before opening it. The gear in the Costs tab opens the **Costs** page directly. Settings stay available when no providers are enabled.
+
+**First-run setup.** The first time a fresh install opens, the panel walks three of those pages, **Sources** (where your agents run, with the same Tests), **Providers** (what was found, with **Monitor**) and **Menu bar** (chips or the icon, and which providers get a chip), then lands on Limits. **‹ Back** returns a step, and closing it skips the rest. Settings carried over from an earlier version skip setup; **Settings → Advanced → Run setup again** starts it over.
+
+**Hints.** The first time the account list, the forecast dashes, the runway or the Costs heatmap appears, one line under it explains it; Limits shows one at a time, top to bottom. **Got it** dismisses a hint for good, and **Run setup again** brings them back.
 
 There is no Save button. Every switch, selector, and valid number writes to the widget's entry in `~/.config/omarchy/shell.json` the moment it changes and applies immediately, so the bar and Limits can be compared without leaving the page. An out-of-range or malformed number stays in its field with the reason underneath and leaves the saved value untouched; free text such as a server URL saves when editing finishes (Enter or leaving the field) and is valid. Keys and tokens are the exception: they have an explicit **Save** that writes the secret to a private file, after which the page shows **Saved on this device** with **Replace** and **Remove**. **‹ Settings** returns to the index; Escape goes back, then closes.
 
-**Providers** holds the source (local sign-ins or a CLIProxyAPI server with its connection and account activity) and then, in local mode, up to four groups, followed by **omp**. **Found on this computer** offers providers that are set up here but not monitored, each with **Monitor** and **Ignore**. **Monitored** is one row per provider in use, with a status line from the last check (`Connected · ChatGPT Plus`, `Not signed in — Run gemini and sign in with Google`, `Sign-in expired — …`, `Key rejected`, `No key saved`), a grip (six dots) to drag it into place, or to move it with the arrow keys once focused (the order the tiles, chips, and provider cycling use), **Monitor** (read it and show it in Limits) and **Menu bar** (give it a chip), the API key editor right under providers that take a key, and a **Customize** disclosure. **Waiting for a sign-in** folds away monitored providers whose last check found no sign-in; each moves up on its own once it is signed in. **More providers** folds away everything else, split into sign-ins and API keys, with a filter field and a **Get a key ↗** link per provider. Customize is where one provider overrides the defaults: **Show limits as** (read this provider as used or left while the others follow Display), **Limit shown**, and **Second limit below** (pin this chip's limits while the others follow Menu bar); its header summarizes the overrides (`Left (%) · 5-hour`) or reads `Default`, and the index counts customized providers. In CLIProxyAPI mode every discovered provider is monitored and only the **Menu bar** column remains. **Menu bar** chooses chips or the widget icon, which limit each chip shows, reset times and their formats, and hiding used-up providers. **Alerts** holds notifications, the percentage thresholds, and the low-balance amounts shown once a money provider is monitored. **Display** holds used or left, provider colors, square cards, and hidden account emails. **Costs** holds local history switches, **Remote T3 servers**, **Custom prices**, and **Last scan**. **Advanced** holds the refresh interval, diagnostics, and **Reset to defaults**. Reset asks once, in place, then returns every preference to its default, including provider order, Customize overrides, and ignored providers; the source, server URLs, saved keys and tokens, T3 servers, and custom prices are kept. Defaults: every provider with a sign-in of its own monitored (one that is not signed in stays out of sight), API-key providers off, every provider allowed a chip, the most constrained limit, used percentages, warning at 25% and critical at 10% left, low-balance alerts at 5 and 1, refresh every 15 minutes, and local Claude Code, Codex, and OpenCode cost history.
+**Sources** is described [above](#sources). **Providers** has up to four groups, followed by **omp**. **Found** offers providers that are set up on this computer, another computer or a proxy but not monitored, each with **Monitor** and **Ignore**. **Monitored** is one row per provider in use, with a status line from the last check (`Connected · ChatGPT Plus`, `Not signed in — Run gemini and sign in with Google`, `Sign-in expired — …`, `Key rejected`, `No key saved`), a grip (six dots) to drag it into place, or to move it with the arrow keys once focused (the order the tiles, chips, and provider cycling use), **Monitor** (read it and show it in Limits, from every source) and **Menu bar** (give it a chip), the API key editor right under providers that take a key, and a **Customize** disclosure. **Waiting for a sign-in** folds away monitored providers whose last check found no sign-in; each moves up on its own once it is signed in. **More providers** folds away everything else, split into sign-ins and API keys, with a filter field and a **Get a key ↗** link per provider. Customize is where one provider overrides the defaults: **Show limits as** (read this provider as used or left while the others follow Display), **Limit shown**, and **Second limit below** (pin this chip's limits while the others follow Menu bar); its header summarizes the overrides (`Left (%) · 5-hour`) or reads `Default`, and the index counts customized providers. **Menu bar** chooses chips or the widget icon, which limit each chip shows, reset times and their formats, and hiding used-up providers. **Alerts** holds notifications, the percentage thresholds, and the low-balance amounts shown once a money provider is monitored. **Display** holds used or left, provider colors, square cards, and hidden account emails. **Costs** holds local history switches, **Custom prices**, and **Last scan**. **Advanced** holds the refresh interval, **Run setup again**, diagnostics, **Back up and restore**, and **Reset to defaults**. Reset asks once, in place, then returns every preference to its default, including provider order, Customize overrides, and ignored providers; sources, saved keys and tokens, and custom prices are kept. Defaults: every provider with a sign-in of its own monitored (one that is not signed in stays out of sight), API-key providers off, every provider allowed a chip, the most constrained limit, used percentages, warning at 25% and critical at 10% left, low-balance alerts at 5 and 1, refresh every 15 minutes, and local Claude Code, Codex, and OpenCode cost history.
 
-In **Settings → Costs → Custom prices**, choose a model from the ones in your costs or enter its exact ID, and its input/output prices in **USD per million tokens**. Model IDs in the Costs breakdown are selectable for copying. Matching preserves case, provider prefixes, and bracketed variants. Cache-read and cache-write prices are optional; blank fields use the input price, while `0` explicitly means free. A complete row applies at once to recorded activity, including offline or otherwise unknown models; an incomplete row is explained underneath and not saved. Remove a row to restore automatic pricing. A T3 server is saved once it has a name and a URL; its token can be saved after that.
+In **Settings → Costs → Custom prices**, choose a model from the ones in your costs or enter its exact ID, and its input/output prices in **USD per million tokens**. Model IDs in the Costs breakdown are selectable for copying. Matching preserves case, provider prefixes, and bracketed variants. Cache-read and cache-write prices are optional; blank fields use the input price, while `0` explicitly means free. A complete row applies at once to recorded activity, including offline or otherwise unknown models; an incomplete row is explained underneath and not saved. Remove a row to restore automatic pricing.
 
 | Key | Default | Meaning |
 |---|---:|---|
 | `refreshIntervalSec` | `900` | Automatic refresh interval; clamped to 60–3600 seconds. A check that finds providers unreachable is retried once a minute later |
-| `enabledProviders` | every sign-in provider | Local providers queried and displayed; API-key providers are off by default. Proxy discovery is automatic |
-| `dismissedProviders` | `[]` | Providers set up on this computer that **Ignore** stopped suggesting |
-| `usageSource` | `direct` | `direct` CLI sign-ins or `cliproxy` managed accounts for quotas |
-| `cliproxyUrl` | `http://127.0.0.1:8317` | CLIProxyAPI server or management URL |
-| `cliproxyKeyFile` | empty | Set automatically when saving a key in the GUI; can also point to an existing private key file |
+| `enabledProviders` | every sign-in provider | Providers monitored: read from every source and shown in Limits. API-key providers are off by default |
+| `dismissedProviders` | `[]` | Providers set up somewhere that **Ignore** stopped suggesting |
+| `sources` | `"[]"` | Managed by **Settings → Sources**: a JSON list of the other places read, in order, each with an `id`, a `kind` and an `on` switch. `computer` rows (`c-` id) hold an SSH destination in `host`; `proxy` rows (`p-` id) a CLIProxyAPI `url`, its management `keyFile`, and an optional CPA Usage Keeper `keeperUrl` and `keeperPasswordFile`; `t3` rows a `name`, `url` and `tokenFile`. Key fields are private file references |
+| `mainComputer` | empty | Where **Sign in** and **Install** open a terminal: empty for automatic (the only other computer, else this one), `this`, or a computer's id |
+| `sourcesVersion` | `0` | Managed automatically: `1` once the source settings of 2.3 and older were moved into `sources` |
+| `sourcesNotice` | empty | Managed automatically: `ompRemote` while the notice that omp on another computer now uses SSH waits to be read |
+| `setupDone` | `true` | Managed automatically: `false` on a fresh install until its setup finishes, and after **Run setup again**. Absent counts as done |
+| `hintsDismissed` | `"[]"` | Managed automatically: the hints already dismissed (`accounts`, `forecast`, `runway`, `heatmap`) |
 | `<id>KeyFile` | empty | Private key file of an API-key provider (`zaiKeyFile`, `openrouterKeyFile`, …), set when saving a key in the GUI. The provider's environment variable takes precedence |
 | `hideAccountEmails` | `true` | Replace account identities with numbered labels and hide them in settings |
 | `squareUsageCards` | `true` | Use square corners for cards in Limits; otherwise follow the theme |
@@ -234,18 +230,12 @@ In **Settings → Costs → Custom prices**, choose a model from the ones in you
 | `creditCriticalUsd` | `1` | Low-balance critical amount; must not be above `creditWarningUsd` |
 | `costPriceOverrides` | `"{}"` | JSON string managed by Custom model prices; exact IDs mapped to USD-per-million rates |
 | `costLocalProviders` | `["claude", "codex", "opencode"]` | Local cost sources (`claude`, `codex`, `opencode`, `grok`), independent of quota providers |
-| `costKeeperUrl` | empty | Optional Keeper URL for last-used quota account activity |
-| `costT3Servers` | `"[]"` | T3 server configurations managed in Costs settings; credentials are private file references |
 | `extraKeys` | `"{}"` | A provider's further API keys, managed by **Settings → Providers → Add another key**: per provider, the first key's name and each further key's id, name, and private key file. Each key is read on its own and shown as its own account |
-| `ompLocal` | `true` | Read the accounts omp (Oh My Pi) is signed in to on this computer and follow its sessions for live activity. Runs only where omp is already set up |
-| `ompGatewayUrl` | empty | An omp auth gateway on another computer; only `/v1/usage` is read. Plain HTTP only to this computer or over Tailscale |
-| `ompGatewayKeyFile` | empty | Private file with the gateway token, managed by Settings |
-| `ompStatsUrl` | empty | An `omp stats` dashboard on another computer, read for costs and live activity |
+| `ompLocal` | `true` | Read the accounts omp (Oh My Pi) is signed in to, here and on the other computers, and follow its sessions for live activity. Runs only where omp is already set up |
 | `barAccountMode` | `"dots"` | `dots`: one chip per provider with a dot per account; `chips`: one chip per account, counted against `barMaxChips` |
 | `motion` | `"system"` | `system` follows Hyprland's animation setting; `reduced` turns animation off |
 | `accountModes` | `"{}"` | Per provider, `single` (one account at a time) or `together` (accounts spent at once); absent means automatic |
 | `hiddenAccounts` | `"{}"` | Per provider, the `accountId`s left out of Limits, the menu bar and the notices (Settings → Providers → Customize → Accounts shown); a hidden account stays signed in, and one account always stays shown |
-| `costKeeperPasswordFile` | empty | Private Keeper password for quota account activity (legacy setting name) |
 
 Examples:
 
@@ -290,9 +280,7 @@ Refresh intervals above one hour mark short limits `No recent data`, because the
 
 **On this computer.** With `ompLocal` on and omp set up (its `~/.omp/agent/agent.db` exists), Quotatank runs `omp usage --json` with each refresh and merges omp's accounts into the providers it already reads: an account you also use directly appears once. omp names an account by its email; an API key in omp (OpenCode Go's, for one) names none, so it is recognised by its limits instead, when they reset at the same second as the reading Quotatank makes itself. omp's session files feed the live activity and Costs (projects, main sessions and subagents).
 
-**On another computer.** In **Settings → Costs → omp on another computer**, enter the address of an `omp stats` dashboard started there (`omp stats --host <Tailscale address> --port 3847`, or reached through `ssh -N -L 3847:127.0.0.1:3847 <host>`). Quotatank reads its totals, providers, models and folders, and its event feed for live activity. The dashboard has no password and also serves conversations: keep it on Tailscale or behind SSH. For limits, **Settings → Providers → omp → On another computer** takes an omp auth gateway address and its token; Quotatank asks it only for `/v1/usage`.
-
-To keep `omp stats` running after a reboot, the Costs settings page gives a systemd user unit to copy: save it as `~/.config/systemd/user/omp-stats.service` on that computer and run `systemctl --user enable --now omp-stats`. With an SSH tunnel, it gives a second unit for the tunnel on this computer. A unit finds `omp` through your login shell's `PATH`; if it does not start, put the path `command -v omp` prints in its place.
+**On another computer.** Add that computer under **Settings → Sources → Other computers**: with **Read omp's accounts** on, it runs omp there as it does here, so its accounts join Limits, its requests mark them as spending, and its sessions feed Costs. Nothing on that computer needs to listen on a port. Quotatank 2.3 and older read an `omp stats` dashboard and an omp auth gateway instead; after the update their addresses are dropped, and a notice in Limits points to **Sources**.
 
 ## Back up and restore
 
@@ -320,7 +308,9 @@ Later updates work as before.
 
 **Kimi does not appear.** Confirm `kimi login` has created `~/.kimi-code/credentials/kimi-code.json`, or set `KIMI_CODE_HOME` to the CLI's actual data directory.
 
-**CLIProxyAPI reports configuration required.** Check the server URL, enter the Management API key in settings, and check the server's remote-management policy. If using a manually configured key file, check its path and permissions. HTTP 404 can mean the management API is disabled. For an expired managed provider sign-in, sign in again through CLIProxyAPI and refresh the widget.
+**A proxy reports configuration required.** Under **Settings → Sources → CLIProxyAPI**, check the server URL, save the Management API key again, and check the server's remote-management policy. If using a manually configured key file, check its path and permissions. HTTP 404 can mean the management API is disabled. For an expired managed provider sign-in, sign in again through CLIProxyAPI and refresh the widget.
+
+**Another computer does not answer.** Its row under **Settings → Sources** says which step failed (host key, key, name, network, Python) and gives the command that fixes it; press **Test** again afterwards. Quotatank uses SSH keys only and never answers a prompt, so a key with a passphrase must be in your SSH agent. Until it answers, Limits keeps its last readings, marked stale.
 
 **Sparklines are empty.** The 24-hour trend begins after the first successful limit fetch. Errors are not recorded as zero usage.
 
@@ -330,7 +320,7 @@ Later updates work as before.
 
 **The first Costs scan is slower.** A cold scan streams recent transcript files. Later scans reuse unchanged files and read only the appended bytes of growing sessions. Replaced, shortened, or detected rewritten files restart from the beginning. The first scan after this upgrade rebuilds old scan and price caches; stale flattened prices are never reused.
 
-**T3 is unavailable.** Open **Costs → gear → Last scan** and hover the source status for details. Check its base URL, connection token, and usage contract version. A saved snapshot is labeled with its last update time; no snapshot means unavailable history, not zero usage.
+**T3 is unavailable.** Open **Costs → gear → Last scan** and hover the source status for details. Check its base URL, connection token, and usage contract version under **Settings → Sources**. A saved snapshot is labeled with its last update time; no snapshot means unavailable history, not zero usage.
 
 **The backend cannot start.** Python 3.10 or newer must be available as `python3`. The backend uses only the Python standard library.
 

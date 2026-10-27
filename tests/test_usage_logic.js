@@ -94,25 +94,8 @@ const discovered = [
 ];
 assert.equal(JSON.stringify(context.availableProviders(discovered).map(row => row.id)),
   '["claude","codex","gemini"]', "hide unconnected or paused providers, retain active accounts even when quota checks fail");
-assert.equal(context.availableProviders([{ id: "cliproxy", status: "error", errorKind: "no_credentials" }]).length,
-  1, "proxy setup errors must remain visible");
 assert.equal(context.availableProviders(null).length, 0);
 assert.equal(discovered.length, 5, "filtering does not change backend discovery");
-
-const priorAccount = { ...provider("antigravity", 75), accountId: "a", plan: "Pro", fetchedAt: "then" };
-const oldProxy = { source: "cliproxy", providers: [{ ...priorAccount, accounts: [priorAccount] }] };
-const failedAccount = { ...priorAccount, status: "error", windows: [], message: "Timeout" };
-const stale = context.preserveProxyReadings(oldProxy, { source: "cliproxy",
-  providers: [{ ...failedAccount, accounts: [failedAccount] }] });
-assert.equal(stale.providers[0].accounts[0].windows[0].remaining, 75);
-assert.equal(stale.providers[0].accounts[0].stale, true);
-assert.equal(stale.providers[0].fetchedAt, "then");
-const outage = context.preserveProxyReadings(oldProxy, { providers: [{ id: "cliproxy", status: "error", message: "Offline" }] });
-assert.equal(outage.providers[0].id, "antigravity");
-assert.equal(outage.providers[0].stale, true);
-const paused = context.preserveProxyReadings(oldProxy, { providers: [{ ...priorAccount, status: "disabled", windows: [] }] });
-assert.equal(paused.providers[0].status, "disabled");
-assert.equal(paused.providers[0].windows.length, 0);
 
 const accountPool = { ...provider("codex", 90), accounts: [
   { ...provider("codex", 90), accountId: "one", account: "one@example.invalid" },
@@ -159,34 +142,35 @@ assert.equal(context.accountResetLabel({ ...resetAccount, id: "claude", credits:
   "Claude shows its banked resets only while it has one");
 assert.equal(context.accountResetLabel({ ...resetAccount, id: "kimi" }), "");
 assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }), "");
-const resetFailure = { ...resetAccount, status: "error", credits: null, message: "Timeout" };
-const resetStale = context.preserveProxyReadings({ source: "cliproxy", providers: [{ ...resetAccount, accounts: [resetAccount] }] },
-  { source: "cliproxy", providers: [{ ...resetFailure, accounts: [resetFailure] }] });
-assert.equal(context.accountResetLabel(resetStale.providers[0].accounts[0]), "2 banked resets");
-assert.equal(resetStale.providers[0].accounts[0].stale, true);
 
 // Where a banked reset can be applied from: Codex through the proxy only; Claude with its own sign-in or the
 // proxy, when Claude lets the next one be spent now; never an account whose sign-in lives in omp.
 {
   const claude = (credits, extra) => ({ ...provider("claude", 40), credits: { resetCreditsAvailable: 1, ...credits }, ...extra });
   const usable = claude({ resetCreditsUsable: true, resetCreditsReason: "" });
-  assert.equal(context.accountResetShown(usable, false), true);
-  assert.equal(context.accountResetActionable(usable, false), true, "a Claude Code sign-in applies its own reset");
-  assert.equal(context.accountResetActionable(usable, true), true);
-  assert.equal(context.accountResetNote(usable, false), "");
+  assert.equal(context.accountResetShown(usable), true);
+  assert.equal(context.accountResetActionable(usable), true, "a Claude Code sign-in applies its own reset");
+  assert.equal(context.accountResetActionable(usable), true);
+  assert.equal(context.accountResetNote(usable), "");
   const waiting = claude({ resetCreditsUsable: false, resetCreditsReason: "limit" });
-  assert.equal(context.accountResetActionable(waiting, false), false);
-  assert.equal(context.accountResetNote(waiting, false), "Usable once you reach a limit.");
-  assert.equal(context.accountResetNote(claude({ resetCreditsUsable: false, resetCreditsReason: "surprise" }), false),
+  assert.equal(context.accountResetActionable(waiting), false);
+  assert.equal(context.accountResetNote(waiting), "Usable once you reach a limit.");
+  assert.equal(context.accountResetNote(claude({ resetCreditsUsable: false, resetCreditsReason: "surprise" })),
     "Claude is not offering it right now.", "an unknown reason reads as not offered");
   const viaOmp = claude({ resetCreditsUsable: true }, { origin: "omp" });
-  assert.equal(context.accountResetActionable(viaOmp, false), false, "omp keeps that sign-in");
-  assert.equal(context.accountResetNote(viaOmp, false), "Apply it in omp: omp usage reset.");
-  assert.equal(context.accountResetActionable(claude({}), false), false, "a count from omp alone is not usable here");
-  assert.equal(context.accountResetShown(resetAccount, false), false, "Codex resets show in CLIProxyAPI mode");
-  assert.equal(context.accountResetActionable(resetAccount, true), true);
-  assert.equal(context.accountResetActionable({ ...resetAccount, origin: "omp" }, true), false);
-  assert.equal(context.accountResetActionable({ ...resetAccount, credits: { resetCreditsAvailable: 0 } }, true), false);
+  assert.equal(context.accountResetActionable(viaOmp), false, "omp keeps that sign-in");
+  assert.equal(context.accountResetNote(viaOmp), "Apply it in omp: omp usage reset.");
+  assert.equal(context.accountResetActionable(claude({})), false, "a count from omp alone is not usable here");
+  assert.equal(context.accountResetShown(resetAccount), false, "Codex resets show when read through CLIProxyAPI");
+  const throughProxy = { ...resetAccount, proxy: { id: "p-00000001", name: "CLIProxyAPI" } };
+  assert.equal(context.accountResetActionable(throughProxy), true);
+  assert.equal(context.accountResetActionable({ ...resetAccount, standIn: { id: "p-00000001", name: "CLIProxyAPI" } }), true,
+    "a proxy's reading standing in for a failed one is applied through the proxy");
+  assert.equal(context.accountResetActionable({ ...throughProxy, origin: "omp" }), false);
+  assert.equal(context.accountResetActionable({ ...throughProxy, credits: { resetCreditsAvailable: 0 } }), false);
+  const elsewhere = claude({ resetCreditsUsable: true }, { computer: { id: "c-00000001", name: "devbox" } });
+  assert.deepEqual([context.accountResetActionable(elsewhere), context.accountResetNote(elsewhere)],
+    [false, "Its sign-in is on devbox: apply it there."]);
   assert.equal(context.creditsHaveFunds(usable.credits), false);
   assert.equal(context.creditsHaveFunds({ used: 4, limit: 50, resetCreditsAvailable: 1 }), true);
 }
@@ -802,10 +786,10 @@ const manifestDefaults = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "
 for (const key of Object.keys(context.DEFAULT_SETTINGS))
   assert.equal(JSON.stringify(context.DEFAULT_SETTINGS[key]), JSON.stringify(manifestDefaults[key]), "reset default for " + key + " matches the manifest");
 const keyFileSettings = context.KEY_PROVIDER_IDS.map((id) => id + "KeyFile");
-for (const kept of ["usageSource", "cliproxyUrl", "cliproxyKeyFile", ...keyFileSettings, "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers", "costPriceOverrides"])
+for (const kept of ["sources", "mainComputer", ...keyFileSettings, "costPriceOverrides"])
   assert.ok(!(kept in context.DEFAULT_SETTINGS), kept + " survives a reset");
 assert.equal(context.changedFromDefaults({}).length, 0, "missing keys already read as defaults");
-assert.equal(context.changedFromDefaults({ quotaMode: "Remaining", barWindow: "auto", usageSource: "cliproxy" }).join(","), "quotaMode",
+assert.equal(context.changedFromDefaults({ quotaMode: "Remaining", barWindow: "auto", sources: '[{"id":"p-1a2b3c4d","kind":"proxy"}]' }).join(","), "quotaMode",
   "only preferences that differ count; connections never do");
 assert.equal(context.DEFAULT_SETTINGS.barShowPeriods, true, "chips show their limit period by default");
 assert.equal(context.changedFromDefaults({ barShowPeriods: false }).join(","), "barShowPeriods", "hiding the period is a preference Reset restores");
@@ -815,10 +799,10 @@ console.log("Reset defaults: passed");
 const asJson = (value) => JSON.parse(JSON.stringify(value));
 const legacyKey = "/home/u/.config/omarchy/model-usage/management-keys/k1";
 assert.deepEqual(asJson(context.legacyPathSettings({
-  cliproxyKeyFile: legacyKey, openrouterKeyFile: "/home/u/keys/or.key", refreshIntervalSec: 900,
+  openrouterKeyFile: legacyKey, factoryKeyFile: "/home/u/keys/f.key", refreshIntervalSec: 900,
   extraKeys: JSON.stringify({ zai: [{ id: "k-0123abcd", name: "Work", file: legacyKey }] }),
-  ompGatewayKeyFile: "/home/u/.config/omarchy/quotatank/management-keys/k2" })), {
-  cliproxyKeyFile: "/home/u/.config/omarchy/quotatank/management-keys/k1",
+  sources: JSON.stringify([{ id: "t3-1", kind: "t3", name: "Lab", url: "https://t3.example", tokenFile: "/home/u/.config/omarchy/quotatank/k2" }]) })), {
+  openrouterKeyFile: "/home/u/.config/omarchy/quotatank/management-keys/k1",
   extraKeys: JSON.stringify({ zai: [{ id: "k-0123abcd", name: "Work", file: "/home/u/.config/omarchy/quotatank/management-keys/k1" }] }) });
 assert.deepEqual(asJson(context.legacyPathSettings({ cliproxyKeyFile: "/home/u/model-usage/k" })), {}, "only the omarchy folder moves");
 assert.deepEqual(asJson(context.legacyPathSettings(null)), {});
@@ -926,9 +910,11 @@ assert.equal(context.accountName({ id: "claude", label: "Work", active: true, ac
 assert.equal(context.accountName({ id: "claude", label: "Work", active: false, account: "me@example.com" }, "{}", false, 2), "Work · me@example.com");
 assert.equal(context.accountName({ id: "codex", accountId: "0123456789abcdef", account: "proxy@example.com" }, "{}", true, 4), "Account 4");
 assert.equal(context.accountName({ id: "codex", accountId: "0123456789abcdef", account: "proxy@example.com" }, "{}", false, 4), "proxy@example.com");
-assert.deepEqual([...context.secretPaths({ poeKeyFile: "/k/poe.key", cliproxyKeyFile: "/k/proxy.key", costKeeperPasswordFile: "", extraKeys: extra,
-  costT3Servers: '[{"id":"a","tokenFile":"/k/t3.key"}]', refreshIntervalSec: 900 })].sort(),
-  ["/k/poe.key", "/k/proxy.key", "/k/t3.key", "/private/a.key", "/private/b.key"]);
+assert.deepEqual([...context.secretPaths({ poeKeyFile: "/k/poe.key", extraKeys: extra, refreshIntervalSec: 900,
+  sources: JSON.stringify([
+    { id: "p-1a2b3c4d", kind: "proxy", url: "https://proxy.example", keyFile: "/k/proxy.key", keeperUrl: "", keeperPasswordFile: "/k/keeper.key" },
+    { id: "t3-1", kind: "t3", name: "Home", url: "https://t3.example", tokenFile: "/k/t3.key" }]) })].sort(),
+  ["/k/keeper.key", "/k/poe.key", "/k/proxy.key", "/k/t3.key", "/private/a.key", "/private/b.key"]);
 assert.equal(context.keyHint(context.localProvider("openrouter")), "OPENROUTER_API_KEY in the environment takes precedence.");
 assert.equal(context.keyHint(context.localProvider("amp")), "Optional: used instead of the sign-in. AMP_API_KEY in the environment takes precedence.");
 assert.equal(context.filterProviders(context.LOCAL_PROVIDERS, " DEEP ").map((entry) => entry.id).join(","), "deepseek,deepinfra");
@@ -1072,24 +1058,15 @@ console.log("Provider setup: passed");
   assert.equal(context.costCacheSummary({}), null);
 
   const local = [{ id: "local-claude", kind: "local", included: true }, { id: "local-omp", kind: "local", provider: "omp", included: true }];
-  assert.equal(context.costSourceSummary(local.concat([{ id: "omp-remote", status: "ok", host: "devbox:3847" }]), true),
-    "Local transcripts + omp on devbox · live");
+  assert.equal(context.costSourceSummary(local, true), "Local transcripts · live");
   assert.equal(context.costSourceSummary([{ id: "lab-claude", kind: "t3", name: "Lab · Claude", included: true },
     { id: "lab-codex", kind: "t3", name: "Lab · Codex", included: true }, { id: "x", kind: "t3", name: "Off", included: false }], false),
     "T3 on Lab", "a server counts once, excluded ones not at all");
-  assert.equal(context.costSourceSummary([{ id: "omp-remote", status: "error", host: "devbox" }], false), "omp on devbox unavailable");
-  assert.equal(context.costSourceSummary([{ id: "omp-remote", status: "ok", host: "127.0.0.1:3847" }], true), "omp through a tunnel · live",
-    "an SSH tunnel's end is not the computer's name");
-  assert.equal(context.costSourceSummary([{ id: "omp-remote", status: "ok", host: "devbox.tail1234.ts.net" }], false), "omp on devbox",
-    "a MagicDNS name reads as the computer's name");
   assert.equal(context.costSourceSummary([], true), "", "nothing to name, nothing to call live");
   assert.equal(context.costSourceSummary(local.concat(["A", "B", "C"].map(name => ({ id: name, kind: "t3", name, included: true }))), false),
     "Local transcripts + 3 more sources");
   assert.ok(context.costScanHasOmp(local));
   assert.ok(!context.costScanHasOmp([{ id: "local-omp", kind: "local", provider: "omp", included: false }]));
-  assert.ok(!context.costScanHasOmp([{ id: "omp-remote", status: "ok" }, { id: "local-omp", kind: "local", provider: "omp", included: false }]),
-    "omp stats elsewhere never holds this computer's live requests");
-  assert.ok(!context.costScanHasOmp([{ id: "omp-remote", status: "error" }]));
 
   // Live requests come from omp's request log; a scan counts from when it started (`generatedAt`).
   const charted = ["claude", "codex"];
@@ -1132,55 +1109,179 @@ console.log("Provider setup: passed");
   console.log("Costs tab: passed");
 }
 
+// ---- Sources: the `sources` setting, and the move of 2.3's source settings into it.
+{
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+  const proxy = { id: "p-1a2b3c4d", kind: "proxy", url: " https://proxy.example ", keyFile: "/k/proxy.key", keeperUrl: "", keeperPasswordFile: "" };
+  const computer = { id: "c-0011aabb", kind: "computer", host: "devbox" };
+  const t3 = { id: "t3-1700000000000-42", kind: "t3", name: "Lab", url: "https://t3.example", tokenFile: "", on: false };
+  const parsed = plain(context.parseSources({ sources: JSON.stringify([proxy, computer, t3, computer,
+    { id: "c-0011aabc", kind: "computer", host: "-oProxyCommand=x" }, { id: "c-0011aabd", kind: "computer", host: "a b" },
+    { id: "p-zz", kind: "proxy", url: "x" }, { id: "x-00000000", kind: "laptop" }, { ...proxy, id: "p-99999999", url: 7 }, null]) }));
+  assert.deepEqual(parsed.map((entry) => entry.id), ["p-1a2b3c4d", "c-0011aabb", "t3-1700000000000-42"],
+    "duplicates, unsafe destinations, bad ids, unknown kinds and wrong types are left out");
+  assert.equal(parsed[0].url, "https://proxy.example", "text is trimmed");
+  assert.equal(parsed[0].on, true, "an entry is on unless switched off");
+  assert.equal(parsed[2].on, false);
+  assert.deepEqual(plain(context.parseSources({ sources: "not json" })), []);
+  assert.deepEqual(plain(context.parseSources({})), []);
+  for (const host of ["devbox", "rafa@devbox.tail1234.ts.net", "build_box", "10.0.0.2"]) assert.ok(context.validDestination(host), host);
+  for (const host of ["", "-oProxyCommand=x", "a b", "a;b", "devbox:22", "@devbox", "x".repeat(256)]) assert.ok(!context.validDestination(host), host);
+
+  assert.equal(context.activeProxy({ sources: JSON.stringify([{ ...proxy, on: false }]) }), null, "a switched-off proxy reads nothing");
+  assert.equal(context.activeProxy({ sources: JSON.stringify([computer, proxy]) }).id, "p-1a2b3c4d");
+  assert.deepEqual(JSON.parse(context.t3ServersJson({ sources: JSON.stringify([proxy, t3, { ...t3, id: "t3-2", name: "" }]) })),
+    [{ id: "t3-1700000000000-42", name: "Lab", url: "https://t3.example", tokenFile: "", enabled: false }],
+    "T3 entries pass in t3_costs.py's shape, half-typed ones not at all");
+  const id = context.newSourceId("computer", [computer]);
+  assert.ok(/^c-[0-9a-f]{8}$/.test(id) && id !== computer.id);
+  const settings = { sources: JSON.stringify([proxy, computer]) };
+  assert.deepEqual(JSON.parse(context.sourcesWith(settings, "c-0011aabb", { ...computer, on: false })).map((entry) => entry.on), [true, false],
+    "an entry is replaced in place");
+  assert.deepEqual(JSON.parse(context.sourcesWith(settings, "p-1a2b3c4d", null)).map((entry) => entry.id), ["c-0011aabb"]);
+  assert.equal(JSON.parse(context.sourcesWith(settings, "t3-9", { ...t3, id: "t3-9" })).length, 3, "a new entry is appended");
+
+  const migrate = (settings) => plain(context.migrateSources(settings));
+  assert.equal(context.migrateSources({ sourcesVersion: 1, usageSource: "cliproxy" }), null, "it runs once");
+  const fresh = migrate({});
+  assert.deepEqual(fresh, { changes: { sourcesVersion: 1, setupDone: false, sources: "[]" }, notice: false },
+    "a fresh install has nothing to move and opens setup");
+  assert.equal(context.setupWanted(context.migrateSources({}).changes), true);
+  assert.equal(migrate({ refreshIntervalSec: 600 }).changes.setupDone, true, "settings carried over skip setup");
+  assert.equal(context.setupWanted({ refreshIntervalSec: 600 }), false, "no setupDone is a setup already done");
+  assert.equal(migrate({ setupDone: false }).changes.setupDone, undefined, "a pending setup stays pending");
+  assert.equal(context.hintShown({}, "runway"), true);
+  const dismissed = context.hintsDismissing({ hintsDismissed: '["heatmap","nope"]' }, "runway");
+  assert.deepEqual(JSON.parse(dismissed), ["heatmap", "runway"], "dismissing keeps the others and drops unknown ids");
+  assert.equal(context.hintShown({ hintsDismissed: dismissed }, "runway"), false);
+  assert.equal(context.hintShown({ hintsDismissed: dismissed }, "accounts"), true);
+  assert.equal(context.hintShown({ hintsDismissed: "not json" }, "forecast"), true, "a broken list shows every hint");
+  const moved = migrate({ usageSource: "cliproxy", cliproxyUrl: "https://proxy.example", cliproxyKeyFile: "/k/proxy.key",
+    costKeeperUrl: "https://proxy.example/keeper", costKeeperPasswordFile: "/k/keeper.key", ompStatsUrl: "http://devbox:3847",
+    ompGatewayUrl: "", ompGatewayKeyFile: "", refreshIntervalSec: 600,
+    costT3Servers: JSON.stringify([{ id: "t3-1", name: "Lab", url: "https://t3.example", tokenFile: "/k/t3.key", enabled: false }]) });
+  const movedSources = JSON.parse(moved.changes.sources);
+  assert.deepEqual(movedSources.map((entry) => [entry.kind, entry.on]), [["proxy", true], ["t3", false]]);
+  assert.deepEqual([movedSources[0].url, movedSources[0].keyFile, movedSources[0].keeperUrl, movedSources[0].keeperPasswordFile],
+    ["https://proxy.example", "/k/proxy.key", "https://proxy.example/keeper", "/k/keeper.key"], "the proxy keeps its key and its Keeper");
+  assert.equal(movedSources[1].tokenFile, "/k/t3.key");
+  assert.equal(moved.notice, true, "omp stats on another computer leaves a notice");
+  assert.equal(moved.changes.sourcesNotice, "ompRemote");
+  for (const key of ["usageSource", "cliproxyUrl", "cliproxyKeyFile", "costKeeperUrl", "costKeeperPasswordFile", "ompStatsUrl",
+    "ompGatewayUrl", "ompGatewayKeyFile", "costT3Servers"])
+    assert.equal(moved.changes[key], null, key + " is removed");
+  assert.equal("refreshIntervalSec" in moved.changes, false, "other settings are left alone");
+  const direct = JSON.parse(migrate({ usageSource: "direct", cliproxyUrl: "https://proxy.example", costKeeperUrl: "https://proxy.example/keeper" }).changes.sources);
+  assert.deepEqual(direct.map((entry) => [entry.kind, entry.on, entry.keeperUrl]), [["proxy", false, "https://proxy.example/keeper"]],
+    "a Keeper set up for a proxy that was not in use stays with that proxy, switched off");
+  assert.equal(JSON.parse(migrate({ usageSource: "direct", cliproxyUrl: "http://127.0.0.1:8317" }).changes.sources).length, 0,
+    "an unused proxy default is not a source");
+  const unused = JSON.parse(migrate({ usageSource: "direct", cliproxyUrl: "https://proxy.example", cliproxyKeyFile: "/k/proxy.key" }).changes.sources);
+  assert.deepEqual(unused.map((entry) => [entry.kind, entry.on, entry.url, entry.keyFile]), [["proxy", false, "https://proxy.example", "/k/proxy.key"]],
+    "a proxy set up but not in use stays, switched off, with its key");
+  assert.equal(JSON.parse(migrate({ usageSource: "direct", cliproxyUrl: "http://127.0.0.1:8317/", cliproxyKeyFile: "/k/proxy.key" }).changes.sources)[0].keyFile,
+    "/k/proxy.key", "a saved key is a proxy set up, also at the default address");
+  const keeperOnly = JSON.parse(migrate({ usageSource: "direct", costKeeperUrl: "http://127.0.0.1:8318" }).changes.sources);
+  assert.deepEqual(keeperOnly.map((entry) => [entry.kind, entry.on, entry.url]), [["proxy", false, "http://127.0.0.1:8317"]],
+    "a Keeper set up for the proxy at its default address keeps that proxy");
+  assert.deepEqual(migrate({ usageSource: "cliproxy", enabledProviders: ["claude", "gemini"] }).changes.enabledProviders,
+    ["claude", "codex", "kimi", "antigravity"], "proxy mode keeps the bar to what the proxy read");
+  assert.equal("enabledProviders" in migrate({ usageSource: "direct", enabledProviders: ["claude"] }).changes, false,
+    "direct mode keeps its providers");
+  assert.equal(JSON.parse(migrate({ costT3Servers: "not json" }).changes.sources).length, 0, "unreadable T3 settings move nothing");
+
+  // Other computers.
+  const devbox = { id: "c-00000001", kind: "computer", host: "devbox", on: true };
+  const buildbox = { id: "c-00000002", kind: "computer", host: "rafa@buildbox", on: false };
+  const withComputers = (extra) => ({ sources: JSON.stringify([devbox, buildbox]), ...extra });
+  assert.deepEqual(Array.from(context.computerArguments(withComputers())), ["--computer", "c-00000001=devbox"],
+    "a switched-off computer is not read");
+  assert.equal(context.mainComputer(withComputers()).id, "c-00000001", "automatic: the one switched-on computer");
+  assert.equal(context.mainComputer(withComputers({ mainComputer: "this" })), null);
+  assert.equal(context.mainComputer({ sources: JSON.stringify([devbox, { ...buildbox, on: true }]) }), null,
+    "automatic with two computers: this computer");
+  assert.equal(context.mainComputer(withComputers({ mainComputer: "c-00000002" })), null, "a switched-off main computer is not used");
+  assert.deepEqual(plain(context.mainComputerOptions(withComputers()).map((option) => option.label)),
+    ["Automatic (devbox)", "This computer", "devbox"]);
+  const payload = { installed: ["claude"], computers: [{ id: "c-00000001", host: "devbox", status: "stale",
+    readAt: "2030-01-15T12:00:00Z", message: "devbox cannot be reached from here.", installed: ["codex"],
+    omp: { installed: true, local: "ok" } }] };
+  const clock = (seconds) => new Date(seconds * 1000).toISOString().slice(11, 16);
+  assert.deepEqual(plain(context.computerLine(devbox, context.computerState(payload, devbox.id), clock)),
+    { tone: "error", text: "Not answering since 12:00. devbox cannot be reached from here." });
+  assert.equal(context.computerLine(devbox, null, clock).text, "Read with the next refresh");
+  assert.equal(context.computerLine(buildbox, null, clock).text, "Off");
+  const claude = context.localProvider("claude");
+  const signedOut = { id: "claude", status: "error", errorKind: "no_credentials" };
+  assert.equal(context.setupActionFor(claude, signedOut, payload, null).command, "claude auth login", "on this computer, as before");
+  const there = context.setupActionFor(claude, signedOut, payload, devbox);
+  assert.equal(there.kind, "install", "what is installed on the main computer decides");
+  assert.equal(there.label, "Install and sign in on devbox");
+  assert.equal(there.command, "ssh -t devbox 'mise use -g claude && claude auth login'");
+  const ompThere = context.setupActionFor(context.localProvider("codex"), { id: "codex", status: "error", errorKind: "no_credentials" }, payload, devbox);
+  assert.equal(ompThere.command, "ssh -t devbox 'omp login'", "omp on the main computer signs in for the providers it reads");
+  assert.deepEqual(plain(context.ompLiveComputers(withComputers(), payload.computers).map((entry) => entry.id)), ["c-00000001"]);
+  assert.equal(context.ompLiveComputers(withComputers({ ompLocal: false }), payload.computers).length, 0);
+  assert.equal(context.computersSummary(withComputers(), payload), "devbox · devbox not answering");
+  assert.equal(context.computersSummary({}, null), "None");
+
+  const tested = (reply) => plain(context.computerTestResult(reply, "devbox"));
+  const refused = tested({ ok: false, steps: [{ id: "ssh", ok: false, text: "devbox did not accept this computer's SSH key.", fix: "ssh-copy-id devbox" }] });
+  assert.deepEqual([refused.addable, refused.fix, refused.lines.length], [false, "ssh-copy-id devbox", 1], "a refused key cannot be added yet");
+  const empty = tested({ ok: false, steps: [{ id: "ssh", ok: true, text: "Connected to devbox" },
+    { id: "found", ok: false, text: "Nothing to read there yet.", fix: "" }] });
+  assert.equal(empty.addable, true, "a computer that answered can be added before anything is signed in there");
+  assert.equal(tested({ ok: false, thisComputer: true, steps: [{ id: "found", ok: false, text: "devbox is this computer." }] }).addable, false);
+  const old = tested({ ok: false, steps: [{ id: "ssh", ok: true, text: "Connected" }, { id: "python", ok: false, text: "Python on devbox is older than 3.10.",
+    fix: "Install Python 3.10 or newer there." }] });
+  assert.deepEqual([old.fix, old.lines[2]], ["", { tone: "info", text: "Install Python 3.10 or newer there." }], "a fix that is not a command is a note");
+  assert.equal(tested({ probeError: "timeout" }).lines[0].text, "No answer within 120 s. Check that devbox is on and online.");
+  for (const reply of [{ probeError: "tooLarge" }, { ok: true }, { steps: "nothing" }])
+    assert.deepEqual(tested(reply).lines.map((line) => line.tone), ["error"], "an answer that cannot be read still says so: " + JSON.stringify(reply));
+  assert.deepEqual(tested({ ok: true, steps: [{ id: "found", ok: true, text: "1 account: Claude" },
+    { id: "harnesses", ok: true, text: "Installed there, not read: Codex" }] }).lines.map((line) => line.tone), ["ok", "info"]);
+  const remoteOmp = { id: "claude", accountId: "c-00000001/omp-0123456789ab", origin: "omp", computer: { id: "c-00000001", name: "devbox" },
+    status: "ok", windows: [], credits: { resetCreditsAvailable: 1, resetCreditsUsable: true } };
+  assert.equal(context.accountResetNote(remoteOmp), "Apply it in omp on devbox: omp usage reset.", "an omp sign-in on devbox is applied there");
+
+  // Readings from another computer.
+  const remoteAccount = { id: "claude", accountId: "c-00000001/main", status: "ok", computer: { id: "c-00000001", name: "devbox" },
+    windows: [], origin: "omarchy" };
+  assert.equal(context.accountSourceKind(remoteAccount), "computer");
+  assert.equal(context.accountCanUse(remoteAccount, "single"), false, "Use switches Omarchy logins on this computer only");
+  assert.equal(context.accountStatusLine(remoteAccount, false, 0, null).text, "on devbox");
+  const staleLine = context.accountStatusLine({ ...remoteAccount, stale: true, readAt: "2030-01-15T12:00:00Z" }, false, 0, null);
+  assert.equal(staleLine.text + " " + clock(staleLine.at), "devbox not answering since 12:00");
+  assert.equal(context.accountStatusLine({ id: "claude", status: "ok", windows: [], standIn: { id: "c-00000001", name: "devbox" } }, false, 0, null).text, "read on devbox");
+  const proxyAccount = { id: "claude", accountId: "auth-1", status: "ok", windows: [], plan: "max", origin: "proxy",
+    proxy: { id: "p-00000001", name: "CLIProxyAPI" } };
+  assert.equal(context.accountStatusLine(proxyAccount, false, 0, null).text, context.accountPlanLabel(proxyAccount) + " · via proxy",
+    "a plan does not hide that the account was read through a proxy");
+  assert.equal(context.accountLiveAt({ id: "claude", accountId: "main", liveIds: ["c-00000001/omp-0123456789ab"] },
+    { "claude@c-00000001/omp-0123456789ab": 1800000000 }), 1800000000, "a request on devbox counts for the same account here");
+  assert.equal(context.costSourceSummary([{ kind: "local", included: true }, { kind: "computer", name: "devbox", status: "stale", included: true }], false),
+    "Local transcripts + devbox (last known)");
+  console.log("Sources: passed");
+}
+
 // ---- 1.9 QmlSettings ----
-// omp as a source: the backends' flags, the address rule, what Settings says, the Test results, and
-// the live feed's lines. Then the per-provider account mode, and the clipboard rule for settings fields.
+// omp on this computer: the backends' flags, what Settings says, and the live feed's lines. Then the
+// per-provider account mode, and the clipboard rule for settings fields.
 {
   const plain = (value) => JSON.parse(JSON.stringify(value));
   const args = (value) => Array.from(value);
   assert.deepEqual(args(context.ompUsageArguments({})), ["--omp", "local"], "omp on this computer is read unless turned off");
   assert.deepEqual(args(context.ompUsageArguments({ ompLocal: false })), [], "turned off, omp gets no flag");
-  assert.deepEqual(args(context.ompUsageArguments({ ompLocal: false, ompGatewayUrl: "http://devbox:4000" })), [],
-    "a gateway without its token is not asked");
-  assert.deepEqual(args(context.ompUsageArguments({ ompLocal: false, ompGatewayUrl: " http://devbox:4000 ", ompGatewayKeyFile: "/private/key-1.key" })),
-    ["--omp-gateway-url", "http://devbox:4000", "--omp-gateway-key-file", "/private/key-1.key"], "the gateway's URL and token file pass together");
-  assert.deepEqual(args(context.ompCostArguments({})), []);
-  assert.deepEqual(args(context.ompCostArguments({ ompStatsUrl: "http://devbox:3847" })), ["--omp-stats-url", "http://devbox:3847"]);
   assert.deepEqual(args(context.ompLiveArguments({}, null)), [], "the live feed waits until the backend finds omp");
   assert.deepEqual(args(context.ompLiveArguments({}, { local: "missing" })), [], "no omp, no feed");
   assert.deepEqual(args(context.ompLiveArguments({}, { local: "ok" })), ["--local", "--accounts"]);
   assert.deepEqual(args(context.ompLiveArguments({}, { local: "off", installed: true })), ["--local", "--accounts"]);
   assert.deepEqual(args(context.ompLiveArguments({ ompLocal: false }, { local: "ok" })), [], "turned off, omp's sessions are not followed");
-  assert.deepEqual(args(context.ompLiveArguments({ ompStatsUrl: "http://devbox:3847" }, { local: "missing" })), ["--stats-url", "http://devbox:3847"],
-    "omp stats elsewhere is followed without omp here");
   assert.deepEqual(args(context.ompLiveArguments({}, { local: "unused", installed: true })), [],
     "omp installed but not signed in to anything: nothing to follow here");
   assert.equal(context.ompFound({ local: "unused", installed: true }), true, "omp that is not set up is still found");
-  assert.deepEqual(args(context.ompLiveArguments({ ompStatsUrl: "http://devbox:3847" }, { local: "ok" }, true)), [],
-    "through a proxy nothing of omp's is followed");
 
-  const problem = context.ompServerUrlProblem;
-  assert.equal(problem(""), "", "empty turns the server off");
-  for (const good of ["https://stats.example.com", "https://203.0.113.9:3847", "http://devbox:3847", "http://devbox.tail1234.ts.net:3847",
-    "http://100.101.102.103:3847", "http://192.168.1.20:3847", "http://10.0.0.2", "http://172.16.0.1:4000", "http://127.0.0.1:3847",
-    "http://localhost:3847", "http://[::1]:3847", "http://[fd7a:115c:a1e0::1]:4000", "http://devbox:", "http://devbox:3847/"])
-    assert.equal(problem(good), "", good + " is accepted");
-  for (const bad of ["ftp://devbox", "http://user:secret@devbox:3847", "http://devbox:3847?range=7d", "http://devbox:3847/#top", "devbox:3847",
-    "http://devbox:99999", "http://devbox/../api", "http://devbox/%2e%2e/api", "http://[::1", "https://proxy.example.com/omp",
-    "http://devbox:3847/api/session/trace", "http://devbox:1/\\..\\x", "http://devbox\\x:3847"])
-    assert.equal(problem(bad), context.OMP_URL_PROBLEM, bad + " is refused: an omp server address has no path");
-  for (const exposed of ["http://example.com:3847", "http://203.0.113.9:3847", "http://172.32.0.1", "http://100.128.0.1", "http://010.0.0.1",
-    "http://2130706433", "http://[2001:db8::1]:3847"])
-    assert.equal(problem(exposed), context.OMP_HTTP_PROBLEM, exposed + " needs HTTPS");
-  // The gateway's token goes over plain HTTP only to this computer or over Tailscale.
-  for (const tailnet of ["http://127.0.0.1:4000", "http://[::1]:4000", "http://localhost:4000", "http://100.101.102.103:4000",
-    "http://[fd7a:115c:a1e0::1]:4000", "http://devbox:4000", "http://devbox.tail1234.ts.net:4000", "https://192.168.1.20:4000",
-    "https://gateway.example.com"])
-    assert.equal(problem(tailnet, true), "", tailnet + " may carry the gateway token");
-  for (const lan of ["http://192.168.1.20:4000", "http://10.0.0.2:4000", "http://172.16.0.1:4000", "http://[fd00::1]:4000",
-    "http://example.com:4000", "http://100.128.0.1:4000"])
-    assert.equal(problem(lan, true), context.SECRET_HTTP_PROBLEM, lan + " would send the gateway token in the clear");
-  // The CLIProxyAPI key, the Keeper password and T3 tokens follow the gateway token's rule; their URLs may have a path.
+  // The CLIProxyAPI key, the Keeper password and T3 tokens go over plain HTTP only to this computer or over Tailscale.
   const secret = (text) => context.secretServerUrlProblem(text, "invalid");
   for (const kept of ["http://127.0.0.1:8317", "http://localhost:8317/", "http://[::1]:8317/keeper", "http://devbox:3773/base",
     "http://100.101.102.103:8317", "https://proxy.example.com/keeper", "https://192.168.1.20:8317"])
@@ -1190,23 +1291,11 @@ console.log("Provider setup: passed");
   for (const bad of ["http://user:secret@127.0.0.1:8317", "http://127.0.0.1:8317/?key=x", "http://127.0.0.1:8317/#x",
     "http://127.0.0.1:8317/a/../b", "ftp://127.0.0.1", "http://127.0.0.1:99999", "127.0.0.1:8317"])
     assert.equal(secret(bad), "invalid", bad + " is not a server URL");
-  assert.equal(context.ompHost("http://devbox.tail1234.ts.net:3847"), "devbox", "MagicDNS names drop the tailnet");
-  assert.equal(context.ompHost("http://Devbox:4000/"), "devbox");
-  assert.equal(context.ompOnHost("http://127.0.0.1:3847"), "", "the end of a tunnel is not the computer's name");
-  assert.equal(context.ompOnHost("http://devbox:3847"), " on devbox");
-  assert.equal(context.ompPlace("http://127.0.0.1:3847"), " through a tunnel");
-  assert.equal(context.ompPlace("devbox.tail1234.ts.net:3847"), " on devbox", "a bare host reads the same as its URL");
-  assert.equal(context.ompPlace(""), "");
-  assert.equal(context.ompStatsSummary({ ompStatsUrl: "http://127.0.0.1:3847" }, { status: "ok" }, "live"), "SSH tunnel · live",
-    "a tunnel's summary never shows 127.0.0.1");
-  assert.equal(context.ompGatewaySummary({ ompGatewayUrl: "http://[::1]:4000" }, null), "SSH tunnel · token needed");
 
   const localStatus = (status, localOn = true, loading = false) => plain(context.ompLocalStatus(status, localOn, loading));
-  assert.deepEqual(localStatus({ local: "ok", version: "omp/18.10.3", localAccounts: 3, accounts: 4, gateway: "ok" }),
+  assert.deepEqual(localStatus({ local: "ok", version: "omp/18.10.3", localAccounts: 3, accounts: 4 }),
     { tone: "ok", text: "omp 18.10 found · 3 accounts" }, "the status names the version and this computer's accounts");
-  assert.deepEqual(localStatus({ local: "ok", accounts: 1, gateway: "off" }), { tone: "ok", text: "omp found · 1 account" });
-  assert.deepEqual(localStatus({ local: "ok", accounts: 5, gateway: "ok" }), { tone: "ok", text: "omp found" },
-    "a merged count that includes the gateway's is not this computer's");
+  assert.deepEqual(localStatus({ local: "ok", accounts: 1 }), { tone: "ok", text: "omp found · 1 account" });
   assert.deepEqual(localStatus({ local: "ok", localAccounts: 0 }), { tone: "ok", text: "omp found · no accounts signed in" });
   assert.deepEqual(localStatus({ local: "missing" }), { tone: "off", text: "omp not found on this computer" });
   assert.deepEqual(localStatus({ local: "unused", installed: true, message: "omp is installed but not set up on this computer." }),
@@ -1218,95 +1307,12 @@ console.log("Provider setup: passed");
   assert.deepEqual(localStatus(null), { tone: "pending", text: "" }, "nothing to say before a refresh");
   assert.deepEqual(localStatus({ local: "off", installed: true }, false), { tone: "off", text: "omp found · its accounts are not read" });
   assert.deepEqual(localStatus({ local: "off" }, false), { tone: "off", text: "Reading omp's accounts is off" });
-  assert.equal(context.ompLocalMessage({ message: "omp usage did not finish in time. The omp gateway refused the token." }),
-    "omp usage did not finish in time.", "the local part of a combined message");
+  assert.equal(context.ompLocalMessage({ message: "omp usage did not finish in time." }), "omp usage did not finish in time.");
 
-  const gateway = { ompGatewayUrl: "http://devbox:4000", ompGatewayKeyFile: "/private/key-1.key" };
-  assert.equal(context.ompGatewaySummary({}, null), "Not set up");
-  assert.equal(context.ompGatewaySummary({ ompGatewayUrl: "http://devbox:4000" }, null), "devbox · token needed");
-  assert.equal(context.ompGatewaySummary(gateway, { gateway: "ok", gatewayAccounts: 3 }), "devbox · 3 accounts");
-  assert.equal(context.ompGatewaySummary(gateway, { gateway: "error", message: "The omp gateway refused the token." }), "devbox · token refused");
-  assert.equal(context.ompGatewaySummary(gateway, { gateway: "error",
-    message: "omp usage exited with status 1. Could not reach the omp gateway. Check its URL, the network and its TLS certificate." }),
-  "devbox · not answering", "the gateway's part of a combined message decides");
-  const plainHttp = { gateway: "error", message: "The omp gateway token goes over plain HTTP only to this computer or over Tailscale. "
-    + "Use an https:// address, or check that Tailscale is connected and that the address is that computer's Tailscale name or address." };
-  assert.equal(context.ompGatewaySummary(gateway, plainHttp), "devbox · needs HTTPS or Tailscale");
-  assert.ok(context.ompGatewayProblem(plainHttp.message, "http://devbox:4000").text.indexOf("Tailscale is connected") > 0,
-    "a refusal to send the token in the clear says what to do");
-  const foreign = { gateway: "error", message: "omp usage exited with status 1. The omp gateway's port on this computer belongs to "
-    + "another account, so the token was not sent." };
-  assert.equal(context.ompGatewaySummary({ ompGatewayUrl: "http://127.0.0.1:4000", ompGatewayKeyFile: "/private/key-1.key" }, foreign),
-    "SSH tunnel · another account's port", "a port another account holds is named as such, not as a local omp failure");
-  assert.equal(context.ompLocalMessage(foreign), "omp usage exited with status 1.");
-
-  const usageReply = (omp, providers) => ({ schemaVersion: 1, generatedAt: "2030-01-15T12:00:00Z", providers: providers || [], omp });
-  const ompAccount = (accountId) => ({ accountId, source: "omp usage report", origin: "omp", status: "ok" });
-  const gatewayOk = usageReply({ local: "off", gateway: "ok", gatewayAccounts: 3 }, [
-    { id: "claude", source: "omp usage report", origin: "omp", accounts: [ompAccount("omp-aaaaaaaaaaaa"), ompAccount("omp-bbbbbbbbbbbb")] },
-    { id: "codex", source: "omp usage report", origin: "omp", accounts: [ompAccount("omp-cccccccccccc"),
-      { accountId: "main", source: "Codex app-server RPC", origin: "signin", origins: ["signin"] }] },
-    { id: "kimi", status: "error", accounts: [] }]);
-  const gatewayLines = (reply, monitored) => plain(context.ompGatewayTestLines(reply, "http://devbox:4000", monitored));
-  assert.deepEqual(gatewayLines(gatewayOk, ["claude", "codex"]), [{ tone: "ok", text: "Gateway answers · 3 accounts: Claude 2, Codex 1" }],
-    "the result names what the gateway has");
-  assert.deepEqual(gatewayLines(gatewayOk, ["claude"])[1], { tone: "info", text: "Not monitored here: Codex. Monitor it to see its accounts in Limits." });
-  assert.deepEqual(gatewayLines(usageReply({ gateway: "ok" }, []), []).map((line) => line.tone), ["ok", "info"], "an empty gateway says so");
-  assert.deepEqual(gatewayLines(usageReply({ gateway: "error", message: "The omp gateway refused the token." }), []),
-    [{ tone: "error", text: "The gateway refused the token. Copy a fresh one with omp auth-gateway token on devbox, then save it here." }]);
-  assert.equal(gatewayLines(usageReply({ gateway: "error", message: "Could not reach the omp gateway. Check its URL, the network and its TLS certificate." }), [])[0].text,
-    "Nothing answers there. Is omp auth-gateway serve running on devbox?");
-  assert.equal(gatewayLines(usageReply({ gateway: "error", message: "The omp gateway answered HTTP 404." }), [])[0].text,
-    "The gateway answered HTTP 404. Check that the URL points at omp auth-gateway (port 4000 unless you chose another).");
-  assert.equal(gatewayLines(usageReply({ gateway: "error", message: "omp gateway token file must be a regular file owned by you with mode 0600." }), [])[0].text,
-    "omp gateway token file must be a regular file owned by you with mode 0600.", "a message the widget has no next step for stays as it is");
-  assert.equal(gatewayLines(usageReply({ local: "off", gateway: "off" }), [])[0].tone, "error", "a backend without gateway support says so");
-  assert.equal(gatewayLines(null, [])[0].text, "The test did not run. Check that Python 3 is installed, then try again.");
-  assert.equal(gatewayLines({ probeError: "timeout" }, [])[0].text, "No answer within 40 s. Check the URL, and that the other computer is awake.");
-  assert.equal(gatewayLines({ schemaVersion: 1, providers: [], backendError: "Backend failed" }, [])[0].text, "Backend failed");
-
-  const costReply = (source, totals) => ({ schemaVersion: 1, generatedAt: "2030-01-15T12:00:00Z", providers: [], models: [], periods: [],
-    totals: totals || { records: 0, costUsd: 0 }, sources: source ? [source] : [] });
-  const statsLines = (reply, url = "http://devbox:3847") => plain(context.ompStatsTestLines(reply, url));
-  assert.deepEqual(statsLines(costReply({ id: "omp-remote", status: "ok", host: "devbox" }, { records: 18811, costUsd: 1107.83 })),
-    [{ tone: "ok", text: "omp stats on devbox answers" }, { tone: "ok", text: "18,811 requests · $1,107.83 in the last 7 days" }],
-    "the result names what the server counted");
-  assert.equal(statsLines(costReply({ id: "omp-remote", status: "ok" }, { records: 12, costUsd: null }))[1].text, "12 requests · unpriced in the last 7 days");
-  assert.equal(statsLines(costReply({ id: "omp-remote", status: "ok" }, { records: 0, costUsd: 0 }))[1].text, "No requests in the last 7 days.");
-  assert.deepEqual(statsLines(costReply({ id: "omp-remote", status: "error", errorKind: "network", message: "Could not reach omp stats." })),
-    [{ tone: "error", text: "Nothing answers there. Is omp stats running on devbox?" }], "an error names the next step");
-  assert.equal(statsLines(costReply({ id: "omp-remote", status: "error", errorKind: "network", message: "" }), "http://127.0.0.1:3847")[0].text,
-    "Nothing answers there. Is the SSH tunnel open, and omp stats running on the other computer?");
-  assert.equal(statsLines(costReply({ id: "omp-remote", status: "error", errorKind: "timeout",
-    message: "omp stats did not answer within 15 seconds. It may still be indexing sessions; try again in a minute." }))[0].text,
-  "omp stats did not answer within 15 seconds. It may still be indexing sessions; try again in a minute.");
-  assert.equal(statsLines(costReply({ id: "omp-remote", status: "duplicate" }))[1].text, "It runs on this computer, so its sessions are already counted here.");
-  assert.equal(statsLines(costReply(null))[0].text, "This version of the backend cannot read omp stats. Update Quotatank, then try again.");
-  assert.equal(statsLines({ probeError: "timeout" })[0].text, "No answer within 75 s. Check the URL, and that the other computer is awake.");
-  assert.equal(context.ompLiveFeedLine("live", "").text, "Live feed on · new activity shows within 10 s");
-  assert.equal(context.ompLiveFeedLine("reconnecting", "").tone, "info");
-  assert.equal(context.ompLiveFeedLine("unavailable", "This omp has no live feed.").text, "Live feed unavailable. This omp has no live feed.");
-  assert.equal(context.ompLiveFeedLine("off", ""), null, "a server the feed does not follow gets no live line");
-  assert.equal(context.ompStatsSummary({}, null, ""), "Not set up");
-  assert.equal(context.ompStatsSummary({ ompStatsUrl: "http://devbox:3847" }, { status: "ok" }, "live"), "devbox · live");
-  assert.equal(context.ompStatsSummary({ ompStatsUrl: "http://devbox:3847" }, { status: "error" }, "live"), "devbox · not answering");
   assert.equal(context.ompLocalCostState([], []), "Off");
   assert.equal(context.ompLocalCostState([], ["claude"]), "Not yet read");
   assert.equal(context.ompLocalCostState([{ id: "local-claude", status: "ok" }], ["claude"]), "None found");
   assert.equal(context.ompLocalCostState([{ id: "local-omp", status: "ok" }], ["claude"]), "Included");
-
-  const tailscale = context.ompStatsRecipe("tailscale");
-  assert.equal(tailscale.steps[0].command, 'omp stats --host "$(tailscale ip -4)" --port 3847');
-  assert.ok(tailscale.units[0].text.startsWith("# ~/.config/systemd/user/omp-stats.service\n[Unit]\n"), "a unit's first line names its file");
-  assert.ok(tailscale.units[0].text.includes("ExecStart=/bin/sh -lc 'exec omp stats \\\n  --host \"$$(tailscale ip -4)\" --port 3847'\n"),
-    "systemd reads $$ as a literal dollar sign, and a backslash continues the line");
-  const ssh = context.ompStatsRecipe("ssh");
-  assert.equal(ssh.steps[0].command, "omp stats --host 127.0.0.1 --port 3847", "behind a tunnel the dashboard listens on loopback only");
-  assert.equal(ssh.steps[1].command, "ssh -N -L 3847:127.0.0.1:3847 other-computer");
-  assert.equal(problem(ssh.url) + problem(tailscale.url), "", "each way's address passes the address rule");
-  assert.deepEqual(Array.from(context.ompGatewayRecipe(), (step) => step.command),
-    ['omp auth-gateway serve \\\n  --bind="$(tailscale ip -4):4000"', "omp auth-gateway token"], "the long command breaks with a shell continuation");
-  assert.equal(context.ompStatsRecipe("ssh").units[1].enable, "systemctl --user daemon-reload\nsystemctl --user enable --now omp-stats-tunnel");
 
   const line = (value) => context.parseOmpLiveLine(JSON.stringify(value));
   const request = { schemaVersion: 1, type: "request", source: "local", provider: "claude", model: "claude-opus-5-5",
@@ -1319,13 +1325,9 @@ console.log("Provider setup: passed");
   assert.equal(context.parseOmpLiveLine("{not json"), null);
   assert.equal(context.parseOmpLiveLine(JSON.stringify({ ...request, model: "x".repeat(70000) })), null, "an oversized line is refused");
   assert.deepEqual(plain(line({ schemaVersion: 1, heartbeat: true })), { type: "heartbeat" });
-  assert.deepEqual(plain(line({ type: "state", state: "live", message: "Connected" })), { type: "state", state: "live", message: "Connected" });
-  assert.equal(line({ type: "state", state: "maybe", message: "" }), null);
   assert.deepEqual(plain(line({ type: "accounts", map: { 7: { provider: "claude", accountId: "omp-0123456789ab" },
     x: { provider: "claude", accountId: "omp-0123456789ab" }, 8: { provider: "codex", accountId: "someone@example.com" } } })),
   { type: "accounts", map: { 7: { provider: "claude", accountId: "omp-0123456789ab" } } }, "malformed map entries are left out");
-  assert.deepEqual(plain(line({ schemaVersion: 1, type: "activity", source: "remote", version: 12, at: 1800000000 })),
-    { type: "activity", source: "remote", version: 12, at: 1800000000 });
   assert.deepEqual(plain(line({ type: "future" })), { type: "other" }, "a newer helper's lines are skipped, not fatal");
 
   const map = { 7: { provider: "claude", accountId: "omp-0123456789ab" } };
@@ -1446,8 +1448,7 @@ console.log("omp settings, live feed and account modes: passed");
     "a live omp request reaches the native account omp shares");
   assert.equal(context.accountLiveAt(merged, { "claude@work": NOW - 90, "claude@omp-0123456789ab": NOW - 30 }), NOW - 30, "the newest key wins");
   assert.equal(context.spendingNow({ ...merged, id: "codex" }, NOW, { "claude@omp-0123456789ab": NOW }), false, "still per provider");
-  assert.equal(context.accountMode({ id: "claude", accounts: [merged, { id: "claude", accountId: "personal", activity: { lastIncreaseAt: NOW - 60 } }] },
-    "{}", false, NOW, { "claude@omp-0123456789ab": NOW - 30 }), "together", "and makes the shared account count as used");
+  assert.equal(context.accountMode({ id: "claude", accounts: [merged, { id: "claude", accountId: "personal", activity: { lastIncreaseAt: NOW - 60 } }] }, "{}", NOW, { "claude@omp-0123456789ab": NOW - 30 }), "together", "and makes the shared account count as used");
   assert.equal(context.accountAnswersTo(merged, "omp-0123456789ab"), true);
   assert.equal(context.accountAnswersTo(merged, "work"), true);
   assert.equal(context.accountAnswersTo(merged, "omp-ffffffffffff"), false);
@@ -1462,17 +1463,20 @@ console.log("omp settings, live feed and account modes: passed");
 
   // Mode: the Settings choice wins; a proxy, an omp pool, or two accounts rising within an hour mean together.
   const pair = (a, b) => ({ id: "claude", accounts: [rose(a), { ...rose(b), accountId: "personal" }] });
-  assert.equal(context.accountMode(pair(10, 5000), "{}", false, NOW, {}), "single");
-  assert.equal(context.accountMode(pair(10, 3500), "{}", false, NOW, {}), "together");
-  assert.equal(context.accountMode({ ...pair(10, 3500), accountSwitch: { mode: "auto", threshold: 95 } }, "{}", false, NOW, {}),
+  assert.equal(context.accountMode(pair(10, 5000), "{}", NOW, {}), "single");
+  assert.equal(context.accountMode(pair(10, 3500), "{}", NOW, {}), "together");
+  assert.equal(context.accountMode({ ...pair(10, 3500), accountSwitch: { mode: "auto", threshold: 95 } }, "{}", NOW, {}),
     "single", "Omarchy switching logins: sessions left on the old one do not make it used together");
-  assert.equal(context.accountMode(pair(10, 3500), '{"claude":"single"}', false, NOW, {}), "single", "the user's choice wins");
-  assert.equal(context.accountMode(pair(10, 5000), '{"claude":"together"}', false, NOW, {}), "together");
-  assert.equal(context.accountMode(pair(10, 5000), '{"claude":"sideways"}', false, NOW, {}), "single", "unknown choices are automatic");
-  assert.equal(context.accountMode(pair(10, 5000), "not json", false, NOW, {}), "single");
-  assert.equal(context.accountMode(pair(9000, 9000), "{}", true, NOW, {}), "together", "a proxy spends its accounts together");
-  assert.equal(context.accountMode({ ...pair(9000, 9000), pool: { source: "omp", windows: [] } }, "{}", false, NOW, {}), "together");
-  assert.equal(context.accountMode(pair(10, 9000), "{}", false, NOW, { "claude@personal": NOW - 3000 }), "together",
+  assert.equal(context.accountMode(pair(10, 3500), '{"claude":"single"}', NOW, {}), "single", "the user's choice wins");
+  assert.equal(context.accountMode(pair(10, 5000), '{"claude":"together"}', NOW, {}), "together");
+  assert.equal(context.accountMode(pair(10, 5000), '{"claude":"sideways"}', NOW, {}), "single", "unknown choices are automatic");
+  assert.equal(context.accountMode(pair(10, 5000), "not json", NOW, {}), "single");
+  const proxyLogins = { id: "claude", accounts: pair(9000, 9000).accounts.map((entry) => ({ ...entry, proxy: { id: "p-00000001", name: "CLIProxyAPI" } })) };
+  assert.equal(context.accountMode(proxyLogins, "{}", NOW, {}), "together", "a proxy spends its accounts together");
+  assert.equal(context.accountMode({ id: "claude", accounts: [proxyLogins.accounts[0], rose(9000)] }, "{}", NOW, {}), "single",
+    "a proxy's account beside this computer's own login is one at a time");
+  assert.equal(context.accountMode({ ...pair(9000, 9000), pool: { source: "omp", windows: [] } }, "{}", NOW, {}), "together");
+  assert.equal(context.accountMode(pair(10, 9000), "{}", NOW, { "claude@personal": NOW - 3000 }), "together",
     "a live omp request counts as activity");
 
   // Counted accounts: the in-use one alone; together, every account spending now, else the least headroom.
@@ -1495,9 +1499,9 @@ console.log("omp settings, live feed and account modes: passed");
   // Row order: stable (Omarchy logins, keys, omp) one at a time; least headroom first together.
   const mixed = [login("omp-1a2b3c4d5e6f", [quiet(10)], { origin: "omp" }), login("k-0123abcd", [quiet(50)]),
     login("main", [quiet(95)]), login("broken", [], { status: "error" })];
-  assert.deepEqual(Array.from(context.accountOrder(mixed, "single", false)), [2, 3, 1, 0]);
-  assert.deepEqual(Array.from(context.accountOrder(mixed, "together", false)), [2, 1, 0, 3], "unknown headroom goes last");
-  assert.deepEqual(Array.from(context.accountOrder([login("a", [quiet(40)]), login("b", [quiet(40)])], "together", false)), [0, 1],
+  assert.deepEqual(Array.from(context.accountOrder(mixed, "single")), [2, 3, 1, 0]);
+  assert.deepEqual(Array.from(context.accountOrder(mixed, "together")), [2, 1, 0, 3], "unknown headroom goes last");
+  assert.deepEqual(Array.from(context.accountOrder([login("a", [quiet(40)]), login("b", [quiet(40)])], "together")), [0, 1],
     "ties keep the stable order, so rows do not shuffle");
 
   // A keyed list reaches the wanted order by moves and inserts; kept items survive.
@@ -1515,7 +1519,7 @@ console.log("omp settings, live feed and account modes: passed");
 
   // Status line priority: failure > used up > spending now > recent event > plan > source.
   const clock = (epoch) => "@" + (epoch - NOW);
-  const line = (account, event = null) => plain(context.accountStatusLine(account, context.spendingNow(account, NOW, {}), NOW, event, false));
+  const line = (account, event = null) => plain(context.accountStatusLine(account, context.spendingNow(account, NOW, {}), NOW, event));
   assert.equal(line(login("w", [], { status: "error", errorKind: "expired" })).text, "sign-in expired");
   const exhausted = login("w", [{ ...quiet(100), resetsAt: NOW + 600 }, { ...week(100), resetsAt: NOW + DAY }],
     { activity: { lastIncreaseAt: NOW - 30 }, plan: "Claude Max 5x" });
@@ -1547,34 +1551,36 @@ console.log("omp settings, live feed and account modes: passed");
   assert.equal(context.accountUseArgv("claude", { accountId: "--help" }), null);
   assert.equal(context.accountUseArgv("claude", { accountId: "two words" }), null);
   assert.equal(context.accountUseArgv("../x", { accountId: "work" }), null);
-  assert.equal(context.accountCanUse(personal, "single", false), true);
-  assert.equal(context.accountCanUse(work, "single", false), false, "the account in use offers no Use");
-  assert.equal(context.accountCanUse(personal, "together", false), false);
-  assert.equal(context.accountCanUse(login("k-0123abcd", [quiet(3)]), "single", false), false, "keys have no Use");
-  assert.equal(context.accountCanUse(personal, "single", true), false, "proxy accounts have no Use");
+  assert.equal(context.accountCanUse(personal, "single"), true);
+  assert.equal(context.accountCanUse(work, "single"), false, "the account in use offers no Use");
+  assert.equal(context.accountCanUse(personal, "together"), false);
+  assert.equal(context.accountCanUse(login("k-0123abcd", [quiet(3)]), "single"), false, "keys have no Use");
+  assert.equal(context.accountCanUse({ ...personal, proxy: { id: "p-00000001", name: "CLIProxyAPI" } }, "single"), false,
+    "proxy accounts have no Use");
 
   // How new sessions pick an account: one text for the ACCOUNTS header and the hover card.
-  assert.equal(context.accountModeText({ ...claude, accountSwitch: { mode: "auto", threshold: 95 } }, "single", false),
+  assert.equal(context.accountModeText({ ...claude, accountSwitch: { mode: "auto", threshold: 95 } }, "single"),
     "Omarchy · switches at 95%");
-  assert.equal(context.accountModeText({ ...claude, accountSwitch: { mode: "manual", threshold: 90 } }, "single", false),
+  assert.equal(context.accountModeText({ ...claude, accountSwitch: { mode: "manual", threshold: 90 } }, "single"),
     "Omarchy · notifies at 90%");
-  assert.equal(context.accountModeText(claude, "single", false), "");
-  assert.equal(context.accountModeText({ ...claude, pool: { source: "omp" } }, "together", false), "Used together · omp");
-  assert.equal(context.accountModeText(claude, "together", true), "Used together · CLIProxyAPI");
-  assert.equal(context.accountModeText({ ...claude, accounts: [{ ...work, origins: ["omarchy", "omp"] }, personal] },
-    "together", false), "Used together · omp", "an account omp also reads counts as omp");
-  assert.equal(context.accountSourceKind({ accountId: "work", source: "Claude OAuth usage API" }, false), "omarchy",
+  assert.equal(context.accountModeText(claude, "single"), "");
+  assert.equal(context.accountModeText({ ...claude, pool: { source: "omp" } }, "together"), "Used together · omp");
+  const throughProxy = (account) => ({ ...account, proxy: { id: "p-00000001", name: "CLIProxyAPI" } });
+  assert.equal(context.accountModeText({ ...claude, accounts: claude.accounts.map(throughProxy) }, "together"), "Used together · CLIProxyAPI");
+  assert.equal(context.accountModeText({ ...claude, accounts: [{ ...work, origins: ["omarchy", "omp"] }, personal] }, "together"), "Used together · omp", "an account omp also reads counts as omp");
+  assert.equal(context.accountSourceKind({ accountId: "work", source: "Claude OAuth usage API" }), "omarchy",
     "source describes the API; only origin names the kind");
-  assert.equal(context.accountSourceKind({ accountId: "a1", origin: "proxy" }, false), "proxy");
-  assert.equal(context.accountSourceKind({ accountId: "a1" }, true), "proxy");
-  assert.equal(context.accountSourceKind({ origin: "omp", accountId: "x" }, false), "omp");
-  assert.equal(context.accountSourceKind({ accountId: "k-0123abcd" }, false), "key");
-  assert.equal(context.accountSourceKind({ accountId: "primary" }, false), "key");
-  assert.equal(context.accountSourceKind({ accountId: "omp-0123456789ab" }, false), "omp");
-  assert.equal(context.accountSourceKind({ accountId: "" }, false), "omarchy", "one fallback for every surface");
+  assert.equal(context.accountSourceKind({ accountId: "a1", origin: "proxy" }), "proxy");
+  assert.equal(context.accountSourceKind({ accountId: "a1", origin: "omarchy", proxy: { id: "p-00000001" } }), "proxy",
+    "a reading that came through a proxy is the proxy's, whatever its origin there");
+  assert.equal(context.accountSourceKind({ origin: "omp", accountId: "x" }), "omp");
+  assert.equal(context.accountSourceKind({ accountId: "k-0123abcd" }), "key");
+  assert.equal(context.accountSourceKind({ accountId: "primary" }), "key");
+  assert.equal(context.accountSourceKind({ accountId: "omp-0123456789ab" }), "omp");
+  assert.equal(context.accountSourceKind({ accountId: "" }), "omarchy", "one fallback for every surface");
 
   // One account state per provider: what the chip, its dots, the tile, the rows and the runway read.
-  const stateOf = (provider, extra = {}) => plain(context.accountState(provider, { modes: "{}", proxyMode: false, nowSeconds: NOW,
+  const stateOf = (provider, extra = {}) => plain(context.accountState(provider, { modes: "{}", nowSeconds: NOW,
     recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10, ...extra }));
   const single = stateOf(claude);
   assert.equal(single.mode, "single");
@@ -1597,13 +1603,13 @@ console.log("omp settings, live feed and account modes: passed");
   const proxyAccounts = [0, 1, 2].map((i) => ({ id: "codex", accountId: String(i), status: "ok", origin: "proxy",
     windows: [{ ...quiet([30, 60, 90][i]), id: "primary" }] }));
   const proxied = { id: "codex", status: "ok", accountId: "2", accounts: proxyAccounts };
-  const viaProxy = stateOf(proxied, { proxyMode: true, recentByAccount: context.mergeRecentActivity(null,
+  const viaProxy = stateOf(proxied, { recentByAccount: context.mergeRecentActivity(null,
     [{ id: "codex", status: "ok", accountId: "1", lastUsedAt: NOW - 30 }, { id: "codex", status: "ok", accountId: "0", lastUsedAt: NOW - 3600 }]) });
   assert.equal(viaProxy.mode, "together");
   assert.deepEqual(viaProxy.counted, [1], "through a proxy the account that just served a request is counted, not an hour-old last one");
   assert.equal(viaProxy.value, 1);
   assert.deepEqual(viaProxy.inUse, [false, false, false]);
-  assert.deepEqual(stateOf(proxied, { proxyMode: true }).counted, [2], "nothing spending: the least headroom");
+  assert.deepEqual(stateOf(proxied).counted, [2], "nothing spending: the least headroom");
   const many = { id: "claude", accounts: ["a", "b", "c", "d", "e"].map((id) => login(id, [quiet(10)])) };
   const manyState = stateOf(many, { modes: '{"claude":"together"}', recentByAccount: { "claude@e": NOW } });
   assert.deepEqual(manyState.dots.dots.map((dot) => dot.index), [0, 1, 4], "five accounts: three dots, the counted one kept");
@@ -1655,7 +1661,7 @@ console.log("omp settings, live feed and account modes: passed");
 
   // Runway, one at a time: the in-use account runs out, the next takes over at the same pace.
   const runwayOf = (accounts, mode, counted) => plain(context.accountRunway({ id: "claude", accounts }, mode, counted, NOW,
-    context.accountOrder(accounts, mode, false)));
+    context.accountOrder(accounts, mode)));
   const first = login("work", [rising(70, 0.01), week(31)], { active: true });
   const takeover = runwayOf([first, login("personal", [quiet(20), week(39)])], "single", [0]);
   assert.equal(takeover.horizon, SESSION / 2);
@@ -1751,7 +1757,7 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
     windows: [win("session", used, 7200, 18000), win("weekly", 30, 300000, 604800)], activity: {}, ...extra });
   const claude = (accounts, extra = {}) => ({ id: "claude", name: "Claude Code", status: "ok", windows: accounts[0].windows,
     accounts, ...extra });
-  const stateOf = (provider, extra = {}) => context.accountState(provider, { modes: "{}", proxyMode: false, nowSeconds: now,
+  const stateOf = (provider, extra = {}) => context.accountState(provider, { modes: "{}", nowSeconds: now,
     recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10, ...extra });
   // The chip's strip from the provider's state; `counted` pins what the state would decide.
   const strip = (provider, counted, mode, extra = {}) => {
@@ -1913,8 +1919,8 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
   assert.equal(hoverOf(claude(hoverAccounts), {}, { modes: '{"claude":"single"}' }).modeText, "", "no Omarchy switching, nothing");
   assert.equal(hoverOf(claude(hoverAccounts, { pool: { source: "omp" } })).modeText, "Used together · omp",
     "the same words as the ACCOUNTS header");
-  const viaProxy = claude(hoverAccounts);
-  const proxyHover = hoverOf(viaProxy, { proxyMode: true }, { proxyMode: true });
+  const viaProxy = claude(hoverAccounts.map((account) => ({ ...account, proxy: { id: "p-00000001", name: "CLIProxyAPI" } })));
+  const proxyHover = hoverOf(viaProxy, {}, {});
   assert.equal(proxyHover.modeText, "Used together · CLIProxyAPI");
   assert.deepEqual(plain(proxyHover.rows.map((row) => row.inUse)), [false, false, false, false, false],
     "\"in use\" only one at a time, as the rows say");

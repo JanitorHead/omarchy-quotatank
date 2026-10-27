@@ -7,19 +7,20 @@ Item {
   id: root
   visible: false
   required property var usageBackend
-  property var settings: ({})
   property var providers: []
   property string fetchError: ""
   property double lastSuccessAt: 0
   property bool pendingRefresh: false
   property bool launchPending: false
   property string scriptPath: usageBackend.localPath(Qt.resolvedUrl("scripts/proxy-activity.py"))
-  readonly property string keeperUrl: String(settings.costKeeperUrl || "")
-  readonly property string passwordFile: String(settings.costKeeperPasswordFile || "")
-  readonly property bool trackingEnabled: usageBackend.usageSource === "cliproxy" && keeperUrl.trim() !== ""
+  // CPA Usage Keeper belongs to the proxy entry under Settings → Sources.
+  readonly property var proxy: UsageLogic.activeProxy(usageBackend.settings)
+  readonly property string keeperUrl: proxy ? proxy.keeperUrl : ""
+  readonly property string passwordFile: proxy ? proxy.keeperPasswordFile : ""
+  readonly property bool trackingEnabled: keeperUrl.trim() !== ""
   readonly property string connectionId: JSON.stringify([usageBackend.connectionId, keeperUrl, passwordFile])
   readonly property string notice: !trackingEnabled
-    ? "Configure CPA Usage Keeper in settings to track the last-used account."
+    ? "Configure CPA Usage Keeper under Settings → Sources to track the last-used account."
     : fetchError !== "" ? fetchError : lastSuccessAt <= 0 ? "Loading account activity…" : ""
 
   function refresh() {
@@ -27,9 +28,9 @@ Item {
     if (process.running || launchPending) { pendingRefresh = true; return }
     launchPending = true
     pendingRefresh = false
-    var command = ["python3", scriptPath, "--cliproxy-url", usageBackend.cliproxyUrl,
+    var command = ["python3", scriptPath, "--cliproxy-url", proxy.url,
       "--keeper-url", keeperUrl, "--timeout", "10"]
-    if (usageBackend.cliproxyKeyFile !== "") command.push("--cliproxy-key-file", usageBackend.cliproxyKeyFile)
+    if (proxy.keyFile !== "") command.push("--cliproxy-key-file", proxy.keyFile)
     if (passwordFile !== "") command.push("--keeper-password-file", passwordFile)
     process.command = command
     process.connectionId = connectionId

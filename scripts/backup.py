@@ -52,9 +52,12 @@ VERSION = 1
 FIELDS = frozenset({"format", "version", "createdAt", "pluginVersion", "settings", "secrets"})
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 # Settings whose value is JSON text holding structure. Restore keeps them as text, with references rewritten.
-CONTAINER_TYPES = {"costT3Servers": list, "extraKeys": dict}
+CONTAINER_TYPES = {"sources": list, "extraKeys": dict, "costT3Servers": list}
 # Settings that hold key file references, directly or inside a container. Restore's "keys" option selects these.
-KEY_SETTINGS = frozenset({"costKeeperPasswordFile", "costT3Servers", "extraKeys"})
+KEY_SETTINGS = frozenset({"sources", "extraKeys", "costT3Servers", "costKeeperPasswordFile"})
+# 2.3.0 settings the manifest no longer defines. Restore keeps them so the widget's migrateSources can move them.
+LEGACY_SETTINGS = frozenset({"usageSource", "cliproxyUrl", "cliproxyKeyFile", "ompGatewayUrl", "ompGatewayKeyFile",
+    "ompStatsUrl", "costT3Servers", "costKeeperUrl", "costKeeperPasswordFile"})
 MIN_PASSPHRASE = 12
 MAX_PASSPHRASE_BYTES = 1024
 MAX_BACKUP_BYTES = 4 * 1024 * 1024
@@ -173,6 +176,9 @@ def restore_backup(request: dict) -> dict:
     for holder, field, _setting in secret_slots(selected):
         if not is_blank(holder[field]):
             holder[field] = paths[reference_index(holder[field])]
+    if any(name in LEGACY_SETTINGS for name in selected):
+        # The widget migrates legacy settings only while sourcesVersion is below 1, so reset it.
+        selected["sourcesVersion"] = 0
     return {"ok": True, "settings": serialize_settings(selected), "skipped": skipped}
 
 
@@ -250,8 +256,8 @@ def known_setting_names() -> set[str]:
 
 
 def keep_known(settings: dict) -> tuple[dict, int]:
-    """Keep only settings the plugin still defines. Others were validated already, and are counted, not written."""
-    known = known_setting_names()
+    """Keep settings the plugin defines, plus 2.3.0 legacy ones the widget migrates. Others are counted, not written."""
+    known = known_setting_names() | LEGACY_SETTINGS
     kept = {name: value for name, value in settings.items() if name in known}
     return kept, len(settings) - len(kept)
 
@@ -566,14 +572,15 @@ def secret_slots(settings: dict) -> list[tuple[dict, str, str]]:
     Shapes are checked here, so any caller that walks the slots can rely on them.
     """
     slots = [(settings, name, name) for name in settings
-             if name.endswith("KeyFile") or name == "costKeeperPasswordFile"]
-    rows = settings.get("costT3Servers")
-    if isinstance(rows, list):
-        for row in rows:
-            if not isinstance(row, dict):
-                raise BackupError("Setting costT3Servers has an unexpected shape.")
-            if "tokenFile" in row:
-                slots.append((row, "tokenFile", "costT3Servers"))
+             if name.endswith("KeyFile") or name == "costKeeperPasswordFile"]  # 2.3.0 has no suffix on this one
+    for setting, fields in (("sources", ("keyFile", "keeperPasswordFile", "tokenFile")),
+                            ("costT3Servers", ("tokenFile",))):
+        rows = settings.get(setting)
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise BackupError(f"Setting {setting} has an unexpected shape.")
+                slots.extend((row, field, setting) for field in fields if field in row)
     entries = settings.get("extraKeys")
     if isinstance(entries, dict):
         for entry in entries.values():

@@ -1,0 +1,31 @@
+#!/bin/sh
+# Stands in for ssh: each destination is a folder under $FAKE_SSH_HOMES used as that computer's HOME, and the
+# remote command runs there with sh, the way a login shell would run it. A few names fail the way ssh does.
+# Every call is logged (one line: the remote command) to $FAKE_SSH_LOG when it is set.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) shift 2 ;;
+    --) shift; break ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+host=$1
+command=$2
+[ -n "${FAKE_SSH_LOG:-}" ] && printf '%s %s\n' "$host" "$command" >> "$FAKE_SSH_LOG"
+case "$host" in
+  offline) echo "ssh: connect to host offline port 22: No route to host" >&2; exit 255 ;;
+  stranger) echo "Host key verification failed." >&2; exit 255 ;;
+  refuses) echo "rafa@refuses: Permission denied (publickey)." >&2; exit 255 ;;
+  nowhere) echo "ssh: Could not resolve hostname nowhere: Name or service not known" >&2; exit 255 ;;
+  refused) echo "ssh: connect to host refused port 22: Connection refused" >&2; exit 255 ;;
+  odd) echo "rafa@odd: Permission denied (publickey)." >&2; exit 1 ;;
+  stalled) echo "ssh: connect to host stalled port 22: Connection timed out" >&2; exit 1 ;;
+  nopython) cat >/dev/null; exit 85 ;;
+  slow) sleep 5; exit 0 ;;
+esac
+HOME="${FAKE_SSH_HOMES:?}/$host"
+mkdir -p "$HOME"
+export HOME
+cd "$HOME" || exit 1
+exec sh -c "$command"

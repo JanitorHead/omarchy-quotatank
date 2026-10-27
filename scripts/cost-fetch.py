@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Estimate API-equivalent costs from local transcripts, remote T3 summaries and omp stats.
+"""Estimate API-equivalent costs from local transcripts and remote T3 summaries.
 
 The scanner reads only usage metadata from the session files already owned by
 Claude Code, Codex, and Kimi Code. Prompts, responses, and tool output are never
 copied into plugin state or emitted to QML.
-Remote T3 sources return usage summaries and remote omp stats servers return
-aggregates; raw transcripts stay on their host.
+Remote T3 sources return usage summaries; raw transcripts stay on their host.
 """
 
 from __future__ import annotations
@@ -15,12 +14,13 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, replace
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 import socket
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
@@ -34,7 +34,7 @@ sys.dont_write_bytecode = True
 from quotatank_common import (
     atomic_write_json, clean_message, move_legacy_folders, opencode_database_path, read_capped, state_folder,
 )
-import omp_stats
+import quotatank_remote
 import t3_costs
 
 
@@ -49,14 +49,8 @@ PROVIDER_NAMES = {
     "kimi": "Kimi Code",
     "opencode": "OpenCode Go",
     "omp": "Oh My Pi",
-    # Further subscriptions that remote omp stats can report.
-    "antigravity": "Antigravity",
-    "copilot": "GitHub Copilot",
-    "cursor": "Cursor",
-    "minimax": "MiniMax Coding Plan",
-    "zai": "Z.ai Coding Plan",
-    "other": "Other providers",
     # Subscriptions an Oh My Pi transcript can bill directly.
+    "minimax": "MiniMax Coding Plan",
     "grok": "Grok CLI",
     "mimo": "Xiaomi MiMo",
 }
@@ -1828,8 +1822,8 @@ def model_rank(row: dict[str, Any]) -> tuple[bool, float, int]:
 
 def rank_models(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The MAX_MODEL_ROWS costliest model rows, then the rest folded into one "Other models" row per provider,
-    so totals stay exact and Costs never gets more rows than it lists (up to 512 local and 512 omp stats rows
-    reach here). A folded row counts no sessions: one session can use several models."""
+    so totals stay exact and Costs never gets more rows than it lists (up to 512 model groups reach here).
+    A folded row counts no sessions: one session can use several models."""
     if len(models) <= MAX_MODEL_ROWS:
         return models
     ranked = sorted(models, key=model_rank, reverse=True)
@@ -1845,8 +1839,6 @@ def rank_models(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         add_finished(other, row)
         other["sessions"] = None
-        if other.get("origin") != row.get("origin"):
-            other.pop("origin", None)
     return kept + sorted(folded.values(), key=model_rank, reverse=True)
 
 
@@ -2050,7 +2042,6 @@ FINISHED_COUNTERS = (
     "totalTokens", "records", "remoteRecords", "pricedRecords", "unpricedRecords", "providerReportedRecords",
     "customPricedRecords", "basePricedRecords", "variantPricedRecords",
 )
-OMP_STATS_DUPLICATE = "This omp stats server runs on this computer; its sessions are already counted locally."
 
 
 def add_finished(row: dict[str, Any], extra: dict[str, Any]) -> None:
@@ -2068,124 +2059,82 @@ def add_finished(row: dict[str, Any], extra: dict[str, Any]) -> None:
     row["costSource"] = cost_source(row)
 
 
-def omp_row(figures: dict[str, Any], savings: float | None = None) -> dict[str, Any]:
-    """A finished cell for one omp stats aggregate; omp's own prices count as provider-reported."""
-    priced = figures["requests"] - figures["unpriced"]
-    cell = empty_cell()
-    cell.update(uncachedInputTokens=figures["input"], cachedInputTokens=figures["cacheRead"],
-                cacheCreationTokens=figures["cacheWrite"], outputTokens=figures["output"],
-                records=figures["requests"], remoteRecords=figures["requests"], cost=figures["cost"],
-                pricedRecords=priced, providerReportedRecords=priced, unpricedRecords=figures["unpriced"])
-    if savings is not None:
-        cell.update(cacheSavings=savings, rateAvailableRecords=figures["requests"])
-    # Buckets report only their token total, so that total is authoritative.
-    return {**finish_cell(cell), "totalTokens": figures["tokens"]}
-
-
-def omp_cache_savings(model: str, cached_input: int, rates: dict[str, tuple[float, float, float, float]],
-                      overrides: dict[str, tuple[float, float, float, float]]) -> float | None:
-    """What cache reads saved at the custom or public rate, as add_record computes it."""
-    custom = overrides.get(model.strip())
-    rate = custom if custom is not None else lookup_rate(model, rates)
-    return cached_input * max(0, rate[0] - rate[2]) if rate is not None else None
-
-
-def omp_provider_ids(remote: dict[str, Any]) -> set[str]:
-    return set(remote["providers"]) | {provider for _, provider in remote["series"]}
-
-
-def remote_projects(remote: dict[str, Any]) -> list[dict[str, Any]]:
-    """Project rows from omp stats folders, named only by the folder's last segment."""
-    rows = []
-    for folder in remote["folders"]:
-        name = folder_basename(folder["folder"])
-        rows.append({"id": project_id(name) if name else OTHER_PROJECT_ID,
-                     "name": name or OTHER_PROJECT_NAME, **omp_row(folder)})
-    return rows
-
-
-def remote_agents(remote: dict[str, Any]) -> list[dict[str, Any]]:
-    return [{"id": kind, **omp_row(figures)} for kind, figures in remote["agents"].items()]
-
-
-def merge_omp_stats(
-    result: dict[str, Any], remote: dict[str, Any], bucket_for: Callable[[int], str | None],
-    window: tuple[int, int], rates: dict[str, tuple[float, float, float, float]],
-    overrides: dict[str, tuple[float, float, float, float]],
-) -> set[str]:
-    """Add omp stats to the aggregated cells and return the periods that gained activity.
-
-    omp priced each request itself and its buckets carry no per-model token split, so its
-    costs are kept as reported instead of being repriced, and its models stay separate rows.
-    """
-    models: dict[tuple[str, str], dict[str, Any]] = {}
-    for (provider, model), figures in remote["models"].items():
-        if len(models) >= MAX_MODEL_GROUPS:
-            model = "<other>"
-        row = omp_row(figures, omp_cache_savings(model, figures["cacheRead"], rates, overrides))
-        if (provider, model) in models:
-            add_finished(models[(provider, model)], row)
-        else:
-            models[(provider, model)] = row
-    savings: dict[str, float] = {}
-    for (provider, model), row in models.items():
-        if row["cacheSavingsUsd"] is not None:
-            savings[provider] = savings.get(provider, 0.0) + row["cacheSavingsUsd"]
-        result["models"].append({
-            "provider": provider,
-            "providerName": PROVIDER_NAMES.get(provider, provider.replace("-", " ").title()),
-            "model": "Unknown model" if not model else "Other models" if model == "<other>" else model,
-            "origin": "omp-remote", **row})
-    result["models"].sort(key=lambda row: (row["costUsd"] is not None, row["costUsd"] or 0, row["totalTokens"]),
-                          reverse=True)
-    providers = {row["id"]: row for row in result["providers"]}
-    for provider, figures in remote["providers"].items():
-        add_finished(providers[provider], omp_row(figures, savings.get(provider)))
-    add_finished(result["totals"], omp_row(remote["overall"], sum(savings.values()) if savings else None))
-    periods = {period["start"]: (period, {cell["id"]: cell for cell in period["providers"]})
-               for period in result["periods"]}
-    start, end = window
-    observed = set()
-    for (timestamp, provider), figures in remote["series"].items():
-        # A server bucket counts where its middle falls; the server's rolling window may start earlier.
-        key = bucket_for(min(max(timestamp + remote["bucketMs"] // 2, start), end))
-        period, cells = periods[key]
-        row = omp_row(figures)
-        add_finished(period, row)
-        add_finished(cells[provider], row)
-        observed.add(key)
-    result["projects"] = rank_projects([*result.get("projects", []), *remote_projects(remote)])
-    result["agents"] = rank_agents([*result.get("agents", []), *remote_agents(remote)])
-    return observed
-
-
-def omp_stats_outcome(future: Future | None, url: str, local_omp: bool,
-                      stamp: int) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    """The omp stats summary to merge, if any, and its `sources` entry."""
-    source = {"id": "omp-remote", "name": "Oh My Pi stats", "kind": "omp-remote", "status": "off",
-              "included": False, "updatedAt": None, "message": "", "host": omp_stats.url_host(url), "providers": []}
-    if future is None:
-        return None, source
-    try:
-        remote = future.result()
-    except omp_stats.OmpStatsError as exc:
-        return None, {**source, "status": "error", "errorKind": exc.kind, "message": str(exc)}
-    if remote["local"] and local_omp:
-        return None, {**source, "status": "duplicate", "updatedAt": stamp, "message": OMP_STATS_DUPLICATE}
-    return remote, {**source, "status": "ok", "included": True, "updatedAt": stamp,
-                    "providers": sorted(omp_provider_ids(remote))}
-
-
 def parse_provider_ids(value: str) -> list[str]:
     requested = {item.strip().lower() for item in value.split(",") if item.strip()}
     return [provider for provider in ("claude", "codex", "opencode", "grok") if provider in requested]
+
+
+# Another computer's transcripts count as this computer's: its reader (`--records`) sends the raw records for the
+# window the view needs, read with its own incremental scan cache, and they are aggregated here as one history.
+# The last good records are kept, so a computer that does not answer still counts, marked stale.
+COMPUTER_ID = re.compile(r"c-[0-9a-f]{8}")
+MAX_COMPUTERS = 16
+COMPUTER_READ_SECONDS = 90.0  # A first scan there reads every transcript; later ones only what changed.
+MAX_COMPUTER_RECORDS_BYTES = 32 * 1024 * 1024
+
+
+def parse_computers(values: list[str]) -> list[tuple[str, str]]:
+    computers: list[tuple[str, str]] = []
+    for value in values:
+        computer_id, separator, host = str(value).partition("=")
+        if (separator and COMPUTER_ID.fullmatch(computer_id) and quotatank_remote.valid_destination(host)
+                and all(known != computer_id for known, _host in computers)):
+            computers.append((computer_id, host))
+    return computers[:MAX_COMPUTERS]
+
+
+def read_computer_records(computer_id: str, host: str, provider_ids: list[str], days: int, zone: Any,
+                          state_dir: Path | None) -> dict[str, Any]:
+    """A computer's records: fresh (`ok`), its last good ones (`stale`), or none (`failed`), with when and why."""
+    args = ["--records", "--providers=" + ",".join(provider_ids), "--days", str(days)]
+    zone_key = getattr(zone, "key", "")
+    if zone_key and quotatank_remote.PLAIN_ARGUMENT.fullmatch(zone_key):
+        args += ["--time-zone", zone_key]  # Days begin at the same moment on both computers.
+    path = state_path("computers", state_dir) / f"{computer_id}-costs.json"
+    try:
+        try:
+            answer = quotatank_remote.run_reader(host, "cost-fetch.py", args, COMPUTER_READ_SECONDS, compress=True,
+                                                 max_bytes=MAX_COMPUTER_RECORDS_BYTES)
+        except (OSError, ValueError) as exc:
+            # Failing here (the runtime folder, the readers' files, starting ssh) must not cost the other sources.
+            raise quotatank_remote.RemoteFailure("failed", f"Could not start ssh for {host} on this computer.", "") from exc
+        if not isinstance(answer, dict) or not isinstance(answer.get("records"), list):
+            raise quotatank_remote.RemoteFailure("failed", f"Quotatank's reader on {host} sent an answer this "
+                                                 "version cannot read.")
+    except quotatank_remote.RemoteFailure as failure:
+        try:
+            saved = json.loads(path.read_text("utf-8"))
+            return {"status": "stale", "readAt": int(saved["readAt"]), "rows": list(saved["rows"]),
+                    "message": failure.message}
+        except (OSError, ValueError, KeyError, TypeError):
+            return {"status": "failed", "readAt": None, "rows": [], "message": failure.message}
+    read_at = int(time.time() * 1000)
+    try:
+        atomic_write_json(path, {"readAt": read_at, "rows": answer["records"]})
+    except OSError:
+        pass  # Without a saved copy the computer only counts while it answers.
+    return {"status": "ok", "readAt": read_at, "rows": answer["records"], "message": ""}
+
+
+def computer_candidate(computer_id: str, host: str, read: dict[str, Any], provider_ids: list[str],
+                       history_start: int, start: int, stamp: int) -> dict[str, Any]:
+    rows = (deserialize_record(row) for row in read["rows"][:MAX_TRANSCRIPT_RECORDS_TOTAL + 1])
+    history = [r for r in rows if r is not None and history_start <= r.timestamp_ms <= stamp]
+    records = [r for r in history if r.timestamp_ms >= start]
+    counts = {p: len({r.session_id for r in records if r.provider == p and r.session_id}) for p in {r.provider for r in records}}
+    message = {"ok": "", "stale": f"{host} is not answering; its last records are counted. {read['message']}".strip(),
+               "failed": read["message"]}[read["status"]]
+    return {"id": computer_id, "name": host, "kind": "computer", "provider": "",
+            "providers": sorted(counts) if read["status"] != "failed" else list(provider_ids),
+            "fingerprint": "computer:" + computer_id, "status": read["status"], "updatedAt": read["readAt"],
+            "message": message, "records": records, "history": history, "sessions": 0, "sessionCounts": counts}
 
 
 def build_payload(
     provider_ids: list[str], days: int, timeout: float, state_dir: Path | None,
     now_ms: int | None = None, zone_name: str | None = None,
     rates_override=None, force_rates: bool = False, price_overrides: str = "{}",
-    t3_servers: str = "[]", omp_stats_url: str = "",
+    t3_servers: str = "[]", computers: list[tuple[str, str]] | None = None, records_only: bool = False,
 ) -> dict[str, Any]:
     started = time.monotonic()
     overrides = parse_price_overrides(price_overrides)
@@ -2209,12 +2158,13 @@ def build_payload(
     if days == 1:
         query.update(sinceTime=iso_timestamp(start / 1000), untilTime=iso_timestamp(stamp / 1000))
     candidates, sources = [], []
-    # I/O for all servers (up to four T3 servers and omp stats) overlaps with the local scan;
-    # one deadline per server.
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    computers = [] if records_only else (computers or [])
+    # I/O for up to four T3 servers and every other computer overlaps with the local scan; one deadline each.
+    with ThreadPoolExecutor(max_workers=4 + len(computers)) as pool:
         futures = [(server, pool.submit(t3_costs.collect, server, query, days,
                      state_path("t3", state_dir), timeout)) for server in servers]
-        omp_future = pool.submit(omp_stats.collect, omp_stats_url, days) if omp_stats_url else None
+        remote = [pool.submit(read_computer_records, computer_id, host, provider_ids, days, zone, state_dir)
+                  for computer_id, host in computers]
         local, coverage = scan_transcripts(provider_ids, state_dir, stamp)
         for item in coverage:
             provider = item["id"]
@@ -2262,6 +2212,13 @@ def build_payload(
                 "updatedAt": stamp, "message": item["message"], "records": records, "history": history,
                 "scannedFiles": item.get("scannedFiles", 0), "skippedFiles": item.get("skippedFiles", 0),
                 "sessions": len({r.session_id for r in records if r.session_id}), "sessionCounts": session_counts})
+        if records_only:
+            # Another computer's reader: this computer's records for the window the full view needs, as they are.
+            return {"schemaVersion": SCHEMA_VERSION, "records": [serialize_record(r) for c in candidates for r in c["history"]],
+                    "coverage": [{"id": c["provider"], "status": c["status"], "message": c["message"]} for c in candidates]}
+        for (computer_id, host), future in zip(computers, remote):
+            candidates.append(computer_candidate(computer_id, host, future.result(), provider_ids,
+                                                 history_start, start, stamp))
         for server, future in futures:
             try:
                 summary, state, error = future.result()
@@ -2305,9 +2262,6 @@ def build_payload(
                                 if state == "stale" else "Includes all readable sessions on this T3 host, including non-T3 sessions."),
                     "records": records, "sessions": remote["sessions"] if state != "stale" else None})
 
-    omp_remote, omp_source = omp_stats_outcome(omp_future, omp_stats_url,
-                                               any(item["id"] == "omp" for item in coverage), stamp)
-
     # Prefer a complete fresh source, then partial fresh, then a stale snapshot.
     # A missing/failed source must never suppress a readable duplicate.
     rank = {"ok": 0, "partial": 1, "stale": 2, "missing": 3, "failed": 3}
@@ -2323,7 +2277,7 @@ def build_payload(
         if included:
             seen.add(candidate["fingerprint"])
             records.extend(candidate["records"])
-            if candidate["kind"] == "local":
+            if candidate["kind"] in ("local", "computer"):
                 local_history.extend(candidate["history"])
             else:
                 remote_included = True
@@ -2333,21 +2287,15 @@ def build_payload(
         elif available:
             public.update(status="duplicate", message="This transcript folder is already included by another source.")
         sources.append(public)
-    sources.append(omp_source)
-    if len(records) > MAX_TRANSCRIPT_RECORDS_TOTAL:
+    # Each computer's scan has its own ceiling, so the combined history may hold one ceiling per computer.
+    if len(records) > MAX_TRANSCRIPT_RECORDS_TOTAL * (1 + len(computers)):
         raise ValueError("Combined transcript history exceeds the record limit. Select a shorter period.")
-    remote_ids = omp_provider_ids(omp_remote) if omp_remote is not None else set()
-    remote_models = [model for _, model in omp_remote["models"]] if omp_remote is not None else []
-    for provider in remote_ids:
-        sessions[provider] = None  # omp stats reports no session counts.
     # A local source reports its own provider; the Oh My Pi source reports each provider its
     # messages were billed to, so those billings reach the aggregate as their own rows.
-    provider_ids = sorted({p for c in candidates for p in (c.get("providers") or [c["provider"]])} | remote_ids,
-                          key=lambda provider: (provider == omp_stats.OTHER_PROVIDER, provider))
+    provider_ids = sorted({p for c in candidates for p in (c.get("providers") or [c["provider"]]) if p})
     if rates_override is not None:
         rates, pricing = rates_override
-    elif (force_rates or any(r.model not in overrides for batch in (records, local_history) for r in batch)
-          or any(model not in overrides for model in remote_models)):
+    elif force_rates or any(r.model not in overrides for batch in (records, local_history) for r in batch):
         rates, pricing = load_rates(state_dir, timeout, stamp // 1000, force=force_rates)
     else:
         rates, pricing = {}, {"status": "notNeeded", "source": LITELLM_RATES_URL,
@@ -2356,10 +2304,8 @@ def build_payload(
     # Exact local timestamps place activity by hour; remote buckets cannot be split that finely.
     result["heatmap"] = aggregate_heatmap(local_history, stamp, zone, rates, overrides)
     # Remote servers report only the selected period, so they cannot be compared.
-    comparable = previous_retained and not remote_included and omp_remote is None
+    comparable = previous_retained and not remote_included
     result["previous"] = aggregate_previous(local_history, previous_start, start, rates, overrides) if comparable else None
-    remote_periods = (merge_omp_stats(result, omp_remote, bucket_for, (start, stamp), rates, overrides)
-                      if omp_remote is not None else set())
     result["models"] = rank_models(result["models"])
     coverage = []
     for provider in result["providers"]:
@@ -2382,8 +2328,8 @@ def build_payload(
         if cell["remoteRecords"]:
             cell["sessions"] = None  # Bucket sessions cannot be summed across models/days.
     included_sources = [s for s in sources if s["included"]]
-    complete = bool(included_sources) and all(s["status"] in ("ok", "duplicate", "missing", "off") for s in sources)
-    observed = {bucket_for(r.timestamp_ms) for r in records} | remote_periods
+    complete = bool(included_sources) and all(s["status"] in ("ok", "duplicate", "missing") for s in sources)
+    observed = {bucket_for(r.timestamp_ms) for r in records}
     for cell in result["periods"]:
         cell["historyStatus"] = "recorded" if complete or cell["start"] in observed else "unavailable"
     result["totals"]["historyStatus"] = "recorded" if included_sources else "unavailable"
@@ -2407,7 +2353,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--refresh-prices", action="store_true")
     parser.add_argument("--price-overrides", default="{}", help="Exact-model rates as JSON, in USD per million tokens")
     parser.add_argument("--t3-servers", default="[]")
-    parser.add_argument("--omp-stats-url", default="", help="Base URL of an omp stats server to include")
+    parser.add_argument("--computer", action="append", default=[], metavar="ID=HOST",
+                        help="Another computer whose transcripts count too, read over SSH.")
+    parser.add_argument("--records", action="store_true",
+                        help="Run as another computer's reader: print this computer's records, not the summary.")
     args = parser.parse_args(argv)
     try:
         payload = build_payload(
@@ -2419,7 +2368,8 @@ def main(argv: list[str] | None = None) -> int:
             force_rates=args.refresh_prices,
             price_overrides=args.price_overrides,
             t3_servers=args.t3_servers,
-            omp_stats_url=args.omp_stats_url,
+            computers=parse_computers(args.computer),
+            records_only=args.records,
         )
     except Exception as exc:
         payload = {

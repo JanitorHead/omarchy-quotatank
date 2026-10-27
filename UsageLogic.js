@@ -1041,11 +1041,6 @@ function availableProviders(providers) {
   var list = listOrEmpty(providers)
   for (var i = 0; i < list.length; i++) {
     var provider = list[i]
-    // Keep connection-level errors visible so the user can fix proxy setup.
-    if (provider && provider.id === "cliproxy") {
-      result.push(provider)
-      continue
-    }
     var accounts = listOrEmpty(provider && provider.accounts)
     if (accounts.length > 0) {
       for (var j = 0; j < accounts.length; j++) {
@@ -1241,7 +1236,7 @@ var DEFAULT_SETTINGS = {
 
 // Quotatank 2 keeps its private files in omarchy/quotatank; 1.x kept them in omarchy/model-usage, and the
 // backends move that folder (plugin_folder in scripts/quotatank_common.py). The settings that still name
-// it, rewritten: key file paths and the JSON settings that list them (extraKeys, costT3Servers). {} when
+// it, rewritten: key file paths and the JSON settings that list them (extraKeys, sources). {} when
 // none does, so Panel saves this once.
 function legacyPathSettings(settings) {
   var moved = {}
@@ -1348,18 +1343,20 @@ function keySaved(settings, providerId) {
   return path !== undefined && path !== null && String(path).trim() !== ""
 }
 
-// Every private file the settings point at: `<id>KeyFile`, the proxy and Keeper secrets, extra keys,
-// and T3 tokens. A restore deletes the ones the new settings no longer use.
+// Every private file the settings point at: `<id>KeyFile`, extra keys, and the secrets of the sources
+// (proxy keys, Keeper passwords, T3 tokens). A restore deletes the ones the new settings no longer use.
 function secretPaths(settings) {
   var paths = []
   function add(path) { if (typeof path === "string" && path.trim() !== "" && paths.indexOf(path) < 0) paths.push(path) }
   if (!settings) return paths
-  for (var key in settings) if (/KeyFile$/.test(key) || key === "costKeeperPasswordFile") add(settings[key])
+  for (var key in settings) if (/KeyFile$/.test(key)) add(settings[key])
   var extra = parseExtraKeys(settings.extraKeys)
   for (var id in extra) for (var i = 0; i < extra[id].keys.length; i++) add(extra[id].keys[i].file)
-  var servers = []
-  try { servers = JSON.parse(String(settings.costT3Servers || "[]")) } catch (e) { servers = [] }
-  if (Array.isArray(servers)) for (var j = 0; j < servers.length; j++) if (servers[j]) add(servers[j].tokenFile)
+  parseSources(settings).forEach(function(entry) {
+    add(entry.keyFile)
+    add(entry.keeperPasswordFile)
+    add(entry.tokenFile)
+  })
   return paths
 }
 
@@ -1735,26 +1732,47 @@ function accountResetLabel(account) {
   return count + " banked reset" + (count === 1 ? "" : "s")
 }
 
-// Whether the account's resets are shown: Claude's wherever it is read, Codex's in CLIProxyAPI mode, where they
-// can be applied.
-function accountResetShown(account, proxyMode) {
-  return accountResetLabel(account) !== "" && (account.id === "claude" || !!proxyMode)
+// The proxy a reading came through: its own (`proxy`), or the one standing in for a reading that failed
+// elsewhere (`standIn` with a proxy's id). null for every other reading.
+function readingProxy(account) {
+  if (!account) return null
+  if (account.proxy && typeof account.proxy === "object") return account.proxy
+  if (account.standIn && /^p-/.test(String(account.standIn.id || ""))) return account.standIn
+  return null
+}
+
+// Whether the account's resets are shown: Claude's wherever it is read, Codex's when read through CLIProxyAPI,
+// where they can be applied.
+function accountResetShown(account) {
+  return accountResetLabel(account) !== "" && (account.id === "claude" || readingProxy(account) !== null)
 }
 
 // Whether this widget can apply one of the account's resets: Codex through CLIProxyAPI, Claude with its own
 // sign-in or through CLIProxyAPI when Claude lets the next one be spent now. An account read only through omp
-// keeps its sign-in in omp, so its reset is applied there.
-function accountResetActionable(account, proxyMode) {
-  if (!accountResetShown(account, proxyMode) || !(accountResetCount(account) > 0) || account.origin === "omp") return false
+// keeps its sign-in in omp, and one read on another computer keeps it there, so its reset is applied there.
+function accountResetActionable(account) {
+  if (!accountResetShown(account) || !(accountResetCount(account) > 0) || account.origin === "omp") return false
+  if (readingComputer(account) !== null) return false
   return account.id === "codex" || account.credits.resetCreditsUsable === true
 }
 
 // Why a reset the account has cannot be applied from here; "" when it can, or when it has none.
-function accountResetNote(account, proxyMode) {
-  if (!accountResetShown(account, proxyMode) || !(accountResetCount(account) > 0) || accountResetActionable(account, proxyMode))
+function accountResetNote(account) {
+  if (!accountResetShown(account) || !(accountResetCount(account) > 0) || accountResetActionable(account))
     return ""
-  if (account.origin === "omp") return "Apply it in omp: omp usage reset."
+  var computer = readingComputer(account)
+  var where = computer ? String(computer.name || "another computer") : ""
+  if (account.origin === "omp") return "Apply it in omp" + (where ? " on " + where : "") + ": omp usage reset."
+  if (computer) return "Its sign-in is on " + where + ": apply it there."
   return CLAUDE_RESET_NOTES[String(account.credits.resetCreditsReason || "")] || CLAUDE_RESET_NOTES.unavailable
+}
+
+// The other computer a reading came from, its own (`computer`) or standing in (`standIn` with a computer's id).
+function readingComputer(account) {
+  if (!account) return null
+  if (account.computer && typeof account.computer === "object") return account.computer
+  if (account.standIn && /^c-/.test(String(account.standIn.id || ""))) return account.standIn
+  return null
 }
 
 // Whether `credits` carries money (a balance, spending or a cap) beside any banked-reset count.
@@ -1795,45 +1813,6 @@ function errorTitle(provider) {
   case "cli_unavailable": return name + " CLI unavailable"
   default: return name + " usage unavailable"
   }
-}
-
-function preserveProxyReadings(previous, next) {
-  if (!previous || previous.source !== "cliproxy") return next
-  function retain(old, fresh) {
-    if (!old || !fresh || fresh.status !== "error" || old.status !== "ok") return fresh
-    return Object.assign({}, fresh, {
-      status: "ok", stale: true, windows: old.windows, credits: old.credits,
-      plan: old.plan, account: old.account, fetchedAt: old.fetchedAt,
-      notice: "Last known reading · " + String(fresh.message || "Refresh failed.")
-    })
-  }
-  var oldProviders = listOrEmpty(previous.providers)
-  if (next.providers.length === 1 && next.providers[0].id === "cliproxy" && next.providers[0].status === "error"
-      && oldProviders.length > 0 && oldProviders[0].id !== "cliproxy") {
-    var failure = next.providers[0]
-    next.providers = Array.prototype.map.call(oldProviders, function(old) {
-      var fresh = Object.assign({}, old, { status: "error", message: failure.message, errorKind: failure.errorKind })
-      fresh.accounts = Array.prototype.map.call(listOrEmpty(old.accounts), function(account) {
-        return retain(account, Object.assign({}, account, { status: "error", message: failure.message }))
-      })
-      return retain(old, fresh)
-    })
-  }
-  next.providers = listOrEmpty(next.providers).map(function(fresh) {
-    var old = null
-    for (var i = 0; i < oldProviders.length; i++)
-      if (oldProviders[i].id === fresh.id) old = oldProviders[i]
-    var accounts = listOrEmpty(fresh.accounts).map(function(account) {
-      var prior = listOrEmpty(old && old.accounts)
-      for (var j = 0; j < prior.length; j++)
-        if (prior[j].accountId === account.accountId) return retain(prior[j], account)
-      return account
-    })
-    var result = old && old.accountId === fresh.accountId ? retain(old, fresh) : fresh
-    if (fresh.accounts) result.accounts = accounts
-    return result
-  })
-  return next
 }
 
 // Custom cost rates are stored as JSON for the manifest's string setting, but
@@ -2121,8 +2100,7 @@ function costCacheSummary(totals) {
 }
 
 // Whether the cost scan read the omp sessions on this computer. Live requests come only from those
-// sessions (omp-live.py --local), so only then do the ones after the scan add to its totals; omp stats
-// on another computer is never live here.
+// sessions (omp-live.py --local), so only then do the ones after the scan add to its totals.
 function costScanHasOmp(sources) {
   var list = listOrEmpty(sources)
   for (var i = 0; i < list.length; i++) {
@@ -2132,24 +2110,18 @@ function costScanHasOmp(sources) {
   return false
 }
 
-// Footer line naming where the totals come from: "Local transcripts + omp on devbox · live", or "omp
-// through a tunnel" when the server is reached through this computer.
+// Footer line naming where the totals come from: "Local transcripts + devbox + T3 on Lab · live".
 function costSourceSummary(sources, live) {
   var list = listOrEmpty(sources)
   var local = false
+  var computers = []
   var servers = []
-  var omp = ""
   for (var i = 0; i < list.length; i++) {
     var source = list[i]
     if (!source || typeof source !== "object") continue
-    if (source.id === "omp-remote") {
-      var place = ompPlace(source.host) || " on another computer"
-      if (source.status === "ok") omp = "omp" + place
-      else if (source.status === "error") omp = "omp" + place + " unavailable"
-      continue
-    }
     if (source.included !== true) continue
     if (source.kind === "local") local = true
+    else if (source.kind === "computer") computers.push(String(source.name || "") + (source.status === "stale" ? " (last known)" : ""))
     else if (source.kind === "t3") {
       var name = String(source.name || "").split(" · ")[0]
       if (name !== "" && servers.indexOf(name) < 0) servers.push(name)
@@ -2157,8 +2129,8 @@ function costSourceSummary(sources, live) {
   }
   var parts = []
   if (local) parts.push("Local transcripts")
+  parts = parts.concat(computers)
   for (var j = 0; j < servers.length; j++) parts.push("T3 on " + servers[j])
-  if (omp !== "") parts.push(omp)
   if (parts.length > 3) parts = [parts[0], (parts.length - 1) + " more sources"]
   var text = parts.join(" + ")
   return text !== "" && live ? text + " · live" : text
@@ -2207,54 +2179,376 @@ function syncKeyedOrder(list, keys) {
   }
 }
 
+// ---- Sources ----
+// Where Quotatank reads from (Settings → Sources): this computer always, plus the entries of the `sources`
+// setting in the user's order: other computers (over SSH), CLIProxyAPI proxies and T3 Code servers.
+
+var SOURCE_KINDS = ["computer", "proxy", "t3"]
+var SOURCE_LIMIT = 16
+// The providers a CLIProxyAPI server has limits for (CLIPROXY_QUOTA_PROVIDERS in scripts/usage-fetch.py).
+var PROXY_PROVIDERS = ["claude", "codex", "kimi", "antigravity"]
+var SOURCE_FIELDS = {
+  computer: ["host"],
+  proxy: ["url", "keyFile", "keeperUrl", "keeperPasswordFile"],
+  t3: ["name", "url", "tokenFile"]
+}
+var SOURCE_ID_PATTERNS = { computer: /^c-[0-9a-f]{8}$/, proxy: /^p-[0-9a-f]{8}$/, t3: /^[A-Za-z0-9-]{1,64}$/ }
+// An SSH destination: a Host alias or name, optionally user@ (valid_destination in scripts/quotatank_remote.py).
+var SSH_DESTINATION = /^(?:[A-Za-z0-9_][A-Za-z0-9._-]*@)?[A-Za-z0-9_][A-Za-z0-9._-]*$/
+
+function validDestination(text) {
+  var value = String(text === undefined || text === null ? "" : text)
+  return value.length > 0 && value.length <= 255 && SSH_DESTINATION.test(value)
+}
+
+// The `sources` setting as a list of checked entries, each a fresh object; entries that do not fit their kind
+// are left out, so a hand-edited setting can never hand a backend something it would refuse.
+function parseSources(settings) {
+  var raw = settings && typeof settings === "object" ? settings.sources : undefined
+  var rows = []
+  try { rows = JSON.parse(String(raw === undefined || raw === null ? "[]" : raw)) } catch (e) { rows = [] }
+  if (!Array.isArray(rows)) return []
+  var result = []
+  var seen = {}
+  for (var i = 0; i < rows.length && result.length < SOURCE_LIMIT; i++) {
+    var row = rows[i]
+    if (!row || typeof row !== "object" || SOURCE_KINDS.indexOf(row.kind) < 0) continue
+    var id = String(row.id || "")
+    if (!SOURCE_ID_PATTERNS[row.kind].test(id) || seen[id]) continue
+    var entry = { id: id, kind: row.kind, on: row.on !== false }
+    var fields = SOURCE_FIELDS[row.kind]
+    var fits = true
+    for (var f = 0; f < fields.length; f++) {
+      var value = row[fields[f]]
+      if (value === undefined || value === null) value = ""
+      if (typeof value !== "string" || value.length > 4096 || /[\x00-\x1f\x7f]/.test(value)) { fits = false; break }
+      entry[fields[f]] = value.trim()
+    }
+    if (!fits || (row.kind === "computer" && !validDestination(entry.host))) continue
+    seen[id] = true
+    result.push(entry)
+  }
+  return result
+}
+
+function sourcesOf(settings, kind) {
+  return parseSources(settings).filter(function(entry) { return entry.kind === kind })
+}
+
+// The switched-on proxy with an address (the Sources page offers one), or null: its Keeper maps requests to
+// its accounts.
+function activeProxy(settings) {
+  var proxies = sourcesOf(settings, "proxy")
+  for (var i = 0; i < proxies.length; i++) if (proxies[i].on && proxies[i].url !== "") return proxies[i]
+  return null
+}
+
+// A proxy by id (a reading's `proxy` or proxy `standIn`), switched on or not, or null.
+function proxyById(settings, id) {
+  var proxies = sourcesOf(settings, "proxy")
+  for (var i = 0; i < proxies.length; i++) if (proxies[i].id === id) return proxies[i]
+  return null
+}
+
+// usage-fetch.py --proxy / --proxy-key-file for each switched-on proxy with an address.
+function proxyArguments(settings) {
+  var result = []
+  sourcesOf(settings, "proxy").forEach(function(entry) {
+    if (!entry.on || entry.url === "") return
+    result.push("--proxy", entry.id + "=" + entry.url)
+    if (entry.keyFile !== "") result.push("--proxy-key-file", entry.id + "=" + entry.keyFile)
+  })
+  return result
+}
+
+// cost-fetch.py --t3-servers: the T3 entries in the shape scripts/t3_costs.py reads.
+function t3ServersJson(settings) {
+  return JSON.stringify(sourcesOf(settings, "t3").filter(function(entry) {
+    return entry.name !== "" && entry.url !== ""
+  }).map(function(entry) {
+    return { id: entry.id, name: entry.name, url: entry.url, tokenFile: entry.tokenFile, enabled: entry.on }
+  }))
+}
+
+// A new entry id for `kind` that no entry in `existing` (a parseSources list) has: kind letter, "-", 8 hex.
+function newSourceId(kind, existing) {
+  var taken = {}
+  listOrEmpty(existing).forEach(function(entry) { if (entry) taken[entry.id] = true })
+  for (;;) {
+    var id = kind.charAt(0) + "-"
+    for (var i = 0; i < 8; i++) id += "0123456789abcdef".charAt(Math.floor(Math.random() * 16))
+    if (!taken[id]) return id
+  }
+}
+
+// `sources` with `entry` in place of the entry that has its id, or appended; `entry` null removes `id`.
+function sourcesWith(settings, id, entry) {
+  var list = parseSources(settings)
+  var position = -1
+  for (var i = 0; i < list.length; i++) if (list[i].id === id) position = i
+  if (entry === null) { if (position >= 0) list.splice(position, 1) }
+  else if (position >= 0) list[position] = entry
+  else list.push(entry)
+  return JSON.stringify(list)
+}
+
+// The settings before Sources (2.3 and older) as Sources: the proxy source with its Keeper, the T3 servers,
+// and omp on another computer, which now goes over SSH and so is dropped with a notice. Returns the settings
+// to save once ({ changes, notice }), or null when there is nothing to move. Removed settings are saved as
+// null, which the shell drops from the entry.
+var LEGACY_SOURCE_KEYS = ["usageSource", "cliproxyUrl", "cliproxyKeyFile", "ompGatewayUrl", "ompGatewayKeyFile",
+  "ompStatsUrl", "costT3Servers", "costKeeperUrl", "costKeeperPasswordFile"]
+
+function migrateSources(settings) {
+  var source = settings && typeof settings === "object" ? settings : {}
+  if (Number(source.sourcesVersion) >= 1) return null
+  function text(key) {
+    var value = source[key]
+    return value === undefined || value === null ? "" : String(value).trim()
+  }
+  var changes = { sourcesVersion: 1 }
+  // Nothing stored yet is a fresh install: it opens setup. Settings that carry over skip it.
+  if (source.setupDone === undefined) changes.setupDone = Object.keys(source).length > 0
+  var list = parseSources(source)
+  var proxyUrl = text("cliproxyUrl")
+  var proxyMode = text("usageSource") === "cliproxy"
+  // A proxy set up but not in use (its own address or key) stays, switched off; so does one a Keeper was
+  // set up for, also at the default address (which is not stored). Only an untouched default is dropped.
+  // A 2.3 backup restored over Sources that already have a proxy keeps that one (the widget reads one).
+  var hasProxy = list.some(function(entry) { return entry.kind === "proxy" })
+  var proxySetUp = (proxyUrl !== "" && proxyUrl.replace(/\/+$/, "") !== "http://127.0.0.1:8317")
+    || text("cliproxyKeyFile") !== "" || text("costKeeperUrl") !== ""
+  if (!hasProxy && (proxyMode || proxySetUp)) {
+    list.push({ id: newSourceId("proxy", list), kind: "proxy", on: proxyMode,
+      url: proxyUrl !== "" ? proxyUrl : "http://127.0.0.1:8317", keyFile: text("cliproxyKeyFile"),
+      keeperUrl: text("costKeeperUrl"), keeperPasswordFile: text("costKeeperPasswordFile") })
+  }
+  // In proxy mode only the proxy was read: monitoring what it reads keeps the bar as it was, and what this
+  // computer has besides arrives under Found.
+  if (proxyMode) changes.enabledProviders = PROXY_PROVIDERS.slice()
+  var servers = []
+  try { servers = JSON.parse(text("costT3Servers") || "[]") } catch (e) { servers = [] }
+  if (Array.isArray(servers)) {
+    servers.forEach(function(row) {
+      if (!row || typeof row.id !== "string" || !SOURCE_ID_PATTERNS.t3.test(row.id)) return
+      list.push({ id: row.id, kind: "t3", on: row.enabled !== false, name: String(row.name || "").trim(),
+        url: String(row.url || "").trim(), tokenFile: String(row.tokenFile || "").trim() })
+    })
+  }
+  changes.sources = JSON.stringify(parseSources({ sources: JSON.stringify(list) }))
+  if (text("ompStatsUrl") !== "" || text("ompGatewayUrl") !== "") changes.sourcesNotice = "ompRemote"
+  LEGACY_SOURCE_KEYS.forEach(function(key) { if (source[key] !== undefined) changes[key] = null })
+  return { changes: changes, notice: changes.sourcesNotice === "ompRemote" }
+}
+
+// ---- First-run setup and hints
+
+// Setup runs while `setupDone` is false: set on a fresh install (migrateSources) and by Run setup again.
+function setupWanted(settings) {
+  return !!settings && settings.setupDone === false
+}
+
+// The one-line explanations shown the first time each part appears; `hintsDismissed` is a JSON list of ids.
+var HINT_IDS = ["accounts", "runway", "forecast", "heatmap"]
+var HINT_TEXT = {
+  accounts: "One row per account: its tightest limit, its trend over 24 hours, and whether it is spending now. Select a row for its limits.",
+  runway: "How long your accounts last at the current pace, from now on the left to the reset on the right. A gap lane is time with nothing left.",
+  forecast: "The dashes show the blocks the current pace still fills before the reset.",
+  heatmap: "When you spend: the last 7 days by hour, darker means more. Hover a cell to read it."
+}
+
+function dismissedHints(settings) {
+  var raw = settings && settings.hintsDismissed !== undefined ? settings.hintsDismissed : "[]"
+  var list = []
+  try { list = typeof raw === "string" ? JSON.parse(raw) : raw } catch (e) { list = [] }
+  return listOrEmpty(list).filter(function(id) { return HINT_IDS.indexOf(id) >= 0 })
+}
+
+function hintShown(settings, id) {
+  return HINT_IDS.indexOf(id) >= 0 && dismissedHints(settings).indexOf(id) < 0
+}
+
+// The `hintsDismissed` value once `id` is dismissed.
+function hintsDismissing(settings, id) {
+  var list = dismissedHints(settings)
+  if (HINT_IDS.indexOf(id) >= 0 && list.indexOf(id) < 0) list.push(id)
+  return JSON.stringify(list)
+}
+
+// ---- Other computers (sources of kind "computer"), read over SSH by the backends.
+
+// usage-fetch.py and cost-fetch.py flags: one --computer ID=HOST per switched-on computer, in order.
+function computerArguments(settings) {
+  var result = []
+  sourcesOf(settings, "computer").forEach(function(entry) {
+    if (entry.on) result.push("--computer", entry.id + "=" + entry.host)
+  })
+  return result
+}
+
+// The computer Sign in and Install open a terminal on: a computer entry, or null for this computer.
+// `mainComputer` is "this", a computer's id, or "" (automatic): the one switched-on computer when there is
+// exactly one, else this computer.
+function mainComputer(settings) {
+  var choice = settings && settings.mainComputer !== undefined && settings.mainComputer !== null ? String(settings.mainComputer) : ""
+  var on = sourcesOf(settings, "computer").filter(function(entry) { return entry.on })
+  if (choice === "this") return null
+  if (choice === "") return on.length === 1 ? on[0] : null
+  for (var i = 0; i < on.length; i++) if (on[i].id === choice) return on[i]
+  return null
+}
+
+// The Main computer menu: Automatic (naming what it picks), This computer, then each switched-on computer.
+function mainComputerOptions(settings) {
+  var automatic = mainComputer({ sources: settings && settings.sources, mainComputer: "" })
+  var options = [{ value: "", label: "Automatic (" + (automatic ? automatic.host : "this computer") + ")" },
+    { value: "this", label: "This computer" }]
+  sourcesOf(settings, "computer").forEach(function(entry) {
+    if (entry.on) options.push({ value: entry.id, label: entry.host })
+  })
+  return options
+}
+
+// A computer's state in the usage payload's `computers`, or null before it was read.
+function computerState(payload, id) {
+  var list = payload ? listOrEmpty(payload.computers) : []
+  for (var i = 0; i < list.length; i++) if (list[i] && list[i].id === id) return list[i]
+  return null
+}
+
+// A proxy's state in the usage payload's `proxies`, or null before it was read.
+function proxyState(payload, id) {
+  var list = payload ? listOrEmpty(payload.proxies) : []
+  for (var i = 0; i < list.length; i++) if (list[i] && list[i].id === id) return list[i]
+  return null
+}
+
+// The status line under a computer or a proxy in Settings → Sources. `formatClock(epochSeconds)` names a time.
+function computerLine(entry, state, formatClock) {
+  if (!entry) return { tone: "off", text: "" }
+  if (!entry.on) return { tone: "off", text: "Off" }
+  if (!state) return { tone: "pending", text: "Read with the next refresh" }
+  var readAt = Date.parse(String(state.readAt || "")) / 1000
+  var when = isFinite(readAt) && formatClock ? formatClock(readAt) : ""
+  if (state.status === "ok") return { tone: "ok", text: "Answering" + (when ? " · read at " + when : "") }
+  if (state.status === "stale")
+    return { tone: "error", text: ("Not answering" + (when ? " since " + when : "") + ". " + String(state.message || "")).trim() }
+  return { tone: "error", text: String(state.message || "Could not be read.") }
+}
+
+// What a provider's Sign in or Install does when the main computer is another one: the same command in a
+// terminal on that computer, over `ssh -t`. omp there signs in for the providers it reads, so it goes first.
+// The destination was checked (validDestination); the command is the registry's own.
+function setupOn(action, computer, state, providerId) {
+  if (!computer || !action || action.command === "") return action
+  var omp = state && state.omp && state.omp.installed === true && contains(OMP_PROVIDER_IDS, providerId)
+  var command = omp && action.kind === "signin" ? "omp login" : action.command
+  return { kind: action.kind, label: action.label + " on " + computer.host, url: action.url,
+    command: "ssh -t " + computer.host + " '" + command.replace(/'/g, "'\\''") + "'" }
+}
+
+// The installed providers that decide between Sign in and Install: the main computer's.
+function setupInstalled(payload, computer) {
+  if (!computer) return payload && isListLike(payload.installed) ? payload.installed : null
+  var state = computerState(payload, computer.id)
+  return state && isListLike(state.installed) ? state.installed : null
+}
+
+// setupAction on the main computer: what is installed there decides, and the command runs there.
+function setupActionFor(entry, reading, payload, computer) {
+  var action = setupAction(entry, reading, setupInstalled(payload, computer))
+  return setupOn(action, computer, computer ? computerState(payload, computer.id) : null, entry ? entry.id : "")
+}
+
+// The other computers whose omp requests are followed live: switched on, with omp found set up there at
+// the last refresh (`computers` is the usage payload's). Nothing with omp turned off.
+function ompLiveComputers(settings, computers) {
+  if (!ompSettings(settings).local) return []
+  var list = listOrEmpty(computers)
+  return sourcesOf(settings, "computer").filter(function(entry) {
+    if (!entry.on) return false
+    for (var i = 0; i < list.length; i++)
+      if (list[i] && list[i].id === entry.id) return !!list[i].omp && list[i].omp.local === "ok"
+    return false
+  })
+}
+
+// What a computer's Test says (scripts/computer-check.py --test): one line per step, the command that fixes
+// the step that failed, and whether the computer may be added (it answered; reading nothing yet is fine).
+var COMPUTER_TEST_SECONDS = 120
+function computerTestResult(reply, host) {
+  var result = { ok: false, addable: false, fix: "", lines: [] }
+  if (!reply) {
+    result.lines = [{ tone: "error", text: "The test did not run. Check that Python 3 is installed, then try again." }]
+    return result
+  }
+  if (reply.probeError === "timeout") {
+    result.lines = [{ tone: "error", text: "No answer within " + COMPUTER_TEST_SECONDS + " s. Check that " + host + " is on and online." }]
+    return result
+  }
+  var steps = listOrEmpty(reply.steps)
+  for (var i = 0; i < steps.length; i++) {
+    if (!steps[i] || typeof steps[i].text !== "string") continue
+    // "harnesses" names what is installed there but was not read: a note, not a passed step.
+    var tone = steps[i].id === "harnesses" ? "info" : steps[i].ok === true ? "ok" : "error"
+    result.lines.push({ tone: tone, text: steps[i].text })
+    if (steps[i].ok !== true && result.fix === "") result.fix = String(steps[i].fix || "")
+  }
+  if (result.lines.length === 0) {
+    // Too large to read (probeError "tooLarge") or not the shape this version sends.
+    result.lines = [{ tone: "error", text: "The test sent an answer this version cannot read. Update Quotatank, then try again." }]
+    return result
+  }
+  var failed = steps.filter(function(entry) { return entry && entry.ok !== true })
+  result.ok = reply.ok === true
+  result.addable = result.ok || (reply.thisComputer !== true && failed.length === 1 && failed[0].id === "found")
+  if (result.fix !== "" && !/^ssh/.test(result.fix)) {
+    result.lines.push({ tone: "info", text: result.fix })
+    result.fix = ""
+  }
+  return result
+}
+
+// Settings → Sources → Other computers in the index: "None", "devbox", "devbox, buildbox · buildbox not answering".
+function computersSummary(settings, payload) {
+  var entries = sourcesOf(settings, "computer").filter(function(entry) { return entry.on })
+  if (entries.length === 0) return sourcesOf(settings, "computer").length ? "Off" : "None"
+  var silent = entries.filter(function(entry) {
+    var state = computerState(payload, entry.id)
+    return state && state.status !== "ok"
+  })
+  var names = entries.map(function(entry) { return entry.host }).join(", ")
+  return names + (silent.length ? " · " + joinNames(silent.map(function(entry) { return entry.host })) + " not answering" : "")
+}
+
 // ---- 1.9 QmlSettings ----
-// omp (Oh My Pi) as a source of limits, costs and live activity: the flags each backend gets, what
-// Settings says about omp, the Test results, and the lines of omp's live feed (scripts/omp-live.py).
-// Then the per-provider account mode that Providers → Customize sets.
+// omp (Oh My Pi) on this computer as a source of limits, costs and live activity: the flags each backend
+// gets, what Settings says about omp, and the lines of omp's live feed (scripts/omp-live.py). Then the
+// per-provider account mode that Providers → Customize sets.
 
 // Quotatank ids of the subscriptions omp signs in to (OMP_PROVIDERS in scripts/quotatank_common.py).
 var OMP_PROVIDER_IDS = ["claude", "codex", "kimi", "opencode", "antigravity", "copilot", "cursor", "zai", "minimax"]
-var OMP_STATS_PORT = 3847
-var OMP_GATEWAY_PORT = 4000
 var OMP_RECENT_SECONDS = 3600       // an account counts as recently used this long after a request
 var OMP_RECENT_LIMIT = 256          // accounts kept in recentByAccount
 var OMP_LOG_SECONDS = 6 * 3600      // live requests kept for the cost scans that do not hold them yet
 var OMP_LOG_LIMIT = 4096            // entries in the live request log
 var OMP_LINE_LIMIT = 65536          // characters in one live line
-var OMP_URL_PROBLEM = "Enter an HTTP or HTTPS address with a host name and, if needed, a port: no path, user name, query, or fragment."
-var OMP_HTTP_PROBLEM = "Use HTTPS, or plain HTTP only to this computer, a private network, or Tailscale."
-// A secret (the omp gateway token, the CLIProxyAPI management key, the Keeper password, a T3 token) never goes
-// over plain HTTP outside this computer and Tailscale (the backends check where a name leads, and on this
-// computer whose server it is, before they send anything).
+
+// A secret (the CLIProxyAPI management key, the Keeper password, a T3 token) never goes over plain HTTP
+// outside this computer and Tailscale (the backends check where a name leads, and on this computer whose
+// server it is, before they send anything).
 var SECRET_HTTP_PROBLEM = "Use HTTPS, or plain HTTP only to this computer or over Tailscale (a 100.x.y.z address or the computer's Tailscale name)."
 
 // The omp settings with their defaults. `local` reads omp on this computer unless turned off.
 function ompSettings(settings) {
   var source = settings && typeof settings === "object" ? settings : {}
-  function text(key) {
-    var value = source[key]
-    return value === undefined || value === null ? "" : String(value).trim()
-  }
-  return { local: source.ompLocal !== false, gatewayUrl: text("ompGatewayUrl"),
-    gatewayKeyFile: text("ompGatewayKeyFile"), statsUrl: text("ompStatsUrl") }
+  return { local: source.ompLocal !== false }
 }
 
-// usage-fetch.py flags: omp on this computer (the backend reports when omp is missing), and omp's
-// auth gateway once both its URL and its token are saved, since the gateway answers nothing without
-// the token. The caller leaves them out for a proxy source.
+// usage-fetch.py flags: omp on this computer (the backend reports when omp is missing). The caller leaves
+// them out for a proxy source.
 function ompUsageArguments(settings) {
-  var omp = ompSettings(settings)
-  var args = []
-  if (omp.local) args.push("--omp", "local")
-  if (omp.gatewayUrl !== "" && omp.gatewayKeyFile !== "")
-    args.push("--omp-gateway-url", omp.gatewayUrl, "--omp-gateway-key-file", omp.gatewayKeyFile)
-  return args
-}
-
-// cost-fetch.py flags: omp stats on another computer.
-function ompCostArguments(settings) {
-  var url = ompSettings(settings).statsUrl
-  return url === "" ? [] : ["--omp-stats-url", url]
+  return ompSettings(settings).local ? ["--omp", "local"] : []
 }
 
 // Whether omp is on this computer, from the usage backend's `omp` status: true, false, or null while
@@ -2267,15 +2561,10 @@ function ompFound(status) {
 }
 
 // omp-live.py flags, or [] while there is nothing to follow: omp's sessions here once omp is found and
-// set up (with --accounts, the map that names the account behind each request), and omp stats
-// elsewhere. Nothing through a proxy: its accounts are the proxy's, and omp is not read then.
-function ompLiveArguments(settings, status, proxyMode) {
-  if (proxyMode === true) return []
-  var omp = ompSettings(settings)
-  var args = []
-  if (omp.local && ompFound(status) === true && status.local !== "unused") args.push("--local", "--accounts")
-  if (omp.statsUrl !== "") args.push("--stats-url", omp.statsUrl)
-  return args
+// set up (with --accounts, the map that names the account behind each request).
+function ompLiveArguments(settings, status) {
+  if (ompSettings(settings).local && ompFound(status) === true && status.local !== "unused") return ["--local", "--accounts"]
+  return []
 }
 
 // "host", "host:port" or "[v6]:port" → { host (lower case, no brackets), port }, or null.
@@ -2305,26 +2594,9 @@ function ompLoopbackHost(host) {
   return host === "localhost" || host === "::1" || /^127\.[0-9]+\.[0-9]+\.[0-9]+$/.test(host)
 }
 
-// Plain HTTP stays on networks the user controls (plain_http_allowed in quotatank_common.py):
-// loopback, private LANs, Tailscale addresses, MagicDNS names and single-label names.
-function ompPlainHttpHost(host) {
-  var octet = "(0|[1-9][0-9]{0,2})"
-  var v4 = new RegExp("^" + octet + "\\." + octet + "\\." + octet + "\\." + octet + "$").exec(host)
-  if (v4) {
-    for (var i = 1; i <= 4; i++) if (Number(v4[i]) > 255) return false
-    var a = Number(v4[1])
-    var b = Number(v4[2])
-    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
-      || (a === 100 && b >= 64 && b <= 127)
-  }
-  if (host.indexOf(":") >= 0) return host === "::1" || /^(?:0{1,4}:){7}0{0,3}1$/.test(host) || /^f[cd][0-9a-f]{0,2}:/.test(host)
-  return /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(host)
-    || /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+ts\.net$/.test(host)
-}
-
-// The gateway's plain-HTTP hosts: this computer, Tailscale addresses (100.64.0.0/10, fd7a:115c:a1e0::/48),
-// and names that may lead there (single-label and MagicDNS names); the backend resolves a name and
-// refuses it unless every address is on Tailscale.
+// The plain-HTTP hosts a secret may go to: this computer, Tailscale addresses (100.64.0.0/10,
+// fd7a:115c:a1e0::/48), and names that may lead there (single-label and MagicDNS names); the backend
+// resolves a name and refuses it unless every address is on Tailscale.
 function ompTailscaleHost(host) {
   if (ompLoopbackHost(host)) return true
   var v4 = /^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$/.exec(host)
@@ -2332,23 +2604,6 @@ function ompTailscaleHost(host) {
   if (host.indexOf(":") >= 0) return /^fd7a:115c:a1e0(?::|$)/.test(host)
   return /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(host)
     || /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+ts\.net$/.test(host)
-}
-
-// What is wrong with an omp server address, or "" when the backends take it (normalize_server_url
-// in scripts/quotatank_common.py): a scheme, a host and an optional port, nothing after them but one
-// "/"; HTTPS anywhere, plain HTTP only to this computer, a private network or Tailscale. With `gateway`
-// (the token it sends can spend model quota) plain HTTP stays on this computer and Tailscale. Empty turns
-// the server off.
-function ompServerUrlProblem(text, gateway) {
-  var value = String(text === undefined || text === null ? "" : text).trim()
-  if (value === "") return ""
-  var match = /^(https?):\/\/([^\s\/?#@\\]+)\/?$/i.exec(value)
-  if (!match || /[\x00-\x1f\x7f]/.test(value)) return OMP_URL_PROBLEM
-  var address = ompSplitHost(match[2])
-  if (!address) return OMP_URL_PROBLEM
-  if (match[1].toLowerCase() === "https") return ""
-  if (gateway === true) return ompTailscaleHost(address.host) ? "" : SECRET_HTTP_PROBLEM
-  return ompPlainHttpHost(address.host) ? "" : OMP_HTTP_PROBLEM
 }
 
 // What is wrong with the URL of a server that receives a secret (CLIProxyAPI, CPA Usage Keeper, T3), or "":
@@ -2363,37 +2618,6 @@ function secretServerUrlProblem(text, invalid) {
   if (!address) return invalid
   if (match[1].toLowerCase() === "https") return ""
   return ompTailscaleHost(address.host) ? "" : SECRET_HTTP_PROBLEM
-}
-
-// The computer an omp server address names, for "omp stats on devbox": MagicDNS names drop the
-// tailnet ("devbox.tail1234.ts.net" → "devbox"); "" when the address has no host.
-function ompHost(url) {
-  var match = /^https?:\/\/([^\s\/?#@]+)/i.exec(String(url || "").trim())
-  var address = match ? ompSplitHost(match[1]) : null
-  if (!address) return ""
-  var tailnet = /^([a-z0-9-]+)\.[a-z0-9-]+\.ts\.net$/.exec(address.host)
-  return tailnet ? tailnet[1] : address.host
-}
-
-// " on devbox" for a remote address; "" for this computer (an SSH tunnel's end) or no address.
-function ompOnHost(url) {
-  var host = ompHost(url)
-  return host === "" || ompLoopbackHost(host) ? "" : " on " + host
-}
-
-// Where an omp server is, for the footer and the summaries: " on devbox", " through a tunnel" for an
-// address on this computer (the near end of an SSH tunnel, never "127.0.0.1"), "" without an address.
-// `address` is a URL, or a host with an optional port as cost-fetch.py reports it.
-function ompPlace(address) {
-  var text = String(address || "").trim()
-  var url = /^https?:\/\//i.test(text) ? text : "http://" + text
-  return ompOnHost(url) || (ompHost(url) !== "" ? " through a tunnel" : "")
-}
-
-// A section summary's name for an omp server: its host, "SSH tunnel" for this computer, "Set" without one.
-function ompSummaryName(url) {
-  var host = ompHost(url)
-  return host === "" ? "Set" : ompLoopbackHost(host) ? "SSH tunnel" : host
 }
 
 function ompShortVersion(version) {
@@ -2425,170 +2649,14 @@ function ompLocalStatus(status, localOn, loading) {
   var name = "omp " + (version !== "" ? version + " " : "") + "found"
   if (status.local === "error") return ompLine("error", name + " · its accounts could not be read")
   var count = typeof status.localAccounts === "number" ? status.localAccounts
-    : (typeof status.accounts === "number" && (status.gateway === undefined || status.gateway === "off") ? status.accounts : null)
+    : (typeof status.accounts === "number" ? status.accounts : null)
   if (count === null) return ompLine("ok", name)
   return ompLine("ok", name + " · " + (count === 0 ? "no accounts signed in" : ompCount(count, "account", "accounts")))
 }
 
-// The local part of omp's status message (the backend puts the local part first, then the gateway's).
+// omp's status message from the last refresh, for the line under omp's switch.
 function ompLocalMessage(status) {
-  var sentences = String(status && status.message || "").split(/\.\s+/)
-  var kept = []
-  for (var i = 0; i < sentences.length; i++)
-    if (sentences[i] !== "" && !/gateway/.test(sentences[i])) kept.push(sentences[i].replace(/\.$/, ""))
-  return kept.length ? kept.join(". ") + "." : ""
-}
-
-// A gateway failure, from the backend's message, with what to do next: { summary, text }. The summary
-// stays short; it follows the host in the section's title.
-function ompGatewayProblem(message, url) {
-  var text = String(message || "")
-  var on = ompOnHost(url)
-  var host = ompHost(url)
-  if (/refused the token/.test(text))
-    return { summary: "token refused", text: "The gateway refused the token. Copy a fresh one with omp auth-gateway token" + on + ", then save it here." }
-  if (/asks for a token/.test(text))
-    return { summary: "token needed", text: "The gateway asks for a token. Save the one omp auth-gateway token prints" + on + "." }
-  if (/Could not reach the omp gateway/.test(text))
-    return { summary: "not answering", text: "Nothing answers there. Is omp auth-gateway serve running" + (on || " on the other computer") + "?" }
-  if (/gateway did not answer in time/.test(text))
-    return { summary: "not answering", text: "The gateway did not answer in time. Check that " + (host !== "" && !ompLoopbackHost(host) ? host : "the other computer") + " is awake and on the network." }
-  if (/rate limiting/.test(text))
-    return { summary: "rate limited", text: "The gateway is rate limiting usage checks. Try again in a minute." }
-  var http = /gateway answered HTTP ([0-9]{3})/.exec(text)
-  if (http)
-    return { summary: "HTTP " + http[1], text: "The gateway answered HTTP " + http[1] + ". Check that the URL points at omp auth-gateway (port " + OMP_GATEWAY_PORT + " unless you chose another)." }
-  if (/unreadable usage data/.test(text))
-    return { summary: "not a gateway", text: "That address did not answer like omp's auth gateway. Check the URL, and update omp there if it is older." }
-  if (/plain HTTP only to this computer or over Tailscale/.test(text))
-    return { summary: "needs HTTPS or Tailscale", text: "The token goes over plain HTTP only to this computer or over Tailscale. Use an https:// address, or check that Tailscale is connected on both computers and that the address is that computer's Tailscale name or address." }
-  if (/belongs to another account/.test(text))
-    return { summary: "another account's port", text: "That port on this computer belongs to another account, so the token was not sent. Start omp auth-gateway or the SSH tunnel as yourself, or use an https:// address." }
-  var sentences = text.split(/\.\s+/)
-  var kept = []
-  for (var i = 0; i < sentences.length; i++)
-    if (/gateway/.test(sentences[i])) kept.push(sentences[i].replace(/\.$/, ""))
-  return { summary: "not read", text: kept.length ? kept.join(". ") + "." : "The gateway could not be read." }
-}
-
-// The title summary of "omp on another computer (limits)".
-function ompGatewaySummary(settings, status) {
-  var omp = ompSettings(settings)
-  if (omp.gatewayUrl === "") return "Not set up"
-  var host = ompSummaryName(omp.gatewayUrl)
-  if (omp.gatewayKeyFile === "") return host + " · token needed"
-  if (!status || typeof status !== "object" || status.gateway === undefined || status.gateway === "off") return host
-  if (status.gateway === "error") return host + " · " + ompGatewayProblem(status.message, omp.gatewayUrl).summary
-  return host + (typeof status.gatewayAccounts === "number" ? " · " + ompCount(status.gatewayAccounts, "account", "accounts") : " · answers")
-}
-
-// The omp accounts a provider reading holds: entries whose kind (`origin`, or `origins` once merged
-// with a native entry) is omp, or the provider itself when omp is all it has.
-function ompFromOmp(entry) {
-  return !!entry && (entry.origin === "omp" || contains(entry.origins, "omp"))
-}
-
-function ompAccountCount(provider) {
-  if (!provider || typeof provider !== "object") return 0
-  var accounts = listOrEmpty(provider.accounts)
-  var count = 0
-  for (var i = 0; i < accounts.length; i++) if (ompFromOmp(accounts[i])) count++
-  return count === 0 && accounts.length === 0 && ompFromOmp(provider) ? 1 : count
-}
-
-// A Test that did not get an answer: { probeError: "timeout" | "tooLarge" }, or nothing at all.
-function ompProbeLines(reply, seconds) {
-  if (reply && reply.probeError === "timeout")
-    return [ompLine("error", "No answer within " + seconds + " s. Check the URL, and that the other computer is awake.")]
-  if (reply && reply.probeError === "tooLarge") return [ompLine("error", "The answer was too large to read.")]
-  if (!reply || reply.schemaVersion !== 1)
-    return [ompLine("error", "The test did not run. Check that Python 3 is installed, then try again.")]
-  if (reply.backendError) return [ompLine("error", String(reply.backendError).slice(0, 300))]
-  return null
-}
-
-// Settings → Providers → omp on another computer → Test, from usage-fetch.py --omp-only run with the
-// gateway's flags: lines { tone: "ok" | "info" | "error", text } that name what the gateway has.
-function ompGatewayTestLines(reply, url, monitored) {
-  var failed = ompProbeLines(reply, 40)
-  if (failed) return failed
-  var omp = reply.omp && typeof reply.omp === "object" ? reply.omp : {}
-  if (omp.gateway === "error") return [ompLine("error", ompGatewayProblem(omp.message, url).text)]
-  if (omp.gateway !== "ok")
-    return [ompLine("error", "This version of the backend cannot read an omp gateway. Update Quotatank, then try again.")]
-  var parts = []
-  var unmonitored = []
-  var total = 0
-  var providers = listOrEmpty(reply.providers)
-  for (var i = 0; i < providers.length; i++) {
-    var count = ompAccountCount(providers[i])
-    if (count === 0) continue
-    var name = providerShortName(providers[i])
-    total += count
-    parts.push(name + " " + count)
-    if (monitored && !contains(monitored, providers[i].id)) unmonitored.push(name)
-  }
-  if (total === 0)
-    return [ompLine("ok", "Gateway answers"), ompLine("info", "omp there has no signed-in accounts with limits that Quotatank reads.")]
-  var lines = [ompLine("ok", "Gateway answers · " + ompCount(total, "account", "accounts") + ": " + parts.join(", "))]
-  if (unmonitored.length > 0)
-    lines.push(ompLine("info", "Not monitored here: " + joinNames(unmonitored) + ". Monitor " + (unmonitored.length === 1 ? "it" : "them")
-      + " to see " + (unmonitored.length === 1 ? "its" : "their") + " accounts in Limits."))
-  return lines
-}
-
-// An omp stats failure from cost-fetch.py's omp-remote source, with what to do next.
-function ompStatsProblem(source, url) {
-  var message = String(source && source.message || "")
-  var kind = String(source && source.errorKind || "")
-  var on = ompOnHost(url)
-  if (kind === "network")
-    return on !== "" ? "Nothing answers there. Is omp stats running" + on + "?"
-      : "Nothing answers there. Is the SSH tunnel open, and omp stats running on the other computer?"
-  if (kind === "http") return (message || "omp stats returned an error.") + " Check that the URL is the dashboard's address, without a path."
-  return message || "omp stats could not be read."
-}
-
-// Settings → Costs → omp on another computer → Test, from cost-fetch.py --providers "" --days 7 run
-// with only the omp stats flag: what the server reported for the last 7 days.
-function ompStatsTestLines(reply, url) {
-  var failed = ompProbeLines(reply, 75)
-  if (failed) return failed
-  var source = readingFor(reply.sources, "omp-remote")
-  if (!source)
-    return [ompLine("error", "This version of the backend cannot read omp stats. Update Quotatank, then try again.")]
-  var on = ompOnHost(url)
-  if (source.status === "error") return [ompLine("error", ompStatsProblem(source, url))]
-  if (source.status === "duplicate")
-    return [ompLine("ok", "omp stats" + on + " answers"), ompLine("info", "It runs on this computer, so its sessions are already counted here.")]
-  if (source.status !== "ok") return [ompLine("error", "omp stats was not read. Check the URL, then try again.")]
-  var totals = reply.totals && typeof reply.totals === "object" ? reply.totals : {}
-  var records = Math.max(0, Math.round(Number(totals.records) || 0))
-  var cost = typeof totals.costUsd === "number" && isFinite(totals.costUsd) ? totals.costUsd : null
-  var lines = [ompLine("ok", "omp stats" + on + " answers")]
-  if (records === 0) lines.push(ompLine("info", "No requests in the last 7 days."))
-  else lines.push(ompLine("ok", ompCount(records, "request", "requests") + " · " + (cost === null ? "unpriced" : formatUsd(cost)) + " in the last 7 days"))
-  return lines
-}
-
-// The Test's line about omp's live feed for that server, from OmpActivity; null when it is not
-// following that server.
-function ompLiveFeedLine(state, message) {
-  if (state === "live") return ompLine("ok", "Live feed on · new activity shows within 10 s")
-  if (state === "connecting" || state === "reconnecting") return ompLine("info", "Live feed connecting…")
-  if (state === "unavailable")
-    return ompLine("error", "Live feed unavailable." + (message ? " " + String(message).slice(0, 200) : ""))
-  return null
-}
-
-// The title summary of Settings → Costs → "omp on another computer".
-function ompStatsSummary(settings, source, liveState) {
-  var url = ompSettings(settings).statsUrl
-  if (url === "") return "Not set up"
-  var host = ompSummaryName(url)
-  if (source && source.status === "error") return host + " · not answering"
-  if (source && source.status === "duplicate") return host + " · counted here"
-  return host + (liveState === "live" ? " · live" : "")
+  return String(status && status.message || "")
 }
 
 // "omp sessions on this computer" in Settings → Costs → Local history: what the last scan did, in a
@@ -2602,52 +2670,6 @@ function ompLocalCostState(sources, localProviders) {
   var labels = { ok: "Included", partial: "Partial", missing: "None found", failed: "Unavailable",
     unavailable: "Unavailable", duplicate: "Included" }
   return labels[source.status] || "Included"
-}
-
-// How to reach omp stats on another computer (Tailscale or an SSH tunnel): where each command runs
-// ("other" or "here"), and the user units that start them at login. A unit's first line names its file;
-// long lines use systemd's backslash continuation, and "$$" is systemd's literal dollar sign.
-function ompStatsRecipe(via) {
-  var port = String(OMP_STATS_PORT)
-  function unit(name, description, execStart, restart) {
-    return "# ~/.config/systemd/user/" + name + ".service\n[Unit]\nDescription=" + description
-      + "\n\n[Service]\nExecStart=" + execStart + "\nRestart=" + restart + "\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n"
-  }
-  function enable(name) {
-    return "systemctl --user daemon-reload\nsystemctl --user enable --now " + name
-  }
-  if (via === "ssh") {
-    return {
-      url: "http://127.0.0.1:" + port,
-      steps: [
-        { where: "other", command: "omp stats --host 127.0.0.1 --port " + port },
-        { where: "here", command: "ssh -N -L " + port + ":127.0.0.1:" + port + " other-computer" }
-      ],
-      units: [
-        { where: "other", enable: enable("omp-stats"), text: unit("omp-stats", "omp stats for Quotatank",
-          "/bin/sh -lc 'exec omp stats \\\n  --host 127.0.0.1 --port " + port + "'", "on-failure") },
-        { where: "here", enable: enable("omp-stats-tunnel"), text: unit("omp-stats-tunnel", "SSH tunnel to omp stats for Quotatank",
-          "/usr/bin/ssh -N \\\n  -o ExitOnForwardFailure=yes \\\n  -o ServerAliveInterval=30 \\\n  -L " + port + ":127.0.0.1:" + port + " other-computer", "always") }
-      ]
-    }
-  }
-  return {
-    url: "http://other-computer:" + port,
-    steps: [{ where: "other", command: "omp stats --host \"$(tailscale ip -4)\" --port " + port }],
-    units: [
-      { where: "other", enable: enable("omp-stats"), text: unit("omp-stats", "omp stats for Quotatank",
-        "/bin/sh -lc 'exec omp stats \\\n  --host \"$$(tailscale ip -4)\" --port " + port + "'", "on-failure") }
-    ]
-  }
-}
-
-// The commands that start omp's auth gateway on the other computer and print its token.
-function ompGatewayRecipe() {
-  // The serve line breaks before its flag with a shell continuation: it reads in two lines and pastes as one.
-  return [
-    { where: "other", command: "omp auth-gateway serve \\\n  --bind=\"$(tailscale ip -4):" + OMP_GATEWAY_PORT + "\"" },
-    { where: "other", command: "omp auth-gateway token" }
-  ]
 }
 
 function ompLiveId(value) {
@@ -2680,10 +2702,6 @@ function parseOmpLiveLine(line) {
       model: typeof raw.model === "string" ? raw.model.slice(0, 256) : "", credentialId: credential.value,
       costUsd: cost.value, tokens: tokens.value === null ? 0 : Math.floor(tokens.value), subagent: raw.subagent === true, at: raw.at }
   }
-  if (raw.type === "activity") {
-    if (typeof raw.at !== "number" || !isFinite(raw.at) || raw.at <= 0) return null
-    return { type: "activity", source: "remote", version: typeof raw.version === "number" && isFinite(raw.version) ? raw.version : 0, at: raw.at }
-  }
   if (raw.type === "accounts") {
     if (!raw.map || typeof raw.map !== "object" || Array.isArray(raw.map)) return null
     var keys = Object.keys(raw.map)
@@ -2696,10 +2714,6 @@ function parseOmpLiveLine(line) {
       map[keys[i]] = { provider: entry.provider, accountId: entry.accountId }
     }
     return { type: "accounts", map: map }
-  }
-  if (raw.type === "state") {
-    if (["live", "reconnecting", "unavailable"].indexOf(raw.state) < 0) return null
-    return { type: "state", state: raw.state, message: typeof raw.message === "string" ? raw.message.slice(0, 256) : "" }
   }
   return { type: "other" }
 }
@@ -2900,7 +2914,7 @@ var ACCOUNT_TOGETHER_SECONDS = 3600     // two accounts rising within this time 
 var ACCOUNT_SPENDING_SECONDS = 900      // a reading that rose this recently means "spending now"
 var ACCOUNT_LIVE_SECONDS = 120          // a live request this recent means "spending now"
 var ACCOUNT_EVENT_SECONDS = 3 * 60 * 60 // a row mentions a switch or a reset for this long
-var ACCOUNT_SOURCE_RANK = { omarchy: 0, signin: 0, proxy: 0, key: 1, omp: 2 }
+var ACCOUNT_SOURCE_RANK = { omarchy: 0, signin: 0, proxy: 0, key: 1, omp: 2, computer: 3 }
 var ACCOUNT_ERROR_TEXT = {
   expired: "sign-in expired", no_credentials: "signed out", rate_limited: "rate limited",
   timeout: "timed out", network: "offline", config: "needs setup", cli_unavailable: "CLI missing"
@@ -2908,6 +2922,12 @@ var ACCOUNT_ERROR_TEXT = {
 
 function providerAccounts(provider) {
   return listOrEmpty(provider && provider.accounts)
+}
+
+// Whether every account of the provider is read through a proxy, which rotates them: they are spent together.
+function proxyPool(provider) {
+  var accounts = providerAccounts(provider)
+  return accounts.length > 0 && accounts.every(function(account) { return accountSourceKind(account) === "proxy" })
 }
 
 // The mode chosen in Settings for one provider (`accountModes`, read by parseAccountModes), or "" for
@@ -2918,23 +2938,32 @@ function accountModeChoice(raw, providerId) {
   return Object.prototype.hasOwnProperty.call(modes, id) ? modes[id] : ""
 }
 
+// The ids live requests may name an account by: its own, omp's id for a native login that omp also reads
+// (`ompAccountId`), and its ids on other computers that read the same account (`liveIds`).
+function accountLiveIds(account) {
+  var ids = [String(account.accountId || "")]
+  if (typeof account.ompAccountId === "string" && account.ompAccountId !== "") ids.push(account.ompAccountId)
+  listOrEmpty(account.liveIds).forEach(function(id) { if (typeof id === "string" && id !== "") ids.push(id) })
+  return ids
+}
+
 // The newest live request for an account in a "<provider>@<accountId>" map (live omp requests, a
-// proxy's activity). A native login that omp also reads carries omp's id for it (`ompAccountId`), and
-// omp's requests name it by that id, so both keys count.
+// proxy's activity), under any of its ids.
 function accountLiveAt(account, recentByAccount) {
   if (!account || !recentByAccount || typeof recentByAccount !== "object") return null
   var provider = String(account.id || "")
-  var at = finiteOrNull(recentByAccount[provider + "@" + String(account.accountId || "")])
-  var omp = typeof account.ompAccountId === "string" ? account.ompAccountId : ""
-  var also = omp !== "" ? finiteOrNull(recentByAccount[provider + "@" + omp]) : null
-  return also !== null && (at === null || also > at) ? also : at
+  var newest = null
+  accountLiveIds(account).forEach(function(id) {
+    var at = finiteOrNull(recentByAccount[provider + "@" + id])
+    if (at !== null && (newest === null || at > newest)) newest = at
+  })
+  return newest
 }
 
 // Whether a live request naming `accountId` (omp's or the proxy's id) was served by this account.
 function accountAnswersTo(account, accountId) {
   var id = String(accountId || "")
-  return !!account && id !== "" && (String(account.accountId || "") === id
-    || (typeof account.ompAccountId === "string" && account.ompAccountId === id))
+  return !!account && id !== "" && accountLiveIds(account).indexOf(id) >= 0
 }
 
 // The latest sign of use per account ("<provider>@<accountId>" → epoch seconds), one map for every
@@ -2978,10 +3007,10 @@ function spendingNow(account, nowSeconds, recentByAccount) {
 // The Settings choice for the provider wins. A provider whose logins Omarchy switches between
 // (`accountSwitch`) stays one at a time: right after a switch the old account still rises from the
 // sessions left running on it, yet new sessions use only the new one.
-function accountMode(provider, modesRaw, proxyMode, nowSeconds, recentByAccount) {
+function accountMode(provider, modesRaw, nowSeconds, recentByAccount) {
   var chosen = accountModeChoice(modesRaw, provider ? provider.id : "")
   if (chosen !== "") return chosen
-  if (proxyMode) return "together"
+  if (proxyPool(provider)) return "together"
   if (provider && provider.pool && typeof provider.pool === "object") return "together"
   if (provider && provider.accountSwitch && typeof provider.accountSwitch === "object") return "single"
   var now = finiteOrNull(nowSeconds)
@@ -3048,18 +3077,25 @@ function countedAccounts(provider, mode, nowSeconds, recentByAccount) {
 }
 
 // Where an account's reading comes from (its `origin`): "omarchy" (a login in Omarchy's registry),
-// "signin" (the one native sign-in next to omp accounts), "key", "omp", or "proxy". Readings from a
+// "signin" (the one native sign-in next to omp accounts), "key", "omp", "proxy", or "computer" (read on
+// another computer, whatever its origin there: Omarchy switches only this computer's logins). Readings from a
 // backend without `origin` are told apart by their ids. `source` is the API's description, not a kind.
 // The one rule for every surface: rows, dots, hints and notices.
-function accountSourceKind(account, proxyMode) {
+function accountSourceKind(account) {
   if (!account) return ""
+  if (account.computer && typeof account.computer === "object") return "computer"
+  if (account.proxy && typeof account.proxy === "object") return "proxy"
   var origin = String(account.origin || "")
   if (origin === "omarchy" || origin === "signin" || origin === "key" || origin === "omp" || origin === "proxy") return origin
-  if (proxyMode) return "proxy"
   var id = String(account.accountId || "")
   if (id === "primary" || /^k-[0-9a-f]{8}$/.test(id)) return "key"
   if (/^omp-/.test(id)) return "omp"
   return "omarchy"
+}
+
+// Whether omp holds the account's sign-in, here or on the computer that read it.
+function fromOmp(account) {
+  return !!account && (account.origin === "omp" || accountSourceKind(account) === "omp")
 }
 
 function accountSourceLabel(kind) {
@@ -3068,18 +3104,19 @@ function accountSourceLabel(kind) {
   if (kind === "omarchy") return "Omarchy"
   if (kind === "signin") return "sign-in"
   if (kind === "proxy") return "proxy"
+  if (kind === "computer") return "another computer"
   return ""
 }
 
 // Row order as account indexes. One at a time keeps the stable order (Omarchy's registry order, then
 // keys, then omp). Together puts the account with the least headroom first; accounts without a reading
 // go last. Ties keep the stable order, so rows only move when headroom really changes places.
-function accountOrder(accounts, mode, proxyMode) {
+function accountOrder(accounts, mode) {
   var list = listOrEmpty(accounts)
   var rows = []
   for (var i = 0; i < list.length; i++) {
     var headroom = minRemaining(list[i])
-    var rank = ACCOUNT_SOURCE_RANK[accountSourceKind(list[i], proxyMode)]
+    var rank = ACCOUNT_SOURCE_RANK[accountSourceKind(list[i])]
     rows.push({ index: i, rank: rank === undefined ? 0 : rank, headroom: headroom === null ? Infinity : headroom })
   }
   rows.sort(function (a, b) {
@@ -3146,7 +3183,7 @@ function accountUsedUp(account) {
 // switch or reset, the plan, the source. `event` is this account's newest {kind: "switch"|"reset", at},
 // or null. Returns {kind, text, at, tone}; tone is "urgent", "accent" or "dim", and `at` is a time to
 // append.
-function accountStatusLine(account, spending, nowSeconds, event, proxyMode) {
+function accountStatusLine(account, spending, nowSeconds, event) {
   if (!account) return { kind: "", text: "", at: null, tone: "dim" }
   var status = String(account.status || "")
   if (status === "error") {
@@ -3157,14 +3194,27 @@ function accountStatusLine(account, spending, nowSeconds, event, proxyMode) {
   if (status === "disabled") return { kind: "paused", text: "paused", at: null, tone: "dim" }
   var usedUp = accountUsedUp(account)
   if (usedUp !== null) return { kind: "usedup", text: "used up", at: usedUp.resetsAt, tone: "urgent" }
-  if (account.stale === true) return { kind: "stale", text: "last known reading", at: null, tone: "dim" }
+  var computer = account.computer && account.computer.name ? String(account.computer.name)
+    : account.proxy && account.proxy.name ? String(account.proxy.name) : ""
+  if (account.stale === true) {
+    var readAt = Date.parse(String(account.readAt || "")) / 1000
+    return computer && isFinite(readAt)
+      ? { kind: "stale", text: computer + " not answering since", at: readAt, tone: "dim" }
+      : { kind: "stale", text: "last known reading", at: null, tone: "dim" }
+  }
   if (spending === true) return { kind: "spending", text: "spending now", at: null, tone: "accent" }
   var now = finiteOrNull(nowSeconds)
   var eventAt = event ? finiteOrNull(event.at) : null
   if (event && (event.kind === "switch" || event.kind === "reset") && withinSeconds(eventAt, now, ACCOUNT_EVENT_SECONDS))
     return { kind: event.kind, text: event.kind === "switch" ? "switched" : "reset", at: eventAt, tone: "accent" }
-  if (account.plan || account.planType) return { kind: "plan", text: accountPlanLabel(account), at: null, tone: "dim" }
-  return { kind: "source", text: accountSourceLabel(accountSourceKind(account, proxyMode)), at: null, tone: "dim" }
+  if (account.standIn && account.standIn.name)
+    return { kind: "standin", text: (readingProxy(account) ? "read through " : "read on ") + account.standIn.name, at: null, tone: "dim" }
+  // "via proxy", not the proxy's name: beside a plan, "through CLIProxyAPI" does not fit a row.
+  var where = account.computer && account.computer.name ? "on " + account.computer.name
+    : readingProxy(account) ? "via proxy" : ""
+  if (account.plan || account.planType)
+    return { kind: "plan", text: accountPlanLabel(account) + (where ? " · " + where : ""), at: null, tone: "dim" }
+  return { kind: "source", text: where || accountSourceLabel(accountSourceKind(account)), at: null, tone: "dim" }
 }
 
 // The command behind a row's Use button: Omarchy starts new sessions of the provider with that login.
@@ -3179,24 +3229,25 @@ function accountUseArgv(providerId, account) {
   return ["omarchy", "agent", "account", "use", provider, id]
 }
 
-// A row offers Use in one-at-a-time mode for an Omarchy login that is not in use and can be read.
-function accountCanUse(account, mode, proxyMode) {
+// A row offers Use in one-at-a-time mode for an Omarchy login on this computer that is not in use and can be
+// read: Omarchy switches logins only here.
+function accountCanUse(account, mode) {
   return !!account && mode === "single" && account.active !== true && account.status === "ok"
-    && accountSourceKind(account, proxyMode) === "omarchy"
+    && accountSourceKind(account) === "omarchy"
 }
 
 // How new sessions pick among a provider's accounts, for the ACCOUNTS header and the hover card alike:
 // "Used together · omp" (omp's pool, or an account omp reads), "Used together · CLIProxyAPI" (a proxy),
 // "Omarchy · switches at 95%" or "Omarchy · notifies at 95%"; "" otherwise.
-function accountModeText(provider, mode, proxyMode) {
+function accountModeText(provider, mode) {
   if (!provider) return ""
   if (mode === "together") {
-    if (proxyMode) return "Used together · CLIProxyAPI"
+    if (proxyPool(provider)) return "Used together · CLIProxyAPI"
     var accounts = providerAccounts(provider)
     var omp = !!provider.pool
     for (var i = 0; i < accounts.length && !omp; i++) {
       var origins = listOrEmpty(accounts[i] && accounts[i].origins)
-      omp = accountSourceKind(accounts[i], false) === "omp" || contains(origins, "omp")
+      omp = fromOmp(accounts[i]) || contains(origins, "omp")
     }
     return "Used together" + (omp ? " · omp" : "")
   }
@@ -3234,12 +3285,12 @@ function pickAccounts(order, counted, keep) {
 
 // What every surface says about a provider's accounts (DESIGN §2–3), worked out once per provider and
 // clock tick so the chip, its dots and hover card, the tile, the Limits rows and the runway agree.
-// `options`: modes (the accountModes setting, text or parsed), proxyMode, nowSeconds (the panel's one
+// `options`: modes (the accountModes setting, text or parsed), nowSeconds (the panel's one
 // clock), recentByAccount (mergeRecentActivity), warningThreshold, criticalThreshold. Returns null
 // without accounts, else:
 // - mode: "single" | "together"; counted: indexes the chip counts (ascending); value: the counted
 //   account with the least headroom, whose figure the tile shows;
-// - spending, rings, inUse: one entry per account ("in use" only one at a time, never through a proxy);
+// - spending, rings, inUse: one entry per account ("in use" only one at a time, never a proxy's account);
 // - order: the Limits rows' order; stable: the dots' order (Omarchy logins, keys, omp);
 // - dots: { dots: [{ index, state, counted, spending }], extra }, at most four dots in stable order,
 //   three and "+N" from five accounts on, counted accounts kept.
@@ -3247,8 +3298,7 @@ function accountState(provider, options) {
   var accounts = providerAccounts(provider)
   if (accounts.length === 0) return null
   var opts = options || {}
-  var proxyMode = opts.proxyMode === true
-  var mode = accountMode(provider, opts.modes, proxyMode, opts.nowSeconds, opts.recentByAccount)
+  var mode = accountMode(provider, opts.modes, opts.nowSeconds, opts.recentByAccount)
   var counted = countedAccounts(provider, mode, opts.nowSeconds, opts.recentByAccount)
   var spending = []
   var rings = []
@@ -3256,9 +3306,9 @@ function accountState(provider, options) {
   for (var i = 0; i < accounts.length; i++) {
     spending.push(spendingNow(accounts[i], opts.nowSeconds, opts.recentByAccount))
     rings.push(accountRingState(accounts[i], opts.warningThreshold, opts.criticalThreshold))
-    inUse.push(mode === "single" && !proxyMode && !!accounts[i] && accounts[i].active === true)
+    inUse.push(mode === "single" && !!accounts[i] && accounts[i].active === true && accountSourceKind(accounts[i]) !== "proxy")
   }
-  var stable = accountOrder(accounts, "single", proxyMode)
+  var stable = accountOrder(accounts, "single")
   var shown = stable.length <= 4 ? stable : pickAccounts(stable, counted, 3)
   var dots = []
   for (var d = 0; d < shown.length; d++) {
@@ -3274,7 +3324,7 @@ function accountState(provider, options) {
     spending: spending,
     rings: rings,
     inUse: inUse,
-    order: mode === "together" ? accountOrder(accounts, "together", proxyMode) : stable,
+    order: mode === "together" ? accountOrder(accounts, "together") : stable,
     stable: stable,
     dots: { dots: accounts.length > 1 ? dots : [], extra: accounts.length > 1 ? stable.length - shown.length : 0 }
   }
@@ -3407,7 +3457,7 @@ function accountRunway(provider, mode, counted, nowSeconds, order) {
   if (!baseRow || resetsAt === null || resetsAt <= now) return null
   var horizon = resetsAt - now
   var sequence = []
-  var source = listOrEmpty(order).length === accounts.length ? listOrEmpty(order) : accountOrder(accounts, mode, false)
+  var source = listOrEmpty(order).length === accounts.length ? listOrEmpty(order) : accountOrder(accounts, mode)
   if (mode !== "together") sequence.push(base)
   for (var s = 0; s < source.length; s++)
     if (mode === "together" || source[s] !== base) sequence.push(source[s])
@@ -3563,7 +3613,7 @@ function accountEvents(previous, providers, nowSeconds, warningThreshold) {
     for (var x = 0; x < accounts.length; x++)
       if (accounts[x] && accounts[x].active === true) activeIndex = x
     var active = accounts.length > 1 && activeIndex >= 0
-      && accountSourceKind(accounts[activeIndex], false) === "omarchy" ? accounts[activeIndex] : null
+      && accountSourceKind(accounts[activeIndex]) === "omarchy" ? accounts[activeIndex] : null
     entry.active = active ? String(active.accountId || "") : ""
     if (before && before.active && entry.active && before.active !== entry.active) {
       var from = null
@@ -3578,11 +3628,13 @@ function accountEvents(previous, providers, nowSeconds, warningThreshold) {
       var account = readings[a]
       var accountId = accounts.length > 0 ? String(account.accountId || "") : ""
       entry.seen[accountId] = true
-      if (account.status === "error" && account.errorKind === "expired" && accountSourceKind(account, false) === "omp") {
+      if (account.status === "error" && account.errorKind === "expired" && fromOmp(account)) {
         entry.expired[accountId] = true
+        var there = readingComputer(account)
         if (before && before.seen && before.seen[accountId] === true && before.expired && before.expired[accountId] !== true)
           events.push({ id: "omp-expired|" + id + "|" + accountId + "|" + now, kind: "omp-expired", provider: id,
-            accountId: accountId, from: "", fromUsed: null, label: "", at: now })
+            accountId: accountId, from: "", fromUsed: null, label: "", at: now,
+            where: there ? String(there.name || "") : "" })
       }
       var rows = account.status === "ok" ? listOrEmpty(account.windows) : []
       for (var w = 0; w < rows.length; w++) {
@@ -3626,7 +3678,8 @@ function eventNoticeText(event, provider, names, clock, manual) {
       + " reset at " + clock(event.at) + "."
   }
   if (event.kind === "omp-expired")
-    return "omp can no longer renew " + who(event.accountId) + "'s sign-in. Sign in again in omp."
+    return "omp can no longer renew " + who(event.accountId) + "'s sign-in. Sign in again in omp"
+      + (event.where ? " on " + event.where : "") + "."
   return ""
 }
 
@@ -3742,11 +3795,11 @@ function barAccountStrip(provider, state, options) {
     var choice = provider.accountSwitch
     if (state.mode === "together" || opts.stale || wanted.length !== 1 || !choice || choice.mode !== "manual") return strip
     var current = wanted[0]
-    if (states[current] !== "critical" || accountSourceKind(accounts[current], false) !== "omarchy") return strip
+    if (states[current] !== "critical" || accountSourceKind(accounts[current]) !== "omarchy") return strip
     var target = -1
     var targetLeft = -1
     for (var k = 0; k < accounts.length; k++) {
-      if (k === current || states[k] !== "ok" || accountSourceKind(accounts[k], false) !== "omarchy") continue
+      if (k === current || states[k] !== "ok" || accountSourceKind(accounts[k]) !== "omarchy") continue
       var left = remainingForWindow(accounts[k], opts.selector)
       if (left !== null && left > targetLeft) {
         target = k
@@ -3835,7 +3888,7 @@ function barAgoText(seconds) {
 // The hover card of a chip with several accounts (DESIGN §2.4), as plain text and values, from the
 // provider's accountState() so it says what the chip and Limits say. It lists every account up to
 // BAR_HOVER_ROWS; past that the counted ones, then those closest to a limit, and `more` for the rest.
-// Rows follow the dots' order and are keyed by account. `options`: proxyMode, nowSeconds,
+// Rows follow the dots' order and are keyed by account. `options`: nowSeconds,
 // extraKeys, readAtSeconds, stale, formatClock(epochSeconds) → "18:02".
 function barHoverModel(provider, state, options) {
   var opts = options || {}
@@ -3894,7 +3947,7 @@ function barHoverModel(provider, state, options) {
   var readText = readAtSeconds <= 0 ? "" : opts.stale
     ? "Read " + barAgoText(now - readAtSeconds) + " ago" : "Read at " + clock(readAtSeconds)
   return { title: providerShortName(provider) + " · " + accounts.length + " accounts",
-           modeText: accountModeText(provider, state ? state.mode : "single", opts.proxyMode === true),
+           modeText: accountModeText(provider, state ? state.mode : "single"),
            rows: rows, more: Math.max(0, accounts.length - rows.length), readText: readText, stale: !!opts.stale }
 }
 

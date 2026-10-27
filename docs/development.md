@@ -6,13 +6,14 @@
 
 - `Panel.qml` owns the injected bar widget, native popup, keyboard behavior, provider selection, error/credit/limit presentation, and namespaced IPC.
 - `UsageBackend.qml` owns one bounded asynchronous Python process, coalesces duplicate refresh requests, applies the configured interval, and rejects malformed contract output.
-- `scripts/usage-fetch.py` performs parallel, failure-isolated provider collection and emits the versioned provider-neutral contract documented in [docs/backend-contract.md](backend-contract.md).
+- `scripts/usage-fetch.py` performs parallel, failure-isolated provider collection and emits the versioned provider-neutral contract documented in [docs/backend-contract.md](backend-contract.md). It merges, in order, this computer's readings, omp's accounts, the other computers' (`--computer`) and the proxies' (`--proxy`).
+- `scripts/quotatank_remote.py` runs the readers on another computer over SSH (keys only, one shared connection per computer) and brings their JSON back; `scripts/computer-check.py` suggests, tests and removes computers for Settings → Sources and carries omp's live feed from them.
 - `CostBackend.qml` owns an independent, on-demand transcript scan, keeps the last known-good result across malformed responses, and never changes quota polling.
 - `scripts/cost-fetch.py` streams CLI JSONL, applies provider-specific deduplication, resumes growing files from a guarded byte position, caches sanitized usage records, prices attributable models, and emits [the estimated-cost contract](cost-contract.md).
-- `UsageSettings.qml` is the whole settings surface: an index of six pages (Providers, Menu bar, Alerts, Display, Costs, Advanced), each flat. Every control saves as it changes through `changeRequested`; secrets are the exception and go through `scripts/management-key.py` with an explicit Save, committed once the path is persisted.
+- `UsageSettings.qml` is the whole settings surface: an index of seven pages (Sources, Providers, Menu bar, Alerts, Display, Costs, Advanced), each flat, and the first-run setup that walks Sources, Providers and Menu bar. Every control saves as it changes through `changeRequested`; secrets are the exception and go through `scripts/management-key.py` with an explicit Save, committed once the path is persisted.
 - `CostPriceEditor.qml` provides validated custom-price rows inside the Costs page, with exact model matching.
 - `scripts/t3_costs.py` reads bounded T3 usage RPC responses and keeps private offline snapshots.
-- `scripts/omp_stats.py` reads the four aggregate endpoints of an `omp stats` dashboard with bounded, concurrent GET requests and keeps only counters, costs, and provider, model and folder names.
+- `HintLine.qml` is the one-line explanation a part of the panel shows the first time it appears (`UsageLogic.HINT_TEXT`); dismissals persist in `hintsDismissed`.
 - `UsageCosts.qml` renders the metric/period controls, time chart, token mix, pricing coverage percentages, and provider/model breakdowns without parsing raw history in QML.
 - `BlockMeter.qml` renders one track item per fixed block plus only the partial boundary fragment—there is no duplicate full-width fill layer.
 - Limits reads only small pre-bucketed history arrays (the 24-hour trend behind the account sparklines and hover card); large history files are never parsed in QML.
@@ -34,7 +35,7 @@ The suite performs:
 
 - Python syntax checks and fixture/contract tests on Python 3.10 through 3.14 in CI.
 - Claude, Codex, and Kimi normalization tests, including multiple/scoped windows and credits.
-- CLIProxyAPI HTTP integration, account-pool selection, disabled accounts, management/upstream errors, private key handling, redirect rejection, and source-isolated history.
+- CLIProxyAPI HTTP integration, account-pool selection, disabled accounts, management/upstream errors, private key handling, redirect rejection, and how proxies, other computers and omp merge into one reading per account.
 - Claude/Codex/Kimi transcript parsing, repeat/fork deduplication, token accounting, pricing, partial/unavailable costs, private cache tests, and adversarial input-ceiling tests.
 - Canonical/provider price collisions, ambiguous aliases, context variants, custom-price precedence, forced-refresh throttling, and incremental/cold scan equivalence across partial lines, replacements, and rewrites.
 - When Quickshell is available, an invisible QML test exercises custom-price editing, validation, persistence payloads, queued refreshes, and preservation of the last good result.

@@ -51,9 +51,10 @@ class ProjectContractTests(unittest.TestCase):
             "refreshIntervalSec", "enabledProviders", "barDisplayMode", "quotaMode", "barWindow", "barWindowSecondary", "barProviders",
             "barProviderLimits", "barShowResets", "barShowPeriods", "barResetTimeFormat", "barResetDateFormat",
             "warningThreshold", "criticalThreshold",
-            "usageSource", "cliproxyUrl", "cliproxyKeyFile", "hideAccountEmails", "squareUsageCards", "providerColors", "notifyLimitThresholds", "costPriceOverrides",
-            "costLocalProviders", "costKeeperUrl", "costKeeperPasswordFile", "costT3Servers", "extraKeys",
-            "ompLocal", "ompGatewayUrl", "ompGatewayKeyFile", "ompStatsUrl", "barAccountMode", "motion", "accountModes", "hiddenAccounts",
+            "sources", "mainComputer", "sourcesVersion", "sourcesNotice", "setupDone", "hintsDismissed",
+            "hideAccountEmails", "squareUsageCards", "providerColors", "notifyLimitThresholds", "costPriceOverrides",
+            "costLocalProviders", "extraKeys",
+            "ompLocal", "barAccountMode", "motion", "accountModes", "hiddenAccounts",
             "creditWarningUsd", "creditCriticalUsd", "hideExhaustedProviders", "barMaxChips", "providerQuotaModes", "providerOrder", "dismissedProviders",
         } | key_files)
         self.assertEqual(set(manifest["barWidget"]["defaults"]), keys, "every setting has a default")
@@ -167,7 +168,6 @@ class ProjectContractTests(unittest.TestCase):
         self.assertIn("Math.max(60, Math.min(3600", backend)
         self.assertNotIn("Timer {\n    interval:", cost_backend.split("Process {")[0])
         self.assertIn("function ensureLoaded()", cost_backend)
-        self.assertIn("interval: 60000", cost_backend)
         for source in (backend, cost_backend):
             self.assertNotIn("StdioCollector", source)
             self.assertIn('splitMarker: ""', source)

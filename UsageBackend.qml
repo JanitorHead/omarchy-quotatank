@@ -21,9 +21,8 @@ Item {
     Math.round(Number(setting("refreshIntervalSec", 900)) || 900)))
   readonly property var enabledProviderIds: normalizedProviderIds(setting(
     "enabledProviders", UsageLogic.DEFAULT_SETTINGS.enabledProviders))
-  readonly property string usageSource: String(setting("usageSource", "direct")) === "cliproxy" ? "cliproxy" : "direct"
-  readonly property string cliproxyUrl: String(setting("cliproxyUrl", "http://127.0.0.1:8317"))
-  readonly property string cliproxyKeyFile: String(setting("cliproxyKeyFile", ""))
+  // Proxies under Settings → Sources: their accounts are read with this computer's and the other computers'.
+  readonly property var proxyArguments: UsageLogic.proxyArguments(settings)
   // Private key files saved from settings, one `[id, path]` pair per API-key provider that has one.
   readonly property var keyFiles: {
     var result = []
@@ -36,10 +35,9 @@ Item {
   }
   // A provider's further keys, each read as its own account (Settings → Providers → Add another key).
   readonly property var extraKeyArguments: UsageLogic.extraKeyArguments(setting("extraKeys", "{}"), enabledProviderIds)
-  // omp (Oh My Pi) on this computer and through its auth gateway (Settings → Providers → omp). A proxy
-  // source reads every account from the proxy instead.
-  readonly property var ompArguments: usageSource === "cliproxy" ? [] : UsageLogic.ompUsageArguments(settings)
-  // What the backend found of omp: { local, gateway, message, accounts, ... }, or null before it says.
+  // omp (Oh My Pi) on this computer (Settings → Sources → This computer).
+  readonly property var ompArguments: UsageLogic.ompUsageArguments(settings)
+  // What the backend found of omp: { local, message, accounts, ... }, or null before it says.
   readonly property var ompStatus: payload && payload.omp && typeof payload.omp === "object" ? payload.omp : null
   // Every reading as the backend gave it; Settings lists hidden accounts from these.
   readonly property var allProviders: payload ? UsageLogic.listOrEmpty(payload.providers) : []
@@ -47,10 +45,14 @@ Item {
   readonly property var providers: UsageLogic.withoutHiddenAccounts(allProviders, setting("hiddenAccounts", "{}"))
   // Providers set up on this computer, monitored or not; Settings offers the ones not monitored yet.
   readonly property var detected: payload ? UsageLogic.listOrEmpty(payload.detected) : []
-  // Providers whose CLI is on PATH, or null before a payload says: Settings offers Sign in for these
-  // and Install for the rest.
-  readonly property var installed: payload && payload.installed !== undefined ? UsageLogic.listOrEmpty(payload.installed) : null
-  readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl, cliproxyKeyFile, keyFiles, extraKeyArguments, ompArguments])
+  // Other computers under Settings → Sources, read over SSH with the same providers.
+  readonly property var computerArguments: UsageLogic.computerArguments(settings)
+  // What the backend says about each computer: { id, host, status, readAt, kind, message, fix, installed, omp }.
+  readonly property var computers: payload ? UsageLogic.listOrEmpty(payload.computers) : []
+  // Where Sign in and Install open a terminal (null: this computer).
+  readonly property var mainComputer: UsageLogic.mainComputer(settings)
+  readonly property string connectionId: JSON.stringify([keyFiles, extraKeyArguments, ompArguments, computerArguments,
+    proxyArguments])
   readonly property string scriptPath: localPath(Qt.resolvedUrl("scripts/usage-fetch.py"))
   readonly property double nextRefreshAt: lastAttemptAt > 0
     ? lastAttemptAt + refreshIntervalSec * 1000 : 0
@@ -99,17 +101,10 @@ Item {
     var command = [
       "python3", scriptPath,
       "--providers", enabledProviderIds.join(","),
-      "--source", usageSource,
       "--timeout", "12"
     ]
-    if (usageSource === "cliproxy") {
-      if (cliproxyUrl.trim() !== "") command.push("--cliproxy-url", cliproxyUrl.trim())
-      if (cliproxyKeyFile.trim() !== "") command.push("--cliproxy-key-file", cliproxyKeyFile.trim())
-    }
-    if (usageSource !== "cliproxy") {
-      for (var i = 0; i < keyFiles.length; i++) command.push("--key-file", keyFiles[i][0] + "=" + keyFiles[i][1])
-      command = command.concat(extraKeyArguments).concat(ompArguments)
-    }
+    for (var i = 0; i < keyFiles.length; i++) command.push("--key-file", keyFiles[i][0] + "=" + keyFiles[i][1])
+    command = command.concat(extraKeyArguments).concat(ompArguments).concat(computerArguments).concat(proxyArguments)
     fetchProcess.command = command
     fetchProcess.connectionId = connectionId
     fetchProcess.running = true
@@ -141,7 +136,7 @@ Item {
           fetchError = backendError
         } else {
           UsageLogic.boundUsagePayload(parsed)
-          payload = usageSource === "cliproxy" ? UsageLogic.preserveProxyReadings(payload, parsed) : parsed
+          payload = parsed
           fetchError = ""
           var generated = new Date(String(parsed.generatedAt || "")).getTime()
           lastSuccessAt = isFinite(generated) ? generated : Date.now()
@@ -222,8 +217,10 @@ Item {
 
   Timer {
     id: processTimeout
-    // `omp usage` may take up to 45 s, so the collector gets longer when it runs omp.
-    interval: root.ompArguments.indexOf("local") >= 0 ? 60000 : 35000
+    // `omp usage` may take up to 45 s, and another computer gets 55 s over SSH (scripts/usage-fetch.py), so
+    // the collector gets longer when it runs either. A proxy is read after this computer's providers.
+    interval: (root.computerArguments.length > 0 ? 75000 : root.ompArguments.indexOf("local") >= 0 ? 60000 : 35000)
+      + (root.proxyArguments.length > 0 ? 15000 : 0)
     repeat: false
     onTriggered: {
       fetchProcess.timedOut = true

@@ -30,6 +30,9 @@ Ui.BorderSurface {
   readonly property var pace: UsageLogic.paceForWindow(root.window, root.nowSeconds)
   readonly property var forecast: UsageLogic.windowForecast(root.window, root.nowSeconds)
   readonly property var forecastSegment: UsageLogic.forecastSegment(root.forecast, root.quotaMode)
+  // The meter draws forecast dashes (the Limits forecast hint follows this).
+  readonly property bool forecastShown: UsageLogic.meterFill(root.window, root.quotaMode) !== null
+    && !!root.forecastSegment && root.forecastSegment.from >= 0 && root.forecastSegment.to > root.forecastSegment.from
   readonly property var verdict: UsageLogic.forecastText(root.forecast, root.quotaMode, root.clock)
   readonly property var shown: root.quotaMode === "Remaining"
     ? UsageLogic.windowRemaining(root.window)

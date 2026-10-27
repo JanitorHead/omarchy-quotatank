@@ -8,12 +8,22 @@ ShellRoot {
   property int ticks: 0
   property var startupProbe: null
   property bool startupVerified: false
+  function proxyWith(keeperUrl, passwordFile) {
+    return { id: "p-1a2b3c4d", kind: "proxy", on: true, url: "http://synthetic.invalid", keyFile: "",
+      keeperUrl: keeperUrl, keeperPasswordFile: passwordFile || "" }
+  }
   QtObject {
     id: usage
-    property string usageSource: "cliproxy"
-    property string cliproxyUrl: "http://synthetic.invalid"
-    property string cliproxyKeyFile: ""
-    readonly property string connectionId: JSON.stringify([usageSource, cliproxyUrl])
+    property var proxy: root.proxyWith("http://synthetic.invalid/old")
+    readonly property var settings: ({ sources: JSON.stringify(proxy ? [proxy] : []) })
+    readonly property string connectionId: JSON.stringify([proxy ? proxy.url : ""])
+    function localPath(url) { return String(url).replace("file://", "") }
+  }
+  QtObject {
+    id: probeUsage
+    property var proxy: root.proxyWith("http://synthetic.invalid/old")
+    readonly property var settings: ({ sources: JSON.stringify(proxy ? [proxy] : []) })
+    readonly property string connectionId: JSON.stringify(["http://synthetic.invalid"])
     function localPath(url) { return String(url).replace("file://", "") }
   }
   Item { id: host }
@@ -24,11 +34,9 @@ ShellRoot {
     var component = Qt.createComponent(Quickshell.env("QUOTATANK_REPO_URL") + "/UsageActivityBackend.qml")
     check(component.status === Component.Ready, component.errorString())
     backend = component.createObject(host, { usageBackend: usage,
-      settings: { costKeeperUrl: "http://synthetic.invalid/old" },
       scriptPath: Quickshell.env("QUOTATANK_FAKE_ACTIVITY") })
     check(backend !== null, "create activity backend")
-    startupProbe = component.createObject(host, { usageBackend: usage,
-      settings: { costKeeperUrl: "http://synthetic.invalid/old" },
+    startupProbe = component.createObject(host, { usageBackend: probeUsage,
       scriptPath: Quickshell.env("QUOTATANK_FAKE_ACTIVITY") })
     startupProbe.providersChanged.connect(function() {
       if (!startupProbe.providers.length) return
@@ -36,7 +44,7 @@ ShellRoot {
       root.startupVerified = true
     })
     startupProbe.refresh()
-    startupProbe.settings = { costKeeperUrl: "http://synthetic.invalid/new" }
+    probeUsage.proxy = proxyWith("http://synthetic.invalid/new")
     startupProbe.refresh()
     startupProbe.refresh()
   }
@@ -49,8 +57,7 @@ ShellRoot {
       root.check(root.ticks < 150, "state machine timed out at " + root.phase)
       var b = root.backend
       if (root.phase === 0 && root.ticks >= 2) {
-        b.settings = { costKeeperUrl: "http://synthetic.invalid/new",
-          costKeeperPasswordFile: Quickshell.env("QUOTATANK_ACTIVITY_MARKER") }
+        usage.proxy = root.proxyWith("http://synthetic.invalid/new", Quickshell.env("QUOTATANK_ACTIVITY_MARKER"))
         root.check(b.providers.length === 0, "changing Keeper clears activity immediately")
         root.phase++
       } else if (root.phase === 1 && b.providers.length > 0) {
@@ -61,14 +68,13 @@ ShellRoot {
       } else if (root.phase === 2 && b.fetchError !== "") {
         root.check(b.providers[0].accountId === "new", "outage preserves last-known activity")
         root.check(b.notice === "Synthetic outage", "outage is explained")
-        usage.usageSource = "direct"
+        usage.proxy = null
         root.check(!b.trackingEnabled && b.providers.length === 0, "direct mode disables and clears tracking")
-        usage.usageSource = "cliproxy"
-        b.settings = { costKeeperUrl: "http://synthetic.invalid/oversized" }
+        usage.proxy = root.proxyWith("http://synthetic.invalid/oversized")
         root.phase++
       } else if (root.phase === 3 && b.fetchError !== "") {
         root.check(b.providers.length === 0, "oversized output cannot supply account activity")
-        b.settings = {}
+        usage.proxy = root.proxyWith("")
         root.check(!b.trackingEnabled && b.notice.indexOf("Configure") >= 0, "missing Keeper gives setup guidance")
         root.check(root.startupVerified, "activity startup probe completed")
         console.log("Activity QML contract: passed")

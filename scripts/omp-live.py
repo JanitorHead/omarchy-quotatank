@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Report omp activity as it happens, one JSON object per line on stdout.
 
---local follows the session files omp writes and reports each model request they record.
---stats-url follows the live events of an `omp stats` server and reports when its statistics grow.
+--local follows the session files omp writes and reports each model request they record. It is required.
 --accounts (with --local) maps omp credential ids to the account ids Quotatank uses.
 Prompts, responses, paths, session ids and emails never leave this process. Nothing of omp's runs, and
 no session file is read, until omp has set itself up on this computer.
@@ -10,29 +9,26 @@ no session file is read, until omp has set itself up on this computer.
 from __future__ import annotations
 
 import argparse
-import http.client
 import importlib.util
 import json
 import math
 import os
 import re
-import ssl
 import stat
 import sys
 import threading
 import time
-import urllib.parse
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import islice
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterator
 
 # Nothing may be written beside the scripts: Omarchy reloads every plugin when a file in a plugin's folder changes.
 sys.dont_write_bytecode = True
 
-from quotatank_common import OMP_PROVIDERS, move_legacy_folders, normalize_server_url, omp_account_id
+from quotatank_common import OMP_PROVIDERS, move_legacy_folders, omp_account_id
 
 SPEC = importlib.util.spec_from_file_location("omp_live_usage", Path(__file__).with_name("usage-fetch.py"))
 assert SPEC and SPEC.loader
@@ -58,22 +54,6 @@ MAX_PASS_BYTES = 1024 * 1024
 MAX_MODEL_CHARS = 256
 MAX_COST_USD = 1e9
 OMP_PROVIDER_ID = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
-
-# Remote stats server
-EVENTS_PATH = "/api/events"
-CONNECT_TIMEOUT = 10
-STALE_SECONDS = 45  # the server sends a keep-alive comment every 15 seconds
-STABLE_SECONDS = 30
-BACKOFF_MIN = 2
-BACKOFF_MAX = 60
-UNSUPPORTED_PAUSE = 60
-MAX_EVENT_BYTES = 64 * 1024
-CONNECTING = "Connecting to omp stats…"
-LIVE = "Live omp activity"
-RECONNECTING = "Reconnecting to omp stats…"
-UNSUPPORTED = "This server does not offer omp live events."
-INVALID_URL = ("The omp stats URL must be the server's address alone, https://host:port or plain HTTP to this "
-               "computer, a private network or Tailscale.")
 
 # Credential map. Each listing makes omp ask Anthropic and OpenAI about every account's saved resets, so it
 # runs once at start and again only for a request whose credential the last listing did not name.
@@ -308,139 +288,6 @@ class Tailer:
         return [line for line in lines if len(line) <= MAX_LINE_BYTES]
 
 
-class EventsUnsupported(Exception):
-    """The server answered, but has no omp live events at /api/events."""
-
-
-def open_event_stream(base_url: str) -> Iterator[bytes]:
-    """The lines of `<base_url>/api/events`, the only path this helper requests from a stats server. `base_url`
-    is a server address alone (normalize_server_url), so the request path is exactly /api/events."""
-    parts = urllib.parse.urlsplit(base_url)
-    if parts.scheme == "https":
-        connection = http.client.HTTPSConnection(parts.netloc, timeout=CONNECT_TIMEOUT,
-                                                 context=ssl.create_default_context())
-    else:
-        connection = http.client.HTTPConnection(parts.netloc, timeout=CONNECT_TIMEOUT)
-    try:
-        connection.connect()
-        connection.sock.settimeout(STALE_SECONDS)
-        connection.request("GET", EVENTS_PATH, headers={"Accept": "text/event-stream", "Cache-Control": "no-cache"})
-        response = connection.getresponse()
-        event_stream = (response.getheader("Content-Type") or "").lower().startswith("text/event-stream")
-        if response.status in (404, 405) or (response.status == 200 and not event_stream):
-            raise EventsUnsupported
-        if response.status != 200:
-            raise ConnectionError
-        while line := response.readline(MAX_EVENT_BYTES + 1):
-            if len(line) > MAX_EVENT_BYTES:
-                raise ValueError("server-sent line is too long")
-            yield line
-    finally:
-        connection.close()
-
-
-def sse_data(lines: Iterable[bytes]) -> Iterator[str]:
-    """The data of each complete server-sent event in `lines`; comments and other fields are skipped."""
-    data: list[str] = []
-    size = 0
-    for raw in lines:
-        line = raw.rstrip(b"\r\n").decode("utf-8", "replace")
-        if not line:
-            if data:
-                yield "\n".join(data)
-            data, size = [], 0
-            continue
-        field, _, value = line.partition(":")
-        if field == "data":
-            value = value.removeprefix(" ")
-            # Each data line costs at least the newline that joins it, so empty ones cannot pile up for free.
-            size += len(value) + 1
-            if size > MAX_EVENT_BYTES:
-                raise ValueError("server-sent event is too large")
-            data.append(value)
-
-
-def event_version(data: str) -> int | None:
-    """The `version` counter of an omp stats status event, or None."""
-    try:
-        document = json.loads(data)
-    except (ValueError, RecursionError):
-        return None
-    version = document.get("version") if isinstance(document, dict) else None
-    return version if type(version) is int and 0 <= version <= MAX_SAFE_INTEGER else None
-
-
-def state_line(state: str, message: str) -> dict[str, Any]:
-    return {"schemaVersion": SCHEMA_VERSION, "type": "state", "source": "remote", "state": state, "message": message}
-
-
-class RemoteFollower:
-    """Follows a stats server's events: a growing `version` is activity, and connection changes are states.
-
-    The first event only sets the baseline. The baseline survives reconnects, so activity during an
-    outage is still reported, while a restarted server (counting from 1 again) is not activity. Growth is
-    held until `report`, which the main loop calls once a pass, so a server cannot flood the reader.
-    """
-
-    def __init__(self, base_url: str, emit: Callable[[dict[str, Any]], None],
-                 open_stream: Callable[[str], Iterable[bytes]] = open_event_stream,
-                 clock: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep):
-        self.base_url = base_url
-        self.emit = emit
-        self.open_stream = open_stream
-        self.clock = clock
-        self.sleep = sleep
-        self.version: int | None = None
-        self.state: tuple[str, str] | None = None
-        self.lock = threading.Lock()
-        self.grown: int | None = None  # the newest version that grew since the last report
-
-    def set_state(self, state: str, message: str) -> None:
-        if (state, message) != self.state:
-            self.state = (state, message)
-            self.emit(state_line(state, message))
-
-    def accept(self, data: str) -> None:
-        version = event_version(data)
-        if version is None:
-            return
-        self.set_state("live", LIVE)
-        if self.version is not None and version > self.version:
-            with self.lock:
-                self.grown = version
-        self.version = version
-
-    def report(self) -> None:
-        """One `activity` line for all the growth since the previous report, if there was any."""
-        with self.lock:
-            version, self.grown = self.grown, None
-        if version is not None:
-            self.emit({"schemaVersion": SCHEMA_VERSION, "type": "activity", "source": "remote",
-                       "version": version, "at": round(self.clock(), 3)})
-
-    def run(self) -> None:
-        self.set_state("reconnecting", CONNECTING)
-        delay = BACKOFF_MIN
-        while True:
-            started = self.clock()
-            unsupported = False
-            try:
-                for data in sse_data(self.open_stream(self.base_url)):
-                    self.accept(data)
-            except EventsUnsupported:
-                unsupported = True
-            except (OSError, http.client.HTTPException, ValueError):
-                pass  # The error text may quote the server; the state message says enough.
-            if unsupported:
-                self.set_state("unavailable", UNSUPPORTED)
-            else:
-                self.set_state("reconnecting", RECONNECTING)
-            if self.clock() - started >= STABLE_SECONDS:
-                delay = BACKOFF_MIN
-            self.sleep(max(UNSUPPORTED_PAUSE if unsupported else BACKOFF_MIN, delay))
-            delay = min(BACKOFF_MAX, delay * 2)
-
-
 def parse_reset_listing(text: str) -> tuple[dict[str, dict[str, str]], set[int]] | None:
     """From `omp usage reset --json`: credential id → Quotatank provider and account id, and every credential
     id the listing names. None when the text is not such a listing or it names no account.
@@ -484,14 +331,15 @@ def lists_resets(version: str) -> bool:
     return len(parts) >= 2 and (int(parts[0]), int(parts[1])) >= RESET_LISTING_VERSION
 
 
-def read_reset_listing() -> str | None:
+def read_reset_listing(state_dir: Path | None = None) -> str | None:
     """Output of `omp usage reset --json`, which lists each account's credential id. None when omp is missing,
-    not set up here, older than 18.9 or not omp at all, or when the listing fails."""
+    not set up here, older than 18.9 or not omp at all, or when the listing fails. omp runs in `state_dir`'s
+    work folder (another computer's reader passes Quotatank's folder there)."""
     omp = usage.omp_executable()
-    if not omp or not usage.omp_set_up() or not lists_resets(usage.omp_version(omp)):
+    if not omp or not usage.omp_set_up() or not lists_resets(usage.omp_version(omp, state_dir)):
         return None
     try:
-        code, output = usage.run_omp(omp, RESET_LISTING_ARGUMENTS, ACCOUNTS_TIMEOUT, MAX_LISTING_BYTES)
+        code, output = usage.run_omp(omp, RESET_LISTING_ARGUMENTS, ACCOUNTS_TIMEOUT, MAX_LISTING_BYTES, state_dir)
     except (OSError, TimeoutError, ValueError):
         return None
     return output.decode("utf-8", "replace") if code == 0 else None
@@ -567,32 +415,21 @@ class LineWriter:
 
 
 def run(args: argparse.Namespace, emit: Callable[[dict[str, Any]], None]) -> None:
-    """Start the requested followers, then tail session files, report remote activity and send heartbeats until
-    stopped. Session files are read only while omp is set up here. However the loop ends (a closed stdout
-    raises), an omp listing still running ends with it."""
+    """Tail session files and send heartbeats until stopped. Session files are read only while omp is set up
+    here. However the loop ends (a closed stdout raises), an omp listing still running ends with it."""
     try:
-        follower = None
-        if args.stats_url is not None:
-            try:
-                base_url = normalize_server_url(args.stats_url)
-            except ValueError:
-                emit(state_line("unavailable", INVALID_URL))
-            else:
-                follower = RemoteFollower(base_url, emit)
-                threading.Thread(target=follower.run, daemon=True).start()
-        accounts = AccountMap(emit) if args.accounts else None
+        state_dir = getattr(args, "state_dir", None)
+        accounts = AccountMap(emit, lambda: read_reset_listing(state_dir)) if args.accounts else None
         if accounts is not None:
             accounts.refresh()
-        tailer = Tailer(omp_sessions_root()) if args.local else None
+        tailer = Tailer(omp_sessions_root())
         heartbeat_at = -math.inf
         while True:
-            if tailer is not None and usage.omp_set_up():
+            if usage.omp_set_up():
                 for event in tailer.poll():
                     emit(event)
                     if accounts is not None:
                         accounts.saw(event)
-            if follower is not None:
-                follower.report()
             if time.monotonic() - heartbeat_at >= HEARTBEAT_SECONDS:
                 emit(HEARTBEAT)
                 heartbeat_at = time.monotonic()
@@ -604,13 +441,13 @@ def run(args: argparse.Namespace, emit: Callable[[dict[str, Any]], None]) -> Non
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--local", action="store_true", help="report the requests omp records in its session files")
-    parser.add_argument("--stats-url", help="follow the live events of this omp stats server")
     parser.add_argument("--accounts", action="store_true", help="with --local, map omp credential ids to accounts")
+    parser.add_argument("--state-dir", type=Path, help="where omp runs from (default: Quotatank's state folder)")
     args = parser.parse_args()
-    if not args.local and args.stats_url is None:
-        parser.error("use --local, --stats-url or both")
     if args.accounts and not args.local:
         parser.error("--accounts requires --local")
+    if not args.local:
+        parser.error("--local is required")
     run(args, LineWriter(sys.stdout))
 
 

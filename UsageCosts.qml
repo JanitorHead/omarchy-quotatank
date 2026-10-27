@@ -87,11 +87,10 @@ Item {
     payload && payload.previous ? (metric === "tokens" ? payload.previous.totalTokens : payload.previous.costUsd) : null)
   readonly property string deltaText: hasResult ? UsageLogic.costDeltaText(delta, displayedPeriodDays) : ""
   readonly property var cache: UsageLogic.costCacheSummary(totals)
-  // "· live" only where something here follows omp as it happens: live requests on top of a scan of
-  // this computer's omp sessions, or omp stats elsewhere whose news starts a new scan.
-  readonly property var remoteSource: payload ? UsageLogic.readingFor(payload.sources, "omp-remote") : null
+  // "· live" only where something here follows omp as it happens: live requests on top of a scan of this
+  // computer's omp sessions.
   readonly property string sourceSummary: hasResult ? UsageLogic.costSourceSummary(payload.sources, !!ompActivity
-    && ompActivity.state === "live" && (scanHasOmp || (!!remoteSource && remoteSource.status === "ok"))) : ""
+    && ompActivity.state === "live" && scanHasOmp) : ""
   // Providers and breakdown share their bar and value columns, so both lists line up.
   readonly property real valueColumnWidth: Math.max(Style.space(40), providerList.widestValue, breakdown.widestValue)
   readonly property real barColumnWidth: Style.space(72)
@@ -123,6 +122,9 @@ Item {
 
   signal periodRequested(int days)
   signal menuClosed()
+  signal hintDismissed(string hintId)
+  // The heatmap's one-line explanation, until it is dismissed (UsageLogic.hintShown).
+  property bool heatmapHintShown: false
 
   implicitHeight: content.implicitHeight
   onMetricChanged: tokenDetailsExpanded = metric === "tokens"
@@ -565,7 +567,18 @@ Item {
       onExpandRequested: function(expanded) { root.modelsExpanded = expanded }
     }
 
+    HintLine {
+      objectName: "hint-heatmap"
+      width: parent.width
+      hintId: "heatmap"
+      shown: root.heatmapHintShown && heatmapView.visible
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onDismissed: function(hintId) { root.hintDismissed(hintId) }
+    }
+
     CostHeatmap {
+      id: heatmapView
       objectName: "costWhen"
       visible: root.hasResult && hasActivity
       width: parent.width

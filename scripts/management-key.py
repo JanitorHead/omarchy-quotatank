@@ -39,8 +39,15 @@ KEY_PROVIDERS = (
     "openrouter", "deepseek", "moonshot", "venice", "deepinfra", "vercel", "poe", "atlascloud",
     "hyper", "sailresearch", "sofya", "v0", "manus", "typesafe", "mimo",
 )
-SETTING_NAMES = frozenset({"cliproxyKeyFile", "costKeeperPasswordFile", "ompGatewayKeyFile"}
-                          | {provider + "KeyFile" for provider in KEY_PROVIDERS})
+SETTING_NAMES = frozenset({provider + "KeyFile" for provider in KEY_PROVIDERS})
+# Keys named per row: a proxy's key and keeper password (proxyKey_<id>, keeperPassword_<id>; proxy ids are
+# p-<8 hex>), a T3 token (t3Token_<id>), and a provider's extra keys (extraKey_<provider>_k-<8 hex>).
+ROW_KEY_NAMES = (
+    re.compile(r"proxyKey_p-[0-9a-f]{8}"),
+    re.compile(r"keeperPassword_p-[0-9a-f]{8}"),
+    re.compile(r"t3Token_[a-zA-Z0-9-]{1,64}"),
+    re.compile(r"extraKey_(" + "|".join(KEY_PROVIDERS) + r")_k-[0-9a-f]{8}"),
+)
 
 
 def unlink_previous(directory: Path, directory_fd: int, previous: Path) -> bool:
@@ -112,10 +119,8 @@ def main() -> int:
         if not isinstance(previous_paths, dict):
             raise ValueError
         for name, key in keys.items():
-            # T3 tokens and a provider's extra keys are named per row: t3Token_<server>, extraKey_<provider>_k-<8 hex>.
-            if (name not in allowed and not (batch and (re.fullmatch(r"t3Token_[a-zA-Z0-9-]{1,64}", name)
-                    or re.fullmatch(r"extraKey_(" + "|".join(KEY_PROVIDERS) + r")_k-[0-9a-f]{8}", name)))) \
-                    or not isinstance(key, str):
+            row_name = batch and any(pattern.fullmatch(name) for pattern in ROW_KEY_NAMES)
+            if (name not in allowed and not row_name) or not isinstance(key, str):
                 raise ValueError
             key = key.strip()
             if not valid_key(key):
