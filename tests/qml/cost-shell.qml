@@ -425,6 +425,7 @@ ShellRoot {
         var original = JSON.parse(root.saved.extraKeys).openrouter.keys[0]
         root.check(restored.label === "Work" && restored.file !== original.file && restored.file.indexOf("/management-keys/key-") >= 0,
           "a restored key gets a new private file and keeps its name")
+        root.check(root.providerResponses > 0, "the pi and grok backend answered")
         console.log("Cost QML contract: passed")
         Qt.quit()
       }
