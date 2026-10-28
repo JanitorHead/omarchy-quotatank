@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.0.1
+
+### Fixed
+
+- **One oversized OpenCode response could still fill memory.** 2.4.0 bounded how many responses Costs reads from OpenCode's database, not how large one is: a single huge `data` cell went whole into SQLite's JSON functions, and one of 400 MiB took the helper to 829 MiB. A response over 256 KiB, or an id over 1 KiB, is now skipped by its size before anything reads it, and the connection refuses to load any value over 1 MiB; the same database now peaks at 26 MiB. Python 3.10 with SQLite older than 3.43 has neither bound, so there the OpenCode database is not read. Reported by @HANCORE-linux during the marketplace review.
+
 ## 3.0.0
 
 Quotatank 3 reads every place your agents run at once: this computer, other computers over SSH and a CLIProxyAPI server, where 2.x read either this computer or a proxy. It is a major release because proxy mode, the omp gateway and stats readers, and the backend's `--source` flags are gone, and the settings that held them move once into `sources`.
