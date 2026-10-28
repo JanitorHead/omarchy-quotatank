@@ -51,6 +51,8 @@ OpenRouter · DeepSeek · Moonshot · Venice · DeepInfra · Vercel AI Gateway �
 
 ## Install
 
+Quotatank is listed in the [Omarchy plugin marketplace](https://plugins.omarchy.org/plugin.html?id=janitorhead.quotatank). To install it from a terminal:
+
 ```bash
 omarchy plugin add https://github.com/JanitorHead/omarchy-quotatank.git --enable
 ```
