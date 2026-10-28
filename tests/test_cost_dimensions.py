@@ -560,6 +560,25 @@ class PayloadTests(unittest.TestCase):
                          "the CLI's own price is kept and resolves IDs the public table cannot")
         self.assertEqual(models[("minimax", "MiniMax-M3")]["costSource"], "providerReported")
 
+    def test_pi_sessions_report_their_billing_providers(self):
+        records = [
+            usage(at("2030-01-15T10:00:00Z"), 1000, provider="codex", model="gpt-6.1-sol", origin="pi"),
+            usage(at("2030-01-15T10:01:00Z"), 500, provider="grok", model="grok-4.7", origin="pi"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            coverage = [{"id": "pi", "status": "ok", "message": ""}]
+            with mock.patch.object(costs, "scan_transcripts", return_value=(records, coverage)), \
+                    mock.patch.object(costs, "transcript_root", return_value=Path(directory)):
+                # As in the widget: the pi source beside the local sources its
+                # messages bill to, which the selection gate names.
+                payload = costs.build_payload(["codex", "pi"], 7, 2, Path(directory) / "state", now_ms=NOW,
+                                              zone_name="UTC", rates_override=(RATES, PRICING))
+
+        self.assertEqual({row["id"] for row in payload["providers"]}, {"codex", "grok"},
+                         "one pi source reports each provider that billed it")
+        sources = {row["id"]: row for row in payload["sources"]}
+        self.assertEqual(sources["local-pi"]["providers"], ["codex", "grok"])
+
     def test_backend_error_keeps_the_dimension_fields(self):
         output = io.StringIO()
         with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(output), \

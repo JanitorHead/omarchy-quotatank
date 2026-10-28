@@ -899,6 +899,31 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertIn("deepseek-v4-pro", models, "harness transcripts are added")
         self.assertEqual({r.origin for r in records if r.model == "deepseek-v4-pro"}, {"omp"})
 
+    def test_pi_sessions_bill_to_their_provider(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sessions = root / "pi" / "sessions"
+            # pi writes the harness shape under its own root, with its own
+            # spellings: openai for Codex's service, and the subscription families.
+            self.write_omp_session(sessions / "-tmp" / "codex.jsonl", provider="openai", model="gpt-6.1-sol")
+            self.write_omp_session(sessions / "-tmp" / "minimax.jsonl", provider="minimax-cn", model="MiniMax-M3.1-Flash")
+            self.write_omp_session(sessions / "-tmp" / "mimo.jsonl", provider="xiaomi-token-plan-cn", model="mimo-v2.6-pro")
+            self.write_omp_session(sessions / "-tmp" / "grok.jsonl", provider="xai", model="grok-4.7")
+            self.write_omp_session(sessions / "-tmp" / "vendor.jsonl", provider="some-vendor", model="x")
+            with mock.patch.dict(os.environ, {"PI_SESSIONS_DIR": str(sessions),
+                                              "OMP_SESSIONS_DIR": str(root / "no-omp")}, clear=False):
+                records, _ = costs.scan_transcripts(["pi"], root / "state", int(costs.time.time() * 1000))
+
+        self.assertEqual({r.provider for r in records}, {"codex", "minimax", "mimo", "grok"},
+                         "pi's spellings bill to the same cost sources; unknown vendors are dropped")
+        self.assertEqual({r.provider: r.model for r in records},
+                         {"codex": "gpt-6.1-sol", "minimax": "MiniMax-M3.1-Flash",
+                          "mimo": "mimo-v2.6-pro", "grok": "grok-4.7"})
+        self.assertEqual({r.origin for r in records}, {"pi"}, "pi is its own source, not the harness's")
+        for record in records:
+            self.assertEqual(costs.deserialize_record(costs.serialize_record(record)), record,
+                             "pi records survive the scan cache")
+
     def test_omp_messages_bill_to_their_own_provider(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

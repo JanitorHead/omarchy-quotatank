@@ -19,11 +19,13 @@ Pi harness session transcripts (`${OMP_SESSIONS_DIR:-~/.omp/agent/sessions}`,
 one JSONL transcript per session) form a separate `omp` source. Each assistant
 message, and each background `model_usage` line (spend outside the conversation,
 such as cache warming), counts under the provider it was billed to: `opencode*` →
-OpenCode, `openai-codex` → Codex, `anthropic` → Claude, `minimax*` → MiniMax
-Coding Plan, `xiaomi` and `mimo*` → Xiaomi MiMo, `xai` and `grok*` → Grok CLI;
-other providers are dropped. MiniMax Coding Plan, Xiaomi MiMo and Grok CLI keep
-no transcripts of their own, so these billings are reported even when no local
-source names them. `model_usage` lines count toward the project and agent of their
+OpenCode, `openai-codex` and `openai` → Codex, `anthropic` → Claude, `minimax*` →
+MiniMax Coding Plan, `xiaomi` and `mimo*` → Xiaomi MiMo, `xai` and `grok*` → Grok
+CLI; other providers are dropped. MiniMax Coding Plan, Xiaomi MiMo and Grok CLI
+keep no transcripts of their own, so these billings are reported even when no
+local source names them. pi keeps transcripts in the same shape
+(`${PI_SESSIONS_DIR:-~/.pi/agent/sessions}`, under its own `pi` source) and is
+attributed the same way. `model_usage` lines count toward the project and agent of their
 transcript and are deduplicated by their line id like messages. A transcript's
 session is the `id` of its own `session` line, so subagent transcripts that share
 a file name (`Explore.jsonl`) stay separate sessions; without that line the
@@ -277,6 +279,7 @@ Custom IDs are trimmed but retain case, provider prefixes, and variant suffixes.
 - Claude: `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/**/*.jsonl`
 - Codex: `${CODEX_HOME:-~/.codex}/sessions/**/*.jsonl`
 - Grok CLI (opt-in): `${GROK_HOME:-~/.grok}/sessions/**/usage.json`, each read whole; its size counts against the scan's changed-input limit
+- pi (opt-in): `${PI_SESSIONS_DIR:-~/.pi/agent/sessions}/**/*.jsonl`
 
 An Oh My Pi run counts when it keeps its session, tool-free runs included (such as review work another agent sends to a provider through omp): it lands in the Oh My Pi transcripts like an interactive run. A run made with `--no-session`, the flag review harnesses use to stay ephemeral, writes no transcript, so its use shows only in that provider's limits.
 

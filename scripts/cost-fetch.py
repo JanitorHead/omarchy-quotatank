@@ -39,8 +39,8 @@ import t3_costs
 
 
 SCHEMA_VERSION = 1
-SCAN_CACHE_VERSION = 9  # v8 stores each record's project folder name and Oh My Pi agent kind; v9 keeps
-# each record's billing provider and the `opencode`/`grok` origins of CLI-priced responses.
+SCAN_CACHE_VERSION = 10  # v8 stores each record's project folder name and Oh My Pi agent kind; v9 keeps
+# each record's billing provider and the `opencode`/`grok` origins of CLI-priced responses; v10 adds pi.
 RATE_CACHE_VERSION = 2  # v1 discarded provider prefixes and could cache conflicting rates.
 PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode", "grok", "minimax", "mimo")
 PROVIDER_NAMES = {
@@ -53,6 +53,8 @@ PROVIDER_NAMES = {
     "minimax": "MiniMax Coding Plan",
     "grok": "Grok CLI",
     "mimo": "Xiaomi MiMo",
+    # A second harness, pi, keeps transcripts of its own.
+    "pi": "Pi",
 }
 LITELLM_RATES_URL = (
     "https://raw.githubusercontent.com/BerriAI/litellm/main/"
@@ -346,7 +348,7 @@ def deserialize_record(row: Any) -> UsageRecord | None:
     if not isinstance(row, list) or len(row) != 14:
         return None
     provider, origin, project, agent = row[10:14]
-    if provider not in PROVIDER_ORDER or origin not in ("local", "omp", "opencode", "grok"):
+    if provider not in PROVIDER_ORDER or origin not in ("local", "omp", "opencode", "grok", "pi"):
         return None
     if project_name(project) != project or agent not in ("", *AGENT_KINDS):
         return None
@@ -912,7 +914,7 @@ def billed_provider(name: Any) -> str | None:
     key = name.strip().lower()
     if key.startswith("opencode"):
         return "opencode"
-    if key == "openai-codex":
+    if key in ("openai-codex", "openai"):
         return "codex"
     if key == "anthropic":
         return "claude"
@@ -920,20 +922,22 @@ def billed_provider(name: Any) -> str | None:
 
 
 def parse_omp_file(path: Path, retention_start_ms: int,
-                   cursor: TranscriptCursor | None = None) -> list[UsageRecord] | None:
-    """Read one Oh My Pi harness session transcript (JSONL, one record per billing provider).
+                   cursor: TranscriptCursor | None = None, *,
+                   sessions_root: Path | None = None, namespace: str = "omp") -> list[UsageRecord] | None:
+    """Read one harness session transcript (JSONL, one record per billing provider).
 
     Main sessions sit directly in their project folder; a subagent's transcript sits
     inside the folder of the session that started it. Assistant messages and
-    background `model_usage` lines (e.g. cache warming) both carry spend.
+    background `model_usage` lines (e.g. cache warming) both carry spend. Oh My Pi
+    and pi write the same shape, each under its own root and its own id namespace.
     """
     records: list[UsageRecord] = []
     state = cursor.state if cursor is not None else initial_cursor_state()
-    folder, depth = folder_below(omp_sessions_root(), path)
+    folder, depth = folder_below(sessions_root or omp_sessions_root(), path)
     fallback = folder_basename(folder)
     # Subagent files share names such as Explore.jsonl, so the file's own
     # session line identifies it; the parent folder disambiguates without one.
-    fallback_session = opaque_id(f"omp:{path.parent.name}/{path.name}")
+    fallback_session = opaque_id(f"{namespace}:{path.parent.name}/{path.name}")
     agent = "subagent" if depth > 1 else "main"
     try:
         for line in bounded_jsonl_lines(path, cursor):
@@ -952,7 +956,7 @@ def parse_omp_file(path: Path, retention_start_ms: int,
                     state["project"] = project_name(document.get("cwd"))
                 raw_session = document.get("id")
                 if not state["session_id"] and isinstance(raw_session, str) and raw_session:
-                    state["session_id"] = opaque_id("omp:" + raw_session)
+                    state["session_id"] = opaque_id(f"{namespace}:" + raw_session)
                 continue
             if kind == "message":
                 message = document.get("message")
@@ -978,7 +982,7 @@ def parse_omp_file(path: Path, retention_start_ms: int,
             if reported is not None and reported <= 0:
                 reported = None
             raw_id = document.get("id")
-            dedupe = opaque_id("omp:" + raw_id) if isinstance(raw_id, str) and raw_id else None
+            dedupe = opaque_id(f"{namespace}:" + raw_id) if isinstance(raw_id, str) and raw_id else None
             output = nonnegative_int(usage.get("output"))
             record = UsageRecord(
                 provider=provider,
@@ -993,7 +997,7 @@ def parse_omp_file(path: Path, retention_start_ms: int,
                 reasoning=min(output, nonnegative_int(usage.get("reasoningTokens"))),
                 reported_cost_usd=reported,
                 dedupe_key=dedupe,
-                origin="omp",
+                origin=namespace,
                 project=state["project"] or fallback,
                 agent=agent,
             )
@@ -1005,6 +1009,17 @@ def parse_omp_file(path: Path, retention_start_ms: int,
     except (OSError, ValueError, OverflowError, RecursionError):
         return None
     return records
+
+
+def parse_pi_sessions(path: Path, retention_start_ms: int,
+                      cursor: TranscriptCursor | None = None) -> list[UsageRecord] | None:
+    """Read one pi session transcript: the harness format under pi's own root.
+
+    pi spells its billing providers `openai`, `minimax-cn`, `xiaomi-token-plan-cn`
+    and `xai`, which the shared attribution maps like the harness's own spellings.
+    """
+    return parse_omp_file(path, retention_start_ms, cursor,
+                          sessions_root=transcript_root("pi"), namespace="pi")
 
 
 def codex_forked(payload: dict[str, Any]) -> bool:
@@ -1174,6 +1189,7 @@ PARSERS: dict[str, Callable[..., list[UsageRecord] | None]] = {
     "kimi": parse_kimi_file,
     "opencode": parse_opencode_database,
     "omp": parse_omp_file,
+    "pi": parse_pi_sessions,
     "grok": parse_grok_usage,
 }
 
@@ -1191,6 +1207,8 @@ def transcript_root(provider: str) -> Path:
         return opencode_database_path()
     if provider == "omp":
         return omp_sessions_root()
+    if provider == "pi":
+        return Path(os.environ.get("PI_SESSIONS_DIR") or (Path.home() / ".pi" / "agent" / "sessions")).expanduser()
     if provider == "grok":
         return Path(os.environ.get("GROK_HOME") or (Path.home() / ".grok")).expanduser() / "sessions"
     return Path(os.environ.get("KIMI_SHARE_DIR") or (Path.home() / ".kimi")).expanduser() / "sessions"
@@ -2086,7 +2104,7 @@ def add_finished(row: dict[str, Any], extra: dict[str, Any]) -> None:
 
 def parse_provider_ids(value: str) -> list[str]:
     requested = {item.strip().lower() for item in value.split(",") if item.strip()}
-    return [provider for provider in ("claude", "codex", "opencode", "grok") if provider in requested]
+    return [provider for provider in ("claude", "codex", "opencode", "grok", "pi") if provider in requested]
 
 
 # Another computer's transcripts count as this computer's: its reader (`--records`) sends the raw records for the
@@ -2163,7 +2181,7 @@ def build_payload(
 ) -> dict[str, Any]:
     started = time.monotonic()
     overrides = parse_price_overrides(price_overrides)
-    provider_ids = [p for p in provider_ids if p in ("claude", "codex", "opencode", "grok")]
+    provider_ids = [p for p in provider_ids if p in ("claude", "codex", "opencode", "grok", "pi")]
     servers = [s for s in t3_costs.parse_servers(t3_servers) if s["enabled"]]
     stamp = int(time.time() * 1000) if now_ms is None else int(now_ms)
     zone = local_zone(zone_name)
@@ -2205,11 +2223,11 @@ def build_payload(
             # the only way to price model IDs the public table cannot
             # disambiguate. An explicit custom price still wins in the
             # aggregation.
-            if provider == "omp":
-                # Oh My Pi keeps each message's billing provider, so its records are selected
-                # by origin; each provider's own transcripts never carry them. Subscriptions
-                # with no local transcripts are counted wherever the harness recorded them.
-                selected = [r for r in local if r.origin == "omp"
+            if provider in ("omp", "pi"):
+                # A harness keeps each message's billing provider, so its records are
+                # selected by origin; each provider's own transcripts never carry them.
+                # Subscriptions with no local transcripts are counted wherever they ran.
+                selected = [r for r in local if r.origin == provider
                             and (r.provider in provider_ids or r.provider in SUBSCRIPTION_PROVIDERS.values())
                             and history_start <= r.timestamp_ms <= stamp]
             elif provider in ("opencode", "grok"):
@@ -2227,7 +2245,7 @@ def build_payload(
             history = [r if r.origin in ("opencode", "grok") else replace(r, reported_cost_usd=None) for r in selected]
             records = [r for r in history if r.timestamp_ms >= start]
             session_counts = None
-            if provider in ("omp", "opencode"):
+            if provider in ("omp", "opencode", "pi"):
                 session_counts = {p: len({r.session_id for r in records if r.provider == p and r.session_id})
                                   for p in {r.provider for r in records}}
             fp = t3_costs.fingerprint(socket.gethostname(), provider, str(root.resolve()), volume)
