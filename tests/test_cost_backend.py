@@ -371,6 +371,20 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(sorted(r.uncached_input for r in records), [100, 200])
         self.assertEqual(coverage[0]["skippedFiles"], 0)
 
+    def test_a_failed_refresh_keeps_the_last_good_position(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = self.write_codex_rollout(root)
+            self.scan_codex(root)
+            self.append_codex_token_row(rollout, 200)
+            # A refresh that fails, as one racing a writer does, must not forget what was read.
+            with mock.patch.object(costs, "MAX_TRANSCRIPT_SCAN_BYTES", rollout.stat().st_size - 1):
+                _, failed = self.scan_codex(root, parser=mock.Mock(return_value=None))
+                records, coverage = self.scan_codex(root)
+        self.assertEqual(failed[0]["skippedFiles"], 1)
+        self.assertEqual(sorted(r.uncached_input for r in records), [100, 200])
+        self.assertEqual(coverage[0]["skippedFiles"], 0)
+
     def test_total_record_ceiling_marks_coverage_partial(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

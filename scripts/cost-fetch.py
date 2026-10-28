@@ -1342,9 +1342,6 @@ def scan_transcripts(
             if cache_hit:
                 parsed = [record for record in entry["records"] if record.timestamp_ms >= retention_start_ms]
             else:
-                if entry is not None:
-                    del cache[key]
-                    cache_changed = True
                 can_resume = entry and entry.get("position") and size > entry["s"] and entry["p"] == provider
                 is_database = provider == "opencode" and path == root
                 if is_database:
