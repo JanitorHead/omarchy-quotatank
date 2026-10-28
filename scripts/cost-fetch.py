@@ -204,8 +204,6 @@ class TranscriptCursor:
             raise TranscriptLimitError("changed transcript input exceeds the scan limit")
 
     def lines(self, path: Path) -> Iterable[str]:
-        if self.stats.st_size > MAX_TRANSCRIPT_FILE_BYTES:
-            raise TranscriptLimitError("transcript file is unexpectedly large")
         with path.open("rb") as handle:
             opened = os.fstat(handle.fileno())
             if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != (
@@ -271,14 +269,10 @@ def bounded_jsonl_lines(path: Path, cursor: TranscriptCursor | None = None) -> I
         yield from cursor.lines(path)
         return
     with path.open("rb") as handle:
-        consumed = 0
         while True:
             raw = handle.readline(MAX_TRANSCRIPT_LINE_BYTES + 1)
             if not raw:
                 return
-            consumed += len(raw)
-            if consumed > MAX_TRANSCRIPT_FILE_BYTES:
-                raise TranscriptLimitError("transcript file is unexpectedly large")
             if len(raw) > MAX_TRANSCRIPT_LINE_BYTES:
                 raise TranscriptLimitError("transcript line is unexpectedly large")
             yield raw.decode("utf-8", errors="replace")
@@ -436,10 +430,12 @@ def load_scan_cache(path: Path) -> dict[str, dict[str, Any]]:
         rows = entry.get("r")
         # A usage database is one growing file rather than one transcript, so
         # it gets the larger ceiling here and in the scanner.
-        size_ceiling = MAX_OPENCODE_DATABASE_BYTES if provider == "opencode" else MAX_TRANSCRIPT_FILE_BYTES
+        size_ceiling = (MAX_OPENCODE_DATABASE_BYTES if provider == "opencode"
+                        else MAX_TRANSCRIPT_FILE_BYTES if provider in WHOLE_FILE_READERS
+                        else None)
         if (
             type(size) is not int
-            or size < 0 or size > size_ceiling
+            or size < 0 or (size_ceiling is not None and size > size_ceiling)
             or type(modified) is not int or modified < 0
             or not isinstance(rows, list)
             or len(rows) > MAX_TRANSCRIPT_RECORDS_PER_FILE
@@ -1168,6 +1164,12 @@ def parse_kimi_file(path: Path, retention_start_ms: int, cursor: TranscriptCurso
     return records
 
 
+# The grok CLI's usage.json is read whole; every other transcript is streamed line
+# by line, bounded by MAX_TRANSCRIPT_LINE_BYTES per line, the record ceilings, and
+# MAX_TRANSCRIPT_SCAN_BYTES of changed input per scan.
+WHOLE_FILE_READERS = ("grok",)
+
+
 PARSERS: dict[str, Callable[..., list[UsageRecord] | None]] = {
     "claude": parse_claude_file,
     "codex": parse_codex_file,
@@ -1347,10 +1349,16 @@ def scan_transcripts(
                 is_database = provider == "opencode" and path == root
                 if is_database:
                     too_large = size > MAX_OPENCODE_DATABASE_BYTES
-                else:
+                elif provider in WHOLE_FILE_READERS:
                     too_large = size > MAX_TRANSCRIPT_FILE_BYTES or (
                         not can_resume and size > scan_budget[0]
                     )
+                else:
+                    # A streamed transcript is bounded by its line size, the record
+                    # ceilings and this budget. Its size alone is no reason to skip:
+                    # one long-lived thread's rollout grows past any whole-file
+                    # ceiling, and skipping it drops all of its usage.
+                    too_large = not can_resume and size > scan_budget[0]
                 if too_large:
                     parsed = None
                 else:

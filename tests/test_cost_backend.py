@@ -247,22 +247,22 @@ class PricingAndAggregationTests(unittest.TestCase):
 
 
 class CoverageTests(unittest.TestCase):
-    def test_oversized_transcript_file_is_skipped_without_parsing(self):
+    def test_oversized_file_a_reader_holds_whole_is_skipped_without_parsing(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            transcript_root = root / "claude" / "projects"
+            transcript_root = root / "grok" / "sessions"
             transcript_root.mkdir(parents=True)
-            transcript = transcript_root / "session.jsonl"
+            transcript = transcript_root / "usage.json"
             transcript.write_text("{}\n", encoding="utf-8")
             now_ms = int(transcript.stat().st_mtime * 1000)
             parser = mock.Mock(return_value=[])
             with (
                 mock.patch.object(costs, "transcript_root", return_value=transcript_root),
                 mock.patch.object(costs, "MAX_TRANSCRIPT_FILE_BYTES", 1),
-                mock.patch.dict(costs.PARSERS, {"claude": parser}),
+                mock.patch.dict(costs.PARSERS, {"grok": parser}),
             ):
                 records, coverage = costs.scan_transcripts(
-                    ["claude"], root / "state", now_ms
+                    ["grok"], root / "state", now_ms
                 )
         parser.assert_not_called()
         self.assertEqual(records, [])
@@ -898,6 +898,51 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertIn("deepseek-v4.1-flash", models, "database rows are kept")
         self.assertIn("deepseek-v4-pro", models, "harness transcripts are added")
         self.assertEqual({r.origin for r in records if r.model == "deepseek-v4-pro"}, {"omp"})
+
+    def test_a_transcript_past_the_whole_file_ceiling_is_still_read(self):
+        # One long-lived thread's rollout grows past any whole-file ceiling, and
+        # dropping it drops all of its usage. Streamed transcripts are read
+        # anyway — their lines, their record count and the scan budget bound
+        # them — while a reader that holds a whole file still skips one.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sessions = root / "codex" / "sessions" / "2030" / "01"
+            sessions.mkdir(parents=True)
+            rollout = sessions / "rollout.jsonl"
+            rows = [
+                {"timestamp": "2030-01-15T10:00:00Z", "type": "session_meta",
+                 "payload": {"id": "thread-1", "cwd": "/home/user/dev/my-app"}},
+                {"timestamp": "2030-01-15T10:00:01Z", "type": "turn_context",
+                 "payload": {"type": "turn_context", "model": "gpt-6.1-sol"}},
+                {"timestamp": "2030-01-15T10:00:02Z", "type": "event_msg",
+                 "payload": {"type": "token_count", "info": {
+                     "last_token_usage": {"input_tokens": 100, "output_tokens": 10,
+                                          "cached_input_tokens": 0, "cache_write_input_tokens": 0},
+                     "total_token_usage": {"input_tokens": 100, "output_tokens": 10}}}},
+            ]
+            rollout.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+            grok = root / "grok" / "sessions" / "%2Fhome" / "s1"
+            grok.mkdir(parents=True)
+            (grok / "usage.json").write_text(json.dumps({
+                "sessionId": "s1", "session": {"inputTokens": 100, "outputTokens": 10,
+                    "cachedReadTokens": 0, "cacheCreationTokens": 0, "reasoningTokens": 0,
+                    "totalTokens": 110, "costUsdTicks": 0, "primaryModelId": "grok-4.7",
+                    "modelUsage": {"grok-4.7": {"inputTokens": 100, "outputTokens": 10,
+                        "cachedReadTokens": 0, "cacheCreationTokens": 0, "reasoningTokens": 0,
+                        "totalTokens": 110, "costUsdTicks": 0}}}, "turns": []}), encoding="utf-8")
+            with mock.patch.object(costs, "MAX_TRANSCRIPT_FILE_BYTES", 16), \
+                    mock.patch.dict(os.environ, {"CODEX_HOME": str(root / "codex"),
+                                                 "GROK_HOME": str(root / "grok"),
+                                                 "OMP_SESSIONS_DIR": str(root / "no-omp")}, clear=False):
+                records, coverage = costs.scan_transcripts(
+                    ["codex", "grok"], root / "state", int(costs.time.time() * 1000))
+
+        self.assertEqual({r.model for r in records}, {"gpt-6.1-sol"},
+                         "a streamed transcript past the whole-file ceiling is still read")
+        by_id = {row["id"]: row for row in coverage}
+        self.assertEqual(by_id["codex"]["skippedFiles"], 0)
+        self.assertEqual(by_id["grok"]["skippedFiles"], 1,
+                         "a reader that holds a whole file still skips one past its ceiling")
 
     def test_omp_messages_bill_to_their_own_provider(self):
         with tempfile.TemporaryDirectory() as temporary:

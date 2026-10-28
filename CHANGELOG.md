@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **A long-lived Codex thread was missing from Costs.** One rollout can grow past the 128 MiB per-file ceiling — a thread kept open for weeks does — and the reader skipped the whole file, so its usage was invisible while the source reported *partial* history. Streamed transcripts are now bounded by their line size, the record ceilings and the scan's changed-input budget, which is what those bounds protect; the whole-file ceiling stays for the grok CLI's `usage.json`, which is read whole.
+
 ## 3.0.1
 
 ### Fixed
