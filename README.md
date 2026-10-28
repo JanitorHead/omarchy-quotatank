@@ -321,7 +321,7 @@ Nothing needs setting up: with omp signed in here or on another computer you add
 
 ### Cost history
 
-Open **Settings → Costs**. Local Codex CLI, Claude Code, OpenCode, and omp history are on by default, and grok CLI history can be turned on; the other computers add theirs. Under **Settings → Sources**, add up to four T3 Code servers, each with a name, base URL, and connection token (usage contract version 4 or 5). Custom model prices are set on the Costs page, by exact model ID.
+Open **Settings → Costs**. Local Codex CLI, Claude Code, OpenCode, and omp history are on by default, and grok CLI and pi history can be turned on; the other computers add theirs. Under **Settings → Sources**, add up to four T3 Code servers, each with a name, base URL, and connection token (usage contract version 4 or 5). Custom model prices are set on the Costs page, by exact model ID.
 
 ## Controls
 

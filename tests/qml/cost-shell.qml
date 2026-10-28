@@ -18,6 +18,8 @@ ShellRoot {
   property int phase: 0
   property string backupFile: ""
   property var backupReply: null
+  property var providerBackend: null
+  property int providerResponses: 0
   // 1.9 Costs tab: a view over a payload with projects, agents, heatmap and previous totals.
   property var costs: null
   property var rich: null
@@ -122,6 +124,14 @@ ShellRoot {
       motion: create("Motion.qml", {}) })
     backend = create("CostBackend.qml", {settings: {costLocalProviders: ["claude"]}})
     openingBackend = create("CostBackend.qml", {settings: {costLocalProviders: ["claude"]}})
+    providerBackend = create("CostBackend.qml", {settings: {costLocalProviders: ["pi", "grok"]}})
+    providerBackend.refreshed.connect(function() {
+      root.providerResponses++
+      var requested = String(providerBackend.payload.testRequest.providers).split(",")
+      root.check(requested.indexOf("pi") >= 0 && requested.indexOf("grok") >= 0,
+        "pi and grok reach the cost helper: " + providerBackend.payload.testRequest.providers)
+    })
+    providerBackend.ensureLoaded()
     openingBackend.refreshed.connect(function() { root.openingResponses++ })
     openingBackend.ensureLoaded()
     openingBackend.ensureLoaded()
@@ -415,6 +425,7 @@ ShellRoot {
         var original = JSON.parse(root.saved.extraKeys).openrouter.keys[0]
         root.check(restored.label === "Work" && restored.file !== original.file && restored.file.indexOf("/management-keys/key-") >= 0,
           "a restored key gets a new private file and keeps its name")
+        root.check(root.providerResponses > 0, "the pi and grok backend answered")
         console.log("Cost QML contract: passed")
         Qt.quit()
       }

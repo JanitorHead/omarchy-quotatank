@@ -1015,6 +1015,63 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertIn("deepseek-v4-pro", models, "harness transcripts are added")
         self.assertEqual({r.origin for r in records if r.model == "deepseek-v4-pro"}, {"omp"})
 
+    def test_pi_sessions_bill_to_their_provider(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sessions = root / "pi" / "sessions"
+            # pi writes the harness shape under its own root, with its own
+            # spellings: openai-codex for Codex's subscription, and the subscription families.
+            self.write_omp_session(sessions / "-tmp" / "codex.jsonl", provider="openai-codex", model="gpt-6.1-sol")
+            self.write_omp_session(sessions / "-tmp" / "api.jsonl", provider="openai", model="gpt-api-only")
+            self.write_omp_session(sessions / "-tmp" / "minimax.jsonl", provider="minimax-cn", model="MiniMax-M3.1-Flash")
+            self.write_omp_session(sessions / "-tmp" / "mimo.jsonl", provider="xiaomi-token-plan-cn", model="mimo-v2.6-pro")
+            self.write_omp_session(sessions / "-tmp" / "grok.jsonl", provider="xai", model="grok-4.7")
+            self.write_omp_session(sessions / "-tmp" / "vendor.jsonl", provider="some-vendor", model="x")
+            with mock.patch.dict(os.environ, {"PI_CODING_AGENT_SESSION_DIR": str(sessions),
+                                              "OMP_SESSIONS_DIR": str(root / "no-omp")}, clear=False):
+                records, _ = costs.scan_transcripts(["pi"], root / "state", int(costs.time.time() * 1000))
+
+        self.assertEqual({r.provider for r in records}, {"codex", "minimax", "mimo", "grok"},
+                         "pi's spellings bill to the same cost sources; unknown vendors are dropped")
+        self.assertEqual({r.provider: r.model for r in records},
+                         {"codex": "gpt-6.1-sol", "minimax": "MiniMax-M3.1-Flash",
+                          "mimo": "mimo-v2.6-pro", "grok": "grok-4.7"})
+        self.assertNotIn("gpt-api-only", {r.model for r in records},
+                         "openai is not the Codex subscription, so its messages are not claimed")
+        self.assertEqual({r.origin for r in records}, {"pi"}, "pi is its own source, not the harness's")
+        for record in records:
+            self.assertEqual(costs.deserialize_record(costs.serialize_record(record)), record,
+                             "pi records survive the scan cache")
+
+    def test_pi_session_directory_follows_pi_variables(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            agent = root / "agent"
+            override = root / "override"
+            home = root / "home"
+            self.write_omp_session(agent / "sessions" / "-tmp" / "agent.jsonl", provider="xai", model="grok-agent")
+            self.write_omp_session(override / "-tmp" / "override.jsonl", provider="xai", model="grok-override")
+            self.write_omp_session(home / ".pi" / "agent" / "sessions" / "-tmp" / "home.jsonl",
+                                   provider="xai", model="grok-home")
+            now = int(costs.time.time() * 1000)
+
+            def scanned_models(name, variables):
+                with mock.patch.dict(os.environ, {"OMP_SESSIONS_DIR": str(root / "no-omp")}, clear=False):
+                    for key in ("PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"):
+                        os.environ.pop(key, None)
+                    os.environ.update(variables)
+                    with mock.patch.object(costs.Path, "home", return_value=home):
+                        records, _ = costs.scan_transcripts(["pi"], root / f"state-{name}", now)
+                return {record.model for record in records}
+
+            self.assertEqual(scanned_models("override", {"PI_CODING_AGENT_DIR": str(agent),
+                                                         "PI_CODING_AGENT_SESSION_DIR": str(override)}),
+                             {"grok-override"}, "the session directory variable wins")
+            self.assertEqual(scanned_models("agent", {"PI_CODING_AGENT_DIR": str(agent)}),
+                             {"grok-agent"}, "sessions sit under the agent directory")
+            self.assertEqual(scanned_models("home", {}), {"grok-home"},
+                             "without either variable pi reads ~/.pi/agent/sessions")
+
     def test_omp_messages_bill_to_their_own_provider(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

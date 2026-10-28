@@ -52,7 +52,7 @@ Item {
   }
 
   function normalizedProviderIds(value) {
-    var allowed = ["claude", "codex", "opencode"]
+    var allowed = ["claude", "codex", "opencode", "grok", "pi"]
     var requestedProviders = UsageLogic.isListLike(value) ? value : allowed
     var result = []
     for (var i = 0; i < allowed.length; i++)
