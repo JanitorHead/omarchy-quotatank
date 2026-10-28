@@ -8,7 +8,7 @@ All notable changes to this project will be documented here. The format follows
 
 ### Added
 
-- **pi's session history as a local cost source.** **Settings → Costs** can read the transcripts pi keeps (`${PI_SESSIONS_DIR:-~/.pi/agent/sessions}/**/*.jsonl`, `costLocalProviders` value `pi`); it is off by default. Each message counts under the provider that billed it, `openai` included — pi's spelling for Codex's service.
+- **pi's session history as a local cost source.** **Settings → Costs** can read the transcripts pi keeps (`$PI_CODING_AGENT_SESSION_DIR`, else `$PI_CODING_AGENT_DIR/sessions`, with `PI_CODING_AGENT_DIR` defaulting to `~/.pi/agent`; `costLocalProviders` value `pi`); it is off by default. Each message counts under the provider that billed it. `openai-codex` counts as Codex; plain `openai` is not the Codex subscription and is dropped.
 
 ## 3.0.1
 

@@ -19,12 +19,12 @@ Pi harness session transcripts (`${OMP_SESSIONS_DIR:-~/.omp/agent/sessions}`,
 one JSONL transcript per session) form a separate `omp` source. Each assistant
 message, and each background `model_usage` line (spend outside the conversation,
 such as cache warming), counts under the provider it was billed to: `opencode*` →
-OpenCode, `openai-codex` and `openai` → Codex, `anthropic` → Claude, `minimax*` →
+OpenCode, `openai-codex` → Codex, `anthropic` → Claude, `minimax*` →
 MiniMax Coding Plan, `xiaomi` and `mimo*` → Xiaomi MiMo, `xai` and `grok*` → Grok
 CLI; other providers are dropped. MiniMax Coding Plan, Xiaomi MiMo and Grok CLI
 keep no transcripts of their own, so these billings are reported even when no
 local source names them. pi keeps transcripts in the same shape
-(`${PI_SESSIONS_DIR:-~/.pi/agent/sessions}`, under its own `pi` source) and is
+(`$PI_CODING_AGENT_SESSION_DIR`, else `$PI_CODING_AGENT_DIR/sessions` with `PI_CODING_AGENT_DIR` defaulting to `~/.pi/agent`, under its own `pi` source) and is
 attributed the same way. `model_usage` lines count toward the project and agent of their
 transcript and are deduplicated by their line id like messages. A transcript's
 session is the `id` of its own `session` line, so subagent transcripts that share
@@ -279,11 +279,13 @@ Custom IDs are trimmed but retain case, provider prefixes, and variant suffixes.
 - Claude: `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/**/*.jsonl`
 - Codex: `${CODEX_HOME:-~/.codex}/sessions/**/*.jsonl`
 - Grok CLI (opt-in): `${GROK_HOME:-~/.grok}/sessions/**/usage.json`, each read whole; its size counts against the scan's changed-input limit
-- pi (opt-in): `${PI_SESSIONS_DIR:-~/.pi/agent/sessions}/**/*.jsonl`
+- pi (opt-in): `${PI_CODING_AGENT_SESSION_DIR:-${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions}/**/*.jsonl`
 
 An Oh My Pi run counts when it keeps its session, tool-free runs included (such as review work another agent sends to a provider through omp): it lands in the Oh My Pi transcripts like an interactive run. A run made with `--no-session`, the flag review harnesses use to stay ephemeral, writes no transcript, so its use shows only in that provider's limits.
 
 Files are streamed line by line. Scan-cache version 5 rebuilds Codex records with duplicate signatures that include cumulative usage counters, so distinct responses with equal token counts remain counted. It also excludes former proxy/app classification metadata; older caches rebuild safely. Scan-cache version 8 adds each record's project folder name and Oh My Pi agent kind; older caches rebuild. Oh My Pi transcripts are cached and resumed like the other transcripts. It retains a byte offset, SHA-256 hash of up to 64 bytes immediately before that offset, device/inode identity, and sanitized parser state (the Codex reducer, the hashed session id, and the session's project folder name). A strictly grown file resumes only after its identity and guard match. Shrinkage, replacement, changed same-size files, or a failed guard cause a full reparse. The guard checks the previous tail, not the entire prefix: it is a lightweight check for normal append-only CLI transcripts, not a guarantee against arbitrary earlier in-place edits. Concurrently changed snapshots are skipped with incomplete coverage and retried on the next scan.
+
+Scan-cache version 9 keeps each record's billing provider and the `opencode` and `grok` origins of CLI-priced responses. Version 10 adds the `pi` origin. Older caches rebuild safely.
 
 Records from a trailing segment without its final newline are provisional: they can appear in the current result but are replaced on the next append, never counted twice. Parser state at the last completed line preserves Codex model attribution, duplicate signatures, fork suppression, the session id, and the project folder name across resumes. Each merge enforces per-file and global record limits, and scan byte limits include guard reads. Nanosecond mtimes remain exact integers. Old or corrupt positions cause a safe rebuild. Only usage-bearing records are parsed. The durable size/mtime cache stores token metadata and hashes every transcript path, session identifier, message identifier, and deduplication key with SHA-256. Project folders are stored by name only (the last path component), never as paths. Prompts, responses, tool calls, tool results, and credentials are neither cached nor returned.
 
