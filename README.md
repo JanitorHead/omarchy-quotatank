@@ -51,6 +51,8 @@ OpenRouter · DeepSeek · Moonshot · Venice · DeepInfra · Vercel AI Gateway �
 
 ## Install
 
+Quotatank is listed in the [Omarchy plugin marketplace](https://plugins.omarchy.org/plugin.html?id=janitorhead.quotatank). To install it from a terminal:
+
 ```bash
 omarchy plugin add https://github.com/JanitorHead/omarchy-quotatank.git --enable
 ```
@@ -58,9 +60,11 @@ omarchy plugin add https://github.com/JanitorHead/omarchy-quotatank.git --enable
 Then [connect a source](#connect-a-source). To update or remove:
 
 ```bash
-omarchy plugin update janitorhead.quotatank
+omarchy plugin update janitorhead.quotatank && omarchy restart shell
 omarchy plugin remove janitorhead.quotatank
 ```
+
+The shell keeps running the widget's previous code until it restarts ([omarchy#6981](https://github.com/omacom/omarchy/issues/6981)), and after 3.0 that code cannot run the new readers.
 
 Installed before 18 October 2026 and `update` cannot fast-forward? See [Troubleshooting](https://github.com/JanitorHead/omarchy-quotatank/blob/main/docs/configuration.md#troubleshooting).
 
@@ -71,7 +75,7 @@ The built-in `omarchy.agents` widget can run alongside Quotatank. To keep only Q
 
 - Omarchy with schema-v1 shell plugins.
 - Python 3.10 or newer. The quota and cost backends use only the standard library.
-- Network access for quota checks. Costs can download the public LiteLLM price table and contact the T3 or omp servers you configure.
+- Network access for quota checks. Costs can download the public LiteLLM price table and contact the T3 Code servers you configure; other computers are read over SSH.
 - Optional: omp 18.9 or newer for omp's live account mapping.
 
 </details>

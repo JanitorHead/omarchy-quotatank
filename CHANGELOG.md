@@ -10,6 +10,10 @@ All notable changes to this project will be documented here. The format follows
 
 - **pi's session history as a local cost source.** **Settings → Costs** can read the transcripts pi keeps (`$PI_CODING_AGENT_SESSION_DIR`, else `$PI_CODING_AGENT_DIR/sessions`, with `PI_CODING_AGENT_DIR` defaulting to `~/.pi/agent`; `costLocalProviders` value `pi`); it is off by default. Each message counts under the provider that billed it. `openai-codex` counts as Codex; plain `openai` is not the Codex subscription and is dropped.
 
+### Fixed
+
+- **A long-lived Codex thread was missing from Costs.** One rollout can grow past the 128 MiB per-file ceiling — a thread kept open for weeks does — and the reader skipped the whole file, so its usage was invisible while the source reported *partial* history. A streamed transcript now has no whole-file ceiling. Its first read must fit the 512 MiB scan budget, and later reads cover only the bytes appended since. A transcript over 512 MiB that must be read from the start (a first scan or a scan-cache upgrade; a failed refresh keeps its saved position) is skipped and reported as partial history. Memory stays bounded by the 16 MiB line cap and the record ceilings. The whole-file ceiling stays for the grok CLI's `usage.json`, which is read whole.
+
 ## 3.0.1
 
 ### Fixed
