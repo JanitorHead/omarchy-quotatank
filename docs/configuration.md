@@ -304,6 +304,8 @@ omarchy restart shell
 
 Later updates work as before.
 
+**After an update, Limits says "Quotatank's limits reader exited with status 2".** The shell is still running the widget's previous code, which passes the new reader flags it no longer takes ([omarchy#6981](https://github.com/omacom/omarchy/issues/6981)). Run `omarchy restart shell`.
+
 **Codex reports unavailable.** Confirm `codex` is on `PATH` and `codex login` succeeds. The collector uses current app-server RPC with `-s read-only -a never`; it does not call the older private web endpoint.
 
 **Kimi does not appear.** Confirm `kimi login` has created `~/.kimi-code/credentials/kimi-code.json`, or set `KIMI_CODE_HOME` to the CLI's actual data directory.
