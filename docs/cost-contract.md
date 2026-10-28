@@ -39,7 +39,12 @@ token split leaves SQLite. Memory stays bounded however large the database is (u
 memory-mapped and gets a 16 MiB page cache, each response looks its session's folder up by id instead of
 loading the session table, text comes back cut (ids, model and provider at 256 characters, the working
 directory at 4,096; a longer message id is skipped), and more than 80,000 responses in the retention window,
-counted or dropped as another vendor's, skip the database for that scan. OpenCode's and the grok CLI's own
+counted or dropped as another vendor's, skip the database for that scan. No single cell can fill memory
+either: a response whose `data` is over 256 KiB (it holds the response's metadata: model, tokens, cost), or whose id or
+session id is over 1 KiB, is skipped by its size before SQLite's JSON functions or anything else read it
+(`octet_length`, SQLite 3.43 and newer), and the connection refuses to load any value over 1 MiB
+(`SQLITE_LIMIT_LENGTH`, Python 3.11 and newer), which skips the database for that scan. Where neither
+bound is available (Python 3.10 with an older SQLite), the OpenCode database is not read. OpenCode's and the grok CLI's own
 recorded costs are kept and used, because each priced every response with the
 rates of the provider that served it — the only reliable rate for model IDs the
 public table cannot disambiguate (`deepseek-v4.1-flash`, for instance, exists

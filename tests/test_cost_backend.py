@@ -708,6 +708,24 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertNotEqual(records[0].project, "my-app", "a directory past the path limit is cut, not read whole")
         self.assertEqual(records[1].project, "shop", "each response still finds its session's folder")
 
+    def padded_open_code_2_row(self, message_id: str, pad: int):
+        row = list(self.open_code_2_row(message_id, "ses1", "xai", "grok-4.7"))
+        row[-1] = json.dumps(dict(json.loads(row[-1]), pad="x" * pad))
+        return tuple(row)
+
+    def test_a_response_too_large_to_be_metadata_is_skipped_before_it_is_parsed(self):
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(costs, "MAX_OPENCODE_DATA_BYTES", 4096), \
+                mock.patch.object(costs, "MAX_OPENCODE_VALUE_BYTES", 65536):
+            path = Path(temporary) / "opencode.db"
+            self.write_open_code_2(path, [("ses1", "/home/user/dev/shop")], [
+                self.padded_open_code_2_row("m1", 100), self.padded_open_code_2_row("m2", 200_000)])
+            if costs.OPENCODE_SIZES_UNREAD:
+                self.assertEqual([r.dedupe_key for r in costs.parse_opencode_database(path, 0) or []],
+                                 [costs.opaque_id("opencode:m1")], "the oversized cell is skipped, the rest count")
+            # Without octet_length, SQLite's length limit stops the read: the database is skipped, not loaded.
+            with mock.patch.object(costs, "OPENCODE_SIZES_UNREAD", False):
+                self.assertIsNone(costs.parse_opencode_database(path, 0))
+
     def test_an_older_session_table_without_a_directory_does_not_cost_the_database(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "opencode.db"

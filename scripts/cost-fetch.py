@@ -620,6 +620,12 @@ MAX_OPENCODE_PATH_CHARS = 4096
 MAX_OPENCODE_ROWS = 4 * MAX_TRANSCRIPT_RECORDS_PER_FILE
 # SQLite's page cache for the query, in KiB; the database is never memory-mapped.
 OPENCODE_CACHE_KIB = 16 * 1024
+# A response's `data` is its metadata (model, tokens, cost, path). A larger cell is skipped before SQLite's
+# JSON functions parse it, and no value larger than MAX_OPENCODE_VALUE_BYTES is ever loaded.
+MAX_OPENCODE_DATA_BYTES = 256 * 1024
+MAX_OPENCODE_VALUE_BYTES = 1024 * 1024
+# SQLite 3.43 sizes text without reading it (octet_length), so each oversized cell is skipped on its own.
+OPENCODE_SIZES_UNREAD = sqlite3.sqlite_version_info >= (3, 43, 0)
 
 OPENCODE_QUERY = (
     "SELECT m.id, substr(m.session_id, 1, {id_chars}), m.time_created,"
@@ -635,9 +641,19 @@ OPENCODE_QUERY = (
     " CAST(COALESCE(json_extract(m.data, '$.cost'), 0) AS REAL),"
     " substr({cwd}, 1, {path_chars})"
     " FROM {table} AS m"
-    " WHERE {condition} AND typeof(m.id) = 'text' AND length(m.id) <= {id_chars}"
-    " AND m.time_created >= ?"
+    # CASE fixes the order: the sizes are checked before anything reads the cells.
+    " WHERE m.time_created >= ? AND CASE WHEN {sized} THEN"
+    " ({condition} AND typeof(m.id) = 'text' AND length(m.id) <= {id_chars}) END"
 )
+
+
+def opencode_sized(*checks: tuple[str, int]) -> str:
+    """SQL that holds when every (column, bytes) is at most that size, read without loading it. Without
+    octet_length it is always true: the connection's length limit then stops an oversized value instead."""
+    if not OPENCODE_SIZES_UNREAD:
+        return "1"
+    return " AND ".join(f"COALESCE(octet_length({column}), 0) <= {limit}" for column, limit in checks)
+
 
 OPENCODE_TABLES = (
     # A row whose data is not JSON is skipped, never allowed to fail the whole query. The last field is the
@@ -652,9 +668,10 @@ OPENCODE_TABLES = (
 def opencode_directory(own: str, session_tables: list[str]) -> str:
     """SQL for a row's working directory: its own, else the one beside its session in `session_tables` (in
     order: OpenCode 2's `session_v2` supersedes the older `session`). Each row looks its session up by id, so
-    no table of sessions is ever held in memory."""
+    no table of sessions is ever held in memory, and a directory too long to be a real path is not read."""
     choices = [own] if own else []
-    choices += [f"(SELECT s.directory FROM {table} AS s WHERE s.id = m.session_id"
+    sized = opencode_sized(("s.directory", 4 * MAX_OPENCODE_PATH_CHARS))
+    choices += [f"(SELECT CASE WHEN {sized} THEN s.directory END FROM {table} AS s WHERE s.id = m.session_id"
                 " AND typeof(s.directory) = 'text' LIMIT 1)" for table in session_tables]
     if not choices:
         return "NULL"
@@ -712,6 +729,12 @@ def parse_opencode_database(path: Path, retention_start_ms: int,
     except sqlite3.Error:
         return None
     try:
+        # No value larger than this is loaded: reading one fails the query, and the database is skipped.
+        # Python 3.10 cannot set it; there octet_length's per-cell checks have to bound every read instead.
+        if hasattr(connection, "setlimit"):
+            connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_OPENCODE_VALUE_BYTES)
+        elif not OPENCODE_SIZES_UNREAD:
+            return None
         connection.execute("PRAGMA query_only = ON")
         connection.execute(f"PRAGMA cache_size = -{OPENCODE_CACHE_KIB}")
         connection.execute("PRAGMA mmap_size = 0")
@@ -724,7 +747,9 @@ def parse_opencode_database(path: Path, retention_start_ms: int,
                 continue
             newest = connection.execute(f"SELECT MAX(time_created) FROM {table}").fetchone()
             unit = 1000 if newest and newest[0] is not None and int(newest[0]) < 1e12 else 1
-            query = OPENCODE_QUERY.format(table=table, condition=condition,
+            sized = opencode_sized(("m.data", MAX_OPENCODE_DATA_BYTES), ("m.id", 4 * MAX_OPENCODE_ID_CHARS),
+                                   ("m.session_id", 4 * MAX_OPENCODE_ID_CHARS))
+            query = OPENCODE_QUERY.format(table=table, condition=condition, sized=sized,
                                           cwd=opencode_directory(own_directory, session_tables),
                                           id_chars=MAX_OPENCODE_ID_CHARS, name_chars=MAX_OPENCODE_NAME_CHARS,
                                           path_chars=MAX_OPENCODE_PATH_CHARS)
