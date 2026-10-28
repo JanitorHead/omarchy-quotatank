@@ -54,7 +54,7 @@ PROVIDER_NAMES = {
     "grok": "Grok CLI",
     "mimo": "Xiaomi MiMo",
     # A second harness, pi, keeps transcripts of its own.
-    "pi": "Pi",
+    "pi": "pi",
 }
 LITELLM_RATES_URL = (
     "https://raw.githubusercontent.com/BerriAI/litellm/main/"
@@ -914,7 +914,7 @@ def billed_provider(name: Any) -> str | None:
     key = name.strip().lower()
     if key.startswith("opencode"):
         return "opencode"
-    if key in ("openai-codex", "openai"):
+    if key == "openai-codex":
         return "codex"
     if key == "anthropic":
         return "claude"
@@ -1015,8 +1015,9 @@ def parse_pi_sessions(path: Path, retention_start_ms: int,
                       cursor: TranscriptCursor | None = None) -> list[UsageRecord] | None:
     """Read one pi session transcript: the harness format under pi's own root.
 
-    pi spells its billing providers `openai`, `minimax-cn`, `xiaomi-token-plan-cn`
-    and `xai`, which the shared attribution maps like the harness's own spellings.
+    pi spells its subscription billing providers `minimax-cn`, `xiaomi-token-plan-cn` and `xai`, which the
+    shared attribution maps like the harness's own spellings. Its `openai` provider is not the Codex
+    subscription, so messages billed there are left unclaimed.
     """
     return parse_omp_file(path, retention_start_ms, cursor,
                           sessions_root=transcript_root("pi"), namespace="pi")
@@ -1208,7 +1209,12 @@ def transcript_root(provider: str) -> Path:
     if provider == "omp":
         return omp_sessions_root()
     if provider == "pi":
-        return Path(os.environ.get("PI_SESSIONS_DIR") or (Path.home() / ".pi" / "agent" / "sessions")).expanduser()
+        # pi reads PI_CODING_AGENT_SESSION_DIR first, then sessions under its agent directory.
+        session_dir = os.environ.get("PI_CODING_AGENT_SESSION_DIR")
+        if session_dir:
+            return Path(session_dir).expanduser()
+        agent_dir = os.environ.get("PI_CODING_AGENT_DIR")
+        return (Path(agent_dir).expanduser() if agent_dir else Path.home() / ".pi" / "agent") / "sessions"
     if provider == "grok":
         return Path(os.environ.get("GROK_HOME") or (Path.home() / ".grok")).expanduser() / "sessions"
     return Path(os.environ.get("KIMI_SHARE_DIR") or (Path.home() / ".kimi")).expanduser() / "sessions"
