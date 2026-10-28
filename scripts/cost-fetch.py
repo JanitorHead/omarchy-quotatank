@@ -268,6 +268,8 @@ def bounded_jsonl_lines(path: Path, cursor: TranscriptCursor | None = None) -> I
     if cursor is not None:
         yield from cursor.lines(path)
         return
+    # Scans always pass a TranscriptCursor, which enforces the scan budget.
+    # This branch serves reads outside a scan, such as direct parser calls.
     with path.open("rb") as handle:
         while True:
             raw = handle.readline(MAX_TRANSCRIPT_LINE_BYTES + 1)
@@ -1351,10 +1353,11 @@ def scan_transcripts(
                         not can_resume and size > scan_budget[0]
                     )
                 else:
-                    # A streamed transcript is bounded by its line size, the record
-                    # ceilings and this budget. Its size alone is no reason to skip:
-                    # one long-lived thread's rollout grows past any whole-file
-                    # ceiling, and skipping it drops all of its usage.
+                    # A streamed transcript has no whole-file ceiling: one long-lived
+                    # thread's rollout grows past any such ceiling, and skipping it
+                    # drops all of its usage. Its first read must fit this scan budget;
+                    # a resume reads only the bytes appended since, and fails only if
+                    # those bytes exceed what remains of this scan's budget.
                     too_large = not can_resume and size > scan_budget[0]
                 if too_large:
                     parsed = None
