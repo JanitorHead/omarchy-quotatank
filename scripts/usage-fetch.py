@@ -1069,19 +1069,34 @@ def fetch_codex(timeout: float, home: Path | None = None) -> dict[str, Any]:
 
     try:
         rpc = CodexRpcStream(process)
+        # Behind a slow connection the account calls run long (account/rateLimits/read
+        # measured 6.5 s through a proxy), so each may spend the full timeout rather
+        # than a 6 s slice. The three RPCs share two timeouts, which keeps the worst
+        # case inside the widget's 35 s process budget instead of being killed with it.
+        session_deadline = time.monotonic() + 2 * timeout
+
+        def budget() -> float:
+            return max(0.0, min(timeout, session_deadline - time.monotonic()))
+
         initialize = {"clientInfo": {"name": "quotatank", "version": "2"}}
-        rpc_request(rpc, 1, "initialize", timeout, initialize)
+        rpc_request(rpc, 1, "initialize", budget(), initialize)
         rpc.send({"method": "initialized", "params": {}})
 
-        account_message = rpc_request(rpc, 2, "account/read", min(timeout, 6))
-        limits_message = rpc_request(rpc, 3, "account/rateLimits/read", min(timeout, 6))
+        account_message = rpc_request(rpc, 2, "account/read", budget())
         account_result = account_message.get("result") or {}
         account = account_result.get("account") if isinstance(account_result, dict) else None
         if not isinstance(account, dict):
             return error_provider(provider_id, "no_credentials", "Codex is not signed in.")
 
-        limits_result = limits_message.get("result") or {}
-        windows, credits, limits_plan, reached = parse_codex_rate_limits(limits_result)
+        # Rate limits are optional detail: losing them must cost the windows and a
+        # notice, not the provider the account and plan it already has.
+        try:
+            limits_message = rpc_request(rpc, 3, "account/rateLimits/read", budget())
+            windows, credits, limits_plan, reached = parse_codex_rate_limits(
+                limits_message.get("result") or {})
+            limits_error = ""
+        except ProviderFailure as exc:
+            windows, credits, limits_plan, reached, limits_error = [], None, "", "", exc.message
         raw_plan = str(account.get("planType") or "")
         plan = limits_plan or CODEX_PLAN_LABELS.get(raw_plan, raw_plan.replace("_", " ").title())
         if account.get("type") == "apiKey" and not plan:
@@ -1095,7 +1110,9 @@ def fetch_codex(timeout: float, home: Path | None = None) -> dict[str, Any]:
             windows=windows,
             credits=credits,
         )
-        if reached:
+        if limits_error:
+            result["notice"] = clean_message("Rate limits unavailable: " + limits_error)
+        elif reached:
             result["notice"] = clean_message(reached.replace("_", " ").capitalize() + ".")
         elif not windows and credits is None:
             result["notice"] = "Codex returned no subscription rate limits."
