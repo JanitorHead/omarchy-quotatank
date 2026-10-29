@@ -279,6 +279,71 @@ class FailureAndIsolationTests(unittest.TestCase):
         self.assertEqual(result["errorKind"], "cli_unavailable")
         self.assertEqual(result["authCommand"], "codex login")
 
+    def test_codex_rate_limits_are_optional_detail(self):
+        # `account/rateLimits/read` runs long behind a proxy (6.5 s measured) and
+        # its failure took the whole provider with it. Losing the rate limits
+        # costs the windows and a notice, not the account and plan.
+        fake = r"""#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"id":'*) ;;
+    *) continue ;;
+  esac
+  id=${line#*'"id":'}
+  id=${id%%,*}
+  case "$line" in
+    *rateLimits*) DELAY; printf '{"id":%s,ANSWER}
+' "$id" ;;
+    *account/read*) printf '{"id":%s,"result":{"account":{"email":"dev@example.com","planType":"pro"}}}
+' "$id" ;;
+    *) printf '{"id":%s,"result":{}}
+' "$id" ;;
+  esac
+done
+"""
+        for failure in ("timeout", "malformed"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                bin_dir = root / "bin"
+                bin_dir.mkdir()
+                delay = "sleep 1" if failure == "timeout" else ":"
+                answer = '"result":42' if failure == "malformed" else '"result":{}'
+                codex = bin_dir / "codex"
+                codex.write_text(fake.replace("DELAY", delay).replace("ANSWER", answer))
+                codex.chmod(0o755)
+                # `sleep` decides the timeout case, so the system dirs stay on the
+                # fake's PATH; the codex in the temp dir is the one found first.
+                with mock.patch.object(usage, "runtime_environment",
+                                       return_value={**os.environ, "PATH": str(bin_dir) + os.pathsep + "/usr/bin:/bin"}):
+                    result = usage.fetch_codex(0.5)
+                self.assertEqual(result["status"], "ok", result)
+                self.assertEqual(result["account"], "dev@example.com")
+                self.assertEqual(result["windows"], [])
+                self.assertIn("rate limits", result["notice"].lower())
+
+    def test_codex_account_calls_get_the_full_timeout_budget(self):
+        # Behind a proxy `account/rateLimits/read` measured 6.5 s over the old
+        # 6 s slice. Each account call may now spend the full timeout, and the
+        # three RPCs together share two of them.
+        seen: dict[str, float] = {}
+
+        def respond(stream, request_id, method, timeout, params=None):
+            seen[method] = timeout
+            if method == "account/read":
+                return {"result": {"account": {"email": "dev@example.com", "planType": "pro"}}}
+            return {"result": {}}
+
+        process = mock.Mock(stdin=mock.Mock(), stdout=mock.Mock())
+        with mock.patch.object(usage.shutil, "which", return_value="/usr/bin/codex"), \
+                mock.patch.object(usage.subprocess, "Popen", return_value=process), \
+                mock.patch.object(usage, "CodexRpcStream", return_value=mock.Mock()), \
+                mock.patch.object(usage, "rpc_request", side_effect=respond):
+            result = usage.fetch_codex(10)
+        self.assertEqual(result["status"], "ok", result)
+        self.assertEqual(seen["initialize"], 10)
+        self.assertEqual(seen["account/read"], 10)
+        self.assertEqual(seen["account/rateLimits/read"], 10)
+
     def test_http_expiry_rate_limit_timeout_and_malformed(self):
         cases = [
             (urllib.error.HTTPError("https://example", 401, "unauthorized", {}, None), "expired"),

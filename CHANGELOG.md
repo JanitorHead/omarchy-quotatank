@@ -6,6 +6,10 @@ All notable changes to this project will be documented here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- **Codex failed as a whole when its rate-limit call ran long.** `account/rateLimits/read` exceeds the old 6 s slice on a proxied or slow connection (6.5 s measured behind a proxy), and its timeout took the provider down with it even though `account/read` had already answered with the account and plan. Each RPC may now spend the full timeout instead of a 6 s slice, with the three calls sharing two timeouts so the worst case still fits the widget's 35 s process budget. Rate limits are now optional detail: when the call fails or its payload is unexpected, the provider keeps its account and plan and says so in a notice instead of erroring. Reported by @shao-zhijie in #23.
+
 ### Added
 
 - **pi's session history as a local cost source.** **Settings → Costs** can read the transcripts pi keeps (`$PI_CODING_AGENT_SESSION_DIR`, else `$PI_CODING_AGENT_DIR/sessions`, with `PI_CODING_AGENT_DIR` defaulting to `~/.pi/agent`; `costLocalProviders` value `pi`); it is off by default. Each message counts under the provider that billed it. `openai-codex` counts as Codex; plain `openai` is not the Codex subscription and is dropped.
