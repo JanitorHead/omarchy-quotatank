@@ -152,7 +152,7 @@ PY
       exit 1
     }
   if ! rg -q 'Settings QML contract: passed' "$settings_root/runtime.log" \
-      || rg -n 'Error:|ReferenceError|TypeError|Binding loop|Unable to assign|failed to load|failed to instantiate|SETTINGS TEST FAILED' "$settings_root/runtime.log"; then
+      || rg -n 'Error:|ReferenceError|TypeError|Binding loop|Unable to assign|failed to load|failed to instantiate|polish\(\) loop|SETTINGS TEST FAILED' "$settings_root/runtime.log"; then
     cat "$settings_root/runtime.log"
     exit 1
   fi
