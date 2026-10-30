@@ -1000,6 +1000,8 @@ Ui.Panel {
   }
 
   IpcHandler {
+    // A bar barScreens leaves out must not take the IPC target, or IPC opens the panel on a screen without the widget.
+    enabled: root.visible
     target: root.ipcTarget
     function open(): void { root.open() }
     function close(): void { root.close() }
