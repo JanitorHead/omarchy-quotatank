@@ -13,6 +13,7 @@ All notable changes to this project will be documented here. The format follows
 ### Fixed
 
 - **A long-lived Codex thread was missing from Costs.** One rollout can grow past the 128 MiB per-file ceiling — a thread kept open for weeks does — and the reader skipped the whole file, so its usage was invisible while the source reported *partial* history. A streamed transcript now has no whole-file ceiling. Its first read must fit the 512 MiB scan budget, and later reads cover only the bytes appended since. A transcript over 512 MiB that must be read from the start (a first scan or a scan-cache upgrade; a failed refresh keeps its saved position) is skipped and reported as partial history. Memory stays bounded by the 16 MiB line cap and the record ceilings. The whole-file ceiling stays for the grok CLI's `usage.json`, which is read whole.
+- **A chip opened Limits on another account.** Clicking a chip opened the login in use, or the first account, even when the chip showed a different one: with one chip per account every chip of a provider opened the same account, and with used-up accounts hidden that could be one the bar no longer showed. A chip now opens the account it shows, and with the panel open, the chip of another account of that provider switches to it instead of closing the panel.
 
 ## 3.0.1
 

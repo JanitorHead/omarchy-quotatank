@@ -667,17 +667,28 @@ Ui.Panel {
     else if (buttonCode === Qt.LeftButton) toggle()
   }
 
-  function handleProviderChipPress(providerId, buttonCode) {
+  // A chip of another account of the open provider switches to it instead of closing the panel.
+  function handleProviderChipPress(providerId, buttonCode, accountId, ownAccount) {
     if (buttonCode === Qt.MiddleButton) {
       nextProvider()
       return
     }
     if (buttonCode !== Qt.LeftButton) return
+    var shown = accountId ? String(accountId) : ""
     var sameProvider = viewMode === "limits" && selectedProviderId === providerId
+    var otherAccount = ownAccount === true && shown !== "" && !!selectedAccount
+      && String(selectedAccount.accountId) !== shown
     viewMode = "limits"
     selectProviderId(providerId)
-    if (opened && sameProvider) close()
-    else open()
+    if (opened && sameProvider && !otherAccount) {
+      close()
+      return
+    }
+    if (shown !== "") {
+      if (opened && sameProvider) selectAccount(shown)
+      else selectedAccountId = shown
+    }
+    open()
   }
 
   function windowSeverity(window) {
@@ -1298,6 +1309,11 @@ Ui.Panel {
             : UsageLogic.barValueIndex(modelData, counted, limits.top)
           readonly property var reading: valueIndex >= 0 ? accounts[valueIndex]
             : throughProxy && lastAccount.reading ? lastAccount.reading : modelData
+          // With used-up accounts hidden, a provider left with one account shows that account's figures.
+          readonly property int shownIndex: valueIndex >= 0 ? valueIndex : accounts.length === 1 ? 0 : -1
+          readonly property string shownAccountId: shownIndex >= 0 && accounts[shownIndex]
+            && accounts[shownIndex].accountId !== undefined && accounts[shownIndex].accountId !== null
+            ? String(accounts[shownIndex].accountId) : ""
           readonly property var limits: root.barLimitsFor(modelData.id)
           readonly property string quotaMode: root.quotaModeFor(modelData.id)
           readonly property var failure: accountChip ? reading : modelData
@@ -1434,7 +1450,8 @@ Ui.Panel {
             : plainTooltip.split("\n").join(", ")
           onPressed: function(buttonCode) {
             root.closeHoverCard()
-            root.handleProviderChipPress(String(providerChip.modelData.id), buttonCode)
+            root.handleProviderChipPress(String(providerChip.modelData.id), buttonCode,
+              providerChip.shownAccountId, providerChip.accountChip)
           }
           onTooltipHoveredChanged: root.chipHoverChanged(providerChip, tooltipHovered && hoverCardEligible)
 
