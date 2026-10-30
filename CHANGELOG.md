@@ -9,6 +9,7 @@ All notable changes to this project will be documented here. The format follows
 ### Added
 
 - **pi's session history as a local cost source.** **Settings → Costs** can read the transcripts pi keeps (`$PI_CODING_AGENT_SESSION_DIR`, else `$PI_CODING_AGENT_DIR/sessions`, with `PI_CODING_AGENT_DIR` defaulting to `~/.pi/agent`; `costLocalProviders` value `pi`); it is off by default. Each message counts under the provider that billed it. `openai-codex` counts as Codex; plain `openai` is not the Codex subscription and is dropped.
+- **Chips on chosen screens only.** `barScreens` lists the screens whose bar shows Quotatank, by connector name or model; with several monitors the chips can stay on the main one. Empty, the default, keeps them on every screen.
 
 ### Fixed
 
