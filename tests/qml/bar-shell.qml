@@ -26,6 +26,7 @@ ShellRoot {
   property int ticks: 0
   property int waited: 0
   property var savedPayload: null
+  property var onePersonalLeft: null
 
   Item {
     id: panelHost
@@ -362,6 +363,27 @@ ShellRoot {
       })
       check(underlined.length === 1 && underlined[0].objectName === "barChip-claude@main",
         "and the login in use is still the one underlined")
+      // The login in use is used up too: only Personal is left on the bar.
+      var copy = JSON.parse(JSON.stringify(savedPayload))
+      var claude = copy.providers.filter(function (provider) { return provider.id === "claude" })[0]
+      claude.accounts[0].windows[1].used = 100
+      claude.accounts[0].windows[1].remaining = 0
+      root.onePersonalLeft = copy
+      widget.usageBackend.payload = copy
+      return true
+    },
+    function () {
+      var chip = namedChild(widget, "barChip-claude")
+      if (chip === null) {
+        // A synthetic refresh can land after the step above and replace its payload.
+        if (widget.usageBackend.payload !== onePersonalLeft) widget.usageBackend.payload = onePersonalLeft
+        return waited < 150 ? false : check(false, "with only Personal left, Claude has one provider chip")
+      }
+      check(!chip.accountChip, "with only Personal left, Claude's chip is the provider's")
+      widget.handleProviderChipPress("claude", Qt.LeftButton, chip.shownAccountId, chip.accountChip)
+      check(widget.opened && widget.selectedAccount && widget.selectedAccount.accountId === "personal",
+        "it opens Limits on Personal, the account it shows, not the used-up login in use")
+      widget.close()
       widget.usageBackend.payload = savedPayload
       widget.settings = Object.assign({}, widget.settings, { hideExhaustedProviders: false })
       return true
@@ -375,6 +397,16 @@ ShellRoot {
       })
       check(underlined.length === 1 && underlined[0].objectName === "barChip-claude@main", "the login in use is underlined")
       check(namedChild(chips[0], "barAccountInitial").visible, "account chips carry the account's initial")
+      var personalChip = namedChild(widget, "barChip-claude@personal")
+      var mainChip = namedChild(widget, "barChip-claude@main")
+      widget.handleProviderChipPress("claude", Qt.LeftButton, personalChip.shownAccountId, personalChip.accountChip)
+      check(widget.opened && widget.selectedAccount && widget.selectedAccount.accountId === "personal",
+        "an account chip opens Limits on its own account, not the login in use")
+      widget.handleProviderChipPress("claude", Qt.LeftButton, mainChip.shownAccountId, mainChip.accountChip)
+      check(widget.opened && widget.selectedAccount && widget.selectedAccount.accountId === "main",
+        "another account's chip switches the open panel to it")
+      widget.handleProviderChipPress("claude", Qt.LeftButton, mainChip.shownAccountId, mainChip.accountChip)
+      check(!widget.opened, "the chip of the account on screen closes the panel")
       widget.settings = Object.assign({}, widget.settings, { barAccountMode: "dots" })
       widget.selectProviderId("claude")
       return true
