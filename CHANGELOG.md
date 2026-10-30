@@ -13,6 +13,7 @@ All notable changes to this project will be documented here. The format follows
 ### Fixed
 
 - **A long-lived Codex thread was missing from Costs.** One rollout can grow past the 128 MiB per-file ceiling — a thread kept open for weeks does — and the reader skipped the whole file, so its usage was invisible while the source reported *partial* history. A streamed transcript now has no whole-file ceiling. Its first read must fit the 512 MiB scan budget, and later reads cover only the bytes appended since. A transcript over 512 MiB that must be read from the start (a first scan or a scan-cache upgrade; a failed refresh keeps its saved position) is skipped and reported as partial history. Memory stays bounded by the 16 MiB line cap and the record ceilings. The whole-file ceiling stays for the grok CLI's `usage.json`, which is read whole.
+- **Settings went blank after starting a sign-in from them.** Once **Sign in** or **Install** was pressed, the provider's "Finish in the terminal" hint and its row kept resizing each other: the shell logged a polish loop thousands of times and Settings drew nothing until the provider read fine. The hint now takes the width of its own text.
 
 ## 3.0.1
 

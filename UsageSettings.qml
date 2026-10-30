@@ -3191,6 +3191,8 @@ Column {
       url: setup.action.url
     }
     Hint {
+      // Label's parent.width would make the Row's width depend on itself: a polish loop.
+      width: implicitWidth
       visible: setup.pending
       anchors.verticalCenter: parent.verticalCenter
       text: "Finish in the terminal; this updates on its own."
