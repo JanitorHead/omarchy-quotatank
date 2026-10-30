@@ -74,84 +74,99 @@ ShellRoot {
     return object
   }
 
+  function formControl(name) {
+    var item = namedChild(widget.settingsForm, name)
+    assertTrue(item !== null, "settings control exists: " + name)
+    return item
+  }
+  function enter(name, text) {
+    var field = formControl(name)
+    if (!field) return
+    field.text = text
+    field.textEdited()
+    field.editingFinished()
+  }
+
   function checkSettings() {
     var original = JSON.parse(JSON.stringify(widget.settings))
     widget.settings = Object.assign({}, original, { unrelatedPreference: "keep" })
+    mockShell.saveCount = 0
     widget.showSettings()
     assertTrue(widget.configuring, "settings opens from the panel")
     var form = widget.settingsForm
-    assertEqual(String(form.findChild("refreshMinutes").source), "60", "refresh interval is presented in minutes")
-    var initialBarProviders = form.draft.barProviders.join(",")
-    var expectedBarProviders = initialBarProviders.split(",").filter(function (id) { return id !== "codex" }).join(",")
-    form.toggleProvider("barProviders", "codex")
-    form.setValue("hideAccountEmails", true)
-    assertTrue(!widget.hideAccountEmails, "draft privacy change waits for Save")
-    assertEqual(widget.percentageProviders.length, 3, "draft edits do not change the live bar")
-    form.cancelRequested()
-    assertEqual(widget.viewMode, "limits", "Cancel returns to Limits")
-    widget.showSettings()
-    assertEqual(form.draft.barProviders.join(","), initialBarProviders, "Cancel discards draft edits")
-    assertEqual(form.draft.hideAccountEmails, false, "Cancel discards privacy edits")
 
-    form.setValue("sources", proxySources("https://proxy.test/prefix", "", "", ""))
-    assertTrue(form.proxyEntry !== null && form.proxyEntry.on, "a proxy source reveals connection fields")
-    form.setValue("sources", proxySources("https://user:secret@proxy.test", "", "", ""))
-    assertTrue(!form.submit(), "URL credentials cannot be saved")
-    form.setValue("sources", proxySources("https://proxy.test/prefix/management.html", "", "", ""))
-    form.findChild("managementKeyRowField").text = "invalid\nkey"
-    form.findChild("managementKeyRow").submit()
-    assertTrue(form.findChild("managementKeyRow").error !== "", "multiline management keys cannot be saved")
-    form.findChild("managementKeyRowField").text = "synthetic-secret"
-    form.setValue("refreshIntervalSec", "")
-    assertTrue(!form.submit(), "empty numeric input cannot be saved")
-    form.setValue("refreshIntervalSec", "900")
-    form.setValue("criticalThreshold", "50")
-    assertTrue(!form.submit(), "inverted thresholds cannot be saved")
-    assertEqual(mockShell.saveCount, 0, "invalid and cancelled edits never reach persistence")
-    form.cancelRequested()
-    assertEqual(form.findChild("managementKeyRowField").text, "", "Cancel clears the entered key")
+    form.open("advanced")
+    assertEqual(String(formControl("refreshMinutesField").text), "60", "refresh interval is presented in minutes")
+    enter("refreshMinutesField", "")
+    assertTrue(formControl("refreshMinutes").error !== "", "an empty refresh interval is refused")
+    form.open("alerts")
+    enter("criticalThresholdField", "50")
+    assertTrue(formControl("criticalThreshold").error !== "", "a critical threshold before the warning is refused")
+    assertEqual(mockShell.saveCount, 0, "refused input never reaches persistence")
 
-    widget.showSettings()
-    form.setValue("criticalThreshold", "90")
-    assertTrue(form.submit(), "a valid Used-mode threshold pair saves")
-    assertEqual(mockShell.savedSettings.criticalThreshold, 10, "Used entries save as % left: 90 used is 10 left")
-    assertEqual(mockShell.savedSettings.warningThreshold, 25, "the 75 used warning saves as 25 left")
-    form.toggleProvider("barProviders", "codex")
-    mockShell.rejectSave = true
-    form.setValue("hideAccountEmails", true)
-    form.submit()
-    assertTrue(widget.configuring, "failed persistence keeps the form open")
-    assertTrue(form.errorText !== "", "failed persistence is explained")
-    assertEqual(widget.percentageProviders.length, 3, "failed persistence does not change live settings")
-    mockShell.rejectSave = false
-    form.submit()
-    assertTrue(!widget.configuring, "Save returns to the previous view")
-    assertTrue(widget.hideAccountEmails, "saving privacy setting updates the view")
-    assertEqual(mockShell.savedSettings.hideAccountEmails, true, "privacy preference is persisted")
+    enter("criticalThresholdField", "95")
+    assertEqual(mockShell.saveCount, 1, "a valid threshold saves as soon as it is entered")
+    assertEqual(mockShell.savedSettings.criticalThreshold, 5, "Used entries save as % left: 95 used is 5 left")
+    assertEqual(mockShell.savedSettings.warningThreshold, 25, "the untouched warning keeps its value")
+    assertEqual(widget.criticalThreshold, 5, "the live widget follows the saved threshold at once")
+
+    form.open("display")
+    formControl("hideAccountEmailsToggle").toggled()
+    assertTrue(widget.hideAccountEmails, "the privacy switch applies at once")
+    assertEqual(mockShell.savedSettings.hideAccountEmails, true, "and is saved at once")
     assertEqual(mockShell.savedId, widget.moduleName, "settings are saved to this widget only")
-    assertEqual(mockShell.savedSettings.unrelatedPreference, "keep", "Save preserves unrelated settings")
-    assertEqual(mockShell.savedSettings.barProviders.join(","), expectedBarProviders, "bar selection is persisted")
-    assertEqual(widget.percentageProviders.length, 2, "hidden provider leaves the bar immediately")
-    assertEqual(widget.providers.length, 3, "hiding from the bar retains all popup providers")
-    widget.settings = JSON.parse(JSON.stringify(mockShell.savedSettings))
-    widget.showSettings()
-    assertEqual(form.draft.barProviders.join(","), expectedBarProviders, "reopening reads persisted selection")
-    form.setValue("barProviders", [])
-    form.submit()
-    assertTrue(!widget.percentageMode, "hiding every chip retains the widget icon")
+    assertEqual(mockShell.savedSettings.unrelatedPreference, "keep", "saving keeps unrelated settings")
 
+    form.open("providers")
+    formControl("bar-codex").toggled()
+    var savedBar = mockShell.savedSettings.barProviders || []
+    assertTrue(savedBar.indexOf("codex") < 0 && savedBar.indexOf("claude") >= 0 && savedBar.indexOf("kimi") >= 0,
+      "the menu bar selection is saved at once: " + savedBar.join(","))
+    assertEqual(widget.percentageProviders.length, 2, "a provider taken off the bar leaves it immediately")
+    assertEqual(widget.providers.length, 3, "taking a provider off the bar keeps it in the popup")
+
+    var savesBefore = mockShell.saveCount
+    mockShell.rejectSave = true
+    form.open("display")
+    formControl("hideAccountEmailsToggle").toggled()
+    assertTrue(form.errorText !== "", "a failed save is explained")
+    assertTrue(widget.hideAccountEmails, "a failed save leaves the live setting as it was")
+    assertEqual(mockShell.saveCount, savesBefore, "a failed save stores nothing")
+    mockShell.rejectSave = false
+
+    widget.leaveSettings()
+    assertEqual(widget.viewMode, "limits", "leaving settings returns to Limits")
+    widget.settings = JSON.parse(JSON.stringify(mockShell.savedSettings))
+    widget.showSettings("providers")
+    assertTrue(!formControl("bar-codex").checked, "reopening shows the saved bar selection")
+    form.set("barProviders", [])
+    assertTrue(!widget.percentageMode, "hiding every chip retains the widget icon")
+    form.set("enabledProviders", [])
+    assertEqual(widget.providers.length, 0, "turning monitoring off removes popup providers immediately")
+    widget.leaveSettings()
     widget.showSettings()
-    form.setValue("enabledProviders", [])
-    form.submit()
-    assertEqual(widget.providers.length, 0, "disabling monitoring removes popup providers immediately")
-    widget.showSettings()
-    assertTrue(widget.configuring, "settings remains accessible with no providers")
-    form.cancelRequested()
+    assertTrue(widget.configuring, "settings remain reachable with no providers")
+    widget.leaveSettings()
+
+    widget.settings = Object.assign({}, original, { sources: proxySources("https://proxy.test/prefix", "", "", "") })
+    savesBefore = mockShell.saveCount
+    widget.showSettings("sources")
+    assertTrue(form.proxyEntry !== null && form.proxyEntry.on, "a proxy source shows its connection fields")
+    enter("proxyUrlField", "https://user:secret@proxy.test")
+    assertTrue(formControl("proxyUrl").error !== "", "a proxy URL with credentials is refused")
+    formControl("managementKeyRowField").text = "invalid\nkey"
+    formControl("managementKeyRow").submit()
+    assertTrue(formControl("managementKeyRow").error !== "", "a multiline management key is refused")
+    assertTrue(!form.saving, "a refused key is never written")
+    assertEqual(mockShell.saveCount, savesBefore, "refused connection input never reaches persistence")
+    formControl("managementKeyRowField").text = ""
+    widget.leaveSettings()
+
     widget.settings = original
     widget.showCosts()
     widget.showSettings()
-    form.cancelRequested()
-    assertEqual(widget.viewMode, "costs", "Cancel restores the Costs view")
+    widget.leaveSettings()
+    assertEqual(widget.viewMode, "costs", "leaving settings returns to Costs")
     widget.showLimits()
     widget.close()
   }
@@ -222,15 +237,22 @@ ShellRoot {
       assertEqual(proxyWidget.accountList.view.count, 3, "three separate Codex account rows are rendered")
       assertTrue(proxyWidget.accountOverview, "proxy defaults to account overview")
       assertEqual(proxyWidget.accountMode, "together", "proxy accounts are used together")
-      for (var i = 0; i < 3; i++) {
-        var row = proxyWidget.accountList.rowFor(String(i))
-        assertTrue(row !== null, "account " + i + " has a row")
-        assertEqual(row.account.windows[1].remaining, [20, 55, 90][i], "account quotas are kept separate")
+      var expectedAccounts = { "0": { remaining: 20, resets: "0 resets" }, "1": { remaining: 55, resets: "1 reset" },
+        "2": { remaining: 90, resets: "2 resets" } }
+      proxyWidget.proxyAccounts.forEach(function (account) {
+        var id = String(account.accountId)
+        var expected = expectedAccounts[id]
+        var row = proxyWidget.accountList.rowFor(id)
+        assertTrue(expected !== undefined, "account " + id + " is one of the fixture's")
+        assertTrue(row !== null, "account " + id + " has a row")
+        if (!expected || !row) return
+        var weekly = (row.account.windows || []).filter(function (window) { return window.id === "codex-secondary" })[0]
+        assertEqual(weekly ? weekly.remaining : null, expected.remaining, "account " + id + " keeps its own quota")
         var badge = namedChild(row, "accountResetBadge")
         var label = namedChild(row, "accountResetLabel")
-        assertTrue(badge !== null && badge.width > 0 && badge.height > 0, "reset badge has a visible size")
-        assertEqual(label ? label.text : "", i + (i === 1 ? " reset" : " resets"), "each account shows its own banked resets including zero")
-      }
+        assertTrue(badge !== null && badge.width > 0 && badge.height > 0, "account " + id + " reset badge has a visible size")
+        assertEqual(label ? label.text : "", expected.resets, "account " + id + " shows its own banked resets, including zero")
+      })
       assertEqual(proxyWidget.accountList.rowModel.get(0).rowKey, "codex@0", "least headroom first")
       proxyWidget.selectAccount("2")
       assertEqual(proxyWidget.selectedAccount.accountId, "2", "a row selects the account the detail shows")
@@ -306,7 +328,7 @@ ShellRoot {
       widget.showCosts()
       assertEqual(widget.viewMode, "costs", "Costs IPC/view helper selects the isolated tab")
       widget.showCostSettings()
-      assertEqual(widget.viewMode, "cost-settings", "navigation does not override cost settings")
+      assertTrue(widget.configuring && widget.settingsForm.page === "costs", "the Costs gear opens Settings on its Costs page")
       widget.leaveSettings()
       assertEqual(widget.viewMode, "costs", "leaving settings restores Costs")
       widget.showLimits()
@@ -416,16 +438,27 @@ ShellRoot {
 
   property var beforeKeySettings: ({})
   property int keySavePhase: 0
+  property string keyPathBeforeFailure: ""
   function startKeySaveCheck() {
     beforeKeySettings = JSON.parse(JSON.stringify(widget.settings))
-    widget.showSettings()
-    var form = widget.settingsForm
-    form.setValue("sources", proxySources("https://proxy.test/prefix", "", "https://keeper.example/keeper", ""))
-    form.findChild("managementKeyRowField").text = "qml-synthetic-management-key"
-    form.findChild("managementKeyRow").submit()
-    widget.settingsForm.submit()
+    widget.settings = Object.assign({}, beforeKeySettings,
+      { sources: proxySources("https://proxy.test/prefix", "", "https://keeper.example/keeper", "") })
+    widget.showSettings("sources")
+    formControl("managementKeyRowField").text = "qml-synthetic-management-key"
+    formControl("managementKeyRow").submit()
     keySavePhase = 0
     waitForKeySave.restart()
+  }
+
+  // The key writer starts asynchronously, so `saving` alone can read false before it has begun.
+  function keySaveSettled() {
+    var form = widget.settingsForm
+    if (form.saving) return false
+    if (form.errorText !== "") return true
+    var proxy = proxyRow(mockShell.savedSettings)
+    if (keySavePhase === 0) return String(proxy.keyFile || "") !== ""
+    if (keySavePhase === 1) return String(proxy.keeperPasswordFile || "") !== ""
+    return false
   }
 
   function writeResult() {
@@ -538,9 +571,18 @@ ShellRoot {
       if ((richReady && malformedReady && costReady && malformedCostReady && lastGoodReady && proxyReady)
           || root.waitAttempts >= 120) {
         stop()
-        root.runChecks()
+        if (root.proxyWidget) root.proxyWidget.selectProviderId("codex")
+        accountRowsSettle.restart()
       }
     }
+  }
+
+  // Account rows follow the selected provider a frame later (AccountList syncs through Qt.callLater).
+  Timer {
+    id: accountRowsSettle
+    interval: 50
+    repeat: false
+    onTriggered: root.runChecks()
   }
 
   Timer {
@@ -581,47 +623,46 @@ ShellRoot {
     property int attempts: 0
     onTriggered: {
       attempts++
-      if (root.widget.settingsForm.saving && attempts < 300) return
+      if (!root.keySaveSettled() && attempts < 300) return
       stop()
       var form = root.widget.settingsForm
       if (root.keySavePhase === 0) {
-        root.assertTrue(!root.widget.configuring, "key save completes and returns to usage: " + form.errorText)
-        root.assertEqual(form.findChild("managementKeyRowField").text, "", "successful save clears the key field")
+        root.assertEqual(form.errorText, "", "the management key saves without an error")
+        root.assertTrue(root.widget.configuring, "saving a key keeps Settings open")
+        root.assertEqual(root.formControl("managementKeyRowField").text, "", "a saved key leaves the editor")
         root.assertTrue(String(root.proxyRow(mockShell.savedSettings).keyFile).indexOf("/management-keys/key-") > 0,
-          "GUI key save persists a generated private file path")
+          "the key is saved as a generated private file path")
         root.assertTrue(JSON.stringify(mockShell.savedSettings).indexOf("qml-synthetic-management-key") < 0,
-          "management key never reaches widget settings")
-        root.widget.showSettings()
-        root.assertEqual(form.findChild("managementKeyRowField").text, "", "saved key is never loaded into the editor")
+          "the management key never reaches the widget settings")
         var savedPath = String(root.proxyRow(root.widget.settings).keyFile)
-        form.submit()
-        root.assertEqual(String(root.proxyRow(root.widget.settings).keyFile), savedPath, "blank key preserves saved credentials")
-        root.widget.showSettings()
-        form.findChild("keeperPasswordRowField").text = "qml-synthetic-keeper-password"
-        form.findChild("keeperPasswordRow").submit()
-        form.submit()
+        root.formControl("managementKeyRow").submit()
+        root.assertTrue(root.formControl("managementKeyRow").error !== "" && !form.saving, "an empty key is refused")
+        root.assertEqual(String(root.proxyRow(root.widget.settings).keyFile), savedPath, "and the saved key stays")
+        root.formControl("keeperPasswordRowField").text = "qml-synthetic-keeper-password"
+        root.formControl("keeperPasswordRow").submit()
         root.keySavePhase = 1
         attempts = 0
         restart()
       } else if (root.keySavePhase === 1) {
-        root.assertTrue(!root.widget.configuring, "Keeper password save completes and returns to usage: " + form.errorText)
-        root.assertEqual(form.findChild("keeperPasswordRowField").text, "", "successful save clears the Keeper password field")
+        root.assertEqual(form.errorText, "", "the Keeper password saves without an error")
+        root.assertEqual(root.formControl("keeperPasswordRowField").text, "", "a saved Keeper password leaves the editor")
         root.assertTrue(JSON.stringify(mockShell.savedSettings).indexOf("qml-synthetic-keeper-password") < 0,
-          "Keeper password never reaches widget settings")
+          "the Keeper password never reaches the widget settings")
         root.assertTrue(String(root.proxyRow(mockShell.savedSettings).keeperPasswordFile).indexOf("/management-keys/key-") > 0,
-          "Keeper password persists only as a private file path")
-        root.widget.showSettings()
-        form.findChild("managementKeyRowField").text = "replacement-that-must-be-rolled-back"
-        form.findChild("managementKeyRow").submit()
+          "the Keeper password is saved only as a private file path")
+        root.keyPathBeforeFailure = String(root.proxyRow(mockShell.savedSettings).keyFile)
+        root.formControl("managementKeyRowField").text = "replacement-that-must-be-rolled-back"
         mockShell.rejectSave = true
-        form.submit()
+        root.formControl("managementKeyRow").submit()
         root.keySavePhase = 2
         attempts = 0
         restart()
       } else {
-        root.assertTrue(root.widget.configuring && form.errorText !== "", "failed config save retains an error")
+        root.assertTrue(form.errorText !== "", "a key whose settings cannot be saved is explained")
+        root.assertEqual(String(root.proxyRow(mockShell.savedSettings).keyFile), root.keyPathBeforeFailure,
+          "and the saved key path stays")
         mockShell.rejectSave = false
-        form.cancelRequested()
+        root.widget.leaveSettings()
         root.widget.settings = root.beforeKeySettings
         root.startPanelChecks()
       }
@@ -644,8 +685,9 @@ ShellRoot {
         panelNextTimer.restart()
       } else {
         root.widget.showCostSettings()
-        root.widget.costSettingsForm.priceEditor.begin("{}")
-        for (var i = 0; i < 16; i++) root.widget.costSettingsForm.priceEditor.addPrice()
+        root.formControl("customPricesSection").expanded = true
+        root.widget.settingsForm.priceEditor.begin("{}")
+        for (var i = 0; i < 16; i++) root.widget.settingsForm.priceEditor.addPrice()
         settingsScrollCheck.restart()
       }
     }
@@ -655,7 +697,7 @@ ShellRoot {
     id: settingsScrollCheck
     interval: 250
     onTriggered: {
-      var editor = root.widget.costSettingsForm.priceEditor
+      var editor = root.widget.settingsForm.priceEditor
       var field = editor.findItem(editor, "costModel-15")
       var flick = field
       while (flick && flick.contentY === undefined) flick = flick.parent
@@ -666,7 +708,7 @@ ShellRoot {
         root.assertTrue(point.y >= 0 && point.y + field.height <= flick.height,
           "new price field is fully visible above the fixed settings footer")
       }
-      root.widget.costSettingsForm.cancelRequested()
+      root.widget.leaveSettings()
       root.widget.close()
       root.writeResult()
     }
