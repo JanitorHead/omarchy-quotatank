@@ -248,6 +248,8 @@ Item {
           target: digitColumn
           easing.type: root.motion ? root.motion.easeEnter : Easing.OutCubic
           onRunningChanged: {
+            // A digit torn down mid-roll stops its animator after the number is gone.
+            if (!root) return
             root.activeAnimations += running ? 1 : -1
             if (!running) cell.snap()
           }

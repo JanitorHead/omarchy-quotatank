@@ -7,11 +7,14 @@ import qs.Commons
 // share on the chosen side, dim dots in the fill's colour are where this pace takes the limit by the reset
 // (red when it runs out). While the account spends, the edge column moves: under Used the next column
 // charges dot by dot, under Remaining the last lit column drains dot by dot; one cycle per 1.6 beats, so a
-// faster charge is a faster pace. A new request flashes that column on the card. The pace tick is a pair
-// of short marks above and below the grid.
+// faster charge is a faster pace. On the card a three-column scan runs through the forecast dots once a
+// beat, rightward from the fill's edge under Used, leftward from it under Remaining (the way the fill
+// drains). A new request flashes that column on the card. The pace tick is a pair of short marks above and
+// below the grid.
 //
 // Cost: one Rectangle per dot, all bound to the reading only (fill, forecast, colours); the moving column
-// is a separate overlay of `rows` dots, so the 30 Hz clock re-evaluates a handful of bindings, not the grid.
+// and the scan are separate overlays of a few dots whose column is an int, so the 30 Hz clock re-binds them
+// only when they step a column, never the grid.
 Item {
   id: root
 
@@ -70,6 +73,21 @@ Item {
   // An int, so the overlay re-binds only when a dot changes, not on every clock tick.
   readonly property int step: edgeMoving
     ? Math.min(cycleSteps - 1, Math.floor(((host.motion.liveSeconds / (model.period * 1.6)) % 1) * cycleSteps)) : 0
+  // The scan over the forecast dots (card only): the forecast's dots, the head's column (an int, so the
+  // overlay re-binds once per column step) and the trail's length. Under Remaining the forecast lies inside
+  // the fill, so the scan starts at its right end and runs left.
+  readonly property int scanFrom: !forecastShown ? -1 : remaining ? forecastFromDot : full + (hasPart ? 1 : 0)
+  readonly property int scanTo: !forecastShown ? -1 : remaining ? Math.min(forecastToDot, full) : forecastToDot
+  readonly property int scanFirstCol: scanFrom >= 0 ? Math.floor(scanFrom / rows) : -1
+  readonly property int scanLastCol: scanTo > 0 ? Math.floor((scanTo - 1) / rows) : -1
+  readonly property int scanTrail: 3
+  readonly property bool scanning: card && running && scanFirstCol >= 0 && scanLastCol - scanFirstCol >= 2
+  readonly property int scanHead: {
+    if (!scanning) return -1
+    var span = scanLastCol - scanFirstCol + 1 + scanTrail
+    var travelled = Math.floor(((host.motion.liveSeconds / model.period) % 1) * span)
+    return remaining ? scanLastCol - travelled + scanTrail - 1 : scanFirstCol + travelled
+  }
   // A request flash on the moving column (card only), fading over Motion.flash.
   property real flash: 0
   property real lastRequestAt: 0
@@ -186,6 +204,22 @@ Item {
       col: root.edgeCol
       fromBottom: index
       dotColor: root.livePaint(index)
+    }
+  }
+
+  // The scan: the head and its fading trail, only over dots inside the forecast.
+  Repeater {
+    objectName: "dotsScan"
+    model: root.scanning ? root.scanTrail * root.rows : 0
+
+    Dot {
+      required property int index
+      readonly property int behind: Math.floor(index / root.rows)
+      readonly property int k: col * root.rows + fromBottom
+      col: root.remaining ? root.scanHead + behind : root.scanHead - behind
+      fromBottom: index % root.rows
+      visible: k >= root.scanFrom && k < root.scanTo && !(root.edgeMoving && col === root.edgeCol)
+      dotColor: root.alpha(root.hotColor, [0.9, 0.55, 0.3][behind])
     }
   }
 
