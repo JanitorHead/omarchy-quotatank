@@ -2496,7 +2496,7 @@ function ompLiveComputers(settings, computers) {
 // the step that failed, and whether the computer may be added (it answered; reading nothing yet is fine).
 var COMPUTER_TEST_SECONDS = 120
 function computerTestResult(reply, host) {
-  var result = { ok: false, addable: false, fix: "", lines: [] }
+  var result = { ok: false, addable: false, fix: "", lines: [], tryAnotherUser: false }
   if (!reply) {
     result.lines = [{ tone: "error", text: "The test did not run. Check that Python 3 is installed, then try again." }]
     return result
@@ -2508,8 +2508,10 @@ function computerTestResult(reply, host) {
   var steps = listOrEmpty(reply.steps)
   for (var i = 0; i < steps.length; i++) {
     if (!steps[i] || typeof steps[i].text !== "string") continue
-    // "harnesses" names what is installed there but was not read: a note, not a passed step.
-    var tone = steps[i].id === "harnesses" ? "info" : steps[i].ok === true ? "ok" : "error"
+    // "harnesses" names what is installed there but was not read, and "history" without any says Costs gets
+    // nothing from this user: notes, not failed steps.
+    var note = steps[i].id === "harnesses" || (steps[i].id === "history" && steps[i].ok !== true)
+    var tone = note ? "info" : steps[i].ok === true ? "ok" : "error"
     result.lines.push({ tone: tone, text: steps[i].text })
     if (steps[i].ok !== true && result.fix === "") result.fix = String(steps[i].fix || "")
   }
@@ -2518,9 +2520,13 @@ function computerTestResult(reply, host) {
     result.lines = [{ tone: "error", text: "The test sent an answer this version cannot read. Update Quotatank, then try again." }]
     return result
   }
-  var failed = steps.filter(function(entry) { return entry && entry.ok !== true })
+  var failed = steps.filter(function(entry) { return entry && entry.ok !== true && entry.id !== "history" })
   result.ok = reply.ok === true
   result.addable = result.ok || (reply.thisComputer !== true && failed.length === 1 && failed[0].id === "found")
+  // Another user on the same computer may be the one SSH accepts, or the one whose agents run there.
+  result.tryAnotherUser = steps.some(function(entry) {
+    return entry && entry.ok !== true && (entry.id === "ssh" || entry.id === "history")
+  })
   if (result.fix !== "" && !/^ssh/.test(result.fix)) {
     result.lines.push({ tone: "info", text: result.fix })
     result.fix = ""

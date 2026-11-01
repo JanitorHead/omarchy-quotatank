@@ -383,12 +383,26 @@ Column {
   property string newComputerHost: ""
   property string computerTesting: ""
   property string computerTested: ""
-  property var computerTestResult: ({ ok: false, addable: false, fix: "", lines: [] })
-  property var computerSuggestions: []
-  // Suggestions not added yet.
-  readonly property var freshSuggestions: computerSuggestions.filter(function(entry) {
-    return !computerEntries.some(function(known) { return known.host === entry.host })
-  })
+  property var computerTestResult: ({ ok: false, addable: false, fix: "", lines: [], tryAnotherUser: false })
+  // Your computers from SSH config and Tailscale, each once with the users ssh connects as (computer-check.py
+  // --suggest): { name, via, ways: [{ host, user }] }.
+  property var computerMachines: []
+  // The ways not added yet, on computers that still have one.
+  readonly property var freshMachines: computerMachines.map(function(machine) {
+    return { name: machine.name, via: machine.via, ways: machine.ways.filter(function(way) {
+      return !computerEntries.some(function(known) { return known.host === way.host })
+    }) }
+  }).filter(function(machine) { return machine.ways.length > 0 })
+
+  // The other users on the computer a destination belongs to, not added yet.
+  function otherWays(host) {
+    var machine = freshMachines.filter(function(entry) {
+      return entry.ways.some(function(way) { return way.host === host })
+    })[0]
+    return machine ? machine.ways.filter(function(way) { return way.host !== host }) : []
+  }
+  function wayText(way) { return way.user ? "as " + way.user : way.host }
+  function pickWay(way) { newComputerHost = way.host; testComputer(way.host) }
 
   function clockText(seconds) { return Qt.formatDateTime(new Date(seconds * 1000), "HH:mm") }
 
@@ -450,9 +464,12 @@ Column {
     id: suggestProbe
     timeoutMs: 10000
     onFinished: function(reply) {
-      root.computerSuggestions = reply ? UsageLogic.listOrEmpty(reply.suggestions).filter(function(entry) {
-        return entry && UsageLogic.validDestination(entry.host)
-      }) : []
+      root.computerMachines = reply ? UsageLogic.listOrEmpty(reply.machines).map(function(machine) {
+        return { name: String(machine && machine.name || ""), via: machine && machine.via === "tailscale" ? "tailscale" : "ssh-config",
+          ways: UsageLogic.listOrEmpty(machine && machine.ways).filter(function(way) {
+            return way && UsageLogic.validDestination(way.host)
+          }).map(function(way) { return { host: String(way.host), user: typeof way.user === "string" ? way.user : "" } }) }
+      }).filter(function(machine) { return machine.name !== "" && machine.ways.length > 0 }) : []
     }
   }
   // SSH config and Tailscale are read each time Sources opens: computers come and go.
@@ -691,6 +708,53 @@ Column {
         width: parent.width
         spacing: Style.spacing.sm
         Label { text: "Add a computer"; font.bold: true }
+        Hint {
+          text: "Pick a computer and the user your agents run as there, or enter an SSH destination. "
+            + "A test runs first: it connects, copies Quotatank's readers, and says what it finds."
+        }
+        // One row per computer: its name, then a button per user ssh can connect as, lined up in one column.
+        TextMetrics {
+          id: machineNames
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          text: root.freshMachines.reduce(function(longest, machine) {
+            return machine.name.length > longest.length ? machine.name : longest
+          }, "")
+        }
+        Repeater {
+          objectName: "computerMachines"
+          model: root.freshMachines
+          delegate: Row {
+            id: machineRow
+            required property var modelData
+            objectName: "computerMachine-" + modelData.name
+            spacing: Style.spacing.sm
+            PlainText {
+              anchors.verticalCenter: parent.verticalCenter
+              width: Math.ceil(machineNames.advanceWidth)
+              text: machineRow.modelData.name
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+            Repeater {
+              model: machineRow.modelData.ways
+              delegate: Ui.Button {
+                required property var modelData
+                objectName: "computerWay-" + modelData.host
+                text: root.wayText(modelData)
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.caption
+                focusable: true
+                tooltipText: "Test ssh " + modelData.host
+                  + (machineRow.modelData.via === "tailscale" ? " (on your tailnet)" : " (from ~/.ssh/config)")
+                onClicked: root.pickWay(modelData)
+              }
+            }
+          }
+        }
         TextRow {
           id: computerHostField
           objectName: "computerHost"
@@ -701,31 +765,10 @@ Column {
           validate: function(text) { return root.computerHostProblem(text) }
           onApplied: function(text) { root.newComputerHost = text }
         }
-        Flow {
-          objectName: "computerSuggestions"
-          visible: root.freshSuggestions.length > 0
-          width: parent.width
-          spacing: Style.spacing.sm
-          Repeater {
-            model: root.freshSuggestions
-            delegate: Ui.Button {
-              required property var modelData
-              objectName: "computerSuggestion-" + modelData.host
-              text: modelData.host
-              bordered: true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              fontSize: Style.font.caption
-              focusable: true
-              tooltipText: modelData.via === "tailscale" ? "On your tailnet" : "In ~/.ssh/config"
-              onClicked: { root.newComputerHost = modelData.host; root.testComputer(modelData.host) }
-            }
-          }
-        }
         TestBlock {
           objectName: "computerAddTest"
           ready: root.newComputerHost !== "" && root.computerHostProblem(root.newComputerHost) === ""
-          blockedReason: root.newComputerHost === "" ? "Enter the computer's SSH destination, or pick one above, to test it."
+          blockedReason: root.newComputerHost === "" ? "Pick a computer above, or enter its SSH destination, to test it."
             : root.computerHostProblem(root.newComputerHost)
           running: root.computerTesting === root.newComputerHost && computerProbe.active
           waitingText: "Connecting to " + root.newComputerHost + " and copying Quotatank's readers…"
@@ -736,6 +779,36 @@ Column {
           objectName: "computerAddFix"
           visible: root.computerTested === root.newComputerHost && !computerProbe.active && /^ssh/.test(root.computerTestResult.fix)
           command: root.computerTestResult.fix
+        }
+        // The key was refused, or this user has no agent history there: the same computer's other users.
+        Row {
+          objectName: "computerOtherWays"
+          readonly property var ways: root.computerTested === root.newComputerHost && !computerProbe.active
+            && root.computerTestResult.tryAnotherUser ? root.otherWays(root.newComputerHost) : []
+          visible: ways.length > 0
+          spacing: Style.spacing.sm
+          PlainText {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Same computer:"
+            color: Qt.darker(root.foreground, 1.5)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+          Repeater {
+            model: parent.ways
+            delegate: Ui.Button {
+              required property var modelData
+              objectName: "computerOtherWay-" + modelData.host
+              text: "Test " + root.wayText(modelData)
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              focusable: true
+              tooltipText: "Test ssh " + modelData.host
+              onClicked: root.pickWay(modelData)
+            }
+          }
         }
         Ui.Button {
           objectName: "computerAdd"

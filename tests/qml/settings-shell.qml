@@ -181,17 +181,30 @@ ShellRoot {
       check(JSON.parse(saved.sources).length === 0, "Remove proxy leaves no proxy source")
       formPhase = 10
     } else if (formPhase === 10) {
+      if (form.computerMachines.length === 0) return
       shown("computersSection").expanded = true
       edit("computerHostField", "-oProxyCommand=x", true)
-      check(form.newComputerHost === "" && text("computerAddTestBlocked").indexOf("Enter the computer's SSH destination") === 0,
+      check(form.newComputerHost === "" && text("computerAddTestBlocked").indexOf("Pick a computer above") === 0,
         "an option-like destination is refused: " + form.newComputerHost)
-      edit("computerHostField", "devbox", true)
-      check(form.newComputerHost === "devbox" && shown("computerAddTestButton").visible && shown("computerAddTestButton").enabled,
-        "a destination can be tested")
-      shown("computerAddTestButton").clicked()
+      check(JSON.stringify(form.freshMachines.map(function(machine) { return machine.name })) === '["devbox","buildbox"]',
+        "each computer is offered once, without option-like names: " + JSON.stringify(form.freshMachines))
+      check(shown("computerWay-devbox").text === "as dev" && shown("computerWay-devbox-root").text === "as root"
+        && shown("computerWay-buildbox").text === "buildbox", "a button per user ssh connects as, or the name when unknown")
+      shown("computerWay-devbox-root").clicked()
+      check(form.newComputerHost === "devbox-root", "picking a user fills the destination and tests it")
+      formPhase = 14
+    } else if (formPhase === 14) {
+      if (form.computerTested !== "devbox-root" || form.computerTesting !== "") return
+      check(text("computerAddTestLine-0Text") === "devbox-root did not accept this computer's SSH key.", "the refusal shows")
+      check(shown("computerOtherWays").visible && shown("computerOtherWay-devbox").text === "Test as dev",
+        "a refused key offers the same computer's other users")
+      check(!shown("computerAdd").visible, "a computer that refused cannot be added")
+      shown("computerOtherWay-devbox").clicked()
       formPhase = 11
     } else if (formPhase === 11) {
-      if (form.computerTested !== "devbox" || form.computerSuggestions.length === 0) return
+      if (form.computerTested !== "devbox" || form.computerTesting !== "") return
+      check(text("computerAddTestLine-4Text") === "Agent history: Oh My Pi (12 transcripts)", "the test says what Costs will read")
+      check(!shown("computerOtherWays").visible, "a computer that answered offers no other user")
       check(text("computerAddTestLine-0Text") === "Connected to devbox", "the test shows its steps: " + text("computerAddTestLine-0Text"))
       check(shown("computerAdd").visible && shown("computerAdd").text === "Add devbox", "a computer that answered can be added")
       shown("computerAdd").clicked()
@@ -199,8 +212,9 @@ ShellRoot {
       check(computers.length === 1 && computers[0].kind === "computer" && computers[0].host === "devbox" && computers[0].on === true
         && /^c-[0-9a-f]{8}$/.test(computers[0].id), "Add saves a switched-on computer: " + saved.sources)
       check(form.newComputerHost === "" && text("computerStatus-0Text") === "Read with the next refresh", "until the next refresh reads it")
-      check(JSON.stringify(form.freshSuggestions.map(function(entry) { return entry.host })) === '["buildbox"]',
-        "suggestions leave out added computers and option-like names: " + JSON.stringify(form.freshSuggestions))
+      check(JSON.stringify(form.freshMachines.map(function(machine) {
+        return machine.name + ":" + machine.ways.map(function(way) { return way.host }).join("+") })) === '["devbox:devbox-root","buildbox:buildbox"]',
+        "an added user leaves the computer's other users on offer: " + JSON.stringify(form.freshMachines))
       check(form.sourcesSummary() === "This computer, devbox", "the index names the computer: " + form.sourcesSummary())
       var refused = payload(ompFound)
       refused.computers = [{ id: computers[0].id, host: "devbox", status: "error", message: "devbox did not accept this computer's SSH key.",

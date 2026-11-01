@@ -307,8 +307,8 @@ Quotatank reads existing credentials and never writes authentication state; sign
 
 If your agents also run on a computer you reach over SSH with a key (a desktop you use from a laptop, say):
 
-1. Open **Settings → Sources → Other computers**, enter its SSH destination or pick one of the suggestions (from your SSH config and Tailscale), and press **Test**.
-2. If a step fails, the Test says which and gives the command that fixes it. Run it and test again.
+1. Open **Settings → Sources → Other computers**. Your computers from your SSH config and Tailscale are listed once each, with a button per user SSH can connect as (**as dev**, **as root**): pick the user your agents run as there. Or enter an SSH destination and press **Test**.
+2. The Test connects, says what it found there, including the agent history Costs will read, and if a step fails, which one and the command that fixes it. When the key is refused or that user has no agent history, it offers the same computer's other users.
 3. Press **Add**. Its sign-ins, keys, omp accounts and transcripts now count with this computer's.
 
 Quotatank copies its readers to `~/.cache/quotatank` there and changes nothing else; **Remove** deletes them. **Main computer** picks where **Sign in** and **Install** open their terminal.

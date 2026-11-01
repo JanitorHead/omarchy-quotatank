@@ -11,14 +11,17 @@ if log:
         handle.write(json.dumps(args) + "\n")
 
 if args[:1] == ["--suggest"]:
-    print(json.dumps({"suggestions": [{"host": "devbox", "via": "ssh-config"}, {"host": "buildbox", "via": "tailscale"},
-                                      {"host": "-oProxyCommand=x", "via": "ssh-config"}]}))
+    print(json.dumps({"machines": [
+        {"name": "devbox", "via": "ssh-config", "ways": [{"host": "devbox", "user": "dev"}, {"host": "devbox-root", "user": "root"}]},
+        {"name": "buildbox", "via": "tailscale", "ways": [{"host": "buildbox", "user": ""}]},
+        {"name": "odd", "via": "ssh-config", "ways": [{"host": "-oProxyCommand=x", "user": "dev"}]}]}))
 elif args[:1] == ["--test"] and len(args) > 1 and args[1] == "devbox":
     print(json.dumps({"ok": True, "steps": [
         {"id": "ssh", "ok": True, "text": "Connected to devbox"},
         {"id": "python", "ok": True, "text": "Python 3.12 on devbox"},
         {"id": "readers", "ok": True, "text": "Quotatank's readers are on devbox"},
-        {"id": "found", "ok": True, "text": "Found Claude Code and omp with 2 accounts"}]}))
+        {"id": "found", "ok": True, "text": "Found Claude Code and omp with 2 accounts"},
+        {"id": "history", "ok": True, "text": "Agent history: Oh My Pi (12 transcripts)"}]}))
 elif args[:1] == ["--test"]:
     print(json.dumps({"ok": False, "steps": [
         {"id": "ssh", "ok": False, "text": args[1] + " did not accept this computer's SSH key.", "fix": "ssh-copy-id " + args[1]}]}))

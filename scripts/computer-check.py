@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Settings → Sources → Computers: suggest, test and remove another computer, and follow omp's live requests there.
 
-  --suggest                     SSH config aliases and Tailscale peers worth offering
+  --suggest                     your computers from SSH config and Tailscale, each once, with the users ssh connects as
   --test HOST [--providers ids] [--omp local|off]   connect, check Python, copy the readers, and read once
   --remove HOST [--id ID]       delete what Quotatank put on that computer, and its saved readings here
   --live HOST -- ARGS…          omp-live.py ARGS on that computer, its lines passed through as they come
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import ipaddress
 import json
 import os
 import re
@@ -20,6 +21,7 @@ import shutil
 import socket
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +34,11 @@ from quotatank_common import state_folder  # noqa: E402
 COMPUTER_ID = re.compile(r"c-[0-9a-f]{8}")
 PROVIDER_IDS = re.compile(r"[a-z0-9-]+(,[a-z0-9-]+)*")
 MAX_SUGGESTIONS = 24
+MAX_CANDIDATES = 64
+SSH_RESOLVE_SECONDS = 3.0
+INVENTORY_SECONDS = 15.0  # Lists folders only; with the probe and the read it stays under the widget's 120 s.
+# Code hosts (GitHub, GitLab, Gitea…) take SSH only as this user, and give it no shell to run the readers.
+CODE_HOST_USERS = {"git"}
 MAX_CONFIG_FILES = 32
 PROBE_SECONDS = 45.0  # The first connection may copy the readers.
 READ_SECONDS = 55.0  # omp usage there may take up to 45 s.
@@ -95,16 +102,76 @@ def tailscale_peers() -> list[str]:
     return names
 
 
+def resolve(host: str) -> dict[str, str]:
+    """Where ssh would go for this name and as whom, from its configuration alone: `ssh -G` connects nowhere."""
+    try:
+        done = subprocess.run(["ssh", "-G", host], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                              timeout=SSH_RESOLVE_SECONDS, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    settings: dict[str, str] = {}
+    for line in done.stdout.splitlines() if done.returncode == 0 else []:
+        key, _space, value = line.partition(" ")
+        if key in ("user", "hostname", "port"):
+            settings[key] = value.strip()
+    return settings
+
+
+def is_address(name: str) -> bool:
+    try:
+        ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    return True
+
+
+def short_name(name: str) -> str:
+    return "" if is_address(name) else name.split(".")[0].lower()
+
+
 def suggest() -> dict[str, Any]:
+    """Each computer once, with the users ssh would connect as. Names that reach one address, or share a first
+    label (a tailnet name), are one computer: `devbox`, `devbox-root` and `10.0.0.2` are devbox, as dev and as
+    root. The name a person would use wins: the first alias that is neither an address nor dotted."""
     here = {socket.gethostname().split(".")[0].lower(), "localhost"}
-    suggestions: list[dict[str, str]] = []
+    candidates: list[tuple[str, str]] = []
     for via, hosts in (("ssh-config", ssh_config_hosts(Path.home() / ".ssh" / "config", set())),
                        ("tailscale", tailscale_peers())):
         for host in hosts:
-            if host.split("@")[-1].split(".")[0].lower() not in here \
-                    and all(known["host"] != host for known in suggestions):
-                suggestions.append({"host": host, "via": via})
-    return {"suggestions": suggestions[:MAX_SUGGESTIONS]}
+            if all(known != host for known, _via in candidates):
+                candidates.append((host, via))
+    candidates = candidates[:MAX_CANDIDATES]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        resolved = list(pool.map(lambda candidate: resolve(candidate[0]), candidates))
+    groups: list[dict[str, Any]] = []
+    for (host, via), settings in zip(candidates, resolved):
+        name = host.split("@")[-1]
+        user = host.split("@")[0] if "@" in host else settings.get("user", "")
+        address = settings.get("hostname", name).lower()
+        if user in CODE_HOST_USERS or short_name(name) in here or short_name(address) in here:
+            continue
+        keys = {f"address:{address}:{settings.get('port', '22')}"}
+        keys |= {"name:" + label for label in (short_name(name), short_name(address)) if label}
+        matching = [group for group in groups if group["keys"] & keys]
+        group = matching[0] if matching else {"keys": set(), "via": via, "names": []}
+        if not matching:
+            groups.append(group)
+        for other in matching[1:]:
+            group["keys"] |= other["keys"]
+            group["names"] += other["names"]
+            groups.remove(other)
+        group["keys"] |= keys
+        group["names"].append((host, name, user))
+    machines = []
+    for group in groups:
+        # Plain names first, then dotted ones, then addresses; config order within each.
+        names = sorted(group["names"], key=lambda entry: (is_address(entry[1]), "." in entry[1]))
+        ways: list[dict[str, str]] = []
+        for host, _name, user in names:
+            if all(way["user"] != user for way in ways):
+                ways.append({"host": host, "user": user})
+        machines.append({"name": short_name(names[0][1]) or names[0][1], "via": group["via"], "ways": ways})
+    return {"machines": machines[:MAX_SUGGESTIONS]}
 
 
 def step(step_id: str, ok: bool, text: str, fix: str = "") -> dict[str, Any]:
@@ -139,6 +206,29 @@ def found_text(payload: dict[str, Any]) -> tuple[bool, str, int, set[str]]:
     return True, f"{count} {'account' if count == 1 else 'accounts'}: {names}", count, {key for key, _name, _number in readings}
 
 
+def agent_history(host: str) -> list[dict[str, Any]] | None:
+    """The agent history Costs would read there (cost-fetch.py --inventory), or None if that could not be told."""
+    try:
+        answer = remote.run_reader(host, "cost-fetch.py", ["--inventory"], INVENTORY_SECONDS)
+    except remote.RemoteFailure:
+        return None
+    entries = answer.get("history") if isinstance(answer, dict) else None
+    if not isinstance(entries, list):
+        return None
+    return [entry for entry in entries if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+            and (entry.get("transcripts") is None or type(entry.get("transcripts")) is int)][:12]
+
+
+def history_step(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    if not entries:
+        return step("history", False, "No agent history there for this user in the last 30 days, "
+                    "so Costs gets nothing from it.", "If your agents run as another user there, test that user.")
+    named = [entry["name"] if entry.get("transcripts") is None
+             else f"{entry['name']} ({entry['transcripts']:,} {'transcript' if entry['transcripts'] == 1 else 'transcripts'})"
+             for entry in entries]
+    return step("history", True, "Agent history: " + ", ".join(named))
+
+
 def provider_name(payload: dict[str, Any], provider_id: str) -> str:
     providers = payload.get("providers") if isinstance(payload.get("providers"), list) else []
     named = next((provider.get("name") for provider in providers if isinstance(provider, dict)
@@ -169,6 +259,10 @@ def test(host: str, providers: str, omp: str) -> dict[str, Any]:
         return {"ok": False, "steps": steps, "found": {"python": python}}
     answer = payload if isinstance(payload, dict) else {}
     ok, text, accounts, read = found_text(answer)
+    history = agent_history(host)
+    if not ok and history:
+        # Its history alone is worth adding: Costs counts it.
+        ok, text = True, "No signed-in accounts there; its agent history counts in Costs."
     steps.append(step("found", ok, text, "" if ok else f"Sign in to your agents on {host}, then test again."))
     installed = answer.get("installed")
     harnesses = [item for item in installed if isinstance(item, str)] if isinstance(installed, list) else []
@@ -177,9 +271,11 @@ def test(host: str, providers: str, omp: str) -> dict[str, Any]:
     unread = [provider_name(answer, item) for item in harnesses if item in monitored and item not in read]
     if unread:
         steps.append(step("harnesses", True, "Installed there, not signed in or not read: " + ", ".join(unread[:8])))
+    if history is not None:
+        steps.append(history_step(history))
     omp_state = answer.get("omp") if isinstance(answer.get("omp"), dict) else {}
     return {"ok": ok, "steps": steps, "found": {"python": python, "harnesses": harnesses, "accounts": accounts,
-                                               "omp": bool(omp_state.get("installed"))}}
+                                               "omp": bool(omp_state.get("installed")), "history": history}}
 
 
 def remove(host: str, computer_id: str | None) -> dict[str, Any]:

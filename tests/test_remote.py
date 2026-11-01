@@ -169,17 +169,43 @@ class BundleTests(FakeSsh):
 
 
 class ComputerCheckTests(FakeSsh):
-    def test_suggestions_come_from_ssh_config_aliases_without_patterns(self):
+    def test_suggestions_are_computers_with_the_users_ssh_connects_as(self):
         ssh = self.root / "home" / ".ssh"
         (ssh / "conf.d").mkdir(parents=True)
-        (ssh / "config").write_text("Include conf.d/*\nHost devbox build-*\n  HostName 10.0.0.2\nHost *\n  ServerAliveInterval 5\n")
-        (ssh / "conf.d" / "work").write_text("Host buildbox !old\nMatch host x\n")
+        (ssh / "config").write_text("Include conf.d/*\nHost devbox build-*\n  HostName 10.0.0.2\nHost devbox-root 10.0.0.2\n"
+                                    "Host *\n  ServerAliveInterval 5\n")
+        (ssh / "conf.d" / "work").write_text("Host buildbox !old gitlab.example\nMatch host x\n")
+        settings = {"buildbox": {"user": "ci", "hostname": "buildbox.example", "port": "22"},
+                    "gitlab.example": {"user": "git", "hostname": "gitlab.example", "port": "2222"},
+                    "devbox": {"user": "dev", "hostname": "10.0.0.2", "port": "22"},
+                    "devbox-root": {"user": "root", "hostname": "10.0.0.2", "port": "22"},
+                    "10.0.0.2": {"user": "dev", "hostname": "10.0.0.2", "port": "22"},
+                    "devbox.tail0001.ts.net": {"user": "dev", "hostname": "devbox.tail0001.ts.net", "port": "22"}}
         with mock.patch.dict(os.environ, {"HOME": str(self.root / "home")}), \
-                mock.patch.object(check, "tailscale_peers", return_value=["devbox", "aether"]), \
+                mock.patch.object(check, "resolve", side_effect=lambda host: settings.get(host, {})), \
+                mock.patch.object(check, "tailscale_peers", return_value=["devbox.tail0001.ts.net", "aether", "lab"]), \
                 mock.patch.object(check.socket, "gethostname", return_value="aether.local"):
-            suggestions = check.suggest()["suggestions"]
-        self.assertEqual(suggestions, [{"host": "buildbox", "via": "ssh-config"}, {"host": "devbox", "via": "ssh-config"}],
-                         "Include is followed, patterns and this computer are left out, and a name is offered once")
+            machines = check.suggest()["machines"]
+        self.assertEqual(machines, [
+            {"name": "buildbox", "via": "ssh-config", "ways": [{"host": "buildbox", "user": "ci"}]},
+            {"name": "devbox", "via": "ssh-config", "ways": [{"host": "devbox", "user": "dev"}, {"host": "devbox-root", "user": "root"}]},
+            {"name": "lab", "via": "tailscale", "ways": [{"host": "lab", "user": ""}]},
+        ], "one computer per address or name, a way per user; patterns, code hosts and this computer are left out")
+
+    def test_a_test_says_what_agent_history_costs_will_read_there(self):
+        with mock.patch.object(remote, "machine_id", return_value="this-computer"):
+            empty = check.test("devbox", "", "off")
+        self.assertEqual((empty["steps"][-1]["id"], empty["steps"][-1]["ok"]), ("history", False))
+        self.assertIn("No agent history there", empty["steps"][-1]["text"])
+        sessions = self.root / "homes" / "devbox" / ".omp" / "agent" / "sessions" / "-web-shop"
+        sessions.mkdir(parents=True)
+        (sessions / "2030-01-15T10-00-00-000Z_s1.jsonl").write_text("{}\n")
+        with mock.patch.object(remote, "machine_id", return_value="this-computer"):
+            found = check.test("devbox", "", "off")
+        self.assertEqual(found["steps"][-1], {"id": "history", "ok": True, "text": "Agent history: Oh My Pi (1 transcript)",
+                                              "fix": ""})
+        self.assertTrue(found["ok"], "history alone is worth adding: Costs counts it")
+        self.assertEqual(found["steps"][3]["text"], "No signed-in accounts there; its agent history counts in Costs.")
 
     def test_a_test_stops_at_the_first_step_that_fails_and_says_how_to_fix_it(self):
         with mock.patch.object(remote, "locked_key_without_agent", return_value=False):
