@@ -31,8 +31,8 @@ Item {
   readonly property real requestFlash: animating && model.requestAt > 0 && seconds >= model.requestAt
     ? Math.max(0, 1 - (seconds - model.requestAt) / 0.8) : 0
   readonly property real pulse: Math.max(beat, requestFlash)
-  // The aurora's drift, in fill widths: about one pass every 5 s at an even pace, quicker under pressure.
-  readonly property real flow: animating ? seconds * (0.06 + 0.14 * Math.min(3, model.pressure)) : 0
+  // The aurora's drift, in fill widths: about one pass every 7 s at an even pace, a little quicker under pressure.
+  readonly property real flow: animating ? seconds * (0.1 + 0.04 * Math.min(2, model.pressure)) : 0
   readonly property bool remaining: !!model && model.quotaMode === "Remaining"
   readonly property color tone: host ? host.tone : "transparent"
   readonly property color foreground: host ? host.foreground : "transparent"

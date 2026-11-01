@@ -1664,7 +1664,7 @@ console.log("omp settings, live feed and account modes: passed");
   const live = context.liveMeter(hot, true, "Used");
   assert.ok(Math.abs(live.pressure - 3) < 1e-9, "0.01%/s against the 30% left over 9000 s");
   assert.ok(Math.abs(live.ratePerHour - 36) < 1e-9);
-  assert.ok(Math.abs(live.period - 2.2 / Math.pow(3, 0.75)) < 1e-9);
+  assert.equal(live.period, 1.2, "pressure 3 beats at the floor: a quicker beat reads as a flicker");
   assert.deepEqual([live.start, live.end, live.runsOut], [0.7, 1, true], "the sweep runs from the fill's edge to the end");
   const draining = context.liveMeter(hot, true, "Remaining");
   assert.ok(Math.abs(draining.start - 0.3) < 1e-9 && draining.end === 0, "Remaining: the sweep runs leftward to what is left at reset");
@@ -1672,7 +1672,6 @@ console.log("omp settings, live feed and account modes: passed");
   assert.ok(easy.pressure < 1 && easy.period > live.period, "a pace that lasts beats slower");
   assert.ok(context.liveMeter(context.windowForecast({ ...quiet(1) }, NOW), true, "Used").period === 3.2, "no rate, the slowest beat");
   assert.equal(context.liveMeter(context.windowForecast({ ...quiet(1) }, NOW), true, "Used").start, -1, "no rate, no sweep");
-  assert.equal(context.liveMeter(context.windowForecast(rising(70, 10), NOW), true, "Used").period, 0.45, "the beat has a floor");
 
   // Live figure: the reading plus what the rate adds since, capped at 15 minutes and at 100.
   assert.equal(context.liveEstimate(hot, NOW - 100, NOW, true), 71);

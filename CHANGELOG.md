@@ -13,6 +13,7 @@ All notable changes to this project will be documented here. The format follows
 
 ### Fixed
 
+- **Meters no longer race when an account spends hard.** Under heavy use the beat sped up to two a second and the projection sweep to 40 blocks a second, which read as a glitch. The beat now stays at 1.2 s or slower, a sweep takes at least 0.7 s, and every style's drift, shine, stripes, and sway are capped to match. The alert colour, not the speed, says the limit is running out.
 - A digit removed mid-roll (switching style or provider while a figure rolled) logged a TypeError in the shell log.
 
 ## 3.1.0

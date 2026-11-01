@@ -32,8 +32,8 @@ Item {
   readonly property real period: model && model.period > 0 ? model.period : 1
   // Seconds into the current beat, on the shared 30 Hz clock.
   readonly property real beatTime: moving ? motion.liveSeconds % period : 0
-  // Blocks a second, faster as the pace presses on the limit.
-  readonly property real speed: model ? Math.max(12, Math.min(60, 24 * Math.sqrt(Math.max(0, model.pressure)))) : 12
+  // Blocks a second, faster as the pace presses on the limit; capped so the flash stays a sweep, not a blink.
+  readonly property real speed: model ? Math.max(10, Math.min(24, 14 * Math.sqrt(Math.max(0, model.pressure)))) : 10
   readonly property bool lightTheme: !!host && 0.299 * host.foreground.r + 0.587 * host.foreground.g + 0.114 * host.foreground.b < 0.5
   readonly property color highlight: !host ? "transparent"
     : model && (model.runsOut || model.pressure > 1) ? lift(host.urgent, 0.25) : lift(host.tone, 0.3)

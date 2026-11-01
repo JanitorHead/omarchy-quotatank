@@ -24,8 +24,8 @@ Item {
   readonly property bool moving: !!model && model.moving && visible
   readonly property bool running: moving && !!motion && !motion.reduced
   readonly property real seconds: running ? motion.liveSeconds : 0
-  // How hard the pace presses on the limit, capped so a burst does not turn the sheen into a flicker.
-  readonly property real ratio: model ? Math.max(0, Math.min(2.5, model.pressure)) : 0
+  // How hard the pace presses on the limit, capped low so a burst does not turn the sheen into a flicker.
+  readonly property real ratio: model ? Math.max(0, Math.min(1.5, model.pressure)) : 0
   readonly property real beat: running && model.period > 0
     ? 0.5 - 0.5 * Math.cos(2 * Math.PI * ((seconds / model.period) % 1)) : 0
   readonly property real requestAge: running && model.requestAt > 0 ? seconds - model.requestAt : -1
@@ -114,7 +114,7 @@ Item {
       objectName: "pillForecast"
       readonly property real dashPeriod: Style.spaceReal(7)
       readonly property real march: root.running
-        ? ((root.seconds * Style.spaceReal(10 + 14 * root.ratio)) % dashPeriod) * (root.remaining ? 1 : -1) : 0
+        ? ((root.seconds * Style.spaceReal(10 + 8 * root.ratio)) % dashPeriod) * (root.remaining ? 1 : -1) : 0
       readonly property real inner: outlinePath.strokeWidth / 2
       readonly property real bend: Math.max(0, height / 2 - inner)
       readonly property real rightX: Math.max(inner, width - height / 2)
@@ -189,7 +189,7 @@ Item {
       objectName: "pillSheen"
       readonly property real band: Style.spaceReal(30)
       readonly property real travel: Math.max(1, width + 2 * Style.spaceReal(40))
-      readonly property real run: (root.seconds * Style.spaceReal(60 + 120 * root.ratio)) % travel
+      readonly property real run: (root.seconds * Style.spaceReal(60 + 50 * root.ratio)) % travel
       // The band's middle at half height; under Remaining it runs back towards the start.
       readonly property real centre: root.remaining ? width + Style.spaceReal(40) - run : run - Style.spaceReal(40)
       visible: root.running && card.solidWidth > 0

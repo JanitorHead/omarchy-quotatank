@@ -26,8 +26,8 @@ Item {
   readonly property bool moving: !!model && model.moving && visible
   readonly property bool running: moving && !!motion && !motion.reduced
   readonly property real seconds: running ? motion.liveSeconds : 0
-  // How hard the pace presses on the limit, capped so a burst does not turn the stripes into a blur.
-  readonly property real ratio: model ? Math.max(0, Math.min(2.5, model.pressure)) : 0
+  // How hard the pace presses on the limit, capped low so a burst does not turn the stripes into a blur.
+  readonly property real ratio: model ? Math.max(0, Math.min(1.5, model.pressure)) : 0
   readonly property real beat: running && model.period > 0
     ? 0.5 - 0.5 * Math.cos(2 * Math.PI * ((seconds / model.period) % 1)) : 0
   // Where even use would be by now on the chosen side (the time rail), -1 without a pace.
@@ -168,7 +168,7 @@ Item {
         root.remaining ? card.edgeX : card.xAt(card.forecastShown ? root.model.forecastTo : 0))
       readonly property real dashPeriod: Style.spaceReal(7)
       readonly property real march: root.running
-        ? ((root.seconds * Style.spaceReal(10 + 14 * root.ratio)) % dashPeriod) * (root.remaining ? 1 : -1) : 0
+        ? ((root.seconds * Style.spaceReal(10 + 8 * root.ratio)) % dashPeriod) * (root.remaining ? 1 : -1) : 0
       readonly property real inner: outlinePath.strokeWidth / 2
       readonly property real bend: Math.max(0, height / 2 - inner)
       readonly property real rightX: Math.max(inner, width - height / 2)
@@ -243,7 +243,7 @@ Item {
       id: stripes
       objectName: "raceStripes"
       readonly property real period: Style.spaceReal(12)
-      readonly property real shift: ((root.seconds * Style.spaceReal(14 + 26 * root.ratio)) % period) * (root.remaining ? -1 : 1)
+      readonly property real shift: ((root.seconds * Style.spaceReal(14 + 12 * root.ratio)) % period) * (root.remaining ? -1 : 1)
       visible: root.running && card.solidWidth > 0
       clip: true
       x: card.inset
@@ -441,7 +441,7 @@ Item {
       id: rowStripes
       objectName: "raceRowStripes"
       readonly property real period: Style.spaceReal(8)
-      readonly property real shift: ((root.seconds * Style.spaceReal(10 + 18 * root.ratio)) % period) * (root.remaining ? -1 : 1)
+      readonly property real shift: ((root.seconds * Style.spaceReal(10 + 10 * root.ratio)) % period) * (root.remaining ? -1 : 1)
       visible: root.running && rowBar.fillWidth > 0
       y: rowBar.barY
       width: rowBar.fillWidth

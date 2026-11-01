@@ -189,7 +189,7 @@ Item {
       Rectangle {
         required property int index
         readonly property int chunk: Math.max(0, root.liveFrom) + index
-        readonly property real swing: Math.abs(Math.sin(root.liveSeconds * (6 + 8 * root.pressure) + chunk * 1.7))
+        readonly property real swing: Math.abs(Math.sin(root.liveSeconds * (3 + 2 * root.pressure) + chunk * 1.7))
           * Math.max(0.4, Math.min(1, 0.4 + root.pressure * 0.5))
         objectName: chunk === root.edge ? "waveLiveEdge" : ""
         x: root.chunkAt(chunk) * root.pitch

@@ -128,10 +128,10 @@ Item {
     readonly property color tone: root.host ? root.host.tone : "transparent"
     readonly property bool running: visible && !!limit && limit.moving && !!root.host && !!root.host.motion && !root.host.motion.reduced
     readonly property real now: running ? root.host.motion.liveSeconds : 0
-    readonly property real pressure: limit ? Math.max(0, Math.min(3, limit.pressure)) : 0
+    readonly property real pressure: limit ? Math.max(0, Math.min(2, limit.pressure)) : 0
     readonly property real beat: running ? 0.5 - 0.5 * Math.cos(2 * Math.PI * ((now / limit.period) % 1)) : 0
     // The meniscus sways while the account spends, quicker as the pace presses on the limit.
-    readonly property real wobble: running ? Math.sin(now * (3 + 3 * pressure)) * Style.spaceReal(1.6) : 0
+    readonly property real wobble: running ? Math.sin(now * (2.5 + 1.5 * pressure)) * Style.spaceReal(1.6) : 0
     property real level: limit && limit.hasMeter ? Math.max(0, Math.min(1, limit.fill)) : 0
     readonly property real surfaceX: Math.max(0, Math.min(width, width * level + wobble))
 
@@ -335,7 +335,7 @@ Item {
           // Motion, on the shared clock and only while the account spends.
           readonly property bool running: visible && limit.moving && !!root.host && !!root.host.motion && !root.host.motion.reduced
           readonly property real now: running ? root.host.motion.liveSeconds : 0
-          readonly property real pressure: Math.max(0, Math.min(3, limit.pressure))
+          readonly property real pressure: Math.max(0, Math.min(2, limit.pressure))
           // An omp request drops in over a quarter second, then rings out on the surface.
           readonly property real requestAge: running && limit.requestAt > 0 ? now - limit.requestAt : -1
           readonly property real dropShare: requestAge >= 0 && requestAge < 0.25 ? requestAge / 0.25 : -1
@@ -344,9 +344,9 @@ Item {
           // The surface rolls higher and quicker as the pace presses on the limit, and splashes as a drop lands.
           readonly property real amplitude: !running ? 0
             : unit * Math.min(3.6, 1 + 1.4 * pressure) + (rippleShare >= 0 ? unit * 2.4 * (1 - rippleShare) : 0)
-          readonly property real phase: running ? (now * (2 + 2.5 * pressure)) % (2 * Math.PI) : 0
+          readonly property real phase: running ? (now * (2 + 1.2 * pressure)) % (2 * Math.PI) : 0
           readonly property real dashPitch: 6 * unit
-          readonly property real march: running ? (now * (8 + 12 * pressure) * unit) % dashPitch : 0
+          readonly property real march: running ? (now * (6 + 5 * pressure) * unit) % dashPitch : 0
 
           // The glass's outline as sample columns, denser around the corners, and how far its rounded
           // corners pull the top and bottom edges in at each.

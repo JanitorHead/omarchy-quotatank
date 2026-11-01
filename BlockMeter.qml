@@ -63,12 +63,13 @@ Item {
   // Never negative, even while a resize updates one end before the other.
   readonly property int sweepLength: Math.max(0, forecastToBlock - forecastFromBlock)
   readonly property int sweepFirst: sweepDirection > 0 ? forecastFromBlock : forecastToBlock - 1
-  // Blocks a second: 7 when the pace is easy, up to 40 when it presses hard on the limit.
-  readonly property real sweepSpeed: live ? Math.max(7, Math.min(40, 14 * Math.pow(Math.max(0.01, live.pressure), 0.6))) : 14
-  readonly property real sweepRun: sweepLength / sweepSpeed
+  // Blocks a second: 7 when the pace is easy, up to 18 when it presses hard on the limit. A run takes at
+  // least 0.7 s, so a short forecast is swept, not flicked.
+  readonly property real sweepSpeed: live ? Math.max(7, Math.min(18, 10 * Math.pow(Math.max(0.01, live.pressure), 0.5))) : 10
+  readonly property real sweepRun: sweepLength > 0 ? Math.max(0.7, sweepLength / sweepSpeed) : 0
   readonly property real sweepPause: 0.8
   readonly property real sweepPhase: sweeping ? motion.liveSeconds % (sweepRun + sweepPause) : 0
-  readonly property real sweepHead: Math.min(sweepPhase, sweepRun) * sweepSpeed
+  readonly property real sweepHead: sweepRun > 0 ? Math.min(1, sweepPhase / sweepRun) * sweepLength : 0
   readonly property real sweepFade: sweepPhase > sweepRun ? Math.max(0, 1 - (sweepPhase - sweepRun) / sweepPause) : 1
   // The limit runs out before its reset: the block at the end flashes red as each sweep lands.
   readonly property bool endsAtLimit: !!live && live.runsOut === true

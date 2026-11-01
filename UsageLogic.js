@@ -3383,10 +3383,11 @@ function forecastSegment(forecast, mode) {
 
 // How a meter moves while its account is spending. `pressure` is the rate against what the limit can
 // bear until its reset (1 = it runs out exactly at the reset); `period` is the meter's beat in seconds,
-// faster as the pressure rises; `start` and `end` are where the projection sweep runs on the side the
+// faster as the pressure rises but never under 1.2 s: a quicker beat reads as a flicker, not as urgency
+// (the alert colour says that); `start` and `end` are where the projection sweep runs on the side the
 // meter shows (0-1): from the fill's edge to where this pace takes it, leftward under Remaining.
 // `moving` is false when the account is not spending or the limit is used up.
-var LIVE_PERIOD_MIN = 0.45
+var LIVE_PERIOD_MIN = 1.2
 var LIVE_PERIOD_MAX = 3.2
 function liveMeter(forecast, spending, mode) {
   var still = { moving: false, ratePerHour: 0, pressure: 0, period: LIVE_PERIOD_MAX, start: -1, end: -1, runsOut: false }
