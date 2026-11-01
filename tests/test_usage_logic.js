@@ -1264,6 +1264,9 @@ console.log("Provider setup: passed");
   assert.equal(context.accountStatusLine(remoteAccount, false, 0, null).text, "on devbox");
   const staleLine = context.accountStatusLine({ ...remoteAccount, stale: true, readAt: "2030-01-15T12:00:00Z" }, false, 0, null);
   assert.equal(staleLine.text + " " + clock(staleLine.at), "devbox not answering since 12:00");
+  const limitedLine = context.accountStatusLine({ id: "claude", accountId: "main", status: "ok", windows: [], stale: true,
+    errorKind: "rate_limited", readAt: "2030-01-15T14:02:00+00:00" }, false, 0, null);
+  assert.equal(limitedLine.text + " " + clock(limitedLine.at), "rate limited · last reading 14:02");
   assert.equal(context.accountStatusLine({ id: "claude", status: "ok", windows: [], standIn: { id: "c-00000001", name: "devbox" } }, false, 0, null).text, "read on devbox");
   const proxyAccount = { id: "claude", accountId: "auth-1", status: "ok", windows: [], plan: "max", origin: "proxy",
     proxy: { id: "p-00000001", name: "CLIProxyAPI" } };
@@ -1930,6 +1933,16 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
   assert.equal(context.readingStale(now * 1000, now * 1000 - 1801000, 900, false, null), true, "older than two intervals");
   assert.equal(context.readingStale(now * 1000, now * 1000 - 1799000, 900, false, null), false);
   assert.equal(context.readingStale(now * 1000, 0, 900, false, null), false, "no reading yet is not stale");
+  const readAtIso = new Date((now - 120) * 1000).toISOString();
+  const offsetClock = function (seconds) { return "T+" + (seconds - now) };
+  assert.equal(context.staleReadingText({ stale: true, errorKind: "rate_limited", readAt: readAtIso }, offsetClock),
+    "Rate limited · last reading T+-120");
+  assert.equal(context.staleReadingText({ stale: true, errorKind: "timeout", readAt: readAtIso }, offsetClock),
+    "Timed out · last reading T+-120");
+  assert.equal(context.staleReadingText({ stale: true, errorKind: "http", readAt: readAtIso }, offsetClock),
+    "Unavailable · last reading T+-120");
+  assert.equal(context.staleReadingText({ stale: true, readAt: readAtIso }, offsetClock), "",
+    "another computer's stale reading has no local failure to name");
   assert.equal(context.barAgoText(30), "less than a minute");
   assert.equal(context.barAgoText(42 * 60), "42 min");
   assert.equal(context.barAgoText(2 * 3600 + 300), "2h 5m");

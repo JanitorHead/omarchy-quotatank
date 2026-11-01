@@ -2137,6 +2137,17 @@ Ui.Panel {
             }
 
             PlainText {
+              objectName: "staleReadingNotice"
+              visible: text !== ""
+              width: parent.width
+              text: UsageLogic.staleReadingText(root.detail, root.clockText)
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            PlainText {
               objectName: "detailNotice"
               visible: text !== ""
               width: parent.width

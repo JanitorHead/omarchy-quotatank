@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- **A temporary failure keeps the last reading.** When a provider's usage check is rate limited, times out, can't reach the network, or gets an HTTP 5xx, its last good reading from the past 24 hours stays on screen, faded as stale, and the row says why and when it was read: "rate limited · last reading 14:02". Accounts come back too when the provider fails before listing them. Limits whose reset passed show as reset. An expired sign-in, missing credentials, or a missing CLI still show as errors, since they need you to act. Stale readings send no threshold notices and add no history.
+
 ## 3.1.1
 
 Quotatank 3.1.1 is for heavy use. Costs now counts every message of a computer that runs agents all day, where it stopped at 50,000 and showed a third of the spend, and opens at once with other computers instead of waiting half a minute on SSH at each period switch. Adding a computer starts from your computers and the users SSH connects as there, and says what Costs will read. Live meters no longer glitch or race, the panel no longer jumps while it reads, and the heatmap's squares are evenly spaced.
