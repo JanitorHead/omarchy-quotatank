@@ -4,6 +4,15 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.1.2
+
+Quotatank 3.1.2 keeps Costs still while omp spends, and sends the Kimi Code sign-in only over https.
+
+### Fixed
+
+- **Costs no longer jumps as omp requests come and go.** The "Live from omp" line appeared with a request and left two minutes later, pushing everything below it down and back up. While Costs follows omp it now keeps its place: the dot fills while requests come in, and the amount since the last scan stays until the next one.
+- **The Kimi Code sign-in goes only to an https address.** A `KIMI_CODE_BASE_URL` override was used as given, so an `http://` address received the sign-in token unencrypted. An override that is not https, or that carries a user name, password, query, or fragment, now shows a configuration error and nothing is sent.
+
 ## 3.1.1
 
 Quotatank 3.1.1 is for heavy use. Costs now counts every message of a computer that runs agents all day, where it stopped at 50,000 and showed a third of the spend, and opens at once with other computers instead of waiting half a minute on SSH at each period switch. Adding a computer starts from your computers and the users SSH connects as there, and says what Costs will read. Live meters no longer glitch or race, the panel no longer jumps while it reads, and the heatmap's squares are evenly spaced.
