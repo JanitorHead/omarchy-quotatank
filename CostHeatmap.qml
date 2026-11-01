@@ -29,6 +29,10 @@ Column {
   readonly property int cellGap: Style.spacing.xxs
   readonly property int cellWidth: Math.max(2, Math.floor((width - labelWidth - cellGap * 23) / 24))
   readonly property int cellHeight: Math.max(Style.space(8), Math.min(cellWidth, Style.space(10)))
+  // One whole-pixel step per hour, so every gap matches the gap between days. The pixels left over by
+  // rounding the cell width go to the label column: the grid stays flush with the right edge.
+  readonly property int cellPitch: cellWidth + cellGap
+  readonly property int gridLeft: Math.max(labelWidth, Math.round(width) - 24 * cellWidth - 23 * cellGap)
   readonly property string readoutText: {
     if (!grid) return ""
     if (hoveredCell >= 0 && hoveredCell < cells.length)
@@ -50,12 +54,12 @@ Column {
   }
 
   function cellX(hour) {
-    return labelWidth + Math.round(hour * (width - labelWidth - cellWidth) / 23)
+    return gridLeft + hour * cellPitch
   }
 
   function cellAt(x, y) {
-    if (x < labelWidth - cellGap) return -1
-    var hour = Math.max(0, Math.min(23, Math.round((x - labelWidth - cellWidth / 2) / ((width - labelWidth - cellWidth) / 23))))
+    if (x < gridLeft - cellGap) return -1
+    var hour = Math.max(0, Math.min(23, Math.floor((x - gridLeft + cellGap / 2) / cellPitch)))
     var day = Math.max(0, Math.min(6, Math.floor(y / (cellHeight + cellGap))))
     return day * 24 + hour
   }

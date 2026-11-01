@@ -496,6 +496,17 @@ ShellRoot {
 
         var when = root.find(root.costs, "costWhen")
         root.check(when.visible && when.cellCount === 168 && root.find(root.costs, "costHeatCell-167") !== null, "seven days of 24 hours")
+        var first = root.find(root.costs, "costHeatCell-0")
+        var second = root.find(root.costs, "costHeatCell-24")
+        var gapsEven = true
+        for (var hour = 0; hour < 23; hour++) {
+          var left = root.find(root.costs, "costHeatCell-" + hour)
+          var right = root.find(root.costs, "costHeatCell-" + (hour + 1))
+          if (right.x - left.x - left.width !== second.y - first.y - first.height) gapsEven = false
+        }
+        var last = root.find(root.costs, "costHeatCell-23")
+        root.check(gapsEven, "every gap between hours matches the gap between days")
+        root.check(last.x + last.width === Math.round(when.width), "the grid ends at the right edge: " + (last.x + last.width) + " of " + when.width)
         when.hoveredCell = 6 * 24 + 15
         var readout = root.find(root.costs, "costHeatReadout")
         root.check(readout.text === "Tue 15:00 · $4.20 · 63 requests", "hovering a cell reads it out: " + readout.text)
