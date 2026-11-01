@@ -216,7 +216,7 @@ Privacy:
 
 On first open, a short setup walks **Sources** (where your agents run), **Providers** (what was found) and **Menu bar**. Everything is read together: the same account read in two places is one row.
 
-![Settings → Sources with devbox answering, ci@buildbox not answering since its last reading, and a Test of workstation that connected, found Python, readied the readers and read two accounts; beside it Limits, where the Claude accounts read here, on devbox and through CLIProxyAPI are one list: Work spending now, Team via proxy, and Personal on devbox](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/sources.png)
+![Settings → Sources with devbox answering and ci@buildbox not answering since its last reading; under Add a computer, workstation offered as sam or as root and homeserver as pi, and a Test of workstation as sam that connected, found Python, readied the readers, read two accounts and found its agent history (Claude Code and Oh My Pi transcripts), with Add workstation; beside it Limits, where the Claude accounts read here, on devbox and through CLIProxyAPI are one list: Work spending now, Team via proxy, and Personal on devbox](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/sources.png)
 
 ```mermaid
 flowchart TB
