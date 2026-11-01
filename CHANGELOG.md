@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- **Dot matrix moves like the other styles.** Only its edge column moved, so it read as still; a three-column scan now runs through the forecast dots once a beat, rightward under Used and leftward under Remaining.
+- **Switching meter style fades.** A style picked while the meter is on screen, as with the Settings preview's arrows, fades in instead of cutting in.
+
+### Fixed
+
+- A digit removed mid-roll (switching style or provider while a figure rolled) logged a TypeError in the shell log.
+
 ## 3.1.0
 
 Quotatank 3.1 makes limit meters move while an account spends, in twenty styles you can preview and step through in Settings. It also bounds what another computer can send over SSH and takes in five contributions: Codex survives a slow rate-limit call, chips can stay on chosen screens, a chip opens the account it shows, Settings no longer go blank after a sign-in, and the live UI checks run again.

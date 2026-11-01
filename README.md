@@ -10,7 +10,7 @@
 
 </div>
 
-![The menu bar chips above the Limits panel: tiles for Claude, Codex, Kimi, and OpenCode, two Claude accounts with Work spending now and in use and Personal with room and a Use button, the headline 5-hour limit runs out in 1h 11m, limit cards with a dashed forecast, and a runway card where Personal takes over when Work runs out; beside it the Costs tab with a total 38% above the previous 30 days, a daily chart, providers, a model breakdown, and a heatmap of when you spend](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/hero.png)
+![The menu bar chips above the Limits panel: tiles for Claude, Codex, Kimi, and OpenCode, two Claude accounts with Work spending now and in use and Personal with room and a Use button, the headline 5-hour limit runs out in 1h 11m, limit cards with a dashed forecast, and a runway card where Personal takes over when Work runs out; beside it the Costs tab with a total 26% above the previous 30 days, a daily chart, providers, a model breakdown, and a heatmap of when you spend](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/hero.png)
 
 Quotatank reads the plan limits and prepaid balances of **50 AI coding providers** with the sign-ins and keys you already have, on this computer and on the other computers you reach over SSH: several accounts per provider, every account behind a **CLIProxyAPI** server, and everything **omp (Oh My Pi)** is signed in to. A second tab shows what your coding agents would cost at API rates, by day, model, project, and subagent.
 
@@ -128,6 +128,12 @@ Every limit card has a meter and a forecast: a dashed stretch after the fill sho
 ![Three panels: Codex with a used-up weekly limit and when it comes back, OpenCode Go with a sign-in expired card that quotes the command to run, and two Claude accounts both used up with a gap until the reset](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/states.png)
 
 When something is wrong, the panel says what and what to do: a used-up limit names when it comes back, a failed refresh names the command to run, and a drained balance says it needs topping up. A signed-out provider has a **Sign in** button; the panel refreshes on its own until the sign-in lands. An old reading fades and says how old it is.
+
+### Meter styles
+
+![Six of the meter styles on the same two limits, each mid-sweep: Glass, Tanks, Rings, Race, Split-flap and Dot matrix](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/styles.png)
+
+**Settings → Display → Meter style** offers twenty looks for limit meters, each with its own motion while the account spends: block meters (Projection, the default), lines such as Race against the clock, Glass with an aurora in its fill, a Split-flap board, a Dot matrix with a scan through its forecast, and Tanks, Gauges, Rings and Compact, which put every limit of an account in one card. Account rows follow the chosen style. A preview of a sample account that is spending sits under the setting; its arrows step through the styles.
 
 ## Menu bar
 
