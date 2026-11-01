@@ -10,8 +10,10 @@ import qs.Commons as Commons
 //
 // Marks: the fill, the forecast dashes (where this pace takes the limit by its reset) and, when asked for
 // or while the pointer is on the meter, the pace tick. While the account is spending (`live`, from
-// UsageLogic.liveMeter) a sweep runs over the forecast from the fill's edge, faster as the pace presses on
-// the limit, and the last block flashes when the limit runs out before its reset.
+// UsageLogic.liveMeter) the fill never moves on its own: the block being filled breathes on the beat, and a
+// soft glow travels along the forecast dashes from the fill's edge, fading in before the first dash and out
+// after the last so each pass starts unseen. When the limit runs out before its reset, the last dash glows
+// in the alert colour as the glow arrives.
 Item {
   id: root
 
@@ -55,26 +57,40 @@ Item {
     ? Math.min(blockCount, Math.max(forecastFromBlock + 1, Math.ceil(forecastTo * blockCount - 0.001))) : 0
   readonly property int dashHeight: Math.max(2, Math.round(height * 0.34))
 
-  // The sweep runs over the forecast blocks from the fill's edge: rightward under Used, leftward under
-  // Remaining (where the forecast lies inside the fill).
+  // Spending moves the edge and the forecast only: rightward under Used, leftward under Remaining (where
+  // the forecast lies inside the fill).
   readonly property bool sweeping: !!live && live.moving === true && live.start >= 0 && forecastActive
     && !!motion && !motion.reduced && visible && width > 0
   readonly property int sweepDirection: live && live.end < live.start ? -1 : 1
   // Never negative, even while a resize updates one end before the other.
   readonly property int sweepLength: Math.max(0, forecastToBlock - forecastFromBlock)
   readonly property int sweepFirst: sweepDirection > 0 ? forecastFromBlock : forecastToBlock - 1
-  // Blocks a second: 7 when the pace is easy, up to 18 when it presses hard on the limit. A run takes at
-  // least 0.7 s, so a short forecast is swept, not flicked.
-  readonly property real sweepSpeed: live ? Math.max(7, Math.min(18, 10 * Math.pow(Math.max(0.01, live.pressure), 0.5))) : 10
-  readonly property real sweepRun: sweepLength > 0 ? Math.max(0.7, sweepLength / sweepSpeed) : 0
-  readonly property real sweepPause: 0.8
-  readonly property real sweepPhase: sweeping ? motion.liveSeconds % (sweepRun + sweepPause) : 0
-  readonly property real sweepHead: sweepRun > 0 ? Math.min(1, sweepPhase / sweepRun) * sweepLength : 0
-  readonly property real sweepFade: sweepPhase > sweepRun ? Math.max(0, 1 - (sweepPhase - sweepRun) / sweepPause) : 1
-  // The limit runs out before its reset: the block at the end flashes red as each sweep lands.
+  // The glow's pass: one every two beats, so it holds still between real changes of pace (the forecast's
+  // length drifts with the clock and must not set the timing), with 0.6 s of rest. It starts 1.5 dashes
+  // before the first and ends 1.5 after the last, so it fades in and out instead of appearing.
+  readonly property real glowCycle: live ? Math.max(2.4, Math.min(5.2, 2 * live.period)) : 4
+  readonly property real glowRun: glowCycle - 0.6
+  readonly property real glowPhase: sweeping ? motion.liveSeconds % glowCycle : 0
+  readonly property real glowHead: sweeping && glowPhase < glowRun ? -1.5 + (sweepLength + 3) * glowPhase / glowRun : -100
+  // The edge's breath, 0-1, on the account's beat, on the block being spent: the fill's partly filled block
+  // (or its last full one) under Used; under Remaining the forecast's first dash, at the fill's end.
+  readonly property real breath: sweeping && live.period > 0
+    ? 0.5 - 0.5 * Math.cos(2 * Math.PI * ((motion.liveSeconds / live.period) % 1)) : 0
+  readonly property int edgeBlock: sweepDirection > 0
+    ? (boundaryFraction > 0.001 && !inForecast(completeBlocks) ? completeBlocks : completeBlocks - 1)
+    : forecastToBlock - 1
+  // The limit runs out before its reset: once the glow reaches the last dash, that dash holds the alert
+  // colour and fades over 0.6 s.
   readonly property bool endsAtLimit: !!live && live.runsOut === true
     && (sweepDirection > 0 ? forecastToBlock >= blockCount : forecastFromBlock <= 0)
-  readonly property real landing: sweeping && endsAtLimit && sweepPhase > sweepRun ? Math.exp(-(sweepPhase - sweepRun) / 0.25) : 0
+  readonly property real arrival: glowRun * (sweepLength + 0.5) / (sweepLength + 3)
+  readonly property real landing: sweeping && endsAtLimit && glowPhase >= arrival
+    ? Math.exp(-(glowPhase - arrival) / 0.6) : 0
+
+  function glowAt(index) {
+    var d = index - glowHead
+    return Math.exp(-d * d / 2.4)
+  }
 
   function inForecast(index) {
     return forecastActive && index >= forecastFromBlock && index < forecastToBlock
@@ -137,34 +153,46 @@ Item {
     }
   }
 
-  // The sweep: blocks light up behind a bright head running from the fill's edge to the forecast's end,
-  // then fade before the next run.
+  // The edge: the block being filled breathes towards the highlight while the account spends.
+  Rectangle {
+    objectName: "meterLiveEdge"
+    visible: root.sweeping && root.edgeBlock >= 0 && root.edgeBlock < root.blockCount
+    x: root.edgeBlock * root.pitch
+    width: root.blockWidth
+    height: root.height
+    radius: 0
+    color: root.highlightColor
+    opacity: 0.12 + 0.5 * root.breath
+  }
+
+  // The glow: each forecast dash brightens and swells a little as it passes, then settles back.
   Repeater {
     objectName: "meterSweep"
     model: root.sweeping ? root.sweepLength : 0
 
     Rectangle {
       required property int index
-      // Steps from the fill's edge.
-      readonly property real behind: root.sweepHead - index
-      readonly property bool isHead: root.sweepPhase < root.sweepRun && index === Math.min(root.sweepLength - 1, Math.floor(root.sweepHead))
+      readonly property real glow: root.glowAt(index)
+      readonly property real lift: root.dashHeight * 0.6 * glow
       x: (root.sweepFirst + root.sweepDirection * index) * root.pitch
+      y: Math.round((root.height - root.dashHeight - lift) / 2)
       width: root.blockWidth
-      height: root.height
+      height: root.dashHeight + lift
       radius: 0
-      visible: index < Math.ceil(root.sweepHead)
-      color: isHead ? root.highlightColor : root.liveColor
-      opacity: isHead ? 0.95 : Math.max(0.16, 0.75 * Math.exp(-behind / root.sweepSpeed * 2.2)) * root.sweepFade
+      visible: glow > 0.02
+      color: root.highlightColor
+      opacity: 0.9 * glow
     }
   }
 
   Rectangle {
     objectName: "meterLanding"
-    visible: root.landing > 0.01
-    x: (root.sweepDirection > 0 ? root.blockCount - 1 : 0) * root.pitch - Style.space(1)
-    y: -Style.space(1)
-    width: root.blockWidth + Style.space(2)
-    height: root.height + Style.space(2)
+    readonly property real lift: (root.height - root.dashHeight) * root.landing
+    visible: root.landing > 0.02
+    x: (root.sweepDirection > 0 ? root.blockCount - 1 : 0) * root.pitch
+    y: Math.round((root.height - root.dashHeight - lift) / 2)
+    width: root.blockWidth
+    height: root.dashHeight + lift
     radius: 0
     color: root.urgentColor
     opacity: root.landing

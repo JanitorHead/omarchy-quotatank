@@ -33,7 +33,7 @@ Item {
     ? Math.max(0, 1 - (seconds - model.requestAt) / 0.8) : 0
   readonly property real pulse: Math.max(beat, requestFlash)
   // The shine's run over the charge, 0-1: quicker as the pace presses on the limit, at most one pass in 2 s.
-  readonly property real shine: animating ? (seconds * (0.2 + 0.15 * Math.min(2, model.pressure))) % 1 : 0
+  readonly property real shine: animating ? (seconds * (0.2 + 0.15 * Math.min(2, model.tempo))) % 1 : 0
   readonly property bool remaining: !!model && model.quotaMode === "Remaining"
   readonly property color tone: host ? host.tone : "transparent"
   readonly property color foreground: host ? host.foreground : "transparent"

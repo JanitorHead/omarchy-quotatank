@@ -27,7 +27,7 @@ Item {
   readonly property bool running: moving && !!motion && !motion.reduced
   readonly property real seconds: running ? motion.liveSeconds : 0
   // How hard the pace presses on the limit, capped low so a burst does not turn the stripes into a blur.
-  readonly property real ratio: model ? Math.max(0, Math.min(1.5, model.pressure)) : 0
+  readonly property real ratio: model ? Math.max(0, Math.min(1.5, model.tempo)) : 0
   readonly property real beat: running && model.period > 0
     ? 0.5 - 0.5 * Math.cos(2 * Math.PI * ((seconds / model.period) % 1)) : 0
   // Where even use would be by now on the chosen side (the time rail), -1 without a pace.

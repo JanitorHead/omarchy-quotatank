@@ -38,9 +38,11 @@ QtObject {
   // Spending now on a limit that is not used up: the meter moves.
   readonly property bool moving: live.moving === true
   readonly property real ratePerHour: live.ratePerHour
-  // Rate against what the limit bears until its reset (1 = it runs out right at the reset), and the beat
-  // in seconds that follows it.
+  // Rate against what the limit bears until its reset (1 = it runs out right at the reset), for colours;
+  // the same in steps of 0.25 for speeds (it holds still between real changes of pace, so animations on
+  // the absolute clock never jump); and the beat in seconds that follows the steps.
   readonly property real pressure: live.pressure
+  readonly property real tempo: live.tempo
   readonly property real period: live.period
   // The live estimate on the chosen side, 0-100: the reading plus what the rate adds since it.
   readonly property real liveShown: {

@@ -50,8 +50,8 @@ Item {
   readonly property bool running: visible && !!model && model.moving && model.hasMeter
     && !!host && !!host.motion && !host.motion.reduced
   readonly property real liveSeconds: running ? host.motion.liveSeconds : 0
-  // Rate against what the limit bears (1 = it runs out at the reset), capped so bursts stay readable.
-  readonly property real pressure: model ? Math.max(0, Math.min(1.5, model.pressure)) : 0
+  // The pace's tempo (pressure in steps, 1 = it runs out at the reset), capped so bursts stay readable.
+  readonly property real pressure: model ? Math.max(0, Math.min(1.5, model.tempo)) : 0
   // The card's edge bar jumps on each omp request and settles over half a second.
   readonly property real kick: {
     if (!running || small || !(model.requestAt > 0)) return 0

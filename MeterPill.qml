@@ -25,7 +25,7 @@ Item {
   readonly property bool running: moving && !!motion && !motion.reduced
   readonly property real seconds: running ? motion.liveSeconds : 0
   // How hard the pace presses on the limit, capped low so a burst does not turn the sheen into a flicker.
-  readonly property real ratio: model ? Math.max(0, Math.min(1.5, model.pressure)) : 0
+  readonly property real ratio: model ? Math.max(0, Math.min(1.5, model.tempo)) : 0
   readonly property real beat: running && model.period > 0
     ? 0.5 - 0.5 * Math.cos(2 * Math.PI * ((seconds / model.period) % 1)) : 0
   readonly property real requestAge: running && model.requestAt > 0 ? seconds - model.requestAt : -1

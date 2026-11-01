@@ -128,7 +128,7 @@ Item {
     readonly property color tone: root.host ? root.host.tone : "transparent"
     readonly property bool running: visible && !!limit && limit.moving && !!root.host && !!root.host.motion && !root.host.motion.reduced
     readonly property real now: running ? root.host.motion.liveSeconds : 0
-    readonly property real pressure: limit ? Math.max(0, Math.min(2, limit.pressure)) : 0
+    readonly property real pressure: limit ? Math.max(0, Math.min(2, limit.tempo)) : 0
     readonly property real beat: running ? 0.5 - 0.5 * Math.cos(2 * Math.PI * ((now / limit.period) % 1)) : 0
     // The meniscus sways while the account spends, quicker as the pace presses on the limit.
     readonly property real wobble: running ? Math.sin(now * (2.5 + 1.5 * pressure)) * Style.spaceReal(1.6) : 0
@@ -335,7 +335,7 @@ Item {
           // Motion, on the shared clock and only while the account spends.
           readonly property bool running: visible && limit.moving && !!root.host && !!root.host.motion && !root.host.motion.reduced
           readonly property real now: running ? root.host.motion.liveSeconds : 0
-          readonly property real pressure: Math.max(0, Math.min(2, limit.pressure))
+          readonly property real pressure: Math.max(0, Math.min(2, limit.tempo))
           // An omp request drops in over a quarter second, then rings out on the surface.
           readonly property real requestAge: running && limit.requestAt > 0 ? now - limit.requestAt : -1
           readonly property real dropShare: requestAge >= 0 && requestAge < 0.25 ? requestAge / 0.25 : -1

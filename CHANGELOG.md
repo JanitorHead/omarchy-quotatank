@@ -8,12 +8,14 @@ All notable changes to this project will be documented here. The format follows
 
 ### Changed
 
+- **Projection, the default style, no longer seems to jump.** Its sweep lit the forecast as full blocks, so the fill looked as if it leapt to the forecast's end and back every beat. Now the fill only moves with a reading: the block being filled breathes on the beat, and a soft glow travels along the forecast dashes, fading in at the fill's edge and out past the end (red as it lands when the limit runs out first). Account rows and the hover card get the same: a faint forecast stretch with a travelling glow and a breathing edge.
 - **Dot matrix moves like the other styles.** Only its edge column moved, so it read as still; a three-column scan now runs through the forecast dots once a beat, rightward under Used and leftward under Remaining.
 - **Switching meter style fades.** A style picked while the meter is on screen, as with the Settings preview's arrows, fades in instead of cutting in.
 
 ### Fixed
 
-- **Meters no longer race when an account spends hard.** Under heavy use the beat sped up to two a second and the projection sweep to 40 blocks a second, which read as a glitch. The beat now stays at 1.2 s or slower, a sweep takes at least 0.7 s, and every style's drift, shine, stripes, and sway are capped to match. The alert colour, not the speed, says the limit is running out.
+- **Live meters no longer glitch once a second.** The forecast is recomputed every second, and the speed of every meter's motion followed its pressure, which drifts a little with each tick; on the absolute clock that small drift threw every animation to a new phase each second. Speeds now follow the pressure in steps of 0.25, which change only when the pace really does.
+- **Meters no longer race when an account spends hard.** Under heavy use the beat sped up to two a second and the projection sweep to 40 blocks a second. The beat now stays at 1.2 s or slower, and every style's drift, shine, stripes, and sway are capped to match. The alert colour, not the speed, says the limit is running out.
 - A digit removed mid-roll (switching style or provider while a figure rolled) logged a TypeError in the shell log.
 
 ## 3.1.0

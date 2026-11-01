@@ -3382,25 +3382,30 @@ function forecastSegment(forecast, mode) {
 }
 
 // How a meter moves while its account is spending. `pressure` is the rate against what the limit can
-// bear until its reset (1 = it runs out exactly at the reset); `period` is the meter's beat in seconds,
-// faster as the pressure rises but never under 1.2 s: a quicker beat reads as a flicker, not as urgency
-// (the alert colour says that); `start` and `end` are where the projection sweep runs on the side the
-// meter shows (0-1): from the fill's edge to where this pace takes it, leftward under Remaining.
-// `moving` is false when the account is not spending or the limit is used up.
+// bear until its reset (1 = it runs out exactly at the reset). `tempo` is the pressure in steps of 0.25,
+// capped at 4: what animations speed up with. The forecast is recomputed every second and the pressure
+// drifts with it, and meters animate on the absolute clock (`seconds * speed`, `seconds / period`), so a
+// drifting speed would jump every animation to a new phase each second; a stepped one changes only when
+// the pace really does. `period` is the beat in seconds from the tempo, never under 1.2 s: a quicker beat
+// reads as a flicker, not as urgency (the alert colour says that). `start` and `end` are where the
+// projection runs on the side the meter shows (0-1): from the fill's edge to where this pace takes it,
+// leftward under Remaining. `moving` is false when the account is not spending or the limit is used up.
 var LIVE_PERIOD_MIN = 1.2
 var LIVE_PERIOD_MAX = 3.2
 function liveMeter(forecast, spending, mode) {
-  var still = { moving: false, ratePerHour: 0, pressure: 0, period: LIVE_PERIOD_MAX, start: -1, end: -1, runsOut: false }
+  var still = { moving: false, ratePerHour: 0, pressure: 0, tempo: 0, period: LIVE_PERIOD_MAX, start: -1, end: -1, runsOut: false }
   if (!forecast || forecast.pace.exhausted || spending !== true) return still
   var left = 100 - forecast.used
   var bearable = forecast.untilReset > 0 ? left / forecast.untilReset : 0
   var pressure = forecast.rate > 0 ? (bearable > 0 ? forecast.rate / bearable : 99) : 0
-  var period = pressure > 0 ? clamp(2.2 / Math.pow(pressure, 0.75), LIVE_PERIOD_MIN, LIVE_PERIOD_MAX) : LIVE_PERIOD_MAX
+  var tempo = Math.round(Math.min(4, pressure) * 4) / 4
+  var period = tempo > 0 ? clamp(2.2 / Math.pow(tempo, 0.75), LIVE_PERIOD_MIN, LIVE_PERIOD_MAX) : LIVE_PERIOD_MAX
   var segment = forecastSegment(forecast, mode)
   return {
     moving: true,
     ratePerHour: forecast.rate * 3600,
     pressure: pressure,
+    tempo: tempo,
     period: period,
     start: segment ? sideOfUsed(forecast.used, mode) / 100 : -1,
     end: segment ? sideOfUsed(forecast.projected, mode) / 100 : -1,

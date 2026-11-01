@@ -1672,6 +1672,12 @@ console.log("omp settings, live feed and account modes: passed");
   assert.ok(easy.pressure < 1 && easy.period > live.period, "a pace that lasts beats slower");
   assert.ok(context.liveMeter(context.windowForecast({ ...quiet(1) }, NOW), true, "Used").period === 3.2, "no rate, the slowest beat");
   assert.equal(context.liveMeter(context.windowForecast({ ...quiet(1) }, NOW), true, "Used").start, -1, "no rate, no sweep");
+  // Animations run on the absolute clock, so their speed must hold still from one second's tick to the next:
+  // a drifting beat jumped every meter to a new phase each second. Pressure drifts; tempo and beat do not.
+  const later = context.liveMeter(context.windowForecast(rising(20, 0.002), NOW + 1), true, "Used");
+  assert.ok(later.pressure !== easy.pressure, "the pressure drifts as the reset nears");
+  assert.deepEqual([later.tempo, later.period], [easy.tempo, easy.period], "one second later the tempo and the beat are the same");
+  assert.equal(easy.tempo, 0.25, "the pressure in steps of 0.25: " + easy.pressure);
 
   // Live figure: the reading plus what the rate adds since, capped at 15 minutes and at 100.
   assert.equal(context.liveEstimate(hot, NOW - 100, NOW, true), 71);
