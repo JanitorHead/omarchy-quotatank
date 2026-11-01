@@ -6,6 +6,10 @@ All notable changes to this project will be documented here. The format follows
 
 ## Unreleased
 
+### Fixed
+
+- **Codex failed as a whole when its rate-limit call ran long.** `account/rateLimits/read` exceeds the old 6 s slice on a proxied or slow connection (6.5 s measured behind a proxy), and its timeout took the provider down with it even though `account/read` had already answered with the account and plan. Each RPC may now spend the full timeout instead of a 6 s slice, with the three calls sharing two timeouts so the worst case still fits the widget's 35 s process budget. Rate limits are now optional detail: when the call fails or its payload is unexpected, the provider keeps its account and plan and says so in a notice instead of erroring. Reported by @shao-zhijie in #23.
+
 ### Added
 
 - **Meters move while an account spends.** On a limit card a sweep runs over the forecast dashes, from the fill's edge to where the current pace takes the limit, faster as that pace presses on what is left before the reset; the last block flashes red when the limit runs out first. In an account row a bright tick makes the same run. They stop when the account goes quiet, when the panel closes, and with reduced motion. All meters share one 30-frame clock that runs only while something moves.
