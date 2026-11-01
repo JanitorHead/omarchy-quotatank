@@ -46,6 +46,11 @@ Ui.Panel {
   readonly property real usageCardRadius: setting("squareUsageCards", true) === true ? 0 : Style.cornerRadius
   readonly property bool notifyLimitThresholds: setting("notifyLimitThresholds", true) !== false
   readonly property bool providerColors: setting("providerColors", false) === true
+  // Display → Live figure (LimitCard): two decimals that climb with the current rate.
+  readonly property bool liveFigure: setting("liveFigure", false) === true
+  // Display → Meter style (UsageLogic.METER_STYLES); group styles draw every limit in one card.
+  readonly property string meterStyle: UsageLogic.meterStyle(String(setting("meterStyle", "projection"))).id
+  readonly property bool groupMeters: UsageLogic.meterStyle(meterStyle).layout === "group"
 
   function accountDisplayName(account, index) {
     return UsageLogic.accountName(account, setting("extraKeys", "{}"), hideAccountEmails, index)
@@ -318,6 +323,8 @@ Ui.Panel {
 
   // The rows of the cards, by key, rebuilt once per reading so each card finds its row without a scan.
   property var detailWindowRows: ({})
+  // The detail's windows in card order, for the group card.
+  property var detailWindowList: []
 
   function detailWindowFor(key) {
     return detailWindowRows[key] || null
@@ -337,6 +344,7 @@ Ui.Panel {
       keys.push(key)
     }
     detailWindowRows = keyed
+    detailWindowList = keys.map(function(key) { return keyed[key] })
     UsageLogic.syncKeyedOrder({
       count: function() { return limitCardModel.count },
       keyAt: function(index) { return limitCardModel.get(index).cardKey },
@@ -410,17 +418,19 @@ Ui.Panel {
   // With several accounts the same line heads the selected account's detail instead.
   readonly property var headline: accountOverview ? ({ text: "", urgent: false }) : headlineFor(provider)
   readonly property var accountHeadline: accountOverview ? headlineFor(selectedAccount) : ({ text: "", urgent: false })
-  // A provider read with one account that has limits: that account, whose 24-hour trend and "spending now"
-  // sit beside the headline. Providers with several accounts show both in their account rows instead.
-  readonly property var singleAccount: {
-    if (viewMode !== "limits" || accountOverview || !provider || provider.status !== "ok") return null
-    var accounts = UsageLogic.listOrEmpty(provider.accounts)
-    if (accounts.length > 1) return null
-    var account = accounts.length ? accounts[0] : provider
-    var trend = account.history ? UsageLogic.listOrEmpty(account.history.h24) : []
-    return UsageLogic.listOrEmpty(account.windows).length > 0 && trend.length > 1 ? account : null
+  // The account behind the detail: the selected one, a provider's only account, or the provider itself.
+  // Its meters move while it spends (UsageLogic.spendingNow), and its live figures count from its reading.
+  readonly property var detailAccount: {
+    if (accountOverview) return selectedAccount
+    var accounts = provider ? UsageLogic.listOrEmpty(provider.accounts) : []
+    return accounts.length === 1 ? accounts[0] : provider
   }
-  readonly property bool singleSpending: !!singleAccount && UsageLogic.spendingNow(singleAccount, nowSeconds, recentByAccount)
+  readonly property bool detailSpending: !!detailAccount && UsageLogic.spendingNow(detailAccount, nowSeconds, recentByAccount)
+  readonly property real detailReadingAt: {
+    var at = detailAccount && detailAccount.activity ? Number(detailAccount.activity.lastReadingAt) : NaN
+    return isFinite(at) && at > 0 ? at : readingSeconds(detailAccount || provider)
+  }
+  readonly property real detailRequestAt: Number(UsageLogic.accountLiveAt(detailAccount, recentByAccount)) || 0
 
   // First-run setup (UsageLogic.setupWanted): the panel opens on Settings, which walks Sources, Providers
   // and Menu bar, then lands on Limits.
@@ -1798,59 +1808,17 @@ Ui.Panel {
               wrapMode: Text.WordWrap
             }
 
-            Item {
+            PlainText {
+              id: headlineText
+              objectName: "limitsHeadline"
               width: parent.width
               visible: root.viewMode === "limits" && root.headline.text !== ""
-              implicitHeight: Math.max(headlineText.implicitHeight, singleTrend.visible ? singleTrend.implicitHeight : 0)
-
-              PlainText {
-                id: headlineText
-                objectName: "limitsHeadline"
-                anchors.left: parent.left
-                anchors.right: singleTrend.visible ? singleTrend.left : parent.right
-                anchors.rightMargin: singleTrend.visible ? Style.spacing.lg : 0
-                anchors.verticalCenter: parent.verticalCenter
-                text: root.headline.text
-                color: root.headline.urgent ? root.urgent : root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.heading
-                font.bold: true
-                wrapMode: Text.WordWrap
-              }
-
-              Row {
-                id: singleTrend
-                objectName: "singleTrend"
-                visible: !!root.singleAccount
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Style.spacing.md
-
-                PlainText {
-                  objectName: "singleSpending"
-                  visible: root.singleSpending
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "spending now"
-                  color: Commons.Color.accent
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-
-                Sparkline {
-                  objectName: "singleSparkline"
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: Style.space(52)
-                  height: Style.space(18)
-                  values: root.singleAccount && root.singleAccount.history ? UsageLogic.listOrEmpty(root.singleAccount.history.h24) : []
-                  endSeconds: root.readingSeconds(root.provider)
-                  lineColor: root.singleSpending ? Commons.Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.5)
-                  dotColor: root.singleSpending ? Commons.Color.accent : root.foreground
-                  guideColor: root.foreground
-                  fontFamily: root.fontFamily
-                  clockFormat: root.tickTimeFormat
-                  motion: root.motion
-                }
-              }
+              text: root.headline.text
+              color: root.headline.urgent ? root.urgent : root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.heading
+              font.bold: true
+              wrapMode: Text.WordWrap
             }
           }
 
@@ -1938,6 +1906,8 @@ Ui.Panel {
               accountState: root.providerState
               selectedId: root.selectedAccount ? String(root.selectedAccount.accountId) : ""
               nowSeconds: root.nowSeconds
+              recentByAccount: root.recentByAccount
+              meterStyle: root.meterStyle
               events: root.accountEvents.eventLog
               resetsActionable: !resetBackend.active && !resetBackend.busy
               useBusyId: root.accountEvents.useBusyId
@@ -2199,6 +2169,7 @@ Ui.Panel {
                 model: limitCardModel
 
                 LimitCard {
+                  visible: !root.groupMeters
                   required property string cardKey
                   readonly property var row: root.detailWindowFor(cardKey)
                   objectName: "limitCard-" + (row ? String(row.id || row.label || "") : "")
@@ -2215,10 +2186,37 @@ Ui.Panel {
                   cardRadius: root.usageCardRadius
                   nowSeconds: root.nowSeconds
                   clockFormat: root.tickTimeFormat
-                  warningThreshold: root.warningThreshold
-                  criticalThreshold: root.criticalThreshold
+                  spending: root.detailSpending
+                  readingAt: root.detailReadingAt
+                  liveFigure: root.liveFigure
                   motion: root.motion
+                  requestAt: root.detailRequestAt
+                  meterStyle: root.meterStyle
                 }
+              }
+
+              LimitGroupCard {
+                objectName: "limitGroupCard"
+                visible: root.groupMeters && root.detailWindowList.length > 0
+                width: limitsSection.width
+                windows: root.detailWindowList
+                quotaMode: root.selectedQuotaMode
+                foreground: root.foreground
+                urgent: root.urgent
+                providerColor: root.providerColors ? UsageLogic.providerAccent(String(root.provider ? root.provider.id : ""), root.foreground) : root.foreground
+                dim: root.dim
+                fontFamily: root.fontFamily
+                cardRadius: root.usageCardRadius
+                nowSeconds: root.nowSeconds
+                clockFormat: root.tickTimeFormat
+                spending: root.detailSpending
+                readingAt: root.detailReadingAt
+                requestAt: root.detailRequestAt
+                liveFigure: root.liveFigure
+                meterStyle: root.meterStyle
+                motion: root.motion
+                severityOf: function(row) { return root.windowSeverity(row) }
+                resetLabelOf: function(row) { return root.resetText(row) }
               }
             }
 

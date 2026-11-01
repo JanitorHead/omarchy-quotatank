@@ -1218,6 +1218,8 @@ var DEFAULT_SETTINGS = {
   barMaxChips: 4,
   quotaMode: "Used",
   providerColors: false,
+  liveFigure: false,
+  meterStyle: "projection",
   squareUsageCards: true,
   hideAccountEmails: true,
   notifyLimitThresholds: true,
@@ -2351,9 +2353,9 @@ function setupWanted(settings) {
 // The one-line explanations shown the first time each part appears; `hintsDismissed` is a JSON list of ids.
 var HINT_IDS = ["accounts", "runway", "forecast", "heatmap"]
 var HINT_TEXT = {
-  accounts: "One row per account: its tightest limit, its trend over 24 hours, and whether it is spending now. Select a row for its limits.",
+  accounts: "One row per account: its 5-hour and weekly limits, which move while it spends. Select a row for its limits.",
   runway: "How long your accounts last at the current pace, from now on the left to the reset on the right. A gap lane is time with nothing left.",
-  forecast: "The dashes show the blocks the current pace still fills before the reset.",
+  forecast: "Past the fill, the meter shows where the current pace takes the limit before the reset.",
   heatmap: "When you spend: the last 7 days by hour, darker means more. Hover a cell to read it."
 }
 
@@ -3360,6 +3362,82 @@ function forecastSegment(forecast, mode) {
   var from = sideOfUsed(forecast.used, mode) / 100
   var to = sideOfUsed(forecast.projected, mode) / 100
   return { from: Math.min(from, to), to: Math.max(from, to), runsOut: forecast.runsOut }
+}
+
+// How a meter moves while its account is spending. `pressure` is the rate against what the limit can
+// bear until its reset (1 = it runs out exactly at the reset); `period` is the meter's beat in seconds,
+// faster as the pressure rises; `start` and `end` are where the projection sweep runs on the side the
+// meter shows (0-1): from the fill's edge to where this pace takes it, leftward under Remaining.
+// `moving` is false when the account is not spending or the limit is used up.
+var LIVE_PERIOD_MIN = 0.45
+var LIVE_PERIOD_MAX = 3.2
+function liveMeter(forecast, spending, mode) {
+  var still = { moving: false, ratePerHour: 0, pressure: 0, period: LIVE_PERIOD_MAX, start: -1, end: -1, runsOut: false }
+  if (!forecast || forecast.pace.exhausted || spending !== true) return still
+  var left = 100 - forecast.used
+  var bearable = forecast.untilReset > 0 ? left / forecast.untilReset : 0
+  var pressure = forecast.rate > 0 ? (bearable > 0 ? forecast.rate / bearable : 99) : 0
+  var period = pressure > 0 ? clamp(2.2 / Math.pow(pressure, 0.75), LIVE_PERIOD_MIN, LIVE_PERIOD_MAX) : LIVE_PERIOD_MAX
+  var segment = forecastSegment(forecast, mode)
+  return {
+    moving: true,
+    ratePerHour: forecast.rate * 3600,
+    pressure: pressure,
+    period: period,
+    start: segment ? sideOfUsed(forecast.used, mode) / 100 : -1,
+    end: segment ? sideOfUsed(forecast.projected, mode) / 100 : -1,
+    runsOut: forecast.runsOut
+  }
+}
+
+// The use a live figure shows between readings: the reading plus what the current rate adds since it
+// was taken, for at most 15 minutes and never past 100. Without spending it is the reading itself.
+function liveEstimate(forecast, readingAt, nowSeconds, spending) {
+  if (!forecast) return null
+  var since = Number(nowSeconds) - Number(readingAt)
+  if (spending !== true || !(forecast.rate > 0) || !isFinite(since) || since <= 0) return forecast.used
+  return Math.min(100, forecast.used + forecast.rate * Math.min(since, ACCOUNT_SPENDING_SECONDS))
+}
+
+// The rate a live chip shows: "24%/h" while spending, "1.5%/h" under 2, else "used up", "idle" or "quiet".
+function rateChipText(forecast, live) {
+  if (forecast && forecast.pace.exhausted) return "used up"
+  if (live && live.moving === true && live.ratePerHour > 0) {
+    var rate = live.ratePerHour
+    return (rate < 2 ? (Math.round(rate * 10) / 10).toFixed(1) : String(Math.round(rate))) + "%/h"
+  }
+  return forecast && forecast.pace.state === "idle" ? "idle" : "quiet"
+}
+
+// Display → Meter style. A "card" style draws the meter inside the shared limit card (LimitCard); a "group"
+// style draws one card for every limit of the account (LimitGroupCard). The QML file of a style is
+// "Meter" + `file` + ".qml"; it draws both the card meter and the account row meter.
+var METER_STYLES = [
+  { id: "projection", label: "Projection", file: "Projection", layout: "card" },
+  { id: "cursor", label: "Cursor", file: "Cursor", layout: "card" },
+  { id: "flow", label: "Flow", file: "Flow", layout: "card" },
+  { id: "trail", label: "Trail", file: "Trail", layout: "card" },
+  { id: "led", label: "LED", file: "Led", layout: "card" },
+  { id: "race", label: "Race", file: "Race", layout: "card" },
+  { id: "ruler", label: "Ruler", file: "Ruler", layout: "card" },
+  { id: "wave", label: "Waveform", file: "Wave", layout: "card" },
+  { id: "burn", label: "Burn chart", file: "Burn", layout: "card" },
+  { id: "pill", label: "Pill", file: "Pill", layout: "card" },
+  { id: "hairline", label: "Hairline", file: "Hairline", layout: "card" },
+  { id: "glass", label: "Glass", file: "Glass", layout: "card" },
+  { id: "ticker", label: "Ticker", file: "Ticker", layout: "card" },
+  { id: "battery", label: "Battery", file: "Battery", layout: "card" },
+  { id: "dots", label: "Dot matrix", file: "Dots", layout: "card" },
+  { id: "flap", label: "Split-flap", file: "Flap", layout: "card" },
+  { id: "tanks", label: "Tanks", file: "Tanks", layout: "group" },
+  { id: "gauges", label: "Gauges", file: "Gauges", layout: "group" },
+  { id: "rings", label: "Rings", file: "Rings", layout: "group" },
+  { id: "compact", label: "Compact", file: "Compact", layout: "group" }
+]
+
+function meterStyle(id) {
+  for (var i = 0; i < METER_STYLES.length; i++) if (METER_STYLES[i].id === id) return METER_STYLES[i]
+  return METER_STYLES[0]
 }
 
 // The limit card's verdict beside the reset line. `clock(epochSeconds)` formats a time.

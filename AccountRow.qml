@@ -7,8 +7,8 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui as Ui
 
-// One account in the ACCOUNTS list: state dot · name and one status line · 24 h sparkline · short and
-// long limits · action (the "in use" tag, a Use button, or a proxy account's banked resets).
+// One account in the ACCOUNTS list: state dot · name and one status line · short and long limits, which
+// move while the account spends · action (the "in use" tag, a Use button, or a proxy account's banked resets).
 Ui.BorderSurface {
   id: root
 
@@ -22,8 +22,6 @@ Ui.BorderSurface {
   property string severity: "unknown"
   property string statusText: ""
   property string statusTone: "dim"
-  property var sparkValues: []
-  property real sparkEnd: 0
   property bool inUse: false
   property bool canUse: false
   property bool useBusy: false
@@ -37,9 +35,12 @@ Ui.BorderSurface {
   property color urgent: Commons.Color.urgent
   property color accent: Commons.Color.accent
   property string fontFamily: Style.font.family
-  property string clockFormat: "HH:mm"
   property real cardRadius: 0
   property var motion: null
+  property real nowSeconds: 0
+  // When omp last sent a request for this account (Unix seconds, 0 when unknown), and Display → Meter style.
+  property real requestAt: 0
+  property string meterStyle: "projection"
 
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property bool hovered: rowMouse.containsMouse
@@ -86,7 +87,7 @@ Ui.BorderSurface {
     anchors.leftMargin: root.contentLeftInset
     anchors.rightMargin: root.contentRightInset
     anchors.topMargin: root.contentTopInset
-    implicitHeight: Math.max(textColumn.implicitHeight, meters.implicitHeight, spark.height, action.implicitHeight)
+    implicitHeight: Math.max(textColumn.implicitHeight, meters.implicitHeight, action.implicitHeight)
 
     // State dot: filled when the chip counts this account, a ring in its state colour otherwise.
     Item {
@@ -158,7 +159,7 @@ Ui.BorderSurface {
       id: textColumn
       anchors.left: dot.right
       anchors.leftMargin: Style.spacing.controlGap
-      anchors.right: spark.left
+      anchors.right: meters.left
       anchors.rightMargin: Style.spacing.lg
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.spacing.xxs
@@ -185,33 +186,19 @@ Ui.BorderSurface {
       }
     }
 
-    Sparkline {
-      id: spark
-      objectName: "accountSparkline"
-      anchors.right: meters.left
-      anchors.rightMargin: Style.spacing.xl
-      anchors.verticalCenter: parent.verticalCenter
-      width: Style.space(52)
-      height: Style.space(18)
-      values: root.sparkValues
-      endSeconds: root.sparkEnd
-      lineColor: root.spending ? root.accent : root.alpha(root.foreground, 0.5)
-      dotColor: root.spending ? root.accent : root.foreground
-      guideColor: root.foreground
-      fontFamily: root.fontFamily
-      clockFormat: root.clockFormat
-      motion: root.motion
-    }
-
     AccountMeters {
       id: meters
       objectName: "accountMeters"
       anchors.right: action.left
       anchors.rightMargin: root.hasAction ? Style.spacing.lg : 0
       anchors.verticalCenter: parent.verticalCenter
-      width: Style.space(92)
+      width: Style.space(112)
       account: root.account
       quotaMode: root.quotaMode
+      spending: root.spending
+      nowSeconds: root.nowSeconds
+      requestAt: root.requestAt
+      meterStyle: root.meterStyle
       warningThreshold: root.warningThreshold
       criticalThreshold: root.criticalThreshold
       foreground: root.foreground

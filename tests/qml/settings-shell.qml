@@ -218,6 +218,15 @@ ShellRoot {
       shown("motionControl").changed("reduced")
       check(saved.motion === "reduced" && form.reducedMotion && form.rowMs === 0 && form.displaySummary().indexOf("Reduced motion") >= 0,
         "Motion: reduced turns the settings' own motion off")
+      shown("meterStyleControl").changed("rings")
+      check(saved.meterStyle === "rings" && form.displaySummary().indexOf("Rings meters") >= 0, "Meter style: saved and summarised")
+      check(shown("meterStylePreview").styleId === "rings" && shown("meterStylePreview").group, "Meter style: the preview shows it at once")
+      shown("meterStyleNext").clicked()
+      shown("meterStyleNext").clicked()
+      check(saved.meterStyle === "projection" && shown("meterStylePreview").styleId === "projection",
+        "Meter style: the preview's arrows step through the styles and wrap past the last")
+      shown("meterStylePrevious").clicked()
+      check(saved.meterStyle === "compact", "Meter style: the previous arrow wraps back to the last style")
 
       form.page = "providers"
       form.usagePayload = payload(ompFound, [

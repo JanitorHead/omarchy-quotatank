@@ -6,12 +6,19 @@ import qs.Commons as Commons
 import "UsageLogic.js" as UsageLogic
 
 // An account's two limits at a glance: its short window and its main long one, each as a tag, a thin
-// meter and the figure on the chosen side ("5h ▬▬▬ 72%", "7d ▬▬▬ 31%").
+// meter of Display → Meter style and the figure on the chosen side ("5h ▬▬▬ 72%", "7d ▬▬▬ 31%"). While the
+// account spends, the meters move as the style's row variant says (MeterProjection.qml: a bright tick runs
+// to where this pace takes the limit by its reset).
 Column {
   id: root
 
   property var account: null
   property string quotaMode: "Used"
+  property bool spending: false
+  property real nowSeconds: 0
+  // When omp last sent a request for this account (Unix seconds, 0 when unknown).
+  property real requestAt: 0
+  property string meterStyle: "projection"
   // Thresholds on what is left, as the panel's settings hold them.
   property real warningThreshold: 25
   property real criticalThreshold: 10
@@ -28,8 +35,6 @@ Column {
     return rows
   }
 
-  function alpha(color, opacity) { return Qt.rgba(color.r, color.g, color.b, opacity) }
-
   spacing: Style.spacing.xs
 
   FontMetrics {
@@ -45,14 +50,27 @@ Column {
       id: meterRow
       required property int index
       readonly property var row: root.meterRows[index] || null
-      readonly property real shown: UsageLogic.sideOfUsed(UsageLogic.windowUsed(row) || 0, root.quotaMode)
       readonly property real remaining: UsageLogic.windowRemaining(row) === null ? 100 : UsageLogic.windowRemaining(row)
       readonly property bool stressed: remaining <= root.warningThreshold
+      // Meter host contract (MeterProjection.qml).
+      readonly property LimitModel model: LimitModel {
+        window: meterRow.row
+        nowSeconds: root.nowSeconds
+        quotaMode: root.quotaMode
+        spending: root.spending
+        requestAt: root.requestAt
+      }
+      readonly property var motion: root.motion
       readonly property color tone: stressed ? root.urgent : root.foreground
+      readonly property color foreground: root.foreground
+      readonly property color urgent: root.urgent
+      readonly property color dim: Qt.darker(root.foreground, 1.55)
+      readonly property bool markShown: false
+      readonly property string fontFamily: root.fontFamily
 
       objectName: "accountMeter-" + index
       width: root.width
-      height: Math.max(tag.implicitHeight, figure.implicitHeight)
+      height: Math.max(tag.implicitHeight, figure.implicitHeight, meterView.height)
 
       PlainText {
         id: tag
@@ -65,28 +83,17 @@ Column {
         font.pixelSize: Style.font.caption
       }
 
-      Item {
+      MeterView {
+        id: meterView
+        objectName: "accountMeterView-" + meterRow.index
         anchors.left: tag.right
         anchors.leftMargin: Style.spacing.sm
         anchors.right: figure.left
         anchors.rightMargin: Style.spacing.sm
         anchors.verticalCenter: parent.verticalCenter
-        height: Style.space(3)
-
-        Rectangle {
-          anchors.fill: parent
-          color: root.alpha(root.foreground, 0.14)
-        }
-
-        Rectangle {
-          width: Math.round(parent.width * Math.max(0, Math.min(1, meterRow.shown / 100)))
-          height: parent.height
-          color: meterRow.tone
-
-          Behavior on width {
-            NumberAnimation { duration: root.motion ? root.motion.duration(root.motion.row) : 0; easing.type: Easing.OutCubic }
-          }
-        }
+        host: meterRow
+        variant: "row"
+        styleId: root.meterStyle
       }
 
       PlainText {

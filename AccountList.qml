@@ -26,6 +26,9 @@ Column {
   readonly property var order: accountState ? accountState.order : []
   property string selectedId: ""
   property real nowSeconds: 0
+  // Latest request per "<provider>@<accountId>" (UsageLogic.mergeRecentActivity) and Display → Meter style.
+  property var recentByAccount: ({})
+  property string meterStyle: "projection"
   // Newest switch or reset per "<provider>@<accountId>".
   property var events: ({})
   property bool resetsActionable: false
@@ -72,14 +75,6 @@ Column {
   function clock(epochSeconds) {
     var seconds = Number(epochSeconds)
     return Qt.formatDateTime(new Date(seconds * 1000), UsageLogic.clockPattern(seconds, nowSeconds, clockFormat))
-  }
-
-  // The newest point of an account's sparkline: when its reading was taken, where its 24 h buckets end.
-  function readingEnd(account) {
-    var at = account && account.activity ? Number(account.activity.lastReadingAt) : NaN
-    if (isFinite(at) && at > 0) return at
-    var fetched = new Date(String(account && account.fetchedAt || "")).getTime()
-    return isFinite(fetched) && fetched > 0 ? fetched / 1000 : nowSeconds
   }
 
   function statusText(status) {
@@ -186,8 +181,9 @@ Column {
         severity: root.accountState && accountIndex >= 0 ? String(root.accountState.rings[accountIndex]) : "unknown"
         statusText: root.statusText(status)
         statusTone: status.tone
-        sparkValues: accountData && accountData.history ? UsageLogic.listOrEmpty(accountData.history.h24) : []
-        sparkEnd: root.readingEnd(accountData)
+        nowSeconds: root.nowSeconds
+        requestAt: Number(UsageLogic.accountLiveAt(accountData, root.recentByAccount)) || 0
+        meterStyle: root.meterStyle
         inUse: !!root.accountState && root.accountState.inUse[accountIndex] === true
         canUse: UsageLogic.accountCanUse(accountData, root.mode)
         useBusy: root.useBusyId !== "" && root.useBusyId === accountId
@@ -200,7 +196,6 @@ Column {
         foreground: root.foreground
         urgent: root.urgent
         fontFamily: root.fontFamily
-        clockFormat: root.clockFormat
         cardRadius: root.cardRadius
         motion: root.motion
         onSelectRequested: root.accountSelected(accountId)

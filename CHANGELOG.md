@@ -8,11 +8,23 @@ All notable changes to this project will be documented here. The format follows
 
 ### Added
 
+- **Meters move while an account spends.** On a limit card a sweep runs over the forecast dashes, from the fill's edge to where the current pace takes the limit, faster as that pace presses on what is left before the reset; the last block flashes red when the limit runs out first. In an account row a bright tick makes the same run. They stop when the account goes quiet, when the panel closes, and with reduced motion. All meters share one 30-frame clock that runs only while something moves.
+- **Meter style** (`meterStyle`, Settings → Display): twenty looks for limit meters, each with its own motion while the account spends — block meters (Projection, the default, Cursor, Flow, Trail, LED), lines (Race, Ruler, Pill, Hairline, Glass, Ticker, Battery), matrices (Dot matrix, Split-flap), charts of the window's history (Waveform, Burn chart), and group cards that show every limit of the account at once (Tanks, Gauges, Rings, Compact). Account rows follow the chosen style, and Settings shows the chosen style live in a preview of a sample account that is spending, with arrows that step through the styles.
+- **Live figure** (`liveFigure`, off by default, Settings → Display): limit card figures carry two decimals that climb at the current rate while the account spends; the next reading corrects them.
 - **pi's session history as a local cost source.** **Settings → Costs** can read the transcripts pi keeps (`$PI_CODING_AGENT_SESSION_DIR`, else `$PI_CODING_AGENT_DIR/sessions`, with `PI_CODING_AGENT_DIR` defaulting to `~/.pi/agent`; `costLocalProviders` value `pi`); it is off by default. Each message counts under the provider that billed it. `openai-codex` counts as Codex; plain `openai` is not the Codex subscription and is dropped.
+
+### Changed
+
+- **Cleaner limit meters.** The pace tick shows only while the pointer is on the meter; the shading of use ahead of pace and the warning and critical lines are gone (the meter turns the alert colour at a threshold). A partly filled block lights up as a whole, dimmer the less full it is, instead of a thin sliver.
+
+### Removed
+
+- The 24-hour sparkline in account rows and the **spending now** caption and trend beside a single account's headline: the meters show spending now. The chip hover card keeps its trend.
 
 ### Fixed
 
 - **A long-lived Codex thread was missing from Costs.** One rollout can grow past the 128 MiB per-file ceiling — a thread kept open for weeks does — and the reader skipped the whole file, so its usage was invisible while the source reported *partial* history. A streamed transcript now has no whole-file ceiling. Its first read must fit the 512 MiB scan budget, and later reads cover only the bytes appended since. A transcript over 512 MiB that must be read from the start (a first scan or a scan-cache upgrade; a failed refresh keeps its saved position) is skipped and reported as partial history. Memory stays bounded by the 16 MiB line cap and the record ceilings. The whole-file ceiling stays for the grok CLI's `usage.json`, which is read whole.
+- **Another computer could fill this one's memory over SSH.** Quotatank read everything ssh printed before checking its size, so a faulty or compromised computer streaming without end could exhaust memory before the 8 MiB ceiling or the timeout applied. Output is now bounded as it arrives: past the ceiling ssh is stopped at once, and only the end of its error output is kept.
 
 ## 3.0.1
 

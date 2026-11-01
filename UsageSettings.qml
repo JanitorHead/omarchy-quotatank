@@ -1683,6 +1683,35 @@ Column {
       onToggled: root.set("providerColors", !checked)
     }
     Hint { text: "Brand colors on chips and meters. Alerts keep the theme's alert color; the cost chart always uses brand colors." }
+    SelectRow {
+      objectName: "meterStyleControl"
+      label: "Meter style"
+      options: UsageLogic.METER_STYLES.map(function(style) { return { value: style.id, label: style.label } })
+      value: UsageLogic.meterStyle(String(root.value("meterStyle", "projection"))).id
+      onChanged: function(next) { root.set("meterStyle", next) }
+    }
+    Hint { text: "How limit meters look and move while an account spends. Tanks, Gauges, Rings and Compact put every limit of the account in one card." }
+    MeterPreview {
+      objectName: "meterStylePreview"
+      width: parent.width
+      styleId: UsageLogic.meterStyle(String(root.value("meterStyle", "projection"))).id
+      quotaMode: root.quotaMode
+      liveFigure: root.value("liveFigure", false) === true
+      motion: root.motion
+      foreground: root.foreground
+      urgent: root.urgent
+      providerColor: root.value("providerColors", false) === true ? UsageLogic.providerAccent("claude", root.foreground) : root.foreground
+      fontFamily: root.fontFamily
+      cardRadius: root.value("squareUsageCards", true) === true ? 0 : Style.cornerRadius
+      onStyleRequested: function(id) { root.set("meterStyle", id) }
+    }
+    SwitchRow {
+      objectName: "liveFigureToggle"
+      label: "Live figure"
+      checked: root.value("liveFigure", false) === true
+      onToggled: root.set("liveFigure", !checked)
+    }
+    Hint { text: "Limit figures carry two decimals that climb at the current rate while an account spends. The next reading corrects them." }
     SwitchRow {
       objectName: "squareUsageCardsToggle"
       label: "Square cards"
@@ -1704,7 +1733,7 @@ Column {
       value: String(root.value("motion", "system")) === "reduced" ? "reduced" : "system"
       onChanged: function(next) { root.set("motion", next) }
     }
-    Hint { text: "Follow Hyprland animates changes while Hyprland's animations are on. Reduced shows every change without movement." }
+    Hint { text: "Follow Hyprland animates changes, and meters move while an account spends, while Hyprland's animations are on. Reduced shows every change without movement." }
   }
 
   // ---- Costs
@@ -3409,6 +3438,8 @@ Column {
 
   function displaySummary() {
     return (quotaMode === "Remaining" ? "% left" : "% used") + " · " + (value("providerColors", false) === true ? "Brand colors" : "Theme colors")
+      + " · " + UsageLogic.meterStyle(String(value("meterStyle", "projection"))).label + " meters"
+      + (value("liveFigure", false) === true ? " · Live figures" : "")
       + (value("hideAccountEmails", true) !== false ? " · Emails hidden" : "")
       + (String(value("motion", "system")) === "reduced" ? " · Reduced motion" : "")
   }

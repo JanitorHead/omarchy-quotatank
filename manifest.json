@@ -88,6 +88,8 @@
       "hideAccountEmails": true,
       "squareUsageCards": true,
       "providerColors": false,
+      "liveFigure": false,
+      "meterStyle": "projection",
       "notifyLimitThresholds": true,
       "barDisplayMode": "Percentages",
       "quotaMode": "Used",
@@ -492,6 +494,42 @@
         "label": "Provider colors",
         "defaultValue": false,
         "description": "Color each provider's bar chip and limit meters with its brand color instead of the Omarchy theme colors. The cost chart always uses provider colors."
+      },
+      {
+        "key": "liveFigure",
+        "type": "boolean",
+        "label": "Live figure",
+        "defaultValue": false,
+        "description": "Show limit figures with two decimals that climb at the current rate while an account is spending. The next reading corrects them."
+      },
+      {
+        "key": "meterStyle",
+        "type": "enum",
+        "label": "Meter style",
+        "options": [
+          "projection",
+          "cursor",
+          "flow",
+          "trail",
+          "led",
+          "race",
+          "ruler",
+          "wave",
+          "burn",
+          "pill",
+          "hairline",
+          "glass",
+          "ticker",
+          "battery",
+          "dots",
+          "flap",
+          "tanks",
+          "gauges",
+          "rings",
+          "compact"
+        ],
+        "defaultValue": "projection",
+        "description": "How limit meters look and move while an account spends. Tanks, gauges, rings and compact show every limit of the account in one card."
       },
       {
         "key": "notifyLimitThresholds",

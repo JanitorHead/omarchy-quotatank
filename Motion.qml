@@ -35,6 +35,15 @@ QtObject {
   readonly property int easeMove: Easing.InOutCubic
   readonly property int easeExit: Easing.InCubic
 
+  // Live meters share one clock. A meter that shows spending holds a claim (`claimLive`/`releaseLive`);
+  // while any claim is held, the panel is open and motion is not reduced, `liveSeconds` advances 30 times
+  // a second. Thirty frames cost a third of the vsync rate (144 Hz here) and block-wise motion needs no more.
+  property real liveSeconds: 0
+  property int liveClaims: 0
+  readonly property bool liveRunning: liveClaims > 0 && panelOpen && !reduced
+  function claimLive() { liveClaims += 1 }
+  function releaseLive() { liveClaims = Math.max(0, liveClaims - 1) }
+
   function duration(ms) {
     if (reduced) return 0
     var value = Math.round(Number(ms))
@@ -80,5 +89,13 @@ QtObject {
     interval: 3000
     running: probeProcess.running
     onTriggered: probeProcess.running = false
+  }
+
+  property Timer liveTimer: Timer {
+    interval: 33
+    repeat: true
+    running: root.liveRunning
+    triggeredOnStart: true
+    onTriggered: root.liveSeconds = Date.now() / 1000
   }
 }

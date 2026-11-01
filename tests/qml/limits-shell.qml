@@ -11,6 +11,7 @@ ShellRoot {
   property var motion: null
   property var list: null
   property var rising: null
+  property var group: null
   property var quiet: null
   property var runwayCard: null
   property var notice: null
@@ -117,6 +118,8 @@ ShellRoot {
     list.useRequested.connect(function(accountId) { root.used = root.used.concat([accountId]) })
     rising = create("LimitCard.qml", { width: 420, window: session(70, 0.01), nowSeconds: now, motion: motion })
     quiet = create("LimitCard.qml", { width: 420, window: Object.assign(session(31, 0), { label: markup }), nowSeconds: now, motion: motion })
+    group = create("LimitGroupCard.qml", { width: 420, nowSeconds: now, motion: motion, spending: true, meterStyle: "tanks",
+      windows: [session(70, 0.01), weekly(31), Object.assign(weekly(12), { id: "extra", label: markup })] })
     var provider = { id: "claude", status: "ok", accounts: [accounts[0], login("personal", { windows: [session(60, 0), weekly(10)] })] }
     runwayCard = create("RunwayCard.qml", { width: 420, motion: motion, nowSeconds: now, names: ["Work", "Personal"],
       counted: [0], runway: UsageLogic.accountRunway(provider, "single", [0], now, [0, 1]) })
@@ -163,15 +166,37 @@ ShellRoot {
     list.accountState = stateOf("together")
 
     // Limit cards: a dashed forecast where the pace runs out before the reset, none without a pace.
-    check(rising.forecastSegment !== null && rising.meter.forecastActive, "a fast pace draws the forecast")
+    check(rising.forecastSegment !== null && rising.meter.blocks.forecastActive, "a fast pace draws the forecast")
     check(rising.forecastSegment.runsOut === true, "the forecast runs out before the reset")
     check(rising.verdict.text.indexOf("runs out ") === 0 && rising.verdict.urgent, "the footer says when: " + rising.verdict.text)
-    check(Math.abs(rising.meter.warningMark - 0.75) < 0.001 && Math.abs(rising.meter.criticalMark - 0.9) < 0.001,
-      "threshold marks sit at 75% and 90% used")
-    check(quiet.forecastSegment === null && !quiet.meter.forecastActive, "no pace, no forecast")
+    check(!rising.meter.blocks.tickVisible, "the pace tick hides until the pointer is on the meter")
+    check(quiet.forecastSegment === null && !quiet.meter.blocks.forecastActive, "no pace, no forecast")
+    // Spending: the meter would sweep, but reduced motion keeps it still; the live figure climbs.
+    rising.spending = true
+    rising.readingAt = now - 50
+    check(rising.live.moving && !rising.meter.blocks.sweeping, "reduced motion: spending, yet no sweep")
+    check(find(rising, "limitFigure").text === "70%" && !find(rising, "limitDecimals").visible, "no live figure unless asked for")
+    rising.liveFigure = true
+    check(find(rising, "limitFigure").text === "70" && find(rising, "limitDecimals").text === ".50%",
+      "live figure: the reading plus 50 s at 0.01%/s")
     rising.quotaMode = "Remaining"
-    check(rising.meter.forecastActive && rising.forecastSegment.to <= 0.3001, "Remaining forecasts inside the fill")
-    check(Math.abs(rising.meter.warningMark - 0.25) < 0.001, "Remaining marks the threshold on what is left")
+    check(rising.meter.blocks.forecastActive && rising.forecastSegment.to <= 0.3001, "Remaining forecasts inside the fill")
+    check(rising.live.end < rising.live.start, "Remaining: the sweep runs leftward")
+    check(find(rising, "limitFigure").text === "29" && find(rising, "limitDecimals").text === ".50%", "Remaining counts what is left down")
+    rising.quotaMode = "Used"
+
+    // Every meter style loads for a card or the group card and for an account row, and draws text as text.
+    UsageLogic.METER_STYLES.forEach(function(style) {
+      var holder = style.layout === "group" ? group : rising
+      holder.meterStyle = style.id
+      check(style.layout === "group" ? find(group, "limitGroupMeter").item !== null : rising.meter !== null,
+        style.id + ": the card loads its meter")
+      check(markupSinks(holder).length === 0, style.id + ": the card reads no markup")
+      list.meterStyle = style.id
+      check(find(list.rowFor("work"), "accountMeterView-0").item !== null, style.id + ": the account row loads its meter")
+    })
+    rising.meterStyle = "projection"
+    list.meterStyle = "projection"
 
     // Runway: both accounts run out before the reset, so a gap lane says how long nothing is left.
     check(runwayCard.runway.gap > 0, "the runway has a gap")
@@ -261,11 +286,11 @@ ShellRoot {
           "the provider's notice shows markup as text")
         var panelSinks = root.markupSinks(content).concat(root.markupSinks(w))
         root.check(panelSinks.length === 0, "panel text items that read markup: " + panelSinks.join(", "))
-        root.check(w.singleAccount === w.provider && root.find(content, "singleTrend").visible
-          && root.find(content, "singleSparkline").values.length === 4, "one account: its 24-hour trend sits beside the headline")
+        var only = UsageLogic.listOrEmpty(w.provider.accounts)
+        root.check(w.detailAccount === (only.length === 1 ? only[0] : w.provider), "one account: the meters follow that account")
         w.selectProviderId("claude")
-        root.check(w.singleAccount === null && !root.find(content, "singleTrend").visible,
-          "several accounts keep their trends in their rows")
+        root.check(w.detailAccount === w.selectedAccount && w.selectedAccount !== null,
+          "several accounts: the meters follow the selected login")
         root.check(w.limitsHint === "accounts" && root.find(content, "hint-accounts").visible
           && !root.find(content, "hint-runway").visible, "Limits explains one part at a time, the account list first")
         // The recorder stands in for Omarchy: it notes the command and switches the synthetic registry.

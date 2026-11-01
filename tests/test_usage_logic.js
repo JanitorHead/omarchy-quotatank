@@ -1646,6 +1646,29 @@ console.log("omp settings, live feed and account modes: passed");
   assert.equal(context.forecastSegment(context.windowForecast(quiet(20), NOW), "Used"), null, "no rate, no forecast segment");
   assert.equal(context.forecastText(context.windowForecast({ ...quiet(100) }, NOW), "Used", clock).text, "used up");
 
+  // Live meters: still unless the account is spending; the beat quickens with the pressure on the limit.
+  assert.equal(context.liveMeter(hot, false, "Used").moving, false, "not spending, not moving");
+  assert.equal(context.liveMeter(context.windowForecast(quiet(100), NOW), true, "Used").moving, false, "a used-up limit does not move");
+  const live = context.liveMeter(hot, true, "Used");
+  assert.ok(Math.abs(live.pressure - 3) < 1e-9, "0.01%/s against the 30% left over 9000 s");
+  assert.ok(Math.abs(live.ratePerHour - 36) < 1e-9);
+  assert.ok(Math.abs(live.period - 2.2 / Math.pow(3, 0.75)) < 1e-9);
+  assert.deepEqual([live.start, live.end, live.runsOut], [0.7, 1, true], "the sweep runs from the fill's edge to the end");
+  const draining = context.liveMeter(hot, true, "Remaining");
+  assert.ok(Math.abs(draining.start - 0.3) < 1e-9 && draining.end === 0, "Remaining: the sweep runs leftward to what is left at reset");
+  const easy = context.liveMeter(calm, true, "Used");
+  assert.ok(easy.pressure < 1 && easy.period > live.period, "a pace that lasts beats slower");
+  assert.ok(context.liveMeter(context.windowForecast({ ...quiet(1) }, NOW), true, "Used").period === 3.2, "no rate, the slowest beat");
+  assert.equal(context.liveMeter(context.windowForecast({ ...quiet(1) }, NOW), true, "Used").start, -1, "no rate, no sweep");
+  assert.equal(context.liveMeter(context.windowForecast(rising(70, 10), NOW), true, "Used").period, 0.45, "the beat has a floor");
+
+  // Live figure: the reading plus what the rate adds since, capped at 15 minutes and at 100.
+  assert.equal(context.liveEstimate(hot, NOW - 100, NOW, true), 71);
+  assert.equal(context.liveEstimate(hot, NOW - 100, NOW, false), 70, "not spending, the reading");
+  assert.equal(context.liveEstimate(hot, NOW - 3600, NOW, true), 79, "at most 15 minutes of extrapolation");
+  assert.equal(context.liveEstimate(context.windowForecast(rising(99.5, 0.01), NOW), NOW - 600, NOW, true), 100);
+  assert.equal(context.liveEstimate(hot, NOW + 5, NOW, true), 70, "a reading from the future adds nothing");
+
   // Scrub: below the fill, when use passed that point; above it, when this pace gets there.
   const scrubbed = rising(70, 0.01);
   assert.deepEqual(plain(context.meterScrub(scrubbed, 50, "Used", NOW)), { kind: "passed", percent: 50, at: NOW - 1800 });

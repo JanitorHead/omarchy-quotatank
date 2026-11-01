@@ -92,7 +92,7 @@ Every source of a second account shows the same way:
 - **Another computer's accounts**, read over SSH: its sign-ins, keys and omp, each named by its computer. An account signed in on both computers appears once, and when one copy fails the other stands in.
 - **CLIProxyAPI accounts**, each with its plan and its banked Codex and Claude resets behind a confirmation.
 
-In the menu bar, a dot per account sits beside the chip: filled for the account counted, a ring coloured by each other account's state. Hover the chip for every account's 5-hour and weekly use and its trend. In Limits, each row says what matters now (`spending now`, `used up · back 18:02`, `switched 16:27`) next to a 24-hour trend you can read with the pointer; pick a row for its full detail.
+In the menu bar, a dot per account sits beside the chip: filled for the account counted, a ring coloured by each other account's state. Hover the chip for every account's 5-hour and weekly use and its trend. In Limits, each row says what matters now (`spending now`, `used up · back 18:02`, `switched 16:27`) beside its 5-hour and weekly meters, which move while the account spends; pick a row for its full detail.
 
 **One at a time or together.** Omarchy accounts are used one at a time, so the chip follows the one in use. Accounts that omp or a proxy spend at once are counted together: the chip shows the one closest to its limit among those spending, rows sort by headroom and slide into place as that changes, and with omp a pool line says how much of the window is left across all of them. **Customize** fixes either mode per provider, and hides an account you do not want to see.
 
@@ -100,7 +100,7 @@ In the menu bar, a dot per account sits beside the chip: filled for the account 
 
 ## Limits and pace
 
-Every limit card has a meter, a pace tick, and a forecast. The tick marks where even use would be by now, so blocks past it are use ahead of pace. A dashed stretch after the fill shows where the current pace takes the limit before it resets, red when it runs out first; faint marks show your warning and critical levels. Hover the meter for the time it reaches that level at this pace, or when it passed it. A 5-hour limit projects from its recent rate, newest samples weighing most; weekly and monthly limits blend this window's average with the last 24 hours, so one busy hour does not predict a weekly run-out. Hover a card's status line for how the tick and the projection work.
+Every limit card has a meter and a forecast: a dashed stretch after the fill shows where the current pace takes the limit before it resets, red when it runs out first. While the account spends, a sweep runs along it, faster as the pace presses on what is left, and the last block flashes when the limit runs out first. Hover the meter for the pace tick, where even use would be by now, and for the time a point is reached at this pace, or when it was passed. **Live figure** adds two decimals that climb at the current rate between readings. A 5-hour limit projects from its recent rate, newest samples weighing most; weekly and monthly limits blend this window's average with the last 24 hours, so one busy hour does not predict a weekly run-out. Hover a card's status line for how the tick and the projection work.
 
 **Banked resets.** When Anthropic grants Claude a reset of its 5-hour and weekly limits (a launch reset, say), a card under the limits counts it and says when it expires. **Apply…** spends it after a confirmation; when Claude holds it back, the card says why.
 
@@ -184,7 +184,7 @@ The gear opens an index of seven pages, and each row already says what the page 
 | **Providers** | **Found** offers providers set up here, on another computer or behind a proxy that Quotatank is not monitoring, with **Monitor** and **Ignore**. **Monitored** gives each provider in use its own card with its mark: what the last check found (`Connected · Claude Max 20x`, `Sign-in expired`, `No key saved`) and, when signed out, a **Sign in** or **Install and sign in** button; a grip to drag it into the order tiles and chips follow; **Monitor** and **Menu bar** switches; its key editor when it takes an API key; and **Customize** to read it as used or left and pin the limits its chip shows. **More providers** folds away everything else, filterable by name, with the same buttons, a link to get each tool, and a link to each provider's key page. Last, **omp**: read its accounts |
 | **Menu bar** | Chips or the widget icon, the limit each chip shows, a second limit, the period tag, reset times and formats, one chip per provider or per account, how many chips the bar holds, hiding used-up providers |
 | **Alerts** | Desktop notifications, the percentage thresholds, and the low-balance amounts |
-| **Display** | Used or left, provider colors, square cards, hidden account emails, motion |
+| **Display** | Used or left, provider colors, meter style, live figure, square cards, hidden account emails, motion |
 | **Costs** | Local history, custom prices, and the last scan |
 | **Advanced** | Refresh interval (1 to 60 minutes), **Run setup again**, diagnostics, **Back up and restore** (every setting and saved key in one passphrase-encrypted file), and **Reset to defaults**, which keeps your sources, keys, and custom prices |
 
