@@ -10,7 +10,7 @@
 
 </div>
 
-![The menu bar chips above the Limits panel: tiles for Claude, Codex, Kimi, and OpenCode, two Claude accounts with Work spending now and in use and Personal with room and a Use button, the headline 5-hour limit runs out in 1h 11m, limit cards with a dashed forecast, and a runway card where Personal takes over when Work runs out; beside it the Costs tab with a total 26% above the previous 30 days, a daily chart, providers, a model breakdown, and a heatmap of when you spend](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/hero.png)
+![The menu bar chips above the Limits panel: tiles for Claude, Codex, Kimi, and OpenCode, two Claude accounts with Work spending now and in use and Personal with room and a Use button, the headline 5-hour limit runs out in 1h 11m, limit cards with a dashed forecast, and a runway card where Personal takes over when Work runs out; beside it the Costs tab with a total 15% above the previous 30 days, a daily chart, providers, a model breakdown, and a heatmap of when you spend](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/hero.png)
 
 Quotatank reads the plan limits and prepaid balances of **50 AI coding providers** with the sign-ins and keys you already have, on this computer and on the other computers you reach over SSH: several accounts per provider, every account behind a **CLIProxyAPI** server, and everything **omp (Oh My Pi)** is signed in to. A second tab shows what your coding agents would cost at API rates, by day, model, project, and subagent.
 
@@ -150,7 +150,7 @@ Clicking a chip opens that provider. A desktop notification fires when a limit o
 
 ## Costs
 
-![Three Costs tabs: the last 30 days with a total 38% above the previous period, a daily chart by provider, providers, a model breakdown, and an hour-by-day heatmap; the same tab with OpenAI Codex isolated and the chart rescaled to it; and the breakdown by project](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/costs.png)
+![Three Costs tabs: the last 30 days with a total 15% above the previous period, a daily chart by provider with quiet weekends, providers, a model breakdown, and an hour-by-day heatmap of a working week; the same tab with OpenAI Codex isolated and the chart rescaled to it; and the breakdown by project](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/costs.png)
 
 Costs estimates what your recorded tokens would cost at API rates. It is not a bill, a subscription charge, or a credit balance.
 
