@@ -17,6 +17,8 @@ import io
 import json
 import os
 import re
+import select
+import selectors
 import stat
 import subprocess
 import sys
@@ -37,6 +39,9 @@ SSH_OPTIONS = ("BatchMode=yes", "StrictHostKeyChecking=yes", "ConnectTimeout=8",
                "ServerAliveCountMax=3", "ControlMaster=auto", "ControlPersist=600")
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_ERROR_CHARS = 4000
+# Only the end of ssh's stderr is kept while it streams: enough bytes for MAX_ERROR_CHARS of UTF-8.
+MAX_ERROR_BYTES = MAX_ERROR_CHARS * 4
+READ_CHUNK = 64 * 1024
 # Exit codes of the remote script, outside the readers' own (0, 1, 2) and the shell's (126, 127).
 EXIT_NO_PYTHON = 85
 EXIT_NO_BUNDLE = 86
@@ -232,16 +237,64 @@ def clean_line(stderr: str) -> str:
 
 def run_ssh(argv: list[str], timeout: float, stdin: bytes | None = None,
             max_bytes: int = MAX_OUTPUT_BYTES) -> tuple[int, bytes, str]:
+    """Run ssh within `timeout` seconds and return its exit code, stdout and the end of its stderr.
+
+    Output is read as it arrives, so what the other computer sends is bounded here, not after it is all in
+    memory: stdout past `max_bytes` stops ssh at once, and stderr keeps only its last MAX_ERROR_BYTES."""
     try:
-        completed = subprocess.run(argv, input=stdin if stdin is not None else b"", capture_output=True,
-                                   timeout=timeout, check=False)
+        process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except FileNotFoundError as exc:
         raise RemoteFailure("failed", "ssh was not found on this computer.", "Install OpenSSH.") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise RemoteFailure("timeout", "", "") from exc
-    if len(completed.stdout) > max_bytes:
-        raise RemoteFailure("failed", "", "")
-    return completed.returncode, completed.stdout, completed.stderr.decode("utf-8", "replace")[-MAX_ERROR_CHARS:]
+    deadline = time.monotonic() + timeout
+    pending = memoryview(stdin or b"")
+    out = bytearray()
+    err = bytearray()
+    finished = False
+    try:
+        with selectors.DefaultSelector() as selector:
+            if pending:
+                selector.register(process.stdin, selectors.EVENT_WRITE)
+            else:
+                process.stdin.close()
+            selector.register(process.stdout, selectors.EVENT_READ, out)
+            selector.register(process.stderr, selectors.EVENT_READ, err)
+            while selector.get_map():
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise RemoteFailure("timeout", "", "")
+                for key, _events in selector.select(left):
+                    if key.fileobj is process.stdin:
+                        # A writable pipe takes PIPE_BUF bytes without blocking.
+                        try:
+                            pending = pending[os.write(key.fd, pending[:select.PIPE_BUF]):]
+                        except BrokenPipeError:
+                            pending = pending[:0]
+                        if not pending:
+                            selector.unregister(process.stdin)
+                            process.stdin.close()
+                        continue
+                    chunk = os.read(key.fd, READ_CHUNK)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    key.data.extend(chunk)
+                    if key.data is out and len(out) > max_bytes:
+                        raise RemoteFailure("failed", "", "")
+                    if key.data is err and len(err) > MAX_ERROR_BYTES:
+                        del err[:-MAX_ERROR_BYTES]
+        try:
+            code = process.wait(max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise RemoteFailure("timeout", "", "") from None
+        finished = True
+    finally:
+        if not finished:
+            process.kill()
+            process.wait()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream and not stream.closed:
+                stream.close()
+    return code, bytes(out), err.decode("utf-8", "replace")[-MAX_ERROR_CHARS:]
 
 
 def named(failure: RemoteFailure, host: str, timeout: float) -> RemoteFailure:

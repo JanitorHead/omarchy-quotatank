@@ -9,6 +9,8 @@ import json
 import os
 import sys
 import tempfile
+import time
+import tracemalloc
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -117,6 +119,25 @@ class BundleTests(FakeSsh):
             remote.run_reader("slow", "quotatank_remote.py", ["probe"], 1)
         self.assertEqual(caught.exception.kind, "timeout")
         self.assertIn("slow", caught.exception.message)
+
+    def test_a_computer_that_sends_without_end_is_stopped_as_it_reads(self):
+        # Bounded while reading: a computer that streams stdout is cut off at the ceiling well before the
+        # deadline, and endless stderr keeps only its end, so neither fills this computer's memory.
+        tracemalloc.start()
+        self.addCleanup(tracemalloc.stop)
+        started = time.monotonic()
+        with self.assertRaises(remote.RemoteFailure) as caught:
+            remote.run_reader("flood", "quotatank_remote.py", ["probe"], 20, max_bytes=1024 * 1024)
+        self.assertEqual(caught.exception.kind, "failed")
+        self.assertIn("flood sent more than Quotatank reads", caught.exception.message)
+        self.assertLess(time.monotonic() - started, 10, "stopped at the ceiling, not at the deadline")
+        self.assertLess(tracemalloc.get_traced_memory()[1], 4 * 1024 * 1024)
+        tracemalloc.reset_peak()
+        with mock.patch.object(remote, "locked_key_without_agent", return_value=False), \
+                self.assertRaises(remote.RemoteFailure) as caught:
+            remote.run_reader("chatty", "quotatank_remote.py", ["probe"], 30)
+        self.assertIn("Permission denied", caught.exception.message, "the end of stderr still explains it")
+        self.assertLess(tracemalloc.get_traced_memory()[1], 4 * 1024 * 1024, "50 MB of stderr, kept only its end")
 
     def test_only_an_ssh_exit_of_255_is_an_ssh_failure(self):
         for host in ("odd", "stalled"):
