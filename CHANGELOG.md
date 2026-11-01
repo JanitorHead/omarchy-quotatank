@@ -4,19 +4,28 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 3.1.1
+
+Quotatank 3.1.1 is for heavy use. Costs now counts every message of a computer that runs agents all day, where it stopped at 50,000 and showed a third of the spend, and opens at once with other computers instead of waiting half a minute on SSH at each period switch. Adding a computer starts from your computers and the users SSH connects as there, and says what Costs will read. Live meters no longer glitch or race, the panel no longer jumps while it reads, and the heatmap's squares are evenly spaced.
 
 ### Changed
 
 - **Projection, the default style, no longer seems to jump.** Its sweep lit the forecast as full blocks, so the fill looked as if it leapt to the forecast's end and back every beat. Now the fill only moves with a reading: the block being filled breathes on the beat, and a soft glow travels along the forecast dashes, fading in at the fill's edge and out past the end (red as it lands when the limit runs out first). Account rows and the hover card get the same: a faint forecast stretch with a travelling glow and a breathing edge.
 - **Dot matrix moves like the other styles.** Only its edge column moved, so it read as still; a three-column scan now runs through the forecast dots once a beat, rightward under Used and leftward under Remaining.
 - **Switching meter style fades.** A style picked while the meter is on screen, as with the Settings preview's arrows, fades in instead of cutting in.
+- **Costs open at once with other computers.** Each period switch read every other computer again over SSH, half a minute for a heavy one. One reading now serves 24H, 7D and 30D and is reused for 100 seconds, and while a period loads Costs first shows the other computers' last saved readings, then the fresh ones.
+- **Another computer sends its usage summed per five minutes.** A heavy month went over SSH as 160,000 raw records (41 MB); it is now about 13,000 grouped rows (2.3 MB) with the same totals, days, hours and sessions.
+- **Adding a computer starts from your computers, not your SSH aliases.** Settings → Sources listed every alias in `~/.ssh/config` and every Tailscale peer as its own suggestion: one machine could appear four times (its name, a root alias, its IP address, its tailnet name), code hosts such as a GitLab server too, and nothing said which user each would connect as. Each computer is now listed once, with a button per user SSH connects as there (**as dev**, **as root**), and code hosts are left out. The Test also says what Costs will read there ("Agent history: Oh My Pi (1,776 transcripts)", or that this user has none), a computer with agent history but no signed-in accounts can be added without "anyway", and when the key is refused or the user has no history, the Test offers the same computer's other users.
 
 ### Fixed
 
+- **Costs count all of a heavy user's history.** A scan stopped at 50,000 records and 32 MB of cache, so a computer running agents all day (about 160,000 messages a month) lost whole transcripts and showed partial totals. The ceilings now leave several times that, the scan cache is a quarter of the size and loads three times faster, and a steady read of such a computer dropped from about 50 to 15 seconds on a busy machine.
+- **A large first read finishes over several refreshes and says how far it has got** ("Reading this history for the first time: 40% so far"), instead of calling the files it has not reached yet unreadable. A transcript an agent is writing while it is read keeps its last reading instead of marking the totals incomplete, so Costs no longer flips between complete and partial while you work.
+- **Another computer's own state reaches Costs.** A computer still on its first read, or with unreadable files, showed as complete; it is now partial, with its message.
 - **Live meters no longer glitch once a second.** The forecast is recomputed every second, and the speed of every meter's motion followed its pressure, which drifts a little with each tick; on the absolute clock that small drift threw every animation to a new phase each second. Speeds now follow the pressure in steps of 0.25, which change only when the pace really does.
 - **Meters no longer race when an account spends hard.** Under heavy use the beat sped up to two a second and the projection sweep to 40 blocks a second. The beat now stays at 1.2 s or slower, and every style's drift, shine, stripes, and sway are capped to match. The alert colour, not the speed, says the limit is running out.
 - **The panel no longer jumps while it reads.** "Loading session history…" in Costs, and "Refreshing…" in Limits with several accounts, appeared on a line under the tabs for the length of a read and pushed everything below it down and back up, as when switching between 24H, 7D and 30D. The footer, which is always there, now says when a read is running.
+- **The Costs heatmap's squares are evenly spaced.** Each hour's position was rounded on its own, so the gaps between hours alternated by a pixel and did not match the gaps between days. Hours now step by one whole-pixel pitch.
 - A digit removed mid-roll (switching style or provider while a figure rolled) logged a TypeError in the shell log.
 
 ## 3.1.0
