@@ -183,6 +183,25 @@ class FailureAndIsolationTests(unittest.TestCase):
                     self.assertEqual(usage.fetch_claude(1)["errorKind"], "expired")
                 self.assertEqual(usage.fetch_kimi(1)["errorKind"], "expired")
 
+    def test_kimi_sends_its_token_only_to_an_https_base_url(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            kimi_dir = Path(temporary)
+            (kimi_dir / "credentials").mkdir()
+            (kimi_dir / "credentials" / "kimi-code.json").write_text(json.dumps({
+                "access_token": "secret", "expires_at": int(time.time()) + 3600}))
+            for override in ("http://kimi.example.com/coding/v1", "https://user:pass@kimi.example.com/v1",
+                             "https://kimi.example.com/v1?x=1", "file:///tmp/kimi"):
+                with self.subTest(override=override), mock.patch.dict(os.environ, {
+                    "KIMI_CODE_HOME": str(kimi_dir), "KIMI_CODE_BASE_URL": override,
+                }), mock.patch.object(usage, "http_json") as request:
+                    self.assertEqual(usage.fetch_kimi(1)["errorKind"], "config")
+                    request.assert_not_called()
+            with mock.patch.dict(os.environ, {
+                "KIMI_CODE_HOME": str(kimi_dir), "KIMI_CODE_BASE_URL": " https://kimi.example.com/coding/v1/ ",
+            }), mock.patch.object(usage, "http_json", side_effect=usage.ProviderFailure("network", "offline")) as request:
+                usage.fetch_kimi(1)
+            self.assertEqual(request.call_args.args[0], "https://kimi.example.com/coding/v1/usages")
+
     def test_a_failed_claude_or_codex_reading_still_names_its_account(self):
         # The saved sign-in names the account without the network, so omp's reading of it is not a second account.
         with tempfile.TemporaryDirectory() as temporary:

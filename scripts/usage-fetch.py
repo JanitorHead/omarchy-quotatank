@@ -1266,6 +1266,26 @@ def kimi_credentials_path() -> Path:
     return kimi_home / "credentials" / "kimi-code.json"
 
 
+KIMI_DEFAULT_BASE_URL = "https://api.kimi.com/coding/v1"
+
+
+def kimi_api_base() -> str:
+    """KIMI_CODE_BASE_URL when set, as Kimi Code reads it, else the public API. The sign-in goes there, so
+    only an https address without credentials, a query or a fragment is used."""
+    base = ((os.environ.get("KIMI_CODE_BASE_URL") or "").strip() or KIMI_DEFAULT_BASE_URL).rstrip("/")
+    try:
+        parts = urllib.parse.urlsplit(base)
+        _ = parts.port  # Raises ValueError for a malformed or out-of-range port.
+    except ValueError:
+        parts = None
+    if (parts is None or parts.scheme != "https" or not parts.hostname or parts.username or parts.password
+            or parts.query or parts.fragment):
+        raise ProviderFailure(
+            "config", "KIMI_CODE_BASE_URL must be an https address; the Kimi Code sign-in is never sent elsewhere."
+        )
+    return base
+
+
 @provider_detector("kimi")
 def detect_kimi() -> bool:
     return kimi_credentials_path().is_file()
@@ -1289,9 +1309,9 @@ def fetch_kimi(timeout: float) -> dict[str, Any]:
     if expires_at is not None and expires_at <= int(time.time()):
         return error_provider(provider_id, "expired", "The Kimi Code sign-in has expired.")
 
-    base_url = (os.environ.get("KIMI_CODE_BASE_URL") or "https://api.kimi.com/coding/v1").rstrip("/")
     headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
     try:
+        base_url = kimi_api_base()
         payload = http_json(base_url + "/usages", headers, timeout)
         windows, credits, fallback_plan = parse_kimi_usage(payload)
     except ProviderFailure as exc:
