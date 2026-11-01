@@ -886,20 +886,23 @@ Ui.Panel {
   readonly property real readingDrain: backend.nextRefreshAt <= 0 || backend.loading ? 0
     : clamp((backend.nextRefreshAt - nowMs) / (backend.refreshIntervalSec * 1000), 0, 1)
 
+  // The read state lives here, in a line that is always there, so starting or finishing a read moves nothing.
   function footerLeft() {
     if (viewMode === "costs") {
       if (costBackend.fetchError !== "") return costBackend.fetchError
+      if (costBackend.loading) return "Loading session history…"
       if (costBackend.lastSuccessAt > 0)
         return "Updated " + Qt.formatTime(new Date(costBackend.lastSuccessAt), "HH:mm")
-      return costBackend.loading ? "Loading session history…" : "Open Costs to load session history"
+      return "Open Costs to load session history"
     }
     if (backend.lastSuccessAt > 0 && usageStale) {
       var minutes = Math.max(1, Math.round((nowMs - backend.lastSuccessAt) / 60000))
       return "Last reading " + (minutes < 60 ? minutes + " min" : UsageLogic.formatDuration(minutes * 60)) + " ago · retrying"
     }
     if (backend.fetchError !== "") return backend.fetchError
+    if (backend.loading) return "Refreshing…"
     if (backend.lastSuccessAt > 0) return "Updated " + Qt.formatTime(new Date(backend.lastSuccessAt), tickTimeFormat)
-    return backend.loading ? "Refreshing…" : "Waiting for first refresh"
+    return "Waiting for first refresh"
   }
 
   // A countdown, written so it cannot be read as a clock time beside "Updated 14:56". Costs names its
@@ -1810,15 +1813,16 @@ Ui.Panel {
               onProviderRequested: function(value) { root.selectProviderId(value) }
             }
 
+            // Context only: a line that came and went with each read moved the whole panel. The footer says
+            // when a read is running.
             PlainText {
               width: parent.width
               text: {
-                if (root.viewMode === "costs")
-                  return costBackend.loading ? "Loading session history…" : ""
+                if (root.viewMode === "costs") return ""
                 var context = root.accountOverview ? "" : root.heroMeta(root.provider)
                 if (root.providers.length === 1 && root.provider)
                   context = root.provider.name + (context ? " · " + context : "")
-                return context + (backend.loading ? (context ? " · " : "") + "Refreshing…" : "")
+                return context
               }
               visible: text !== ""
               color: root.dim

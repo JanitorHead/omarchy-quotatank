@@ -16,6 +16,7 @@ All notable changes to this project will be documented here. The format follows
 
 - **Live meters no longer glitch once a second.** The forecast is recomputed every second, and the speed of every meter's motion followed its pressure, which drifts a little with each tick; on the absolute clock that small drift threw every animation to a new phase each second. Speeds now follow the pressure in steps of 0.25, which change only when the pace really does.
 - **Meters no longer race when an account spends hard.** Under heavy use the beat sped up to two a second and the projection sweep to 40 blocks a second. The beat now stays at 1.2 s or slower, and every style's drift, shine, stripes, and sway are capped to match. The alert colour, not the speed, says the limit is running out.
+- **The panel no longer jumps while it reads.** "Loading session history…" in Costs, and "Refreshing…" in Limits with several accounts, appeared on a line under the tabs for the length of a read and pushed everything below it down and back up, as when switching between 24H, 7D and 30D. The footer, which is always there, now says when a read is running.
 - A digit removed mid-roll (switching style or provider while a figure rolled) logged a TypeError in the shell log.
 
 ## 3.1.0
