@@ -48,7 +48,7 @@ class ProjectContractTests(unittest.TestCase):
         keys = {entry["key"] for entry in manifest["barWidget"]["schema"]}
         key_files = {entry["id"] + "KeyFile" for entry in js_registry() if entry["auth"] != "signin"}
         self.assertEqual(keys, {
-            "refreshIntervalSec", "enabledProviders", "barDisplayMode", "quotaMode", "barWindow", "barWindowSecondary", "barProviders",
+            "refreshIntervalSec", "enabledProviders", "barDisplayMode", "barScreens", "quotaMode", "barWindow", "barWindowSecondary", "barProviders",
             "barProviderLimits", "barShowResets", "barShowPeriods", "barResetTimeFormat", "barResetDateFormat",
             "warningThreshold", "criticalThreshold",
             "sources", "mainComputer", "sourcesVersion", "sourcesNotice", "setupDone", "hintsDismissed",

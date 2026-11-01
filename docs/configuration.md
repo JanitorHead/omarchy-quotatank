@@ -213,6 +213,7 @@ In **Settings → Costs → Custom prices**, choose a model from the ones in you
 | `liveFigure` | `false` | Limit card figures carry two decimals that climb at the current rate while the account spends (at most 15 minutes past its reading); the next reading corrects them |
 | `notifyLimitThresholds` | `true` | Send a desktop notification (`notify-send`) when a limit moves into the warning or critical threshold. Recovering re-arms the next notification |
 | `barDisplayMode` | `Percentages` | `Icon` or compact `Percentages` |
+| `barScreens` | `"[]"` | Screens whose bar shows Quotatank, as a JSON array of connector names (`DP-1`) or models (`Odyssey G80SH`), as `hyprctl monitors` lists them; the bars of other screens leave it out. Empty shows it on every screen. A model keeps matching when the screen moves to another port; Hyprland does not pass serial numbers to the shell |
 | `quotaMode` | `Used` | `Used` or `Remaining`: which side of each allowance cards and chips report. Alerts follow the same choice: under `Used` a notification reports high usage in % used; under `Remaining` it reports a limit running low in % left |
 | `providerQuotaModes` | `"{}"` | Per-provider **Show limits as** overrides managed under Providers → Customize: a JSON object of provider id → `Used` or `Remaining`; missing providers follow `quotaMode` |
 | `providerOrder` | `"[]"` | Provider order set by dragging rows under Providers: a JSON array of provider ids; listed providers come first in that order in tiles, chips, and provider cycling, the rest follow in their natural order |

@@ -92,6 +92,7 @@
       "meterStyle": "projection",
       "notifyLimitThresholds": true,
       "barDisplayMode": "Percentages",
+      "barScreens": "[]",
       "quotaMode": "Used",
       "providerQuotaModes": "{}",
       "barProviders": [
@@ -1005,6 +1006,13 @@
         ],
         "defaultValue": "Percentages",
         "description": "Percentages shows compact quota on horizontal bars and falls back to the icon on vertical bars."
+      },
+      {
+        "key": "barScreens",
+        "type": "string",
+        "label": "Screens",
+        "defaultValue": "[]",
+        "description": "JSON array of the screens whose bar shows Quotatank, by connector name (DP-1) or model from hyprctl monitors. Empty shows it on every screen."
       },
       {
         "key": "quotaMode",

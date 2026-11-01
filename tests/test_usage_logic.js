@@ -34,6 +34,18 @@ assert.equal(context.contains(listLike, "second"), true);
 assert.equal(context.contains(listLike, "missing"), false);
 assert.equal(JSON.stringify(context.firstItems(listLike, 1)), '["first"]');
 assert.equal(JSON.stringify(context.listOrEmpty(null)), "[]");
+const mainScreen = { name: "DP-1", model: "Odyssey G80SH", serialNumber: "HNBL500080" };
+assert.equal(context.onScreen([], mainScreen), true, "no barScreens shows the chips everywhere");
+assert.equal(context.onScreen(null, null), true, "a missing setting shows the chips everywhere");
+assert.equal(context.onScreen(["HNBL500080"], mainScreen), true, "a serial number matches");
+assert.equal(context.onScreen(["DP-1"], mainScreen), true, "a connector name matches");
+assert.equal(context.onScreen({ 0: "Odyssey G80SH", length: 1 }, mainScreen), true, "a model matches, from a list-like setting");
+assert.equal(context.onScreen(["HNAX800182"], mainScreen), false, "another screen's serial hides the chips");
+assert.equal(context.onScreen([""], { name: "", model: "", serialNumber: "" }), false, "an empty entry matches nothing");
+assert.equal(context.onScreen(["DP-1"], null), false, "with no screen yet, a filtered bar stays hidden");
+assert.equal(context.onScreen('["HNBL500080"]', mainScreen), true, "the stored JSON string is read");
+assert.equal(context.onScreen("[]", mainScreen), true, "the default JSON string shows the chips everywhere");
+assert.equal(context.onScreen("not json", mainScreen), true, "an unreadable value falls back to every screen");
 assert.equal(context.errorTitle({ id: "claude", name: "Claude Code", errorKind: "expired" }), "Claude Code sign-in expired");
 
 const providers = [provider("claude", 72), provider("codex", 44), provider("kimi", null, "error")];

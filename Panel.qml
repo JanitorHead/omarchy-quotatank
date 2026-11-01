@@ -912,7 +912,7 @@ Ui.Panel {
     return "Next reading in " + Math.ceil(seconds / 60) + " min"
   }
 
-  visible: true
+  visible: UsageLogic.onScreen(setting("barScreens", "[]"), QsWindow.window ? QsWindow.window.screen : null)
   implicitWidth: percentageMode ? percentageGroup.implicitWidth : iconButton.implicitWidth
   implicitHeight: percentageMode ? percentageGroup.implicitHeight : iconButton.implicitHeight
   // Bar draws the open-panel mark at this width (otherwise it falls back to
@@ -1021,6 +1021,8 @@ Ui.Panel {
   }
 
   IpcHandler {
+    // A bar barScreens leaves out must not take the IPC target, or IPC opens the panel on a screen without the widget.
+    enabled: root.visible
     target: root.ipcTarget
     function open(): void { root.open() }
     function close(): void { root.close() }
