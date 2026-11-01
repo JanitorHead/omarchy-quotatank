@@ -4,11 +4,9 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 3.1.0
 
-### Fixed
-
-- **Codex failed as a whole when its rate-limit call ran long.** `account/rateLimits/read` exceeds the old 6 s slice on a proxied or slow connection (6.5 s measured behind a proxy), and its timeout took the provider down with it even though `account/read` had already answered with the account and plan. Each RPC may now spend the full timeout instead of a 6 s slice, with the three calls sharing two timeouts so the worst case still fits the widget's 35 s process budget. Rate limits are now optional detail: when the call fails or its payload is unexpected, the provider keeps its account and plan and says so in a notice instead of erroring. Reported by @shao-zhijie in #23.
+Quotatank 3.1 makes limit meters move while an account spends, in twenty styles you can preview and step through in Settings. It also bounds what another computer can send over SSH and takes in five contributions: Codex survives a slow rate-limit call, chips can stay on chosen screens, a chip opens the account it shows, Settings no longer go blank after a sign-in, and the live UI checks run again.
 
 ### Added
 
@@ -32,6 +30,7 @@ All notable changes to this project will be documented here. The format follows
 - **Another computer could fill this one's memory over SSH.** Quotatank read everything ssh printed before checking its size, so a faulty or compromised computer streaming without end could exhaust memory before the 8 MiB ceiling or the timeout applied. Output is now bounded as it arrives: past the ceiling ssh is stopped at once, and only the end of its error output is kept.
 - **Settings went blank after starting a sign-in from them.** Once **Sign in** or **Install** was pressed, the provider's "Finish in the terminal" hint and its row kept resizing each other: the shell logged a polish loop thousands of times and Settings drew nothing until the provider read fine. The hint now takes the width of its own text.
 - **A chip opened Limits on another account.** Clicking a chip opened the login in use, or the first account, even when the chip showed a different one: with one chip per account every chip of a provider opened the same account, and with used-up accounts hidden that could be one the bar no longer showed. A chip now opens the account it shows, and with the panel open, the chip of another account of that provider switches to it instead of closing the panel.
+- **Codex failed as a whole when its rate-limit call ran long.** `account/rateLimits/read` exceeds the old 6 s slice on a proxied or slow connection (6.5 s measured behind a proxy), and its timeout took the provider down with it even though `account/read` had already answered with the account and plan. Each RPC may now spend the full timeout instead of a 6 s slice, with the three calls sharing two timeouts so the worst case still fits the widget's 35 s process budget. Rate limits are now optional detail: when the call fails or its payload is unexpected, the provider keeps its account and plan and says so in a notice instead of erroring. Reported by @shao-zhijie in #23.
 
 ## 3.0.1
 
