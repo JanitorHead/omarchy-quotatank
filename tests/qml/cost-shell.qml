@@ -592,9 +592,9 @@ ShellRoot {
         fakeActivity.add({ type: "request", provider: "claude", model: "claude-opus-4-6", costUsd: 0.42, tokens: 1200,
           subagent: false, at: scan + 60 })
         fakeActivity.add({ type: "request", provider: "claude", costUsd: 5, tokens: 10, subagent: false, at: scan - 60 })
-        root.check(root.find(root.costs, "costLiveLine").shown
+        root.check(root.find(root.costs, "costLiveLine").shown && root.find(root.costs, "costLiveLine").active
           && root.find(root.costs, "costLiveText").text === "Live from omp · +$0.42 since the last scan",
-          "a live omp request shows the live line: " + root.find(root.costs, "costLiveText").text)
+          "a live omp request shows on the live line: " + root.find(root.costs, "costLiveText").text)
         root.check(root.find(root.costs, "costSummaryValue").text === "$12.76", "the total includes requests after the scan, not before it")
         root.check(Math.abs(chart.buckets[6].raw.claude - 1.52) < 0.000001, "today's bar grows with the request")
         // A scan that started before the request but landed after it does not hold it: the request still counts.
@@ -605,14 +605,16 @@ ShellRoot {
         var next = JSON.parse(JSON.stringify(root.rich))
         next.generatedAt = new Date((scan + 120) * 1000).toISOString()
         root.costs.payload = next
-        root.check(!root.find(root.costs, "costLiveLine").shown && root.find(root.costs, "costSummaryValue").text === "$12.34",
-          "the next scan takes over from the live figures")
+        var liveLine = root.find(root.costs, "costLiveLine")
+        root.check(liveLine.shown && !liveLine.active && root.find(root.costs, "costLiveText").text === "Live from omp"
+          && root.find(root.costs, "costSummaryValue").text === "$12.34",
+          "the next scan takes over from the live figures, and the live line keeps its place")
         var remoteOnly = JSON.parse(JSON.stringify(next))
         remoteOnly.sources = remoteOnly.sources.filter(function(source) { return source.id !== "local-omp" })
         fakeActivity.add({ type: "request", provider: "claude", costUsd: 0.5, tokens: 10, subagent: false, at: scan + 180 })
         root.costs.payload = remoteOnly
-        root.check(root.find(root.costs, "costSummaryValue").text === "$12.34",
-          "without this computer's omp sessions in the scan, live requests add nothing")
+        root.check(root.find(root.costs, "costSummaryValue").text === "$12.34" && !liveLine.shown,
+          "without this computer's omp sessions in the scan, live requests add nothing and there is no live line")
         root.costsDone = true
       }
     }

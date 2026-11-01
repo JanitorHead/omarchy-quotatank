@@ -83,14 +83,15 @@ Item {
   }
   property real nowSeconds: Date.now() / 1000
   readonly property bool liveActive: !!live && nowSeconds - live.lastAt <= 120
+  // Costs follows omp here: live requests add to a scan of this computer's omp sessions.
+  readonly property bool liveFollowing: hasResult && scanHasOmp && !!ompActivity && ompActivity.state === "live"
   readonly property var delta: UsageLogic.costDelta(currentTotal(),
     payload && payload.previous ? (metric === "tokens" ? payload.previous.totalTokens : payload.previous.costUsd) : null)
   readonly property string deltaText: hasResult ? UsageLogic.costDeltaText(delta, displayedPeriodDays) : ""
   readonly property var cache: UsageLogic.costCacheSummary(totals)
   // "· live" only where something here follows omp as it happens: live requests on top of a scan of this
   // computer's omp sessions.
-  readonly property string sourceSummary: hasResult ? UsageLogic.costSourceSummary(payload.sources, !!ompActivity
-    && ompActivity.state === "live" && scanHasOmp) : ""
+  readonly property string sourceSummary: hasResult ? UsageLogic.costSourceSummary(payload.sources, liveFollowing) : ""
   // Providers and breakdown share their bar and value columns, so both lists line up.
   readonly property real valueColumnWidth: Math.max(Style.space(40), providerList.widestValue, breakdown.widestValue)
   readonly property real barColumnWidth: Style.space(72)
@@ -428,11 +429,13 @@ Item {
         wrapMode: Text.WordWrap
       }
 
-      // Only while omp reports requests (last 2 minutes); the dot is static, the figures move.
+      // While Costs follows omp, the line keeps its place so nothing below moves as requests come and go:
+      // the dot fills while omp reports requests (last 2 minutes), and the figure holds until the next scan.
       Item {
         id: liveLine
         objectName: "costLiveLine"
-        readonly property bool shown: root.liveActive
+        readonly property bool shown: root.liveFollowing
+        readonly property bool active: root.liveActive
         width: parent.width
         height: shown ? liveRow.implicitHeight + Style.spacing.xs : 0
         visible: height > 0
@@ -456,13 +459,15 @@ Item {
             width: Style.space(6)
             height: width
             radius: width / 2
-            color: Commons.Color.accent
+            color: liveLine.active ? Commons.Color.accent : "transparent"
+            border.width: liveLine.active ? 0 : 1
+            border.color: root.dim
           }
 
           PlainText {
             objectName: "costLiveText"
             text: root.liveText()
-            color: Commons.Color.accent
+            color: liveLine.active ? Commons.Color.accent : root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             font.weight: Font.Medium
