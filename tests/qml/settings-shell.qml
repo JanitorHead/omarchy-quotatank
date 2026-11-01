@@ -7,6 +7,8 @@ import Quickshell
 ShellRoot {
   id: root
   property var form: null
+  property var laidOutWindow: null
+  property var laidOut: null
   property var usage: null
   property var activity: null
   property var twin: null
@@ -85,6 +87,19 @@ ShellRoot {
     form.changeRequested.connect(host)
     form.begin("sources")
     form.usagePayload = payload(ompFound)
+
+    // Layout polish runs only in a window: tests/run fails the contract on a polish loop logged here.
+    laidOutWindow = Qt.createQmlObject('import QtQuick; import Quickshell; FloatingWindow { visible: true; '
+      + 'implicitWidth: 420; implicitHeight: 900 }', root, "laidOutWindow")
+    var laidOutComponent = Qt.createComponent(Quickshell.env("QUOTATANK_REPO_URL") + "/UsageSettings.qml")
+    laidOut = laidOutComponent.createObject(laidOutWindow.contentItem, { width: 420,
+      settings: { enabledProviders: ["claude", "codex"], barProviders: ["claude", "codex"] } })
+    check(laidOut !== null, laidOutComponent.errorString())
+    laidOut.begin("providers")
+    laidOut.usagePayload = payload(ompFound)
+    // A sign-in started from Settings shows its "Finish in the terminal" hint beside the setup action.
+    check(laidOut.moreSignIns.length > 0, "the Providers page lists sign-ins to set up")
+    laidOut.pendingSetup = laidOut.moreSignIns[0].id
 
     usage = create("UsageBackend.qml", { settings: { enabledProviders: ["claude"], ompLocal: false, refreshIntervalSec: 3600 } })
 
