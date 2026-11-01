@@ -20,6 +20,10 @@ ShellRoot {
   property var backupReply: null
   property var providerBackend: null
   property int providerResponses: 0
+  // With another computer: each request in order, and whether loading dropped between a quick pass and its read.
+  property var computerBackend: null
+  property var computerRequests: []
+  property bool computerLoadingGap: false
   // 1.9 Costs tab: a view over a payload with projects, agents, heatmap and previous totals.
   property var costs: null
   property var rich: null
@@ -132,6 +136,18 @@ ShellRoot {
         "pi and grok reach the cost helper: " + providerBackend.payload.testRequest.providers)
     })
     providerBackend.ensureLoaded()
+    computerBackend = create("CostBackend.qml", {settings: {costLocalProviders: ["claude"],
+      sources: '[{"id":"c-0011aabb","kind":"computer","on":true,"host":"devbox"}]'}})
+    computerBackend.refreshed.connect(function() {
+      var request = computerBackend.payload.testRequest
+      root.computerRequests = root.computerRequests.concat([request.days + (request.saved ? " saved" : " full")])
+      if (root.computerRequests.length === 2) computerBackend.selectPeriod(7)
+    })
+    computerBackend.loadingChanged.connect(function() {
+      var last = root.computerRequests[root.computerRequests.length - 1] || ""
+      if (!computerBackend.loading && / saved$/.test(last)) root.computerLoadingGap = true
+    })
+    computerBackend.ensureLoaded()
     openingBackend.refreshed.connect(function() { root.openingResponses++ })
     openingBackend.ensureLoaded()
     openingBackend.ensureLoaded()
@@ -426,6 +442,10 @@ ShellRoot {
         root.check(restored.label === "Work" && restored.file !== original.file && restored.file.indexOf("/management-keys/key-") >= 0,
           "a restored key gets a new private file and keeps its name")
         root.check(root.providerResponses > 0, "the pi and grok backend answered")
+        root.check(JSON.stringify(root.computerRequests) === '["30 saved","30 full","7 saved","7 full"]',
+          "with another computer, a waiting period paints from its saved reading, then reads it: "
+          + JSON.stringify(root.computerRequests))
+        root.check(!root.computerLoadingGap, "the footer keeps saying a read runs between the two")
         console.log("Cost QML contract: passed")
         Qt.quit()
       }

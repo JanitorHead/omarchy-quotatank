@@ -15,6 +15,8 @@ parser.add_argument("--state-dir")
 parser.add_argument("--price-overrides", default="{}")
 parser.add_argument("--refresh-prices", action="store_true")
 parser.add_argument("--t3-servers", default="[]")
+parser.add_argument("--computer", action="append", default=[])
+parser.add_argument("--saved-computers", action="store_true")
 args = parser.parse_args()
 
 if args.providers == "" and args.t3_servers == "[]":
@@ -24,7 +26,12 @@ if args.providers == "" and args.t3_servers == "[]":
 payload = json.loads(Path(os.environ["QUOTATANK_COST_FIXTURE"]).read_text())
 payload["source"] = "transcripts"
 payload["testRequest"] = {"force": args.refresh_prices, "prices": args.price_overrides,
-                          "servers": args.t3_servers, "providers": args.providers}
+                          "servers": args.t3_servers, "providers": args.providers,
+                          "days": args.days, "computers": args.computer, "saved": args.saved_computers}
+if args.computer:
+    payload["period"]["days"] = int(args.days)  # the period asked for, as the real backend answers
+    if not args.saved_computers:
+        time.sleep(0.3)  # the full read waits on ssh
 if args.t3_servers != "[]":
     time.sleep(0.15)
 if (args.providers == "codex" and args.t3_servers == "[]") or args.price_overrides == "synthetic-failure":

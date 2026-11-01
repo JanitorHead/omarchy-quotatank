@@ -689,7 +689,9 @@ def atomic_write_json(path: Path, payload: Any) -> None:
         handle = os.fdopen(fd, "w", encoding="utf-8")
         fd = None  # The file object now owns the descriptor.
         with handle:
-            json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
+            # json.dumps encodes in C; json.dump streams through the pure-Python encoder, which took over a
+            # minute for a heavy user's 40 MB scan cache.
+            handle.write(json.dumps(payload, separators=(",", ":"), sort_keys=True))
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())

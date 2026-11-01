@@ -174,9 +174,10 @@ class PricingAndAggregationTests(unittest.TestCase):
             "UTC",
         )
         self.assertEqual(result["totals"]["records"], 5)
-        self.assertEqual(result["totals"]["pricedRecords"], 4)
-        self.assertEqual(result["totals"]["unpricedRecords"], 1)
-        self.assertAlmostEqual(result["totals"]["costUsd"], 1.2531025, places=8)
+        # Claude Code's own costUSD is not used (only OpenCode's and grok's are), so its unknown model stays unpriced.
+        self.assertEqual(result["totals"]["pricedRecords"], 3)
+        self.assertEqual(result["totals"]["unpricedRecords"], 2)
+        self.assertAlmostEqual(result["totals"]["costUsd"], 0.0031025, places=8)
         kimi = next(row for row in result["providers"] if row["id"] == "kimi")
         self.assertIsNone(kimi["costUsd"])
         self.assertEqual(kimi["totalTokens"], 1040)
@@ -434,7 +435,9 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(parser.call_count, 1)
         self.assertEqual(coverage[0]["status"], "partial")
         self.assertEqual(coverage[0]["scannedFiles"], 1)
-        self.assertEqual(coverage[0]["skippedFiles"], 1)
+        self.assertEqual((coverage[0]["pendingFiles"], coverage[0]["skippedFiles"]), (1, 0),
+                         "a file the budget leaves for the next refresh is pending, not broken")
+        self.assertIn("first time", coverage[0]["message"])
 
     def test_unreadable_transcript_marks_coverage_failed(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -674,7 +677,7 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertEqual(record.reasoning, 5)
         self.assertEqual(record.total_tokens, 162)
         self.assertNotEqual(record.session_id, "s1", "session ids are hashed before storage")
-        self.assertEqual(record.dedupe_key, costs.opaque_id("opencode:m1"))
+        self.assertEqual(record.dedupe_key, costs.dedupe_id("opencode:m1"))
         self.assertEqual(record.origin, "opencode")
         # OpenCode prices each response with the vendor rate it used, which is
         # the only rate available for IDs the public table cannot disambiguate.
@@ -774,8 +777,8 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertIsNotNone(records)
         assert records is not None
         self.assertEqual(len(records), 2, "a repeated row is counted once, and the older table fills in the rest")
-        self.assertEqual(len([r for r in records if r.dedupe_key == costs.opaque_id("opencode:m1")]), 1)
-        older = next(r for r in records if r.dedupe_key == costs.opaque_id("opencode:m2"))
+        self.assertEqual(len([r for r in records if r.dedupe_key == costs.dedupe_id("opencode:m1")]), 1)
+        older = next(r for r in records if r.dedupe_key == costs.dedupe_id("opencode:m2"))
         self.assertEqual((older.provider, older.model, older.project), ("minimax", "MiniMax-M3", "other"))
         self.assertEqual(older.reported_cost_usd, 0.5)
 
@@ -788,7 +791,7 @@ class OpenCodeSourceTests(unittest.TestCase):
             ])
             records = costs.parse_opencode_database(path, 0)
 
-        self.assertEqual([r.dedupe_key for r in records or []], [costs.opaque_id("opencode:m1")],
+        self.assertEqual([r.dedupe_key for r in records or []], [costs.dedupe_id("opencode:m1")],
                          "a row that is not JSON is skipped and the rest still count")
 
     def test_a_database_with_more_responses_than_the_limit_fails_also_when_none_are_counted(self):
@@ -818,7 +821,7 @@ class OpenCodeSourceTests(unittest.TestCase):
             records = costs.parse_opencode_database(path, 0)
 
         self.assertEqual([r.dedupe_key for r in records or []],
-                         [costs.opaque_id("opencode:m1"), costs.opaque_id("opencode:m2")])
+                         [costs.dedupe_id("opencode:m1"), costs.dedupe_id("opencode:m2")])
         assert records is not None
         self.assertLessEqual(len(records[0].model), costs.MAX_OPENCODE_NAME_CHARS)
         self.assertNotEqual(records[0].project, "my-app", "a directory past the path limit is cut, not read whole")
@@ -837,7 +840,7 @@ class OpenCodeSourceTests(unittest.TestCase):
                 self.padded_open_code_2_row("m1", 100), self.padded_open_code_2_row("m2", 200_000)])
             if costs.OPENCODE_SIZES_UNREAD:
                 self.assertEqual([r.dedupe_key for r in costs.parse_opencode_database(path, 0) or []],
-                                 [costs.opaque_id("opencode:m1")], "the oversized cell is skipped, the rest count")
+                                 [costs.dedupe_id("opencode:m1")], "the oversized cell is skipped, the rest count")
             # Without octet_length, SQLite's length limit stops the read: the database is skipped, not loaded.
             with mock.patch.object(costs, "OPENCODE_SIZES_UNREAD", False):
                 self.assertIsNone(costs.parse_opencode_database(path, 0))
@@ -900,7 +903,7 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertEqual(first.model, "grok-4.7-build")
         fallback = records[1]
         self.assertEqual(fallback.model, "grok-4.7-build", "a turn without modelUsage falls back to its own totals")
-        self.assertEqual(fallback.dedupe_key, costs.opaque_id("grok:sess-1:3:grok-4.7-build"))
+        self.assertEqual(fallback.dedupe_key, costs.dedupe_id("grok:sess-1:3:grok-4.7-build"))
         self.assertEqual(fallback.reported_cost_usd, 0.0012345678)
 
     def test_a_grok_session_without_turns_reports_its_own_totals(self):
@@ -942,7 +945,7 @@ class OpenCodeSourceTests(unittest.TestCase):
 
         self.assertEqual(parser.call_count, 1, "a session read whole spends its size, so the next one waits")
         self.assertEqual(coverage[0]["status"], "partial")
-        self.assertEqual(coverage[0]["skippedFiles"], 1)
+        self.assertEqual((coverage[0]["pendingFiles"], coverage[0]["skippedFiles"]), (1, 0))
 
     def test_omp_harness_maps_tokens_models_and_sessions(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -964,7 +967,7 @@ class OpenCodeSourceTests(unittest.TestCase):
         self.assertEqual(record.output, 20)
         self.assertEqual(record.reasoning, 5)
         self.assertEqual(record.total_tokens, 157)
-        self.assertEqual(record.dedupe_key, costs.opaque_id("omp:m1"))
+        self.assertEqual(record.dedupe_key, costs.dedupe_id("omp:m1"))
         self.assertEqual(record.reported_cost_usd, 0.00123)
         self.assertNotEqual(record.session_id, "")
         self.assertNotIn("01a0baea", record.session_id, "session ids are hashed before storage")

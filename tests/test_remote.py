@@ -460,15 +460,67 @@ class CostComputerTests(unittest.TestCase):
             session_id="s1", uncached_input=100, cached_input=0, cache_creation=0, output=50, reasoning=0,
             reported_cost_usd=None, dedupe_key=key))
 
-    def payload(self, result) -> dict:
+    def payload(self, result, days: int = 7) -> dict:
+        self.reads = getattr(self, "reads", [])
         def run_reader(host, script, args, timeout, **_options):
             self.assertEqual((script, args[0]), ("cost-fetch.py", "--records"))
+            self.reads.append(args)
             if isinstance(result, Exception):
                 raise result
             return result
         with mock.patch.object(costs.quotatank_remote, "run_reader", run_reader):
-            return costs.build_payload(["claude"], 7, 1, self.state, now_ms=self.NOW, zone_name="UTC",
+            return costs.build_payload(["claude"], days, 1, self.state, now_ms=self.NOW, zone_name="UTC",
                                        rates_override=self.rates, computers=[("c-00000001", "devbox")])
+
+    def age_saved_reading(self) -> None:
+        """As if the next refresh came after the last reading stopped being reused."""
+        path = self.state / "computers" / "c-00000001-costs.json"
+        saved = json.loads(path.read_text())
+        saved["readAt"] -= (costs.COMPUTER_REUSE_SECONDS + 1) * 1000
+        path.write_text(json.dumps(saved))
+
+    def test_a_period_switch_reuses_the_last_reading_and_a_later_refresh_reads_again(self):
+        answer = {"schemaVersion": 1, "records": [self.record(2, "a"), self.record(24 * 9, "b")]}
+        week = self.payload(answer, 7)
+        self.assertIn("30", self.reads[0], "one reading serves every period")
+        day, month = self.payload(answer, 1), self.payload(answer, 30)
+        self.assertEqual(len(self.reads), 1, "switching period does not wait on ssh again")
+        self.assertEqual([p["totals"]["records"] for p in (day, week, month)], [1, 1, 2])
+        self.age_saved_reading()
+        self.payload(answer, 7)
+        self.assertEqual(len(self.reads), 2)
+
+    def test_a_computer_still_on_its_first_read_says_so(self):
+        message = "Reading this history for the first time: 40% so far. The rest follows over the next refreshes."
+        payload = self.payload({"schemaVersion": 1, "records": [self.record(2, "a")],
+                                "coverage": [{"id": "omp", "status": "partial", "message": message},
+                                             {"id": "claude", "status": "missing", "message": "No local transcript directory was found."}]})
+        computer = next(source for source in payload["sources"] if source["id"] == "c-00000001")
+        self.assertEqual((computer["status"], computer["included"]), ("partial", True))
+        self.assertEqual(computer["message"], "devbox: " + message)
+        self.assertEqual(payload["totals"]["records"], 1)
+
+    def test_a_reader_sends_grouped_rows_that_add_up_to_its_records(self):
+        def usage(minute: int, key: str | None, model: str = "claude-sonnet-4-5", origin: str = "omp",
+                  reported: float | None = None) -> costs.UsageRecord:
+            return costs.UsageRecord("claude", self.NOW - 3_600_000 + minute * 60_000, model, "s1", 100, 10, 5, 50, 0,
+                                     reported, key, origin=origin, project="web-shop", agent="main")
+        records = [usage(0, "a"), usage(1, "b"), usage(1, "a"),  # a copy of "a" counts once
+                   usage(2, None, "claude-opus-4-6"), usage(9, "c"),  # another model; the next five minutes
+                   usage(3, "d", origin="opencode", reported=0.25), usage(4, "e", origin="opencode", reported=0.5)]
+        coverage = [{"id": "omp", "status": "ok", "message": ""}, {"id": "opencode", "status": "ok", "message": ""}]
+        with mock.patch.object(costs, "scan_transcripts", return_value=(records, coverage)):
+            answer = costs.build_payload(["claude", "opencode"], 30, 1, self.state, now_ms=self.NOW,
+                                         zone_name="UTC", records_only=True)
+        rows = [costs.deserialize_record(row) for row in answer["records"]]
+        self.assertEqual(len(rows), 4)
+        rates = {"claude-sonnet-4-5": (1e-6, 2e-6, 1e-7, 3e-6), "claude-opus-4-6": (5e-6, 9e-6, 5e-7, 6e-6)}
+        grouped, raw = (costs.aggregate_usage(batch, ["claude"], 30, self.NOW, rates, "UTC")["totals"]
+                        for batch in (rows, records))
+        for field in ("records", "totalTokens", "pricedRecords", "providerReportedRecords"):
+            self.assertEqual(grouped[field], raw[field], field)
+        self.assertAlmostEqual(grouped["costUsd"], raw["costUsd"], places=12)
+        self.assertEqual(grouped["records"], 6)
 
     def test_another_computers_records_count_in_totals_the_heatmap_and_the_comparison(self):
         payload = self.payload({"schemaVersion": 1, "records": [self.record(2, "a"), self.record(2, "a"),
@@ -482,6 +534,7 @@ class CostComputerTests(unittest.TestCase):
 
     def test_a_computer_that_stops_answering_still_counts_its_last_records(self):
         self.payload({"schemaVersion": 1, "records": [self.record(2, "a")]})
+        self.age_saved_reading()
         payload = self.payload(remote.RemoteFailure("unreachable", "devbox cannot be reached from here."))
         computer = next(source for source in payload["sources"] if source["id"] == "c-00000001")
         self.assertEqual((computer["status"], computer["included"]), ("stale", True))

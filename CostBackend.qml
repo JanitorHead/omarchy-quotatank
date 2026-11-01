@@ -28,6 +28,7 @@ Item {
   property bool pendingRefresh: false
   property bool pendingPriceRefresh: false
   property bool launchPending: false
+  property bool fullReadNext: false
   property bool requested: false
 
   readonly property var enabledProviderIds: normalizedProviderIds(setting(
@@ -118,6 +119,13 @@ Item {
       "--price-overrides", priceOverrides
     ]
     command = command.concat(computerArguments)
+    // While the view waits for this period, other computers first count from their last saved reading (no ssh,
+    // under a second); the full read follows at once. A heavy computer's read can take tens of seconds.
+    var payloadDays = payload && payload.period ? Number(payload.period.days) : 0
+    fetchProcess.quick = computerArguments.length > 0 && !fullReadNext
+      && (lastSuccessAt <= 0 || payloadDays !== periodDays)
+    fullReadNext = false
+    if (fetchProcess.quick) command.push("--saved-computers")
     if (pendingPriceRefresh) command.push("--refresh-prices")
     pendingPriceRefresh = false
     fetchProcess.command = command
@@ -127,7 +135,11 @@ Item {
 
   function settle() {
     launchPending = false
-    loading = false
+    // A quick pass is always followed by the full read, whatever it returned.
+    if (fetchProcess.quick && fetchProcess.connectionId === connectionId) {
+      pendingRefresh = true
+      fullReadNext = true
+    }
     if (fetchProcess.connectionId !== connectionId) {
       // A response from an old source must never repopulate the new source.
       pendingRefresh = requested
@@ -159,6 +171,8 @@ Item {
         }
       }
     }
+    // A refreshed() handler may already have started the next read (a period switch).
+    loading = pendingRefresh || launchPending || fetchProcess.running
     if (pendingRefresh) Qt.callLater(function() {
       if (root.pendingRefresh) root.startFetch()
     })
@@ -182,6 +196,7 @@ Item {
     property bool timedOut: false
     property bool outputTooLarge: false
     property string connectionId: ""
+    property bool quick: false
     readonly property int maxBodyChars: 4 * 1024 * 1024
 
     function appendBody(data) {

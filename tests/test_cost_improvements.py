@@ -22,8 +22,10 @@ def rate(input_rate=2e-6, output_rate=8e-6, cached=0.2e-6):
 
 
 def record(model="example", reported=None):
+    # Only CLI-priced responses (OpenCode, grok) keep their own cost figure.
     return costs.UsageRecord("claude", NOW, model, "session", 1_000_000, 1_000_000,
-                             1_000_000, 1_000_000, 500_000, reported, None)
+                             1_000_000, 1_000_000, 500_000, reported, None,
+                             origin="opencode" if reported is not None else "local")
 
 
 def aggregate(records, rates=None, overrides=None):
@@ -358,8 +360,28 @@ class IncrementalScanTests(unittest.TestCase):
         self.write(path, base.TranscriptParserTests.claude_line(3) + "\n", append=True)
         with mock.patch.object(costs, "MAX_TRANSCRIPT_SCAN_BYTES", 1):
             records, coverage = self.scan()
-        self.assertEqual(records, [])
-        self.assertEqual(coverage[0]["skippedFiles"], 1)
+        # Never half a resume: the last complete reading stands in until a refresh has the budget for the rest.
+        self.assertEqual(len(records), 2)
+        self.assertEqual(coverage[0]["skippedFiles"], 0)
+        self.assertEqual(len(self.scan()[0]), 3)
+
+    def test_a_transcript_written_during_the_read_keeps_its_last_reading(self):
+        path = self.transcripts / "session.jsonl"
+        self.write(path, base.TranscriptParserTests.claude_line(1) + "\n")
+        self.scan()
+        self.write(path, base.TranscriptParserTests.claude_line(2) + "\n", append=True)
+        read = costs.PARSERS["claude"]
+
+        def busy_agent(transcript, retention_start_ms, cursor=None):
+            # The agent writes while Quotatank reads.
+            self.write(transcript, base.TranscriptParserTests.claude_line(3) + "\n", append=True)
+            return read(transcript, retention_start_ms, cursor)
+
+        with mock.patch.dict(costs.PARSERS, {"claude": busy_agent}):
+            records, coverage = self.scan()
+        self.assertEqual(len(records), 1, "the last complete reading stands in")
+        self.assertEqual((coverage[0]["status"], coverage[0]["skippedFiles"], coverage[0]["message"]), ("ok", 0, ""),
+                         "an agent at work is not an unreadable file")
         self.assertEqual(len(self.scan()[0]), 3)
 
     def test_corrupt_position_and_old_cache_cause_safe_rebuild(self):

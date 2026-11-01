@@ -19,7 +19,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import socket
 import sqlite3
@@ -39,8 +39,9 @@ import t3_costs
 
 
 SCHEMA_VERSION = 1
-SCAN_CACHE_VERSION = 10  # v8 stores each record's project folder name and Oh My Pi agent kind; v9 keeps
-# each record's billing provider and the `opencode`/`grok` origins of CLI-priced responses; v10 adds pi.
+SCAN_CACHE_VERSION = 11  # v8 stores each record's project folder name and Oh My Pi agent kind; v9 keeps
+# each record's billing provider and the `opencode`/`grok` origins of CLI-priced responses; v10 adds pi;
+# v11 keeps each file's repeated fields once and shorter dedupe ids, a quarter of the size for heavy users.
 RATE_CACHE_VERSION = 2  # v1 discarded provider prefixes and could cache conflicting rates.
 PROVIDER_ORDER = ("claude", "codex", "kimi", "opencode", "grok", "minimax", "mimo")
 PROVIDER_NAMES = {
@@ -74,13 +75,17 @@ MAX_TRANSCRIPT_FILE_BYTES = 128 * 1024 * 1024
 # OpenCode keeps every message in one SQLite database, so the single-file
 # ceiling has to leave room for a long-lived installation.
 MAX_OPENCODE_DATABASE_BYTES = 4 * 1024 * 1024 * 1024
+# Changed input read per scan. A heavy first read (gigabytes of agent history) completes over several
+# refreshes instead of one long one; the source says how far it has got meanwhile.
 MAX_TRANSCRIPT_SCAN_BYTES = 512 * 1024 * 1024
-MAX_TRANSCRIPT_RECORDS_PER_FILE = 20_000
-MAX_TRANSCRIPT_RECORDS_TOTAL = 50_000
-MAX_TRANSCRIPT_FILES_PER_PROVIDER = 10_000
-MAX_TRANSCRIPT_DIRECTORIES_PER_PROVIDER = 2_000
-MAX_SCAN_CACHE_BYTES = 32 * 1024 * 1024
-MAX_SCAN_CACHE_FILES = 10_000
+# Sized for heavy use: one computer running agents all day writes ~160k billed messages and ~1,800
+# transcripts a month (measured), so each ceiling leaves several times that.
+MAX_TRANSCRIPT_RECORDS_PER_FILE = 200_000
+MAX_TRANSCRIPT_RECORDS_TOTAL = 1_000_000
+MAX_TRANSCRIPT_FILES_PER_PROVIDER = 50_000
+MAX_TRANSCRIPT_DIRECTORIES_PER_PROVIDER = 20_000
+MAX_SCAN_CACHE_BYTES = 512 * 1024 * 1024
+MAX_SCAN_CACHE_FILES = 50_000
 MAX_MODEL_NAME_CHARS = 256
 MAX_MODEL_GROUPS = 512
 MAX_MODEL_ROWS = 48
@@ -98,7 +103,9 @@ class TranscriptLimitError(ValueError):
     """A transcript exceeded a resource ceiling and must be skipped atomically."""
 
 
-@dataclass(frozen=True)
+# Not frozen: a frozen dataclass sets each field through object.__setattr__, which tripled the time to load a
+# heavy user's cached history. Records are never changed after they are made.
+@dataclass(slots=True)
 class UsageRecord:
     provider: str
     timestamp_ms: int
@@ -171,6 +178,12 @@ def iso_timestamp(epoch_seconds: int | float | None) -> str | None:
 
 def opaque_id(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()
+
+
+def dedupe_id(value: str) -> str:
+    """Names one response so its copies (resumed and forked transcripts) count once. 80 bits: a collision among a
+    million records has odds near 1e-12, and each cached record is 44 bytes smaller than with a full digest."""
+    return opaque_id(value)[:20]
 
 
 def read_bounded_json(path: Path, max_bytes: int) -> Any:
@@ -322,7 +335,7 @@ def state_path(name: str, state_dir: Path | None = None) -> Path:
 
 
 def serialize_record(record: UsageRecord) -> list[Any]:
-    return [
+    row = [
         record.timestamp_ms,
         record.model,
         record.session_id,
@@ -338,15 +351,88 @@ def serialize_record(record: UsageRecord) -> list[Any]:
         record.project,
         record.agent,
     ]
+    # A grouped row (another computer's answer) says how many messages it sums.
+    if record.record_count != 1:
+        row.append(record.record_count)
+    return row
+
+
+RECORD_ORIGINS = frozenset(("local", "omp", "opencode", "grok", "pi"))
+# Only these readers' own cost figures are kept; every other record is priced from its tokens.
+REPORTED_COST_ORIGINS = frozenset(("opencode", "grok"))
+RECORD_AGENTS = frozenset(("", *AGENT_KINDS))
+PROVIDER_SET = frozenset(PROVIDER_ORDER)
+MAX_RECORD_COUNT = 1_000_000_000
+# Far above any real response; a cached count past it is corrupt, and its file is read again.
+MAX_RECORD_TOKENS = 10**15
+
+
+def valid_record_count(row: list[Any]) -> int | None:
+    if len(row) == 14:
+        return 1
+    count = row[14]
+    return count if type(count) is int and 1 <= count <= MAX_RECORD_COUNT else None
+
+
+def encode_cached_records(records: list[UsageRecord]) -> tuple[list[list[Any]], list[list[Any]]]:
+    """A file's records for the scan cache: the fields its records share (model, session, provider, origin,
+    project, agent) once in a table, then per record its numbers and the table row it uses."""
+    shared: dict[tuple[str, str, str, str, str, str], int] = {}
+    rows = []
+    for record in records:
+        index = shared.setdefault((record.model, record.session_id, record.provider, record.origin,
+                                   record.project, record.agent), len(shared))
+        row = [record.timestamp_ms, index, record.uncached_input, record.cached_input, record.cache_creation,
+               record.output, record.reasoning, record.reported_cost_usd, record.dedupe_key]
+        if record.record_count != 1:
+            row.append(record.record_count)
+        rows.append(row)
+    return [list(fields) for fields in shared], rows
+
+
+def decode_cached_records(shared: Any, rows: Any) -> list[UsageRecord] | None:
+    """What encode_cached_records wrote to this scanner's own private cache, or None if any of it is malformed.
+    Shapes and types only: the full checks deserialize_record makes on rows from elsewhere took 17 s for a heavy
+    user's 160k cached records."""
+    if type(shared) is not list or type(rows) is not list:
+        return None
+    for fields in shared:
+        if type(fields) is not list or len(fields) != 6:
+            return None
+        model, session_id, provider, origin, project, agent = fields
+        if (type(model) is not str or not model or len(model) > MAX_MODEL_NAME_CHARS
+                or type(session_id) is not str or len(session_id) > 128 or provider not in PROVIDER_SET
+                or origin not in RECORD_ORIGINS or agent not in RECORD_AGENTS or type(project) is not str
+                or project_name(project) != project):
+            return None
+    records: list[UsageRecord] = []
+    for row in rows:
+        if type(row) is not list or not 9 <= len(row) <= 10:
+            return None
+        timestamp, index, uncached, cached, creation, output, reasoning, reported, dedupe = row[:9]
+        count = row[9] if len(row) == 10 else 1
+        if (type(timestamp) is not int or type(index) is not int or not 0 <= index < len(shared)
+                or type(count) is not int or not 1 <= count <= MAX_RECORD_COUNT
+                or (dedupe is not None and (type(dedupe) is not str or len(dedupe) > 128))
+                or (reported is not None and type(reported) is not float and type(reported) is not int)):
+            return None
+        for value in (uncached, cached, creation, output, reasoning):
+            if type(value) is not int or not 0 <= value <= MAX_RECORD_TOKENS:
+                return None
+        model, session_id, provider, origin, project, agent = shared[index]
+        records.append(UsageRecord(provider, timestamp, model, session_id, uncached, cached, creation, output,
+                                   reasoning, reported, dedupe, count, origin, project, agent))
+    return records
 
 
 def deserialize_record(row: Any) -> UsageRecord | None:
-    if not isinstance(row, list) or len(row) != 14:
+    if not isinstance(row, list) or not 14 <= len(row) <= 15:
         return None
+    count = valid_record_count(row)
     provider, origin, project, agent = row[10:14]
-    if provider not in PROVIDER_ORDER or origin not in ("local", "omp", "opencode", "grok", "pi"):
+    if count is None or provider not in PROVIDER_SET or origin not in RECORD_ORIGINS:
         return None
-    if project_name(project) != project or agent not in ("", *AGENT_KINDS):
+    if project_name(project) != project or agent not in RECORD_AGENTS:
         return None
     timestamp = finite_number(row[0])
     model = bounded_model(row[1])
@@ -372,6 +458,7 @@ def deserialize_record(row: Any) -> UsageRecord | None:
         reasoning=int(numeric[4] or 0),
         reported_cost_usd=reported,
         dedupe_key=dedupe,
+        record_count=count,
         origin=origin,
         project=project,
         agent=agent,
@@ -452,23 +539,15 @@ def load_scan_cache(path: Path) -> dict[str, dict[str, Any]]:
         tail_count = entry.get("tailCount", 0)
         if type(tail_count) is not int or not 0 <= tail_count <= len(rows):
             continue
-        records: list[UsageRecord] = []
-        corrupt = False
-        for row in rows:
-            try:
-                record = deserialize_record(row)
-            except (ValueError, OverflowError):
-                record = None
-            if record is None:
-                corrupt = True
-                break
-            records.append(record)
-        if not corrupt:
+        records = decode_cached_records(entry.get("k"), rows)
+        if records is not None:
             cache[key] = {
                 "s": int(size),
                 "m": int(modified),
                 "p": provider,
                 "records": records,
+                # Saved again as they are while the file is unchanged.
+                "encoded": (entry["k"], rows),
                 "position": position,
                 "tailCount": tail_count,
             }
@@ -489,11 +568,13 @@ def save_scan_cache(path: Path, cache: dict[str, dict[str, Any]]) -> None:
             or cached_records + len(records) > MAX_TRANSCRIPT_RECORDS_TOTAL
         ):
             continue
+        shared, rows = entry.get("encoded") or encode_cached_records(records)
         files[key] = {
             "s": int(entry["s"]),
             "m": int(entry["m"]),
             "p": entry["p"],
-            "r": [serialize_record(record) for record in records],
+            "k": shared,
+            "r": rows,
             "position": entry.get("position"),
             "tailCount": entry.get("tailCount", 0),
         }
@@ -559,7 +640,7 @@ def record_from_claude(document: Any, project: str) -> UsageRecord | None:
         output=nonnegative_int(usage.get("output_tokens")),
         reasoning=0,
         reported_cost_usd=cost,
-        dedupe_key=opaque_id("claude:" + raw_dedupe) if raw_dedupe else None,
+        dedupe_key=dedupe_id("claude:" + raw_dedupe) if raw_dedupe else None,
         project=project,
     )
     return record if record.total_tokens > 0 else None
@@ -795,7 +876,7 @@ def parse_opencode_database(path: Path, retention_start_ms: int,
                     output=output + reasoned,
                     reasoning=reasoned,
                     reported_cost_usd=recorded_cost,
-                    dedupe_key=opaque_id("opencode:" + raw_id),
+                    dedupe_key=dedupe_id("opencode:" + raw_id),
                     origin="opencode",
                     project=project_name(cwd),
                 )
@@ -869,7 +950,7 @@ def parse_grok_usage(path: Path, retention_start_ms: int,
                     output=output,
                     reasoning=min(output, nonnegative_int(values.get("reasoningTokens"))),
                     reported_cost_usd=(ticks / GROK_TICKS_PER_USD) if ticks is not None and ticks > 0 else None,
-                    dedupe_key=opaque_id(f"grok:{session}:{turn.get('turnNumber')}:{model}"),
+                    dedupe_key=dedupe_id(f"grok:{session}:{turn.get('turnNumber')}:{model}"),
                     origin="grok",
                     project=project,
                 )
@@ -980,7 +1061,7 @@ def parse_omp_file(path: Path, retention_start_ms: int,
             if reported is not None and reported <= 0:
                 reported = None
             raw_id = document.get("id")
-            dedupe = opaque_id(f"{namespace}:" + raw_id) if isinstance(raw_id, str) and raw_id else None
+            dedupe = dedupe_id(f"{namespace}:" + raw_id) if isinstance(raw_id, str) and raw_id else None
             output = nonnegative_int(usage.get("output"))
             record = UsageRecord(
                 provider=provider,
@@ -1171,7 +1252,7 @@ def parse_kimi_file(path: Path, retention_start_ms: int, cursor: TranscriptCurso
                     output=nonnegative_int(usage.get("output")),
                     reasoning=0,
                     reported_cost_usd=None,
-                    dedupe_key=opaque_id(dedupe_source),
+                    dedupe_key=dedupe_id(dedupe_source),
                 )
                 if record.total_tokens > 0:
                     if len(records) >= MAX_TRANSCRIPT_RECORDS_PER_FILE:
@@ -1324,6 +1405,8 @@ def scan_transcripts(
             "message": "",
             "scannedFiles": 0,
             "skippedFiles": 0,
+            # Not read yet because this scan's budget ran out: a heavy first read finishes over several refreshes.
+            "pendingFiles": 0,
             "sessions": 0,
         }
         if provider == "opencode":
@@ -1350,6 +1433,8 @@ def scan_transcripts(
             live_by_provider[provider] = live if discovery_complete else None
         source["skippedFiles"] += discovery_errors
         provider_record_count = 0
+        pending_bytes = 0
+        candidate_bytes = sum(int(stats.st_size) for _path, stats, _key in candidates)
         for path, stats, key in candidates:
             size = int(stats.st_size)
             modified = int(stats.st_mtime_ns)
@@ -1365,24 +1450,25 @@ def scan_transcripts(
                     and entry["position"]["inode"] == stats.st_ino))
             )
             cursor = None
+            over_budget = False
+            reused = False
             if cache_hit:
                 parsed = [record for record in entry["records"] if record.timestamp_ms >= retention_start_ms]
             else:
                 can_resume = entry and entry.get("position") and size > entry["s"] and entry["p"] == provider
                 is_database = provider == "opencode" and path == root
+                over_budget = not is_database and not can_resume and size > scan_budget[0]
                 if is_database:
                     too_large = size > MAX_OPENCODE_DATABASE_BYTES
                 elif provider in WHOLE_FILE_READERS:
-                    too_large = size > MAX_TRANSCRIPT_FILE_BYTES or (
-                        not can_resume and size > scan_budget[0]
-                    )
+                    too_large = size > MAX_TRANSCRIPT_FILE_BYTES or over_budget
                 else:
                     # A streamed transcript has no whole-file ceiling: one long-lived
                     # thread's rollout grows past any such ceiling, and skipping it
                     # drops all of its usage. Its first read must fit this scan budget;
                     # a resume reads only the bytes appended since, and fails only if
                     # those bytes exceed what remains of this scan's budget.
-                    too_large = not can_resume and size > scan_budget[0]
+                    too_large = over_budget
                 if too_large:
                     parsed = None
                 else:
@@ -1410,13 +1496,30 @@ def scan_transcripts(
                                 tail_count += int(provisional)
                         cursor.tail_count = tail_count
                         parsed = merged if len(merged) <= MAX_TRANSCRIPT_RECORDS_PER_FILE else None
+                if parsed is None:
+                    # The budget ran out (before or while reading it), or an agent wrote to it during the read:
+                    # neither is an error. Its last reading stands in until a later refresh reads it again.
+                    waiting = (over_budget and size <= MAX_TRANSCRIPT_SCAN_BYTES) or scan_budget[0] < 0
+                    if not waiting:
+                        try:
+                            now = path.stat()
+                            waiting = (int(now.st_size), int(now.st_mtime_ns)) != (size, modified)
+                        except OSError:
+                            waiting = False
+                    if waiting and entry is not None and entry.get("p") == provider:
+                        parsed = [record for record in entry["records"] if record.timestamp_ms >= retention_start_ms]
+                        reused = True
+                    elif waiting:
+                        source["pendingFiles"] += 1
+                        pending_bytes += size
+                        continue
             if parsed is None:
                 source["skippedFiles"] += 1
                 continue
             if len(records) + len(parsed) > MAX_TRANSCRIPT_RECORDS_TOTAL:
                 source["skippedFiles"] += 1
                 continue
-            if not cache_hit:
+            if not cache_hit and not reused:
                 cache[key] = {
                     "s": size,
                     "m": modified,
@@ -1432,6 +1535,11 @@ def scan_transcripts(
 
         incomplete = source["skippedFiles"] > 0
         messages: list[str] = []
+        if source["pendingFiles"]:
+            done = min(99, max(1, round(100 * (1 - pending_bytes / max(1, candidate_bytes)))))
+            messages.append(f"Reading this history for the first time: {done}% so far. "
+                            "The rest follows over the next refreshes.")
+            source["status"] = "partial"
         if incomplete:
             messages.append(
                 "Some transcript files were unreadable or exceeded safety limits; "
@@ -1464,6 +1572,26 @@ def scan_transcripts(
         except OSError:
             pass
     return records, coverage
+
+
+def history_inventory(now_ms: int) -> list[dict[str, Any]]:
+    """The agent history kept here for Costs, per source: how many transcripts the last 32 days left (OpenCode
+    keeps one database, so None). A Test of another computer shows it before it is added: listing folders reads
+    no transcript, so it takes a second or two even for a heavy user."""
+    retention_start_ms = retention_start(now_ms)
+    found: list[dict[str, Any]] = []
+    for provider in PARSERS:
+        root = transcript_root(provider)
+        if provider == "opencode":
+            if opencode_signature(root) is not None:
+                found.append({"id": provider, "name": PROVIDER_NAMES[provider], "transcripts": None})
+            continue
+        if not root.is_dir():
+            continue
+        candidates, _live, _errors, _complete = discover_transcripts(provider, root, retention_start_ms)
+        if candidates:
+            found.append({"id": provider, "name": PROVIDER_NAMES[provider], "transcripts": len(candidates)})
+    return found
 
 
 def normalize_model_name(model: str) -> str:
@@ -1739,7 +1867,7 @@ def add_record(
     # parse_price_overrides already rejects synthetic/unattributed identities.
     custom = (overrides or {}).get(record.model.strip())
     rate = custom if custom is not None else lookup_rate(record.model, rates)
-    if record.reported_cost_usd is not None and custom is None:
+    if record.reported_cost_usd is not None and record.origin in REPORTED_COST_ORIGINS and custom is None:
         cell["cost"] += record.reported_cost_usd
         cell["pricedRecords"] += record.record_count
         cell["providerReportedRecords"] += record.record_count
@@ -1957,6 +2085,40 @@ def unique_records(records: Iterable[UsageRecord]) -> Iterable[UsageRecord]:
         yield record
 
 
+# Another computer's messages are summed per five minutes. Every time zone's hours begin on a five-minute
+# boundary, so hours and days add up exactly; only the moving start of 24H can shift by under five minutes.
+REMOTE_GROUP_MS = 5 * 60 * 1000
+
+
+def grouped_records(records: Iterable[UsageRecord]) -> list[UsageRecord]:
+    """Copies of one response are dropped first, then messages are summed per five minutes and per everything the
+    view tells apart. Prices are linear in tokens, so a sum costs what its messages do: a heavy month (160k
+    messages, a 40 MB answer) becomes about 13k rows."""
+    groups: dict[tuple[Any, ...], list[Any]] = {}
+    for record in unique_records(records):
+        reported = record.reported_cost_usd if record.origin in REPORTED_COST_ORIGINS else None
+        key = (record.timestamp_ms // REMOTE_GROUP_MS, record.provider, record.origin, record.model,
+               record.session_id, record.project, record.agent, reported is None)
+        group = groups.get(key)
+        if group is None:
+            groups[key] = [record.timestamp_ms, record.uncached_input, record.cached_input, record.cache_creation,
+                           record.output, record.reasoning, reported, record.record_count]
+            continue
+        group[0] = max(group[0], record.timestamp_ms)
+        group[1] += record.uncached_input
+        group[2] += record.cached_input
+        group[3] += record.cache_creation
+        group[4] += record.output
+        group[5] += record.reasoning
+        if reported is not None:
+            group[6] += reported
+        group[7] += record.record_count
+    return [UsageRecord(provider, timestamp, model, session_id, uncached, cached, creation, output, reasoning,
+                        reported, None, count, origin, project, agent)
+            for (_bucket, provider, origin, model, session_id, project, agent, _unpriced),
+                [timestamp, uncached, cached, creation, output, reasoning, reported, count] in groups.items()]
+
+
 def aggregate_usage(
     records: list[UsageRecord],
     provider_ids: list[str],
@@ -2128,6 +2290,11 @@ COMPUTER_ID = re.compile(r"c-[0-9a-f]{8}")
 MAX_COMPUTERS = 16
 COMPUTER_READ_SECONDS = 90.0  # A first scan there reads every transcript; later ones only what changed.
 MAX_COMPUTER_RECORDS_BYTES = 32 * 1024 * 1024
+# One reading serves every period: it always covers the 30-day view, its comparison and the heatmap.
+COMPUTER_DAYS = 30
+# Under the 120 s refresh: switching period reuses the last reading, and each refresh reads again.
+COMPUTER_REUSE_SECONDS = 100
+COMPUTER_SAVED_VERSION = 2
 
 
 def parse_computers(values: list[str]) -> list[tuple[str, str]]:
@@ -2140,14 +2307,33 @@ def parse_computers(values: list[str]) -> list[tuple[str, str]]:
     return computers[:MAX_COMPUTERS]
 
 
-def read_computer_records(computer_id: str, host: str, provider_ids: list[str], days: int, zone: Any,
-                          state_dir: Path | None) -> dict[str, Any]:
-    """A computer's records: fresh (`ok`), its last good ones (`stale`), or none (`failed`), with when and why."""
-    args = ["--records", "--providers=" + ",".join(provider_ids), "--days", str(days)]
+def saved_computer_read(path: Path) -> dict[str, Any] | None:
+    try:
+        saved = read_bounded_json(path, MAX_COMPUTER_RECORDS_BYTES * 2)
+    except (OSError, ValueError, RecursionError):
+        return None
+    if not isinstance(saved, dict) or type(saved.get("readAt")) is not int or not isinstance(saved.get("rows"), list):
+        return None
+    return saved
+
+
+def read_computer_records(computer_id: str, host: str, provider_ids: list[str], zone: Any,
+                          state_dir: Path | None, saved_only: bool = False) -> dict[str, Any] | None:
+    """A computer's records: fresh (`ok`), its last good ones (`stale`), or none (`failed`), with when and why.
+    `saved_only` answers at once from the last reading, of any age, or None when there is none yet."""
     zone_key = getattr(zone, "key", "")
+    path = state_path("computers", state_dir) / f"{computer_id}-costs.json"
+    saved = saved_computer_read(path)
+    asked = {"version": COMPUTER_SAVED_VERSION, "providers": sorted(provider_ids), "zone": zone_key}
+    if (saved is not None and all(saved.get(key) == value for key, value in asked.items())
+            and (saved_only or 0 <= time.time() * 1000 - saved["readAt"] < COMPUTER_REUSE_SECONDS * 1000)):
+        return {"status": "ok", "readAt": saved["readAt"], "rows": saved["rows"],
+                "coverage": saved.get("coverage") if isinstance(saved.get("coverage"), list) else [], "message": ""}
+    if saved_only:
+        return None
+    args = ["--records", "--providers=" + ",".join(provider_ids), "--days", str(COMPUTER_DAYS)]
     if zone_key and quotatank_remote.PLAIN_ARGUMENT.fullmatch(zone_key):
         args += ["--time-zone", zone_key]  # Days begin at the same moment on both computers.
-    path = state_path("computers", state_dir) / f"{computer_id}-costs.json"
     try:
         try:
             answer = quotatank_remote.run_reader(host, "cost-fetch.py", args, COMPUTER_READ_SECONDS, compress=True,
@@ -2159,18 +2345,17 @@ def read_computer_records(computer_id: str, host: str, provider_ids: list[str], 
             raise quotatank_remote.RemoteFailure("failed", f"Quotatank's reader on {host} sent an answer this "
                                                  "version cannot read.")
     except quotatank_remote.RemoteFailure as failure:
-        try:
-            saved = json.loads(path.read_text("utf-8"))
-            return {"status": "stale", "readAt": int(saved["readAt"]), "rows": list(saved["rows"]),
-                    "message": failure.message}
-        except (OSError, ValueError, KeyError, TypeError):
-            return {"status": "failed", "readAt": None, "rows": [], "message": failure.message}
+        if saved is None:
+            return {"status": "failed", "readAt": None, "rows": [], "coverage": [], "message": failure.message}
+        return {"status": "stale", "readAt": saved["readAt"], "rows": saved["rows"], "coverage": [],
+                "message": failure.message}
     read_at = int(time.time() * 1000)
+    coverage = answer.get("coverage") if isinstance(answer.get("coverage"), list) else []
     try:
-        atomic_write_json(path, {"readAt": read_at, "rows": answer["records"]})
+        atomic_write_json(path, {**asked, "readAt": read_at, "rows": answer["records"], "coverage": coverage})
     except OSError:
         pass  # Without a saved copy the computer only counts while it answers.
-    return {"status": "ok", "readAt": read_at, "rows": answer["records"], "message": ""}
+    return {"status": "ok", "readAt": read_at, "rows": answer["records"], "coverage": coverage, "message": ""}
 
 
 def computer_candidate(computer_id: str, host: str, read: dict[str, Any], provider_ids: list[str],
@@ -2179,11 +2364,19 @@ def computer_candidate(computer_id: str, host: str, read: dict[str, Any], provid
     history = [r for r in rows if r is not None and history_start <= r.timestamp_ms <= stamp]
     records = [r for r in history if r.timestamp_ms >= start]
     counts = {p: len({r.session_id for r in records if r.provider == p and r.session_id}) for p in {r.provider for r in records}}
-    message = {"ok": "", "stale": f"{host} is not answering; its last records are counted. {read['message']}".strip(),
-               "failed": read["message"]}[read["status"]]
+    status = read["status"]
+    # What the computer said of its own history, such as a first read that is still under way.
+    unfinished = [item for item in read.get("coverage", []) if isinstance(item, dict)
+                  and item.get("status") in ("partial", "failed")]
+    notes = list(dict.fromkeys(clean_message(item.get("message")) for item in unfinished if item.get("message")))
+    if status == "ok" and unfinished:
+        status = "partial"
+    message = {"ok": "", "partial": f"{host}: {' '.join(notes) or 'some of its history could not be read.'}",
+               "stale": f"{host} is not answering; its last records are counted. {read['message']}".strip(),
+               "failed": read["message"]}[status]
     return {"id": computer_id, "name": host, "kind": "computer", "provider": "",
-            "providers": sorted(counts) if read["status"] != "failed" else list(provider_ids),
-            "fingerprint": "computer:" + computer_id, "status": read["status"], "updatedAt": read["readAt"],
+            "providers": sorted(counts) if status != "failed" else list(provider_ids),
+            "fingerprint": "computer:" + computer_id, "status": status, "updatedAt": read["readAt"],
             "message": message, "records": records, "history": history, "sessions": 0, "sessionCounts": counts}
 
 
@@ -2192,6 +2385,7 @@ def build_payload(
     now_ms: int | None = None, zone_name: str | None = None,
     rates_override=None, force_rates: bool = False, price_overrides: str = "{}",
     t3_servers: str = "[]", computers: list[tuple[str, str]] | None = None, records_only: bool = False,
+    saved_computers: bool = False,
 ) -> dict[str, Any]:
     started = time.monotonic()
     overrides = parse_price_overrides(price_overrides)
@@ -2220,7 +2414,7 @@ def build_payload(
     with ThreadPoolExecutor(max_workers=4 + len(computers)) as pool:
         futures = [(server, pool.submit(t3_costs.collect, server, query, days,
                      state_path("t3", state_dir), timeout)) for server in servers]
-        remote = [pool.submit(read_computer_records, computer_id, host, provider_ids, days, zone, state_dir)
+        remote = [pool.submit(read_computer_records, computer_id, host, provider_ids, zone, state_dir, saved_computers)
                   for computer_id, host in computers]
         local, coverage = scan_transcripts(provider_ids, state_dir, stamp)
         for item in coverage:
@@ -2251,12 +2445,9 @@ def build_payload(
             else:
                 selected = [r for r in local if r.origin == "local" and r.provider == provider
                             and history_start <= r.timestamp_ms <= stamp]
-            # Local sources are repriced from one table so the view is
-            # consistent. OpenCode and the grok CLI are the exception: each has
-            # already priced every response itself, which is the only way to
-            # price model IDs the public table cannot disambiguate. An explicit
-            # custom price still wins in the aggregation.
-            history = [r if r.origin in ("opencode", "grok") else replace(r, reported_cost_usd=None) for r in selected]
+            # Local sources are repriced from one table so the view is consistent: add_record keeps only
+            # OpenCode's and the grok CLI's own cost figures (REPORTED_COST_ORIGINS).
+            history = selected
             records = [r for r in history if r.timestamp_ms >= start]
             session_counts = None
             if provider in ("omp", "opencode", "pi"):
@@ -2270,12 +2461,15 @@ def build_payload(
                 "scannedFiles": item.get("scannedFiles", 0), "skippedFiles": item.get("skippedFiles", 0),
                 "sessions": len({r.session_id for r in records if r.session_id}), "sessionCounts": session_counts})
         if records_only:
-            # Another computer's reader: this computer's records for the window the full view needs, as they are.
-            return {"schemaVersion": SCHEMA_VERSION, "records": [serialize_record(r) for c in candidates for r in c["history"]],
+            # Another computer's reader: this computer's history for the window the full view needs, grouped.
+            return {"schemaVersion": SCHEMA_VERSION,
+                    "records": [serialize_record(r) for r in grouped_records(r for c in candidates for r in c["history"])],
                     "coverage": [{"id": c["provider"], "status": c["status"], "message": c["message"]} for c in candidates]}
         for (computer_id, host), future in zip(computers, remote):
-            candidates.append(computer_candidate(computer_id, host, future.result(), provider_ids,
-                                                 history_start, start, stamp))
+            read = future.result()
+            if read is not None:
+                candidates.append(computer_candidate(computer_id, host, read, provider_ids,
+                                                     history_start, start, stamp))
         for server, future in futures:
             try:
                 summary, state, error = future.result()
@@ -2414,7 +2608,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="Another computer whose transcripts count too, read over SSH.")
     parser.add_argument("--records", action="store_true",
                         help="Run as another computer's reader: print this computer's records, not the summary.")
+    parser.add_argument("--saved-computers", action="store_true",
+                        help="Count other computers from their last saved reading, without connecting: a quick "
+                             "first answer while the full read runs.")
+    parser.add_argument("--inventory", action="store_true",
+                        help="Print the agent history kept here per source, as a Test of this computer reports it.")
     args = parser.parse_args(argv)
+    if args.inventory:
+        os.sys.stdout.write(json.dumps({"schemaVersion": SCHEMA_VERSION,
+                                        "history": history_inventory(int(time.time() * 1000))}) + "\n")
+        return 0
     try:
         payload = build_payload(
             parse_provider_ids(args.providers),
@@ -2427,6 +2630,7 @@ def main(argv: list[str] | None = None) -> int:
             t3_servers=args.t3_servers,
             computers=parse_computers(args.computer),
             records_only=args.records,
+            saved_computers=args.saved_computers,
         )
     except Exception as exc:
         payload = {
@@ -2452,7 +2656,7 @@ def main(argv: list[str] | None = None) -> int:
             "previous": None,
             "scanDurationMs": 0,
         }
-    json.dump(payload, os.sys.stdout, separators=(",", ":"))
+    os.sys.stdout.write(json.dumps(payload, separators=(",", ":")))
     os.sys.stdout.write("\n")
     return 0
 

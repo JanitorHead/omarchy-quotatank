@@ -303,7 +303,7 @@ class OmpTranscriptTests(unittest.TestCase):
                          ("claude", "test-model", at("2030-01-15T10:05:00Z")))
         self.assertEqual((background.uncached_input, background.cached_input, background.output), (5, 400, 1))
         self.assertEqual(background.reported_cost_usd, 0.002)
-        self.assertEqual(background.dedupe_key, costs.opaque_id("omp:w1"))
+        self.assertEqual(background.dedupe_key, costs.dedupe_id("omp:w1"))
         self.assertEqual((background.project, background.agent, background.session_id, background.origin),
                          (message.project, "subagent", message.session_id, "omp"))
         copies = [*records, *costs.parse_omp_file(fork, 0)]
