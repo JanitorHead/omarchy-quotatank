@@ -34,3 +34,4 @@ This runs the whole suite without opening windows. [docs/development.md](docs/de
 - `./tests/run` passes.
 - Text the user sees goes through `PlainText.qml`, never a rich-text `Text` (Omarchy's plugin UI-safety rule).
 - Add a line to `CHANGELOG.md` under the next version.
+- The change meets [CODING_STANDARDS.md](CODING_STANDARDS.md): what a review checks beyond the suite (contracts, ceilings, deduplication, credentials, layout).
