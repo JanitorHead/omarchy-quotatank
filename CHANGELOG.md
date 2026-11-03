@@ -13,6 +13,11 @@ Quotatank 3.1.2 keeps Costs still while omp spends, and sends the Kimi Code sign
 - **Costs no longer jumps as omp requests come and go.** The "Live from omp" line appeared with a request and left two minutes later, pushing everything below it down and back up. While Costs follows omp it now keeps its place: the dot fills while requests come in, and the amount since the last scan stays until the next one.
 - **The Kimi Code sign-in goes only to an https address.** A `KIMI_CODE_BASE_URL` override was used as given, so an `http://` address received the sign-in token unencrypted. An override that is not https, or that carries a user name, password, query, or fragment, now shows a configuration error and nothing is sent.
 
+### Added
+
+- **CI runs the QML checks.** They were skipped there because the runner had no Quickshell, `qmllint` or Omarchy shell source. A second job now runs them in an Arch container with Omarchy's Quickshell build and the Omarchy shell at the targeted release, and with `QUOTATANK_REQUIRE_QML=1` a check that cannot run fails instead of being skipped.
+- **[CODING_STANDARDS.md](CODING_STANDARDS.md)** lists what a review checks beyond the suite.
+
 ## 3.1.1
 
 Quotatank 3.1.1 is for heavy use. Costs now counts every message of a computer that runs agents all day, where it stopped at 50,000 and showed a third of the spend, and opens at once with other computers instead of waiting half a minute on SSH at each period switch. Adding a computer starts from your computers and the users SSH connects as there, and says what Costs will read. Live meters no longer glitch or race, the panel no longer jumps while it reads, and the heatmap's squares are evenly spaced.
