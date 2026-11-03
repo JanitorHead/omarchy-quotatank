@@ -32,6 +32,8 @@ Run the routine checks without opening test windows:
 OMARCHY_QUATTRO_PATH=/path/to/omarchy-quattro ./tests/run
 ```
 
+Without Quickshell, Qt 6's `qmllint` or the Omarchy shell source, the QML checks below are skipped and the run still passes. CI runs them in a second job: an Arch container with Omarchy's Quickshell build (Arch's own package hides some Quickshell types from `qmllint`), `ripgrep`, and the `basecamp/omarchy` shell at the release the plugin targets, with `QUOTATANK_REQUIRE_QML=1`, under which a QML check that cannot run fails the suite.
+
 The suite performs:
 
 - Python syntax checks and fixture/contract tests on Python 3.10 through 3.14 in CI.
@@ -43,7 +45,7 @@ The suite performs:
 - missing/expired credentials, HTTP errors, timeouts, rate limiting, malformed data, and provider-failure isolation.
 - bounded XDG history persistence and corrupt-history recovery.
 - JavaScript threshold and compact-percentage tests.
-- `omarchy plugin validate` when available.
+- `omarchy plugin validate`, or the shell repository's `bin/omarchy-plugin-validate` when only the source tree is present.
 - `qmllint` against the supplied Quattro source tree.
 - Reset selection and account targeting, proxy HTTP requests, response outcomes, and idempotent retries. When Quickshell is available, a QML test checks confirmation state, duplicate clicks, cancellation, expiry, and connection changes using a synthetic backend; it opens no desktop popups. With Wayland it also loads the full panel and tests badge activation; otherwise it runs the reset components offscreen.
 
