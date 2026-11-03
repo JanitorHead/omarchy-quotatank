@@ -8119,6 +8119,13 @@ def attach_history(history: dict[str, Any], key: str, reading: dict[str, Any], s
 
 STALE_READING_SECONDS = 24 * 60 * 60
 STALE_READING_ERROR_KINDS = frozenset({"http", "network", "rate_limited", "timeout"})
+# HTTP answers that say the server could not answer for now, not that the request or sign-in is wrong.
+REQUEST_TIMEOUT_STATUS = 408
+
+
+def temporary_http_status(status: Any) -> bool:
+    code = number(status)
+    return code is not None and (code == REQUEST_TIMEOUT_STATUS or code >= 500)
 
 
 def stale_reading(saved: dict[str, Any], failed: dict[str, Any], stamp: int) -> dict[str, Any] | None:
@@ -8127,7 +8134,7 @@ def stale_reading(saved: dict[str, Any], failed: dict[str, Any], stamp: int) -> 
     if (
         failed.get("status") != "error"
         or failed.get("errorKind") not in STALE_READING_ERROR_KINDS
-        or (failed.get("errorKind") == "http" and not (number(failed.get("httpStatus")) or 0) >= 500)
+        or (failed.get("errorKind") == "http" and not temporary_http_status(failed.get("httpStatus")))
         or not isinstance(read_at, int)
         or stamp - read_at > STALE_READING_SECONDS
         or not isinstance(reading, dict)
@@ -8137,6 +8144,8 @@ def stale_reading(saved: dict[str, Any], failed: dict[str, Any], stamp: int) -> 
     result.pop("accounts", None)
     result.update(stale=True, readAt=datetime.fromtimestamp(read_at, timezone.utc).isoformat(),
                   errorKind=failed["errorKind"], message=failed.get("message", ""))
+    if failed.get("httpStatus") is not None:
+        result["httpStatus"] = failed["httpStatus"]
     for window in result.get("windows", []):
         if not isinstance(window, dict):
             continue

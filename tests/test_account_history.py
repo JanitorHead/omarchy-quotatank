@@ -151,6 +151,14 @@ class StaleReadingTests(AccountHistoryTestCase):
         self.assertEqual(failed["status"], "error")
         self.assertNotIn("stale", failed)
 
+    def test_http_request_timeout_uses_a_saved_reading(self) -> None:
+        self.refresh(reading("claude", 35, 55), NOW)
+        timed_out = self.refresh(usage.error_provider("claude", "http", "HTTP 408.", 408), NOW + 900)
+
+        self.assertTrue(timed_out["stale"])
+        self.assertEqual((timed_out["errorKind"], timed_out["httpStatus"]), ("http", 408))
+        self.assertEqual([window["used"] for window in timed_out["windows"]], [35, 55])
+
     def test_a_collector_that_catches_a_five_hundred_keeps_its_status(self) -> None:
         home = self.state / "claude-home"
         home.mkdir()

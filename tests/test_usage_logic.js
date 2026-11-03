@@ -1267,6 +1267,10 @@ console.log("Provider setup: passed");
   const limitedLine = context.accountStatusLine({ id: "claude", accountId: "main", status: "ok", windows: [], stale: true,
     errorKind: "rate_limited", readAt: "2030-01-15T14:02:00+00:00" }, false, 0, null);
   assert.equal(limitedLine.text + " " + clock(limitedLine.at), "rate limited · last reading 14:02");
+  const requestTimeoutLine = context.accountStatusLine({ id: "claude", accountId: "main", status: "ok", windows: [], stale: true,
+    errorKind: "http", httpStatus: 408, readAt: "2030-01-15T14:02:00+00:00" }, false, 0, null);
+  assert.equal(requestTimeoutLine.text + " " + clock(requestTimeoutLine.at), "timed out · last reading 14:02",
+    "HTTP 408 is a timeout, not an outage");
   assert.equal(context.accountStatusLine({ id: "claude", status: "ok", windows: [], standIn: { id: "c-00000001", name: "devbox" } }, false, 0, null).text, "read on devbox");
   const proxyAccount = { id: "claude", accountId: "auth-1", status: "ok", windows: [], plan: "max", origin: "proxy",
     proxy: { id: "p-00000001", name: "CLIProxyAPI" } };
@@ -1941,6 +1945,8 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
     "Timed out · last reading T+-120");
   assert.equal(context.staleReadingText({ stale: true, errorKind: "http", readAt: readAtIso }, offsetClock),
     "Unavailable · last reading T+-120");
+  assert.equal(context.staleReadingText({ stale: true, errorKind: "http", httpStatus: 408, readAt: readAtIso }, offsetClock),
+    "Timed out · last reading T+-120");
   assert.equal(context.staleReadingText({ stale: true, readAt: readAtIso }, offsetClock), "",
     "another computer's stale reading has no local failure to name");
   assert.equal(context.barAgoText(30), "less than a minute");

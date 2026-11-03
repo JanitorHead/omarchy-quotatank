@@ -22,7 +22,7 @@
 
 The packaged script and assets are found with `Qt.resolvedUrl`, so cloned plugins and symlinked development checkouts use the plugin's actual source directory. Restart the desktop shell to apply QML/JavaScript edits on the symlinked installation described below.
 
-Polling never overlaps: a refresh requested while a collector is running is collapsed into one follow-up run. Provider requests, transcript scans, price downloads, and both QML processes have timeouts. Provider/local JSON, Codex RPC messages, QML process streams, transcript lines/files/scan volume, cached scan records, and aggregate records all have explicit memory ceilings; limit breaches fail locally or produce honest partial coverage. The one-second countdown timer runs only while the panel is open, quota history is capped to seven days, and transcript cache retention is capped to 32 days for the longest 30-day view plus boundary slack.
+Polling never overlaps: a refresh requested while a collector is running is collapsed into one follow-up run. Provider requests, transcript scans, price downloads, and both QML processes have timeouts. Provider/local JSON, Codex RPC messages, QML process streams, transcript lines/files/scan volume, cached scan records, and aggregate records all have explicit memory ceilings; limit breaches fail locally or produce honest partial coverage. The one-second countdown timer runs only while the panel is open, quota history is capped to seven days, the last good reading of each provider and account (`readings.json`, `0600`, shown while a refresh fails for a temporary reason) to 24 hours, and transcript cache retention is capped to 32 days for the longest 30-day view plus boundary slack.
 
 ## Development and testing
 
@@ -41,7 +41,7 @@ The suite performs:
 - Canonical/provider price collisions, ambiguous aliases, context variants, custom-price precedence, forced-refresh throttling, and incremental/cold scan equivalence across partial lines, replacements, and rewrites.
 - When Quickshell is available, an invisible QML test exercises custom-price editing, validation, persistence payloads, queued refreshes, and preservation of the last good result.
 - missing/expired credentials, HTTP errors, timeouts, rate limiting, malformed data, and provider-failure isolation.
-- bounded XDG history persistence and corrupt-history recovery.
+- bounded XDG history persistence, corrupt-history recovery, and the last good reading kept through a temporary failure.
 - JavaScript threshold and compact-percentage tests.
 - `omarchy plugin validate` when available.
 - `qmllint` against the supplied Quattro source tree.
