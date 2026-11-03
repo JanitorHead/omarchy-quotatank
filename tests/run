@@ -8,6 +8,15 @@ trap 'rm -rf -- "$test_root"' EXIT
 # Scripts started by the tests resolve Quotatank's private folders (and move a 1.x one) from these;
 # never let them reach the developer's own keys and state.
 export XDG_STATE_HOME="$test_root/state"
+# CI sets QUOTATANK_REQUIRE_QML=1 and provides Quickshell, qmllint and the Omarchy shell source: there, a QML
+# check that cannot run fails the suite instead of being skipped.
+check_unavailable() {
+  if [[ ${QUOTATANK_REQUIRE_QML:-0} == 1 ]]; then
+    echo "$1 (QUOTATANK_REQUIRE_QML=1)" >&2
+    exit 1
+  fi
+  echo "$1"
+}
 
 python3 -m py_compile "$repo_root/scripts/quotatank_common.py"
 python3 -m py_compile "$repo_root/scripts/usage-fetch.py"
@@ -26,8 +35,10 @@ node "$repo_root/tests/test_usage_logic.js"
 
 if command -v omarchy >/dev/null 2>&1 && omarchy plugin validate --help >/dev/null 2>&1; then
   omarchy plugin validate "$repo_root"
+elif [[ -x "$quattro_root/bin/omarchy-plugin-validate" ]]; then
+  "$quattro_root/bin/omarchy-plugin-validate" "$repo_root"
 else
-  echo "omarchy plugin validate unavailable; manifest contract tests still ran"
+  check_unavailable "omarchy plugin validate unavailable; manifest contract tests still ran"
 fi
 
 # Qt 6 qmllint understands the flags below; the Qt 5 one on PATH rejects them.
@@ -55,7 +66,7 @@ if [[ -n $qml_lint && -d "$quattro_root/shell/Ui" ]]; then
   fi
   echo "qmllint: passed (dynamic Omarchy/Quickshell type warnings disabled)"
 else
-  echo "qmllint or Quattro source unavailable; skipping QML lint"
+  check_unavailable "qmllint or Quattro source unavailable; skipping QML lint"
 fi
 
 if command -v quickshell >/dev/null 2>&1 && [[ -d "$quattro_root/shell/Ui" ]]; then
@@ -280,6 +291,8 @@ PY
   else
     echo "Bar QML contract: passed (motion, rolling digits, account dots, hints, pie, hover card; Panel chips need Wayland)"
   fi
+else
+  check_unavailable "Quickshell or Quattro source unavailable; skipping the QML contracts"
 fi
 
 if [[ ${QUOTATANK_LIVE_TESTS:-0} != 1 ]]; then

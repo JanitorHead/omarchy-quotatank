@@ -32,3 +32,27 @@ jobs:
         run: bash -n tests/run
       - name: Run portable tests
         run: ./tests/run
+
+  # The QML side (qmllint, the QML contracts, plugin validation) needs Quickshell, Qt 6's qmllint and the
+  # Omarchy shell source the plugin imports. Arch has the first two; the shell comes from Omarchy's repository at
+  # the release the plugin targets. Without these the portable job above skips every QML check.
+  qml:
+    name: QML (Quickshell, Omarchy ${{ matrix.omarchy }})
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        omarchy: ["v4.0.6"]
+    env:
+      QUOTATANK_REQUIRE_QML: "1"
+      OMARCHY_QUATTRO_PATH: /tmp/omarchy
+      XDG_RUNTIME_DIR: /tmp/xdg-runtime
+    steps:
+      - name: Install Quickshell, Qt and tools
+        run: pacman -Syu --noconfirm --needed git python nodejs jq quickshell qt6-declarative ttf-dejavu
+      - uses: actions/checkout@v4
+      - name: Fetch the Omarchy shell
+        run: git clone --depth 1 --branch "${{ matrix.omarchy }}" https://github.com/basecamp/omarchy.git "$OMARCHY_QUATTRO_PATH"
+      - name: Run the suite with the QML checks
+        run: mkdir -p -m 700 "$XDG_RUNTIME_DIR" && ./tests/run
