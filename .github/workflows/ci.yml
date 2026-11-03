@@ -34,8 +34,10 @@ jobs:
         run: ./tests/run
 
   # The QML side (qmllint, the QML contracts, plugin validation) needs Quickshell, Qt 6's qmllint and the
-  # Omarchy shell source the plugin imports. Arch has the first two; the shell comes from Omarchy's repository at
-  # the release the plugin targets. Without these the portable job above skips every QML check.
+  # Omarchy shell source the plugin imports, as Omarchy installs them. Quickshell comes from Omarchy's own package
+  # repository: Arch's quickshell 0.3.2-1 ships opaque stubs for PopupAnchor and other value types, so qmllint cannot
+  # see `anchor.rect` there. The shell comes from Omarchy's git repository at the release the plugin targets.
+  # Without these the portable job above skips every QML check.
   qml:
     name: QML (Quickshell, Omarchy ${{ matrix.omarchy }})
     runs-on: ubuntu-latest
@@ -49,8 +51,17 @@ jobs:
       OMARCHY_QUATTRO_PATH: /tmp/omarchy
       XDG_RUNTIME_DIR: /tmp/xdg-runtime
     steps:
-      - name: Install Quickshell, Qt and tools
-        run: pacman -Syu --noconfirm --needed git python nodejs jq quickshell qt6-declarative ttf-dejavu
+      - name: Install Quickshell (Omarchy's build), Qt and tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          key=40DFB630FF42BCFFB047046CF0134EE680CAC571   # Omarchy <pkgs@omarchy.org>
+          pacman-key --init
+          pacman-key --recv-keys "$key" --keyserver hkps://keyserver.ubuntu.com
+          pacman-key --lsign-key "$key"
+          sed -i '/^\[core\]/i [omarchy]\nServer = https://pkgs.omarchy.org/stable/$arch\n' /etc/pacman.conf
+          pacman -Syu --noconfirm --needed git python nodejs jq ripgrep qt6-declarative ttf-dejavu omarchy/quickshell
+          pacman -Q quickshell qt6-declarative
       - uses: actions/checkout@v4
       - name: Fetch the Omarchy shell
         run: git clone --depth 1 --branch "${{ matrix.omarchy }}" https://github.com/basecamp/omarchy.git "$OMARCHY_QUATTRO_PATH"
