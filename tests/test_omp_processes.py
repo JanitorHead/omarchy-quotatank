@@ -7,6 +7,7 @@ tests start the real scripts with an omp that hangs and end them while it runs.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import importlib.util
 import os
 import signal
@@ -127,6 +128,20 @@ class CollectorTests(HangingOmpTestCase):
         # omp ran in Quotatank's private folder and left nothing among the temporary files.
         self.assertEqual(self.folders(), {str(self.root / "state-home" / "omarchy" / "quotatank" / "omp-workdir")})
         self.assertEqual(list((self.root / "tmp").iterdir()), [])
+
+    def test_a_stop_signal_that_lands_on_another_thread_still_stops_the_collector(self):
+        # The kernel may hand a process's signal to any of its threads, but Python runs handlers in the main
+        # thread only, and only once it next runs Python code: blocked on a reader thread, it never did.
+        tgkill = getattr(ctypes.CDLL(None, use_errno=True), "tgkill", None)
+        if tgkill is None:
+            self.skipTest("no tgkill in this C library")
+        process = self.start(BACKEND, *self.arguments)
+        omp = self.wait_for_pid(self.pid_file)
+        others = [int(task.name) for task in Path(f"/proc/{process.pid}/task").iterdir() if int(task.name) != process.pid]
+        self.assertTrue(others, "the collector reads omp on a thread of its own")
+        self.assertEqual(tgkill(process.pid, others[0], int(signal.SIGTERM)), 0)
+        self.assertEqual(process.wait(timeout=5), 128 + signal.SIGTERM)
+        self.assert_gone(omp)
 
     def test_a_killed_collector_takes_omp_with_it(self):
         # SIGKILL reaches no handler: the kernel ends omp because its parent died (PR_SET_PDEATHSIG).

@@ -9,6 +9,7 @@ All notable changes to this project will be documented here. The format follows
 ### Fixed
 
 - **Signing out of Claude Code no longer reads as a rejected sign-in.** Claude Code empties its sign-in record instead of removing it, and Quotatank sent that empty token to Anthropic at every refresh: the account said "The saved sign-in is no longer accepted", or the usage check came back rate limited. A signed-out record now counts as no sign-in: nothing is sent, and accounts that omp reads show without the notice.
+- **Stopping the limits reader no longer waits for the CLIs it runs.** The shell stops the reader with SIGTERM, which should end omp and every other CLI at once. The kernel can hand that signal to any of the reader's threads, but Python handles it in the main thread only, and the main thread was blocked waiting for the readers: the stop then waited until the running CLIs finished or timed out, up to half a minute, with omp still running. The main thread now only waits in short slices, so a stop takes effect within a quarter of a second.
 
 ## 3.1.2
 

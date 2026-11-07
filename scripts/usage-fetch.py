@@ -9404,7 +9404,29 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def answer_signals_while(work: Callable[[], int]) -> int:
+    """Run `work` on a thread of its own while the main thread waits for it in short slices. The kernel may
+    hand a stop signal to any thread, but Python runs the handler in the main thread only, once that thread
+    next runs Python code; blocked on a reader (a future, an executor closing), it would not stop the CLIs
+    until they finished on their own."""
+    outcome: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            outcome["code"] = work()
+        except BaseException as exc:  # Re-raised below: argparse exits with SystemExit, for instance.
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=run, name="collector", daemon=True)
+    worker.start()
+    while worker.is_alive():
+        worker.join(0.25)
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["code"]
+
+
 if __name__ == "__main__":
     stop_on_signals()
     move_legacy_folders()
-    raise SystemExit(main())
+    raise SystemExit(answer_signals_while(main))
