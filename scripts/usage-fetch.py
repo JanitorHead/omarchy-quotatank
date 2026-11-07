@@ -735,6 +735,9 @@ def fetch_claude(timeout: float, home: Path | None = None) -> dict[str, Any]:
         return error_provider(provider_id, "no_credentials", "No Claude Code sign-in was found.")
     try:
         login = read_claude_login(credentials_path)
+        # Signing out of Claude Code empties the record instead of removing it: nothing to renew or send.
+        if not login["accessToken"]:
+            return error_provider(provider_id, "no_credentials", "No Claude Code sign-in was found.")
         if claude_login_expired(login):
             renew_claude_login(timeout, home)
             login = read_claude_login(credentials_path)

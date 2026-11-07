@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **Signing out of Claude Code no longer reads as a rejected sign-in.** Claude Code empties its sign-in record instead of removing it, and Quotatank sent that empty token to Anthropic at every refresh: the account said "The saved sign-in is no longer accepted", or the usage check came back rate limited. A signed-out record now counts as no sign-in: nothing is sent, and accounts that omp reads show without the notice.
+
 ## 3.1.2
 
 Quotatank 3.1.2 keeps the last reading on screen through a temporary failure, keeps Costs still while omp spends, and sends the Kimi Code sign-in only over https.

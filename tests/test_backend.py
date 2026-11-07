@@ -183,6 +183,23 @@ class FailureAndIsolationTests(unittest.TestCase):
                     self.assertEqual(usage.fetch_claude(1)["errorKind"], "expired")
                 self.assertEqual(usage.fetch_kimi(1)["errorKind"], "expired")
 
+    def test_a_signed_out_claude_code_is_no_sign_in(self):
+        # What `claude` leaves after signing out: the record stays, emptied, and the account file keeps the email.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            claude_dir = root / "claude"
+            claude_dir.mkdir()
+            (claude_dir / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {
+                "accessToken": "", "refreshToken": "", "expiresAt": 0, "scopes": ["user:inference", "user:profile"]}}))
+            (root / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": "dev@example.com"}}))
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_dir)}), \
+                    mock.patch.object(usage.Path, "home", return_value=root), \
+                    mock.patch.object(usage, "runtime_environment", return_value={**os.environ, "PATH": ""}), \
+                    mock.patch.object(usage, "http_json") as request:
+                result = usage.fetch_claude(1)
+            self.assertEqual((result["errorKind"], result["message"]), ("no_credentials", "No Claude Code sign-in was found."))
+            request.assert_not_called()
+
     def test_kimi_sends_its_token_only_to_an_https_base_url(self):
         with tempfile.TemporaryDirectory() as temporary:
             kimi_dir = Path(temporary)
