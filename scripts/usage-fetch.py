@@ -216,10 +216,11 @@ CLIPROXY_QUOTA_PROVIDERS = ("claude", "codex", "kimi", "antigravity")
 class ProviderFailure(Exception):
     """A display-safe provider failure."""
 
-    def __init__(self, kind: str, message: str):
+    def __init__(self, kind: str, message: str, http_status: int | None = None):
         super().__init__(message)
         self.kind = kind
         self.message = clean_message(message)
+        self.http_status = http_status
 
 
 def now_iso() -> str:
@@ -290,10 +291,16 @@ def base_provider(provider_id: str) -> dict[str, Any]:
     }
 
 
-def error_provider(provider_id: str, kind: str, message: str) -> dict[str, Any]:
+def error_provider(provider_id: str, kind: str, message: str, http_status: int | None = None) -> dict[str, Any]:
     result = base_provider(provider_id)
     result.update(status="error", errorKind=kind, message=clean_message(message))
+    if http_status is not None:
+        result["httpStatus"] = http_status
     return result
+
+
+def failure_provider(provider_id: str, exc: ProviderFailure) -> dict[str, Any]:
+    return error_provider(provider_id, exc.kind, exc.message, exc.http_status)
 
 
 # Each collector registers itself with @provider_fetcher. A keyed collector also accepts the
@@ -414,12 +421,11 @@ def http_json(url: str, headers: dict[str, str], timeout: float, body: Any = Non
     except urllib.error.HTTPError as exc:
         exc.close()
         if exc.code in (401, 403):
-            failure = ProviderFailure("expired", "The saved sign-in is no longer accepted.")
+            failure = ProviderFailure("expired", "The saved sign-in is no longer accepted.", exc.code)
         elif exc.code == 429:
-            failure = ProviderFailure("rate_limited", "The provider is rate limiting usage checks.")
+            failure = ProviderFailure("rate_limited", "The provider is rate limiting usage checks.", exc.code)
         else:
-            failure = ProviderFailure("http", f"The usage endpoint returned HTTP {exc.code}.")
-        failure.http_status = exc.code
+            failure = ProviderFailure("http", f"The usage endpoint returned HTTP {exc.code}.", exc.code)
         raise failure from None
     except (TimeoutError, urllib.error.URLError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
@@ -758,7 +764,7 @@ def fetch_claude(timeout: float, home: Path | None = None) -> dict[str, Any]:
             payload = request_claude_usage(login, timeout)
         windows, credits = parse_claude_usage(payload)
     except ProviderFailure as exc:
-        return dict(error_provider(provider_id, exc.kind, exc.message), account=account)
+        return dict(failure_provider(provider_id, exc), account=account)
 
     result = base_provider(provider_id)
     result.update(
@@ -1118,7 +1124,7 @@ def fetch_codex(timeout: float, home: Path | None = None) -> dict[str, Any]:
             result["notice"] = "Codex returned no subscription rate limits."
         return result
     except ProviderFailure as exc:
-        return dict(error_provider(provider_id, exc.kind, exc.message), account=codex_signed_in_email(home))
+        return dict(failure_provider(provider_id, exc), account=codex_signed_in_email(home))
     except (OSError, BrokenPipeError) as exc:
         return dict(error_provider(provider_id, "rpc", f"Codex app-server stopped unexpectedly: {exc}"),
                     account=codex_signed_in_email(home))
@@ -1315,7 +1321,7 @@ def fetch_kimi(timeout: float) -> dict[str, Any]:
         payload = http_json(base_url + "/usages", headers, timeout)
         windows, credits, fallback_plan = parse_kimi_usage(payload)
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
 
     plan = fallback_plan
     account = ""
@@ -1511,7 +1517,7 @@ def fetch_opencode(timeout: float) -> dict[str, Any]:
             )
             return result
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     message = OPENCODE_CONSOLE_EXPIRED if console_expired else OPENCODE_REJECTED[rejected[0]]
     return error_provider(provider_id, "expired", message)
 
@@ -2025,7 +2031,7 @@ def antigravity_rpc(scheme: str, port: int, csrf: str, method: str, body: dict[s
     if status in (401, 403):
         raise ProviderFailure("expired", "Antigravity refused the local quota request. Restart Antigravity, then refresh.")
     if status != 200:
-        raise ProviderFailure("http", f"Antigravity's language server answered HTTP {status}.")
+        raise ProviderFailure("http", f"Antigravity's language server answered HTTP {status}.", status)
     try:
         payload = json.loads(raw) if len(raw) <= MAX_HTTP_RESPONSE_BYTES else None
     except (ValueError, RecursionError):
@@ -2273,10 +2279,8 @@ def http_form_json(url: str, fields: dict[str, str], timeout: float) -> Any:
             raw = read_capped(response, MAX_HTTP_RESPONSE_BYTES, deadline)
     except urllib.error.HTTPError as exc:
         exc.close()
-        failure = ProviderFailure("rate_limited" if exc.code == 429 else "http",
-                                  f"The sign-in endpoint returned HTTP {exc.code}.")
-        failure.http_status = exc.code
-        raise failure from None
+        raise ProviderFailure("rate_limited" if exc.code == 429 else "http",
+                              f"The sign-in endpoint returned HTTP {exc.code}.", exc.code) from None
     except (TimeoutError, urllib.error.URLError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
@@ -2492,7 +2496,7 @@ def fetch_gemini(timeout: float) -> dict[str, Any]:
         if exc.kind == "expired":
             message = GEMINI_NO_CLIENT_EXPIRED if exc.message == GEMINI_NO_CLIENT_EXPIRED else GEMINI_EXPIRED
             return error_provider(provider_id, "expired", message)
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
 
     email = claims.get("email")
     result = base_provider(provider_id)
@@ -2682,7 +2686,7 @@ def fetch_copilot(timeout: float) -> dict[str, Any]:
                 rejected = rejected or exc.kind == "expired"
                 without_copilot = without_copilot or exc.kind == "http"
                 continue
-            return error_provider(provider_id, exc.kind, exc.message)
+            return failure_provider(provider_id, exc)
         if not has_copilot:
             without_copilot = True
             continue
@@ -2817,7 +2821,7 @@ def fetch_cursor(timeout: float) -> dict[str, Any]:
         if exc.kind == "expired":
             return error_provider(provider_id, "expired",
                                   "Cursor rejected the saved sign-in. Sign in to Cursor again or run `cursor-agent login`.")
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     email = jwt_claims(token).get("email")
     result = base_provider(provider_id)
     result.update(plan=plan, account=clean_message(email) if isinstance(email, str) else "",
@@ -2943,7 +2947,7 @@ def fetch_grok(timeout: float, home: Path | None = None) -> dict[str, Any]:
     except ProviderFailure as exc:
         if exc.kind == "expired":
             return error_provider(provider_id, "expired", "Grok rejected the CLI sign-in. Run `grok login` again.")
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     if not plan:
         try:
             settings = http_json(GROK_SETTINGS_URL, headers, min(2.0, time_left(deadline)))
@@ -3056,7 +3060,7 @@ def fetch_kiro(timeout: float) -> dict[str, Any]:
     except ProviderFailure as exc:
         if exc.kind == "expired":
             return error_provider(provider_id, "expired", "Kiro refused kiro-cli's token. Run `kiro-cli login` again.")
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     result = base_provider(provider_id)
     result.update(plan=plan, source="Kiro usage limits API", windows=windows)
     if not windows:
@@ -3269,7 +3273,7 @@ def fetch_jetbrains(timeout: float) -> dict[str, Any]:
     try:
         reading = jetbrains_reading()
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     if reading is None:
         return error_provider(provider_id, "no_credentials",
                               "No JetBrains AI quota was found. Use AI Assistant in a JetBrains IDE.")
@@ -3409,7 +3413,7 @@ def fetch_factory(timeout: float, key_file: Path | None = None) -> dict[str, Any
     try:
         token, origin = key_or_cli_token(provider_id, key_file, factory_env_key)
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     if not token:
         return error_provider(provider_id, "no_credentials",
                               "No Factory API key was found. Add one under Settings → Providers.")
@@ -3434,7 +3438,7 @@ def fetch_factory(timeout: float, key_file: Path | None = None) -> dict[str, Any
             message = ("Factory rejected the saved key. Enter a new one under Settings → Providers." if origin == "key"
                        else "Factory rejected the key in ~/.factory/.env. Replace it with a current key.")
             return error_provider(provider_id, "expired", message)
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     result = base_provider(provider_id)
     result.update(plan=plan, account=account, source="Factory API", windows=windows, credits=credits)
     if not windows and credits is None:
@@ -3575,7 +3579,7 @@ def fetch_amp(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
     try:
         token, origin = key_or_cli_token(provider_id, key_file, amp_cli_token)
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     if not token:
         return error_provider(provider_id, "no_credentials",
                               "No Amp sign-in was found. Run `amp login` or add a key under Settings → Providers.")
@@ -3600,7 +3604,7 @@ def fetch_amp(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
             message = ("Amp rejected the saved key. Enter a new one under Settings → Providers." if origin == "key"
                        else "Amp rejected the CLI sign-in. Run `amp login` again.")
             return error_provider(provider_id, "expired", message)
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     result = base_provider(provider_id)
     result.update(plan=plan, account=account, source="Amp usage API", windows=windows, credits=credits)
     return result
@@ -3710,7 +3714,7 @@ def fetch_kilo(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
     try:
         token, origin = key_or_cli_token(provider_id, key_file, kilo_cli_token)
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     if not token:
         return error_provider(provider_id, "no_credentials",
                               "No Kilo sign-in was found. Run `kilo auth login` or add a key under Settings → Providers.")
@@ -3723,7 +3727,7 @@ def fetch_kilo(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
             message = ("Kilo rejected the saved key. Enter a new one under Settings → Providers." if origin == "key"
                        else "Kilo rejected the CLI sign-in. Run `kilo auth login` again.")
             return error_provider(provider_id, "expired", message)
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     result = base_provider(provider_id)
     result.update(plan=plan, source="Kilo API", windows=windows, credits=credits)
     return result
@@ -3805,7 +3809,7 @@ def fetch_codebuff(timeout: float, key_file: Path | None = None) -> dict[str, An
     try:
         token, origin = key_or_cli_token(provider_id, key_file, codebuff_cli_token)
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     if not token:
         return error_provider(provider_id, "no_credentials",
                               "No Codebuff sign-in was found. Run `codebuff login` or add a key under Settings → Providers.")
@@ -3820,7 +3824,7 @@ def fetch_codebuff(timeout: float, key_file: Path | None = None) -> dict[str, An
             message = ("Codebuff rejected the saved key. Enter a new one under Settings → Providers." if origin == "key"
                        else "Codebuff rejected the CLI sign-in. Run `codebuff login` again.")
             return error_provider(provider_id, "expired", message)
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     plan = account = ""
     if origin == "cli":
         try:
@@ -3902,7 +3906,7 @@ def fetch_huggingface(timeout: float, key_file: Path | None = None) -> dict[str,
     try:
         token, origin = key_or_cli_token(provider_id, key_file, huggingface_cli_token)
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     if not token:
         return error_provider(provider_id, "no_credentials",
                               "No Hugging Face token was found. Run `hf auth login` or add one under Settings → Providers.")
@@ -3921,7 +3925,7 @@ def fetch_huggingface(timeout: float, key_file: Path | None = None) -> dict[str,
                        "Hugging Face rejected the `hf auth login` token, or it lacks Billing read access. "
                        "Run `hf auth login` with a token that can read billing.")
             return error_provider(provider_id, "expired", message)
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     try:
         zero_gpu = parse_zero_gpu(http_json(HF_API_BASE + "/spaces/zero-gpu/quota", headers,
                                             min(2.0, time_left(deadline))))
@@ -4058,7 +4062,7 @@ def fetch_openrouter(timeout: float, key_file: Path | None = None) -> dict[str, 
     try:
         token = provider_key("openrouter", key_file)
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     if not token:
         return error_provider(provider_id, "no_credentials",
                               "No OpenRouter key was found. Add one under Settings → Providers.")
@@ -4083,7 +4087,7 @@ def fetch_openrouter(timeout: float, key_file: Path | None = None) -> dict[str, 
     except ProviderFailure as exc:
         if exc.kind == "expired":
             return error_provider(provider_id, "expired", "OpenRouter rejected the saved key. Enter a new one under Settings → Providers.")
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
 
     result = base_provider(provider_id)
     result.update(plan=plan, source="OpenRouter API", windows=windows, credits=credits)
@@ -4132,7 +4136,7 @@ def fetch_deepseek(timeout: float, key_file: Path | None = None) -> dict[str, An
     try:
         token = provider_key("deepseek", key_file)
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     if not token:
         return error_provider(provider_id, "no_credentials",
                               "No DeepSeek key was found. Add one under Settings → Providers.")
@@ -4142,7 +4146,7 @@ def fetch_deepseek(timeout: float, key_file: Path | None = None) -> dict[str, An
     except ProviderFailure as exc:
         if exc.kind == "expired":
             return error_provider(provider_id, "expired", "DeepSeek rejected the saved key. Enter a new one under Settings → Providers.")
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     result = base_provider(provider_id)
     result.update(plan="API key", source="DeepSeek API", credits=credits, notice=notice)
     return result
@@ -4167,7 +4171,7 @@ def key_or_error(provider_id: str, key_file: Path | None, name: str) -> tuple[st
     try:
         token = provider_key(provider_id, key_file)
     except ProviderFailure as exc:
-        return "", error_provider(provider_id, exc.kind, exc.message)
+        return "", failure_provider(provider_id, exc)
     if not token:
         return "", error_provider(provider_id, "no_credentials",
                                   f"No {name} key was found. Add one under Settings → Providers.")
@@ -4179,7 +4183,7 @@ def keyed_error(provider_id: str, exc: ProviderFailure, name: str,
     """A failed read as a result. A rejected key says which key to save, not how to sign in."""
     if exc.kind == "expired":
         return error_provider(provider_id, "expired", f"{name} rejected the saved key. {fix}")
-    return error_provider(provider_id, exc.kind, exc.message)
+    return failure_provider(provider_id, exc)
 
 
 def bearer_headers(token: str) -> dict[str, str]:
@@ -4458,7 +4462,7 @@ def fetch_minimax(timeout: float, key_file: Path | None = None) -> dict[str, Any
     try:
         token, found = minimax_subscription_key(key_file)
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     if not found:
         return error_provider(provider_id, "no_credentials",
                               "No MiniMax key was found. Add one under Settings → Providers.")
@@ -5327,7 +5331,7 @@ def fetch_nous(timeout: float) -> dict[str, Any]:
     try:
         credential = resolve_nous_token(time.time())
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     origin, rejected_host = nous_portal(credential["portal"])
     headers = {**bearer_headers(credential["token"]), "User-Agent": SIGNIN_USER_AGENT}
     try:
@@ -5339,7 +5343,7 @@ def fetch_nous(timeout: float) -> dict[str, Any]:
                 "expired",
                 "Nous Portal rejected the access token. Run `hermes portal` to sign in again.",
             )
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     result = base_provider(provider_id)
     result.update(parsed, source="Nous Portal account API")
     if rejected_host:
@@ -5582,7 +5586,7 @@ def fetch_muse(timeout: float) -> dict[str, Any]:
     except ProviderFailure as exc:
         if exc.kind == "expired":
             return error_provider(provider_id, "expired", "Muse Code login was rejected. Run `muse login` again.")
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     result = base_provider(provider_id)
     result.update(parsed, source="Muse Code API")
     return result
@@ -7150,9 +7154,9 @@ def typesafe_check(status: int, text: str) -> None:
     if status == 429:
         raise ProviderFailure("rate_limited", "TypeSafe rate limit reached.")
     if status == 408 or status >= 500:
-        raise ProviderFailure("http", "TypeSafe billing is unavailable.")
+        raise ProviderFailure("http", "TypeSafe billing is unavailable.", status)
     if not 200 <= status < 300:
-        raise ProviderFailure("http", f"TypeSafe returned HTTP {status}.")
+        raise ProviderFailure("http", f"TypeSafe returned HTTP {status}.", status)
     if TYPESAFE_LOGIN_RE.search(text):
         raise ProviderFailure("expired", TYPESAFE_SESSION_EXPIRED)
 
@@ -7442,7 +7446,7 @@ def fetch_mimo(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
     try:
         headers = mimo_headers(token)
     except ProviderFailure as exc:
-        return error_provider(provider_id, exc.kind, exc.message)
+        return failure_provider(provider_id, exc)
     deadline = time.monotonic() + timeout
     try:
         credits = parse_mimo_balance(mimo_data("/balance", headers, deadline))
@@ -7555,7 +7559,7 @@ class CliProxyClient:
                 raise ProviderFailure("config", "CLIProxyAPI rejected the management key or remote management access.") from None
             if exc.code == 429:
                 raise ProviderFailure("rate_limited", "CLIProxyAPI is rate limiting management requests.") from None
-            raise ProviderFailure("http", f"CLIProxyAPI management endpoint returned HTTP {exc.code}.") from None
+            raise ProviderFailure("http", f"CLIProxyAPI management endpoint returned HTTP {exc.code}.", exc.code) from None
         except (TimeoutError, urllib.error.URLError, OSError) as exc:
             if foreign_local_server(exc):
                 raise ProviderFailure("config", FOREIGN_LOCAL_SERVER) from None
@@ -7598,7 +7602,7 @@ class CliProxyClient:
         if status == 429:
             raise ProviderFailure("rate_limited", "The managed provider is rate limiting usage checks.")
         if not 200 <= status < 300:
-            raise ProviderFailure("http", f"The managed usage endpoint returned HTTP {int(status)}.")
+            raise ProviderFailure("http", f"The managed usage endpoint returned HTTP {int(status)}.", int(status))
         body = payload.get("body")
         if isinstance(body, dict):
             return body
@@ -7746,6 +7750,8 @@ def fetch_cliproxy_account(provider_id: str, entry: dict[str, Any], client: CliP
             result["notice"] = "The managed account returned no subscription limits."
     except ProviderFailure as exc:
         result.update(status="error", errorKind=exc.kind, message=exc.message)
+        if exc.http_status is not None:
+            result["httpStatus"] = exc.http_status
     except Exception:
         # Arbitrary proxy metadata/exception text must not expose credentials.
         result.update(status="error", errorKind="malformed", message="Could not read this CLIProxyAPI account's usage.")
@@ -7840,6 +7846,35 @@ def empty_history() -> dict[str, Any]:
         "providers": {provider_id: [] for provider_id in PROVIDER_ORDER},
         "windows": {},
     }
+
+
+def good_readings_path(state_dir: Path | None = None) -> Path:
+    return history_path(state_dir).with_name("readings.json")
+
+
+def load_good_readings(path: Path, stamp: int) -> tuple[dict[str, dict[str, Any]], bool]:
+    """The saved readings still young enough to stand in, and whether any saved entry was dropped."""
+    try:
+        raw = read_json(path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}, False
+    readings = raw.get("readings") if isinstance(raw, dict) and raw.get("schemaVersion") == 1 else None
+    if not isinstance(readings, dict):
+        return {}, False
+    result = {}
+    for key, saved in readings.items():
+        if not isinstance(key, str) or not isinstance(saved, dict):
+            continue
+        read_at = number(saved.get("readAt"))
+        reading = saved.get("reading")
+        if (read_at is None or stamp - read_at > STALE_READING_SECONDS
+                or not isinstance(reading, dict) or reading.get("status") != "ok"):
+            continue
+        result[key] = {"readAt": int(read_at), "reading": reading}
+        account_ids = saved.get("accountIds")
+        if isinstance(account_ids, list) and all(isinstance(account_id, str) for account_id in account_ids):
+            result[key]["accountIds"] = account_ids
+    return result, len(result) != len(readings)
 
 
 def read_series(rows: Any) -> list[list[float]]:
@@ -8102,13 +8137,102 @@ def attach_history(history: dict[str, Any], key: str, reading: dict[str, Any], s
     reading["windows"] = attached
 
 
+STALE_READING_SECONDS = 24 * 60 * 60
+STALE_READING_ERROR_KINDS = frozenset({"http", "network", "rate_limited", "timeout"})
+# HTTP answers that say the server could not answer for now, not that the request or sign-in is wrong.
+REQUEST_TIMEOUT_STATUS = 408
+
+
+def temporary_http_status(status: Any) -> bool:
+    code = number(status)
+    return code is not None and (code == REQUEST_TIMEOUT_STATUS or code >= 500)
+
+
+def stale_reading(saved: dict[str, Any], failed: dict[str, Any], stamp: int) -> dict[str, Any] | None:
+    read_at = saved.get("readAt")
+    reading = saved.get("reading")
+    if (
+        failed.get("status") != "error"
+        or failed.get("errorKind") not in STALE_READING_ERROR_KINDS
+        or (failed.get("errorKind") == "http" and not temporary_http_status(failed.get("httpStatus")))
+        or not isinstance(read_at, int)
+        or stamp - read_at > STALE_READING_SECONDS
+        or not isinstance(reading, dict)
+    ):
+        return None
+    result = copy.deepcopy(reading)
+    result.pop("accounts", None)
+    result.update(stale=True, readAt=datetime.fromtimestamp(read_at, timezone.utc).isoformat(),
+                  errorKind=failed["errorKind"], message=failed.get("message", ""))
+    if failed.get("httpStatus") is not None:
+        result["httpStatus"] = failed["httpStatus"]
+    for window in result.get("windows", []):
+        if not isinstance(window, dict):
+            continue
+        resets_at = number(window.get("resetsAt"))
+        if resets_at is None or resets_at > stamp:
+            continue
+        if number(window.get("used")) is not None:
+            window["used"] = 0
+        if number(window.get("remaining")) is not None:
+            window["remaining"] = 100
+    return result
+
+
+def apply_stale_readings(good_readings: dict[str, dict[str, Any]], readings: dict[str, dict[str, Any]], stamp: int) -> None:
+    """Replace each temporary failure in `readings` with its saved reading, in place. A provider that failed before
+    listing any account gets its saved accounts back, which are then added to `readings` as well."""
+    restored: dict[str, dict[str, Any]] = {}
+    for key, failed in readings.items():
+        saved = good_readings.get(key, {})
+        replacement = stale_reading(saved, failed, stamp)
+        if replacement is None:
+            continue
+        accounts = failed.get("accounts")
+        if accounts is None and saved.get("accountIds"):
+            accounts = []
+            for account_id in saved["accountIds"]:
+                account_key = f"{key}@{account_id}"
+                account = stale_reading(good_readings.get(account_key, {}), failed, stamp)
+                if account is not None and account_key not in readings:
+                    accounts.append(account)
+                    restored[account_key] = account
+        failed.clear()
+        failed.update(replacement)
+        # The accounts listed now are the ones whose own stale replacements follow in `readings`.
+        if accounts:
+            failed["accounts"] = accounts
+    readings.update(restored)
+
+
+def remember_good_readings(good_readings: dict[str, dict[str, Any]], readings: dict[str, dict[str, Any]], stamp: int) -> bool:
+    """Save each fresh reading of this refresh; True when any was saved."""
+    remembered = False
+    for key, reading in readings.items():
+        if reading.get("status") != "ok" or reading.get("stale") or reading.get("standIn"):
+            continue
+        saved = {"readAt": stamp, "reading": copy.deepcopy({k: v for k, v in reading.items() if k != "accounts"})}
+        accounts = reading.get("accounts")
+        if account_series_provider(key) is None and isinstance(accounts, list):
+            saved["accountIds"] = [account["accountId"] for account in accounts
+                                   if isinstance(account, dict) and isinstance(account.get("accountId"), str)
+                                   and f"{key}@{account['accountId']}" in readings]
+        good_readings[key] = saved
+        remembered = True
+    return remembered
+
+
 def update_and_attach_history(
     providers: list[dict[str, Any]], state_dir: Path | None = None, now: int | None = None
 ) -> None:
     stamp = int(time.time()) if now is None else int(now)
     path = history_path(state_dir)
     history = load_history(path)
+    good_path = good_readings_path(state_dir)
+    good_readings, good_readings_dropped = load_good_readings(good_path, stamp)
     readings = series_readings(providers)
+    apply_stale_readings(good_readings, readings, stamp)
+    good_readings_changed = remember_good_readings(good_readings, readings, stamp) or good_readings_dropped
     # A stale reading repeats an old answer and a stand-in is another source's: neither is this reading's use.
     changed = record_history(history, {key: reading for key, reading in readings.items()
                                        if not reading.get("stale") and not reading.get("standIn")}, stamp)
@@ -8129,6 +8253,11 @@ def update_and_attach_history(
             atomic_write_json(path, history)
         except OSError:
             # History persistence must never suppress otherwise valid live data.
+            pass
+    if good_readings_changed:
+        try:
+            atomic_write_json(good_path, {"schemaVersion": 1, "readings": good_readings})
+        except OSError:
             pass
 
 
@@ -8244,7 +8373,7 @@ def read_concurrently(provider_id: str, reads: list[Callable[[float], dict[str, 
         try:
             return read(max(0.0, deadline - time.monotonic()))
         except ProviderFailure as exc:
-            return error_provider(provider_id, exc.kind, exc.message)
+            return failure_provider(provider_id, exc)
         except Exception:
             return error_provider(provider_id, "internal", "The provider collector could not read usage data.")
 
@@ -9073,6 +9202,8 @@ def safe_fetch(provider_id: str, timeout: float,
         if not isinstance(result, dict) or result.get("id") != provider_id:
             raise ValueError("invalid normalized result")
         return result
+    except ProviderFailure as exc:
+        return failure_provider(provider_id, exc)
     except Exception:
         return error_provider(provider_id, "internal", "The provider collector could not read usage data.")
 

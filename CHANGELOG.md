@@ -6,17 +6,21 @@ All notable changes to this project will be documented here. The format follows
 
 ## 3.1.2
 
-Quotatank 3.1.2 keeps Costs still while omp spends, and sends the Kimi Code sign-in only over https.
-
-### Fixed
-
-- **Costs no longer jumps as omp requests come and go.** The "Live from omp" line appeared with a request and left two minutes later, pushing everything below it down and back up. While Costs follows omp it now keeps its place: the dot fills while requests come in, and the amount since the last scan stays until the next one.
-- **The Kimi Code sign-in goes only to an https address.** A `KIMI_CODE_BASE_URL` override was used as given, so an `http://` address received the sign-in token unencrypted. An override that is not https, or that carries a user name, password, query, or fragment, now shows a configuration error and nothing is sent.
+Quotatank 3.1.2 keeps the last reading on screen through a temporary failure, keeps Costs still while omp spends, and sends the Kimi Code sign-in only over https.
 
 ### Added
 
 - **CI runs the QML checks.** They were skipped there because the runner had no Quickshell, `qmllint` or Omarchy shell source. A second job now runs them in an Arch container with Omarchy's Quickshell build and the Omarchy shell at the targeted release, and with `QUOTATANK_REQUIRE_QML=1` a check that cannot run fails instead of being skipped.
 - **[CODING_STANDARDS.md](CODING_STANDARDS.md)** lists what a review checks beyond the suite.
+
+### Changed
+
+- **A temporary failure keeps the last reading.** When a provider's usage check is rate limited, times out, can't reach the network, or gets an HTTP 408 or 5xx, its last good reading from the past 24 hours stays on screen, faded as stale, and the row says why and when it was read: "rate limited · last reading 14:02". Accounts come back too when the provider fails before listing them. Limits whose reset passed show as reset. An expired sign-in, missing credentials, or a missing CLI still show as errors, since they need you to act. Stale readings send no threshold notices and add no history. Contributed by @lkshrk in #31, for #30.
+
+### Fixed
+
+- **Costs no longer jumps as omp requests come and go.** The "Live from omp" line appeared with a request and left two minutes later, pushing everything below it down and back up. While Costs follows omp it now keeps its place: the dot fills while requests come in, and the amount since the last scan stays until the next one.
+- **The Kimi Code sign-in goes only to an https address.** A `KIMI_CODE_BASE_URL` override was used as given, so an `http://` address received the sign-in token unencrypted. An override that is not https, or that carries a user name, password, query, or fragment, now shows a configuration error and nothing is sent.
 
 ## 3.1.1
 

@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -110,6 +111,140 @@ class AccountSeriesTests(AccountHistoryTestCase):
         for account in codex["accounts"][1:]:
             self.assertNotIn("activity", account)
             self.assertNotIn("samples", account["windows"][0])
+
+
+class StaleReadingTests(AccountHistoryTestCase):
+    def test_rate_limit_after_a_good_reading_shows_that_reading_stale(self) -> None:
+        self.refresh(reading("claude", 35, 55), NOW)
+        limited = self.refresh(usage.error_provider("claude", "rate_limited", "Too many requests."), NOW + 900)
+
+        self.assertEqual(limited["status"], "ok")
+        self.assertTrue(limited["stale"])
+        self.assertEqual(limited["errorKind"], "rate_limited")
+        self.assertEqual(limited["message"], "Too many requests.")
+        self.assertEqual(limited["readAt"], "2033-05-18T03:33:20+00:00")
+        self.assertEqual([window["used"] for window in limited["windows"]], [35, 55])
+
+    def test_a_saved_reading_expires_after_a_day(self) -> None:
+        self.refresh(reading("claude", 35, 55), NOW)
+        last_day = self.refresh(usage.error_provider("claude", "rate_limited", "Too many requests."), NOW + DAY)
+        self.assertTrue(last_day["stale"])
+
+        expired = self.refresh(usage.error_provider("claude", "rate_limited", "Too many requests."), NOW + DAY + 1)
+        self.assertEqual(expired["status"], "error")
+        self.assertNotIn("stale", expired)
+
+    def test_rate_limit_without_a_good_reading_stays_an_error(self) -> None:
+        limited = self.refresh(usage.error_provider("claude", "rate_limited", "Too many requests."), NOW)
+
+        self.assertEqual(limited["status"], "error")
+        self.assertNotIn("stale", limited)
+
+    def test_http_five_hundred_uses_a_saved_reading_but_client_error_does_not(self) -> None:
+        self.refresh(reading("claude", 35, 55), NOW)
+        unavailable = usage.error_provider("claude", "http", "HTTP 503.", 503)
+        self.refresh(unavailable, NOW + HOUR)
+        self.assertTrue(unavailable["stale"])
+
+        failed = usage.error_provider("claude", "http", "HTTP 400.", 400)
+        self.refresh(failed, NOW + 2 * HOUR)
+        self.assertEqual(failed["status"], "error")
+        self.assertNotIn("stale", failed)
+
+    def test_http_request_timeout_uses_a_saved_reading(self) -> None:
+        self.refresh(reading("claude", 35, 55), NOW)
+        timed_out = self.refresh(usage.error_provider("claude", "http", "HTTP 408.", 408), NOW + 900)
+
+        self.assertTrue(timed_out["stale"])
+        self.assertEqual((timed_out["errorKind"], timed_out["httpStatus"]), ("http", 408))
+        self.assertEqual([window["used"] for window in timed_out["windows"]], [35, 55])
+
+    def test_a_collector_that_catches_a_five_hundred_keeps_its_status(self) -> None:
+        home = self.state / "claude-home"
+        home.mkdir()
+        (home / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "token"}}))
+        unavailable = urllib.error.HTTPError(usage.CLAUDE_USAGE_URL, 503, "Service Unavailable", {}, None)
+        opener = mock.Mock()
+        opener.open.side_effect = unavailable
+        with mock.patch.object(usage.urllib.request, "build_opener", return_value=opener):
+            failed = usage.fetch_claude(5, home)
+
+        self.assertEqual((failed["errorKind"], failed["httpStatus"]), ("http", 503))
+        self.refresh(reading("claude", 35, 55), NOW)
+        self.assertTrue(self.refresh(failed, NOW + HOUR)["stale"])
+
+    def test_expired_sign_in_does_not_use_a_saved_reading(self) -> None:
+        self.refresh(reading("claude", 35, 55), NOW)
+        failed = self.refresh(usage.error_provider("claude", "expired", "Sign in again."), NOW + HOUR)
+
+        self.assertEqual(failed["status"], "error")
+        self.assertNotIn("stale", failed)
+
+    def test_a_stale_summary_keeps_this_refreshs_accounts(self) -> None:
+        self.refresh(logins(("main", 10, 40), ("work", 5, 20)), NOW)
+        failed_main = dict(usage.error_provider("claude", "rate_limited", "Too many requests."),
+                           accountId="main", label="main", primary=True, active=True)
+        fresh_work = dict(reading("claude", 7, 22), accountId="work", label="work", primary=False, active=False)
+        claude = self.refresh(usage.summarize_accounts([failed_main, fresh_work], 0), NOW + 900)
+
+        main, work = claude["accounts"]
+        self.assertTrue(main["stale"])
+        self.assertEqual(main["errorKind"], "rate_limited")
+        self.assertNotIn("stale", work)
+        self.assertEqual(work["windows"][0]["used"], 7)
+        self.assertNotIn("accounts", json.loads((self.state / "readings.json").read_text())["readings"]["claude"]["reading"])
+
+    def test_stale_reading_resets_elapsed_windows(self) -> None:
+        self.refresh(reading("claude", 35, 55), NOW)
+        stale = self.refresh(usage.error_provider("claude", "timeout", "Timed out."), NOW + HOUR + 1)
+
+        session, weekly = stale["windows"]
+        self.assertEqual((session["used"], session["remaining"]), (0, 100))
+        self.assertEqual((weekly["used"], weekly["remaining"]), (55, 45))
+
+    def test_an_elapsed_window_without_a_figure_stays_without_one(self) -> None:
+        unknown = reading("antigravity", 35, 55)
+        unknown["windows"][0].update(used=None, remaining=None)
+        self.refresh(unknown, NOW)
+        stale = self.refresh(usage.error_provider("antigravity", "timeout", "Timed out."), NOW + HOUR + 1)
+
+        self.assertEqual((stale["windows"][0]["used"], stale["windows"][0]["remaining"]), (None, None))
+
+    def test_a_provider_that_fails_before_listing_accounts_gets_its_saved_accounts_back(self) -> None:
+        self.refresh(logins(("main", 10, 40), ("work", 5, 20)), NOW)
+        claude = self.refresh(usage.error_provider("claude", "network", "Offline."), NOW + 900)
+
+        self.assertTrue(claude["stale"])
+        self.assertEqual([account["accountId"] for account in claude["accounts"]], ["main", "work"])
+        for account in claude["accounts"]:
+            self.assertTrue(account["stale"])
+            self.assertEqual(account["errorKind"], "network")
+        self.assertEqual(set(self.saved()["windows"]), {"claude", "claude@main", "claude@work"},
+                         "the accounts' series survive the failed refresh")
+
+    def test_readings_older_than_a_day_are_dropped_from_the_file(self) -> None:
+        self.refresh(logins(("main", 10, 40), ("work", 5, 20)), NOW)
+        self.refresh(reading("codex", 10, 10), NOW + DAY + 1)
+
+        self.assertEqual(set(json.loads((self.state / "readings.json").read_text())["readings"]), {"codex"})
+
+    def test_a_proxy_accounts_five_hundred_uses_a_saved_reading_but_its_client_error_does_not(self) -> None:
+        client = usage.CliProxyClient("https://proxy.test", "private-key")
+        for status, stale in ((502, True), (404, False)):
+            with self.subTest(status=status), \
+                    mock.patch.object(client, "request", return_value={"status_code": status, "body": ""}):
+                failed = usage.fetch_cliproxy_account("kimi", {"auth_index": "a"}, client, 1)
+                self.assertEqual((failed["errorKind"], failed["httpStatus"]), ("http", status))
+                self.refresh(reading("kimi", 35, 55), NOW)
+                self.assertEqual(self.refresh(failed, NOW + HOUR).get("stale", False), stale)
+
+    def test_safe_fetch_keeps_a_collectors_failure(self) -> None:
+        failing = mock.Mock(side_effect=usage.ProviderFailure("http", "HTTP 503.", 503))
+        failed = usage.safe_fetch("claude", 1, {"claude": failing})
+
+        self.assertEqual((failed["errorKind"], failed["httpStatus"]), ("http", 503))
+        self.refresh(reading("claude", 35, 55), NOW)
+        self.assertTrue(self.refresh(failed, NOW + HOUR)["stale"])
 
 
 class ActivityTests(AccountHistoryTestCase):

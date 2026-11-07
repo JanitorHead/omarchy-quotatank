@@ -3223,6 +3223,9 @@ function accountStatusLine(account, spending, nowSeconds, event) {
     : account.proxy && account.proxy.name ? String(account.proxy.name) : ""
   if (account.stale === true) {
     var readAt = Date.parse(String(account.readAt || "")) / 1000
+    var staleReason = staleReasonText(account)
+    if (staleReason !== "" && isFinite(readAt))
+      return { kind: "stale", text: staleReason + " · last reading", at: readAt, tone: "dim" }
     return computer && isFinite(readAt)
       ? { kind: "stale", text: computer + " not answering since", at: readAt, tone: "dim" }
       : { kind: "stale", text: "last known reading", at: null, tone: "dim" }
@@ -3982,6 +3985,27 @@ function readingStale(nowMs, lastSuccessMs, intervalSeconds, refreshFailed, read
   var last = Number(lastSuccessMs)
   if (!isFinite(last) || last <= 0) return false
   return Number(nowMs) - last > 2 * Math.max(60, Number(intervalSeconds) || 900) * 1000
+}
+
+var STALE_REASON_TEXT = { rate_limited: "rate limited", timeout: "timed out", network: "offline", http: "unavailable" }
+
+// Why this computer shows a saved reading; "" for another computer's stale reading, which carries no errorKind.
+// An HTTP 408 is the server timing out, so it reads as one rather than as the service being unavailable.
+function staleReasonText(reading) {
+  var key = String((reading && reading.errorKind) || "")
+  if (key === "http" && Number(reading.httpStatus) === 408) key = "timeout"
+  return Object.prototype.hasOwnProperty.call(STALE_REASON_TEXT, key) ? STALE_REASON_TEXT[key] : ""
+}
+
+function staleReadingText(reading, formatClock) {
+  if (!reading || reading.stale !== true) return ""
+  var reason = staleReasonText(reading)
+  if (reason === "") return ""
+  reason = reason.charAt(0).toUpperCase() + reason.slice(1)
+  var readAt = Date.parse(String(reading.readAt || "")) / 1000
+  if (!isFinite(readAt)) return reason
+  var clock = typeof formatClock === "function" ? formatClock : function (seconds) { return String(seconds) }
+  return reason + " · last reading " + clock(readAt)
 }
 
 // How long ago a reading was taken, for "Read 42 min ago".
