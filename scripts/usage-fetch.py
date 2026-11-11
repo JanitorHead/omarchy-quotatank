@@ -8659,8 +8659,13 @@ def omp_report_entry(provider_id: str, account_id: str, report: dict[str, Any]) 
         window = omp_window(provider_id, limit)
         if window is not None and all(known["id"] != window["id"] for known in entry["windows"]):
             entry["windows"].append(window)
-    # Only the banked-reset balance, shaped as the Codex reader shapes it.
-    credits = parse_codex_rate_limits({"rateLimitResetCredits": report.get("resetCredits")})[1]
+    # The banked-reset balance, shaped as the Codex reader shapes it, and the expiry of the reset omp spends next.
+    reset_credits = report.get("resetCredits") if isinstance(report.get("resetCredits"), dict) else {}
+    credits = parse_codex_rate_limits({"rateLimitResetCredits": reset_credits or None})[1]
+    following = next((credit for credit in dict_list(reset_credits.get("credits"))
+                      if credit.get("id") == reset_credits.get("nextCreditId")), None)
+    if credits is not None and following is not None:
+        credits["resetCreditsExpiresAt"] = epoch_seconds(following.get("expiresAt"))
     entry.update(plan=omp_plan(provider_id, metadata.get("planType")), credits=credits,
                  fetchedAt=omp_time(report.get("fetchedAt")) or entry["fetchedAt"])
     if not entry["windows"]:

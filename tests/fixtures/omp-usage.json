@@ -36,7 +36,20 @@
           "amount": {"used": 45, "unit": "usd", "limit": 50, "remaining": 5, "usedFraction": 0.9, "remainingFraction": 0.1}
         }
       ],
-      "resetCredits": {"availableCount": 1},
+      "resetCredits": {
+        "availableCount": 1, "redeemableCount": 1, "nextCreditId": "launch-fable", "eligible": true,
+        "credits": [
+          {"id": "launch-fable-6mo", "title": "New model launch: one more Fable reset at 6 months' tenure",
+           "program": "cedar_ember", "remainingCount": 1, "usable": false, "requiresLimit": false,
+           "clears": ["anthropic:reset:seven_day_overage_included"], "blocking": [], "usedFractions": {},
+           "grantedAt": "2029-12-20T18:00:00.000Z", "expiresAt": "2030-01-05T00:00:00.000Z", "status": "unavailable"},
+          {"id": "launch-fable", "title": "New model launch: one Fable reset", "program": "cedar_ember",
+           "remainingCount": 1, "usable": true, "requiresLimit": false,
+           "clears": ["anthropic:reset:seven_day_overage_included"], "blocking": [],
+           "usedFractions": {"anthropic:reset:seven_day_overage_included": 0},
+           "grantedAt": "2029-12-20T18:00:00.000Z", "expiresAt": "2030-03-09T07:59:00.000Z", "status": "available"}
+        ]
+      },
       "metadata": {
         "email": "Dev@Example.com",
         "accountId": "acc-synthetic-claude",

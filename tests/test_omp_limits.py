@@ -212,6 +212,8 @@ class ReportMappingTests(unittest.TestCase):
         self.assertEqual([row[:3] for row in window_rows({"windows": native_windows})], [row[:3] for row in window_rows(entry)[:2]])
         self.assertEqual(entry["windows"][0]["resetsAt"], 1893474000)
         self.assertEqual(entry["credits"]["resetCreditsAvailable"], 1)
+        # The expiry is the one of the reset omp spends next, as the Claude reader shows it.
+        self.assertEqual(entry["credits"]["resetCreditsExpiresAt"], 1899273540)  # 2030-03-09T07:59:00Z
         self.assertEqual((entry["source"], entry["origin"], entry["label"], entry["account"], entry["plan"]),
                          ("omp usage report", "omp", "", "Dev@Example.com", ""))
         self.assertEqual((entry["status"], entry["active"], entry["primary"], entry["authCommand"]), ("ok", False, False, ""))

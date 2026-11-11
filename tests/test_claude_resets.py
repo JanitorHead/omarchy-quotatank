@@ -140,9 +140,16 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(details["availableCount"], 2)
         self.assertEqual([credit["id"] for credit in details["credits"]], [GRANT["id"]])
         self.assertEqual(details["credits"][0]["title"], "Launch: one usage-limit reset")
-        self.assertEqual(details["credits"][0]["description"], "Clears your 5-hour and weekly limits.")
+        self.assertEqual(details["credits"][0]["description"], "Clears your 5-hour, weekly and Fable weekly limits.")
         self.assertEqual(details["target"], "fingerprint")
         uuid.UUID(details["requestId"])
+
+    def test_a_fable_reset_says_it_clears_the_fable_weekly_limit(self):
+        # The shape of the Fable 5.2 launch grants: only the Fable meter, spendable before any limit.
+        fable = grant(id="launch-2610-fable", label="New model launch: one Fable reset",
+                      clears=["seven_day_overage_included"], use_requires_limit=False, percent_used={})
+        login, _recorder = self.login(**{usage.CLAUDE_USAGE_URL: answer(grants=[fable], next_grant_id=fable["id"])})
+        self.assertEqual(self.prepare(login)["credits"][0]["description"], "Clears your Fable weekly limit.")
 
     def test_prepare_refuses_a_reset_that_cannot_be_spent_now(self):
         cases = {"limit": answer(grants=[grant(usable_now=False, use_requires_limit=True)]),

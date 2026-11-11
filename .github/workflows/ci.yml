@@ -45,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        omarchy: ["v4.0.6"]
+        omarchy: ["v4.0.6", "v4.5.0"]
     env:
       QUOTATANK_REQUIRE_QML: "1"
       OMARCHY_QUATTRO_PATH: /tmp/omarchy

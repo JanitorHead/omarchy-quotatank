@@ -102,7 +102,7 @@ In the menu bar, a dot per account sits beside the chip: filled for the account 
 
 Every limit card has a meter and a forecast: a dashed stretch after the fill shows where the current pace takes the limit before it resets, red when it runs out first. While the account spends, the block being filled breathes and a glow travels along the forecast, quicker as the pace presses on what is left; the last dash turns red as it lands when the limit runs out first. The fill itself only moves with a new reading. Hover the meter for the pace tick, where even use would be by now, and for the time a point is reached at this pace, or when it was passed. **Live figure** adds two decimals that climb at the current rate between readings. A 5-hour limit projects from its recent rate, newest samples weighing most; weekly and monthly limits blend this window's average with the last 24 hours, so one busy hour does not predict a weekly run-out. Hover a card's status line for how the tick and the projection work.
 
-**Banked resets.** When Anthropic grants Claude a reset of its 5-hour and weekly limits (a launch reset, say), a card under the limits counts it and says when it expires. **Apply…** spends it after a confirmation; when Claude holds it back, the card says why.
+**Banked resets.** When Anthropic grants Claude a limit reset (a launch reset, say, which clears only the Fable weekly limit), a card under the limits counts it and says when it expires. **Apply…** spends it after a confirmation; when Claude holds it back, the card says why.
 
 <details>
 <summary>Every status line</summary>

@@ -33,8 +33,9 @@ CLAUDE_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 CLAUDE_RESET_URL = "https://api.anthropic.com/api/organizations/{}/reset_rate_limits"
 CLAUDE_ORGANIZATION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 CLAUDE_OUTCOMES = {"reset": "reset", "already_used": "already_redeemed", "not_limited": "nothing_to_reset"}
+# `seven_day_overage_included` is the Fable weekly meter (Claude Code labels it "Fable limit").
 CLAUDE_LIMIT_NAMES = {"five_hour": "5-hour", "seven_day": "weekly", "seven_day_opus": "Opus weekly",
-                      "seven_day_sonnet": "Sonnet weekly"}
+                      "seven_day_sonnet": "Sonnet weekly", "seven_day_overage_included": "Fable weekly"}
 CLAUDE_UNUSABLE = {
     "cooldown": "Claude asks to wait before the next reset. Try again later.",
     "paused": "Claude has paused this reset.",
