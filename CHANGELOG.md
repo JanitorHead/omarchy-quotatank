@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **The backend contract and the README describe 3.1.3's Claude resets as they work.** The contract still said Claude's banked resets clear the 5-hour and weekly limits, did not list the Fable weekly limit or the reset expiry that omp accounts now carry, and did not say that a signed-out Claude Code reading names no account. The README said every launch reset clears only the Fable weekly limit; the confirmation names what each one clears.
+
+### Changed
+
+- **`./tests/run test_module` runs one Python test module, and CI checks that a release tag matches `manifest.json` and has its CHANGELOG section** (`tests/check-release`).
+
 ## 3.1.3
 
 Quotatank 3.1.3 names what a Fable limit reset clears, shows when an omp account's next banked reset expires, and no longer mistakes a signed-out Claude Code for a rejected sign-in.

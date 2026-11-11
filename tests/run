@@ -30,6 +30,11 @@ python3 -m py_compile "$repo_root/scripts/omp-live.py"
 python3 -m py_compile "$repo_root/scripts/management-key.py"
 python3 -m py_compile "$repo_root/scripts/reset-credit.py"
 python3 -m py_compile "$repo_root/scripts/backup.py"
+# `./tests/run test_omp_limits` runs one Python test module (the tests import each other from tests/).
+if [[ $# -gt 0 ]]; then
+  XDG_CONFIG_HOME="$test_root/config" python3 -m unittest discover -s "$repo_root/tests" -p "${1%.py}.py" -v
+  exit
+fi
 XDG_CONFIG_HOME="$test_root/config" python3 -m unittest discover -s "$repo_root/tests" -p 'test_*.py' -v
 node "$repo_root/tests/test_usage_logic.js"
 
