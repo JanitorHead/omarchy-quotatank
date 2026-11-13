@@ -192,7 +192,7 @@ ShellRoot {
     // Rows: one per account, each with the most useful status line.
     check(list.view.count === 5, "a row per account")
     check(rowText("work") === "spending now", "spending now beats the plan: " + rowText("work"))
-    check(rowText("personal") === "Claude Max 20x", "an idle account shows its plan: " + rowText("personal"))
+    check(rowText("personal") === "65% left over", "an idle account with room left shows what is left over: " + rowText("personal"))
     check(rowText("spare").indexOf("used up · back ") === 0, "used up says when it is back: " + rowText("spare"))
     check(rowText("broken") === "sign-in expired", "a failed reading says why: " + rowText("broken"))
     check(rowText("old") === "Subscription ended", "an ended subscription says so: " + rowText("old"))
