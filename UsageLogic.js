@@ -3629,8 +3629,8 @@ function accountLeftover(account, nowSeconds) {
   return best
 }
 
-// The dates where an account loses something, in date order: its next limit reset (with the leftover that reset
-// leaves), the banked reset's expiry and the subscription end. Empty for an ended or missing account.
+// The dates where an account loses something, in date order: its next limit reset of a day or longer (with the
+// leftover that reset leaves), the banked reset's expiry and the subscription end. Empty for an ended or missing account.
 function comingUpItems(account, nowSeconds) {
   var now = finiteOrNull(nowSeconds)
   if (!account || now === null || subscriptionEnded(account)) return []
@@ -3638,8 +3638,9 @@ function comingUpItems(account, nowSeconds) {
   var next = null
   var windows = listOrEmpty(account.windows)
   for (var i = 0; i < windows.length; i++) {
+    var windowSeconds = finiteOrNull(windows[i].windowSeconds)
     var resetsAt = finiteOrNull(windows[i].resetsAt)
-    if (resetsAt !== null && resetsAt > now && (next === null || resetsAt < next.at)) next = { row: windows[i], at: resetsAt }
+    if (windowSeconds !== null && windowSeconds >= PACE_DAY_SECONDS && resetsAt !== null && resetsAt > now && (next === null || resetsAt < next.at)) next = { row: windows[i], at: resetsAt }
   }
   if (next !== null) {
     var left = windowLeftover(next.row, account, now)

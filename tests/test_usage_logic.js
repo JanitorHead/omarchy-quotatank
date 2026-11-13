@@ -2063,6 +2063,11 @@ console.log("1.9 Leftover at the reset: passed");
   const ended = { windows: [], subscription: { endsAt: NOW + DAY, endsOn: "1970-01-02", source: "manual", ended: true } };
   assert.equal(context.comingUpItems(ended, NOW).length, 0, "an ended subscription lists nothing");
   assert.equal(context.comingUpItems(null, NOW).length, 0, "no account lists nothing");
+  // A limit under a day (a 5-hour window) is not listed: it resets too often to name.
+  const fiveHour = { id: "five", label: "5-hour limit", used: 10, remaining: 90, windowSeconds: 5 * 3600, resetsAt: NOW + 3600, samples: [] };
+  assert.deepEqual(asJson(context.comingUpItems({ windows: [fiveHour] }, NOW)), [], "a 5-hour reset is not listed");
+  assert.equal(asJson(context.comingUpItems({ ...full, windows: [fiveHour, reset, monthly] }, NOW))[0].at, NOW + 3 * DAY,
+    "the next reset is the next day-long one");
 }
 console.log("1.9 Coming up list: passed");
 
