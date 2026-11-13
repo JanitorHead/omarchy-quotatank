@@ -3282,10 +3282,10 @@ function accountUseArgv(providerId, account) {
 }
 
 // A row offers Use in one-at-a-time mode for an Omarchy login on this computer that is not in use and can be
-// read: Omarchy switches logins only here.
+// read: Omarchy switches logins only here. An ended subscription with no money left gives a session nothing.
 function accountCanUse(account, mode) {
   return !!account && mode === "single" && account.active !== true && account.status === "ok"
-    && accountSourceKind(account) === "omarchy"
+    && accountSourceKind(account) === "omarchy" && !(subscriptionEnded(account) && spendable(account) === null)
 }
 
 // How new sessions pick among a provider's accounts, for the ACCOUNTS header and the hover card alike:
@@ -3670,6 +3670,9 @@ function accountRunway(provider, mode, counted, nowSeconds, order) {
     resetsAt: resetsAt,
     horizon: horizon,
     base: base,
+    // One at a time, the ended account in use, which the runway skips (else -1).
+    endedInUse: mode !== "together" && countedList.length === 1 && subscriptionEnded(accounts[countedList[0]])
+      ? countedList[0] : -1,
     spending: spending,
     lanes: lanes,
     gap: gap > 0.5 ? gap : 0,

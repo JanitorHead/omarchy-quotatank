@@ -72,6 +72,9 @@ Ui.BorderSurface {
 
   readonly property string hint: {
     if (!runway) return ""
+    // The account in use has ended: the lanes start from the account to switch to.
+    if (runway.endedInUse >= 0 && lanes.length > 0 && (lanes[0].kind === "runs" || lanes[0].kind === "lasts"))
+      return "The account in use has ended: switch to " + nameOf(lanes[0].index) + "."
     if (runway.gap >= runway.horizon - 1) return lanes.length > 1 ? "Every account is used up until the reset." : ""
     if (!runway.spending) return lanes.length > 1 ? "Nothing is being spent: every account lasts until the reset." : ""
     if (runway.mode === "together") return "Used together: the accounts run down at the same time."

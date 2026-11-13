@@ -159,6 +159,7 @@ ShellRoot {
     check(list.view.itemAt(4) === list.rowFor("old"), "an ended subscription is the last row")
     check(list.rowFor("work").inUse && !list.rowFor("work").canUse, "the account in use is tagged, not offered")
     check(list.rowFor("personal").useButton.visible, "another login offers Use")
+    check(!list.rowFor("old").useButton.visible, "an ended login without money offers no Use")
     check(list.rowFor("work").counted && !list.rowFor("personal").counted, "the chip's account has the filled dot")
     list.rowFor("personal").useButton.clicked()
     check(root.used.length === 1 && root.used[0] === "personal", "Use asks for that account")
@@ -209,6 +210,12 @@ ShellRoot {
     check(runwayCard.runway.gap > 0, "the runway has a gap")
     check(find(runwayCard, "runwayLane-gap") !== null, "the gap lane is drawn")
     check(find(runwayCard, "runwayLane-account-1") !== null, "Personal takes over in its own lane")
+    // The account in use has ended: the runway starts from the live one and the card asks to switch to it.
+    runwayCard.names = ["Old", "Work"]
+    runwayCard.runway = UsageLogic.accountRunway({ id: "claude", status: "ok", accounts: [
+      login("old", { active: true, subscription: { ended: true } }), Object.assign({}, accounts[0], { active: false })] },
+      "single", [0], now, [0, 1])
+    check(runwayCard.hint === "The account in use has ended: switch to Work.", "an ended account in use: " + runwayCard.hint)
 
     // Notice: open with its text, closed by its button.
     check(notice.height > 0 && notice.visible, "the notice opens")

@@ -395,7 +395,7 @@ Ui.Panel {
         : (shown === null ? "—" : UsageLogic.formatPercent(shown) + "%"),
       unit: money !== null ? money.unit : shown === null ? "" : (mode === "Remaining" ? "left" : "used"),
       fill: money !== null ? (money.share === null ? 0 : money.share / 100) : shown === null ? 0 : shown / 100,
-      alert: ended || providerNeedsAttention(provider),
+      alert: empty || providerNeedsAttention(provider),
       failed: failed || empty,
       dots: state ? state.dots : null
     }

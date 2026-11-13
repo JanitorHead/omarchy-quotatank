@@ -537,7 +537,7 @@ ShellRoot {
       }
       var tile = widget.providerOptions.filter(function (option) { return option.value === "claude" })[0]
       check(chip.topText === "ended" && chip.active, "the chip reads ended, highlighted: " + chip.topText)
-      check(tile.figure === "ended" && tile.failed, "so does the tile: " + tile.figure)
+      check(tile.figure === "ended" && tile.failed && tile.alert, "so does the tile, flagged: " + tile.figure)
       var counted = chip.strip.dots.filter(function (dot) { return dot.counted })[0]
       check(counted && counted.index === 0 && counted.state === "error", "its counted dot is an error ring: "
         + JSON.stringify(counted))
@@ -555,7 +555,8 @@ ShellRoot {
       var tile = widget.providerOptions.filter(function (option) { return option.value === "claude" })[0]
       check(!chip.failed && chip.topText === chip.moneyShown.text, "an ended login with money shows it: " + chip.topText)
       check(chip.plainTooltip.indexOf("Claude Code · Subscription ended") === 0, "and says it ended: " + chip.plainTooltip)
-      check(tile.figure === chip.moneyShown.text && !tile.failed, "so does the tile: " + tile.figure)
+      check(tile.figure === chip.moneyShown.text && !tile.failed && !tile.alert, "so does the tile, unflagged: "
+        + tile.figure)
       console.log("Bar QML contract: passed (panel chips)")
       Qt.quit()
       return false

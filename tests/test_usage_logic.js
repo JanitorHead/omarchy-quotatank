@@ -1836,6 +1836,11 @@ console.log("omp settings, live feed and account modes: passed");
     "one at a time: the live account is the runway, not the ended one in use");
   assert.equal(context.accountRunway({ id: "claude", status: "ok", subscription: { ended: true }, windows: [rising(70, 0.01)] },
     "single", [], NOW, []), null, "a provider whose only reading has ended has no runway");
+  assert.equal(stuckRunway.endedInUse, 0, "and it names the ended account in use, which the card asks to leave");
+  assert.equal(runwayOf(sharing, "together", [1]).endedInUse, -1, "together, no account is the one in use");
+  assert.equal(context.accountCanUse(ended("old", []), "single"), false, "an ended account without money offers no Use");
+  assert.equal(context.accountCanUse(ended("old", [], { credits: { remaining: 5, spendable: 5, currency: "USD" } }), "single"),
+    true, "with money left it still does: that money spends");
   const endedSeed = context.accountEvents({}, [{ ...before, subscription: { ended: true } }], NOW - 60, 25);
   assert.equal(context.accountEvents(endedSeed.state, [{ ...after, subscription: { ended: true } }], NOW, 25).events.length, 0,
     "an ended account's limit resets quietly");
