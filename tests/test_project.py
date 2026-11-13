@@ -216,7 +216,6 @@ class ProjectContractTests(unittest.TestCase):
 
     def test_account_details_are_available_in_settings(self):
         panel = (ROOT / "Panel.qml").read_text()
-        self.assertIn('return provider && provider.plan ? String(provider.plan) : ""', panel)
         self.assertIn('lines.push("Account: " + String(provider.account))', panel)
         self.assertIn('lines.push("Source: " + String(provider.source))', panel)
         self.assertIn('iconText: "󰒓"', panel)

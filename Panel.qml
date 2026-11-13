@@ -794,14 +794,9 @@ Ui.Panel {
     return "Resets in " + relative + (absolute !== "" ? " · " + absolute : "")
   }
 
-  function planText(provider) {
-    return provider && provider.plan ? String(provider.plan) : ""
-  }
-
   // The plan, then when a single account's subscription ends (with several accounts each row says it).
   function heroMeta(provider) {
-    var plan = planText(provider)
-    var parts = plan !== "" ? [plan] : []
+    var parts = provider && provider.plan ? [String(provider.plan)] : []
     var accounts = provider ? UsageLogic.listOrEmpty(provider.accounts) : []
     var ends = accounts.length === 1 ? UsageLogic.subscriptionEndLabel(accounts[0].subscription, nowSeconds) : ""
     if (ends !== "") parts.push("ends " + ends)
