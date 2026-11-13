@@ -3799,8 +3799,10 @@ function ompCandidate(account, index, nowSeconds) {
   var primaryUsed = ((primary && windowUsed(primary)) || 0) / 100
   var inReserve = !!account.policy && account.policy.state === "inside-reserve"
   // rank.ts PRIMARY_WINDOW_HOT_FRACTION: a 5 h window at 85% or more makes the account "hot".
+  var rawPriority = account.policy ? Number(account.policy.priority) : NaN
+  var priority = isFinite(rawPriority) ? rawPriority : 0
   return { index: index, blocked: blockedUntil !== null, blockedUntil: blockedUntil, inReserve: inReserve,
-    hot: primaryUsed >= 0.85 }
+    hot: primaryUsed >= 0.85, accountPriority: priority }
 }
 
 function ompWindow(account, id) {
@@ -3821,6 +3823,7 @@ function ompStep(a, b) {
   }
   if (a.inReserve !== b.inReserve) return { order: a.inReserve ? 1 : -1, step: "reserve" }
   if (a.hot !== b.hot) return { order: a.hot ? 1 : -1, step: "hot" }
+  if (a.accountPriority !== b.accountPriority) return { order: b.accountPriority - a.accountPriority, step: "priority" }
   return { order: 0, step: "" }
 }
 

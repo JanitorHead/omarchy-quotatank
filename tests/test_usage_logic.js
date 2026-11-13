@@ -2429,6 +2429,12 @@ console.log("1.9 Coming up list: passed");
   assert.equal(hot.nextAccount, 1, "a 5 h window at 85% or more loses to a cooler account");
   assert.equal(hot.nextReason, "hot");
   assert.deepEqual(plain(hot.ranking), [1, 0]);
+
+  const boosted = { ...ompAccount("Personal", cool), policy: { state: "regular", priority: 2 } };
+  const prio = together(ompProvider([ompAccount("Work", cool), boosted]));
+  assert.equal(prio.nextAccount, 1, "a higher policy priority wins between equal accounts");
+  assert.equal(prio.nextReason, "priority");
+  assert.deepEqual(plain(prio.ranking), [1, 0]);
   console.log("1.10 omp's next account: passed");
 }
 
