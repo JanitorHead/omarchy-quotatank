@@ -3429,7 +3429,7 @@ function accountStatusLine(account, spending, nowSeconds, event) {
   if (event && (event.kind === "switch" || event.kind === "reset") && withinSeconds(eventAt, now, ACCOUNT_EVENT_SECONDS))
     return { kind: event.kind, text: event.kind === "switch" ? "switched" : "reset", at: eventAt, tone: "accent" }
   // A dated subscription shows its last day within 30 days, urgent within the last 7 (the ended state is above).
-  // The largest leftover (see windowLeftover) follows the end date, or stands alone; it is dimmed.
+  // The largest leftover (see windowLeftover) joins that line, dimmed; without a near end date the row keeps its plan.
   var leftover = accountLeftover(account, now)
   var leftText = leftover ? Math.round(leftover.percent) + "% left over" : ""
   var endsAt = account.subscription ? finiteOrNull(account.subscription.endsAt) : null
@@ -3437,7 +3437,6 @@ function accountStatusLine(account, spending, nowSeconds, event) {
   if (now !== null && endsAt !== null && endsOn !== "" && endsAt - now > 0 && endsAt - now <= 30 * PACE_DAY_SECONDS)
     return { kind: "ends", text: "Ends " + subscriptionEndText(endsOn, now) + (leftText !== "" ? " · " + leftText : ""),
       at: null, tone: endsAt - now <= 7 * PACE_DAY_SECONDS ? "urgent" : "dim" }
-  if (leftText !== "") return { kind: "leftover", text: leftText, at: null, tone: "dim" }
   if (account.standIn && account.standIn.name)
     return { kind: "standin", text: (readingProxy(account) ? "read through " : "read on ") + account.standIn.name, at: null, tone: "dim" }
   // "via proxy", not the proxy's name: beside a plan, "through CLIProxyAPI" does not fit a row.
