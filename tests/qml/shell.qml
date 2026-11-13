@@ -693,17 +693,24 @@ ShellRoot {
     }
   }
 
+  // Sixteen new rows, each revealed in turn, can keep a slow machine (software rendering in CI) busy past any fixed
+  // wait: poll until the last field is in view, for up to three seconds.
   Timer {
     id: settingsScrollCheck
-    interval: 250
+    property int tries: 0
+    interval: 100
+    repeat: true
     onTriggered: {
       var editor = root.widget.settingsForm.priceEditor
       var field = editor.findItem(editor, "costModel-15")
       var flick = field
       while (flick && flick.contentY === undefined) flick = flick.parent
+      var point = flick ? field.mapToItem(flick, 0, 0) : null
+      var shown = !!point && flick.contentY > 0 && point.y >= 0 && point.y + field.height <= flick.height
+      if (!shown && ++tries < 30) return
+      stop()
       root.assertTrue(!!flick, "settings editor is in a scrollable view")
       if (flick) {
-        var point = field.mapToItem(flick, 0, 0)
         root.assertTrue(flick.contentY > 0, "adding a price scrolls a long form")
         root.assertTrue(point.y >= 0 && point.y + field.height <= flick.height,
           "new price field is fully visible above the fixed settings footer")
