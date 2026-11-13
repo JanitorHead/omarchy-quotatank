@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Runs a command inside a headless sway session of its own, so the QML contracts that need Wayland (the panel in
+# limits-shell.qml, Panel.qml's chips in bar-shell.qml) run without a desktop: `tests/headless-wayland ./tests/run`.
+# Software rendering only; no GPU, input device or seat is needed. Nothing reaches the desktop's own session.
+set -euo pipefail
+
+command -v sway >/dev/null || { echo "tests/headless-wayland: sway is not installed" >&2; exit 1; }
+runtime=$(mktemp -d)
+chmod 700 "$runtime"
+sway_pid=
+cleanup() {
+  if [[ -n $sway_pid ]]; then
+    kill "$sway_pid" 2>/dev/null || true
+    wait "$sway_pid" 2>/dev/null || true
+  fi
+  rm -rf -- "$runtime"
+}
+trap cleanup EXIT
+
+# An empty runtime folder, so sway's socket is the first free name there: wayland-1. Arch's sway carries the file
+# capability cap_sys_nice, which a container without it refuses to execute; a plain copy drops it.
+: >"$runtime/sway.conf"
+cp "$(command -v sway)" "$runtime/sway"
+env -u WAYLAND_DISPLAY -u DISPLAY -u SWAYSOCK XDG_RUNTIME_DIR="$runtime" \
+  WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 \
+  "$runtime/sway" -c "$runtime/sway.conf" >"$runtime/sway.log" 2>&1 &
+sway_pid=$!
+for _ in $(seq 100); do
+  [[ -S $runtime/wayland-1 ]] && break
+  if ! kill -0 "$sway_pid" 2>/dev/null; then
+    cat "$runtime/sway.log" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+if [[ ! -S $runtime/wayland-1 ]]; then
+  cat "$runtime/sway.log" >&2
+  echo "tests/headless-wayland: sway did not start" >&2
+  exit 1
+fi
+
+XDG_RUNTIME_DIR="$runtime" WAYLAND_DISPLAY=wayland-1 QT_QUICK_BACKEND=software "$@"

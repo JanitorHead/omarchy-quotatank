@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Installs what the QML checks need on Arch Linux, as root: Quickshell from Omarchy's own package repository, Qt 6,
+# and sway for the contracts that need Wayland (tests/headless-wayland). Arch's quickshell 0.3.2-1 ships opaque stubs
+# for PopupAnchor and other value types, so qmllint cannot see `anchor.rect` there. CI's qml job runs this; so does any
+# local container that reproduces that job.
+set -euo pipefail
+
+key=40DFB630FF42BCFFB047046CF0134EE680CAC571   # Omarchy <pkgs@omarchy.org>
+pacman-key --init
+pacman-key --recv-keys "$key" --keyserver hkps://keyserver.ubuntu.com
+pacman-key --lsign-key "$key"
+if ! grep -q '^\[omarchy\]' /etc/pacman.conf; then
+  sed -i '/^\[core\]/i [omarchy]\nServer = https://pkgs.omarchy.org/stable/$arch\n' /etc/pacman.conf
+fi
+pacman -Syu --noconfirm --needed git python nodejs jq ripgrep qt6-declarative qt6-wayland ttf-dejavu sway \
+  omarchy/quickshell
+pacman -Q quickshell qt6-declarative sway

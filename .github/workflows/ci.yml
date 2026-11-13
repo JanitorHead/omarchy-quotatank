@@ -41,10 +41,10 @@ jobs:
       - uses: actions/checkout@v4
       - run: tests/check-release "$GITHUB_REF_NAME"
 
-  # The QML side (qmllint, the QML contracts, plugin validation) needs Quickshell, Qt 6's qmllint and the
-  # Omarchy shell source the plugin imports, as Omarchy installs them. Quickshell comes from Omarchy's own package
-  # repository: Arch's quickshell 0.3.2-1 ships opaque stubs for PopupAnchor and other value types, so qmllint cannot
-  # see `anchor.rect` there. The shell comes from Omarchy's git repository at the release the plugin targets.
+  # The QML side (qmllint, the QML contracts, plugin validation) needs Quickshell, Qt 6's qmllint and the Omarchy shell
+  # source the plugin imports, as Omarchy installs them (tests/install-qml-deps), and a Wayland session for the
+  # contracts that drive the whole panel, its chips and the live runtime: a headless sway (tests/headless-wayland), where
+  # their test windows bother nobody. The shell comes from Omarchy's git repository at the release the plugin targets.
   # Without these the portable job above skips every QML check.
   qml:
     name: QML (Quickshell, Omarchy ${{ matrix.omarchy }})
@@ -56,22 +56,15 @@ jobs:
         omarchy: ["v4.0.6", "v4.5.0"]
     env:
       QUOTATANK_REQUIRE_QML: "1"
+      QUOTATANK_LIVE_TESTS: "1"
       OMARCHY_QUATTRO_PATH: /tmp/omarchy
-      XDG_RUNTIME_DIR: /tmp/xdg-runtime
     steps:
-      - name: Install Quickshell (Omarchy's build), Qt and tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          key=40DFB630FF42BCFFB047046CF0134EE680CAC571   # Omarchy <pkgs@omarchy.org>
-          pacman-key --init
-          pacman-key --recv-keys "$key" --keyserver hkps://keyserver.ubuntu.com
-          pacman-key --lsign-key "$key"
-          sed -i '/^\[core\]/i [omarchy]\nServer = https://pkgs.omarchy.org/stable/$arch\n' /etc/pacman.conf
-          pacman -Syu --noconfirm --needed git python nodejs jq ripgrep qt6-declarative ttf-dejavu omarchy/quickshell
-          pacman -Q quickshell qt6-declarative
+      - name: Install git for the checkout
+        run: pacman -Syu --noconfirm --needed git
       - uses: actions/checkout@v4
+      - name: Install Quickshell (Omarchy's build), Qt, sway and tools
+        run: tests/install-qml-deps
       - name: Fetch the Omarchy shell
         run: git clone --depth 1 --branch "${{ matrix.omarchy }}" https://github.com/basecamp/omarchy.git "$OMARCHY_QUATTRO_PATH"
-      - name: Run the suite with the QML checks
-        run: mkdir -p -m 700 "$XDG_RUNTIME_DIR" && ./tests/run
+      - name: Run the suite with the QML checks, Wayland contracts included
+        run: tests/headless-wayland ./tests/run

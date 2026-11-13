@@ -18,7 +18,8 @@ All notable changes to this project will be documented here. The format follows
 
 ### Changed
 
-- **`./tests/run test_module` runs one Python test module, and CI checks that a release tag matches `manifest.json` and has its CHANGELOG section** (`tests/check-release`).
+- **`./tests/run test_module` runs one Python test module, and CI checks that a release tag matches `manifest.json` and has its CHANGELOG section** (`tests/check-release`). The Python tests print only failures and the summary; `./tests/run -v` names each test.
+- **CI runs the QML contracts that need Wayland.** The qml job starts a headless sway (`tests/headless-wayland`), so the contracts that drive the whole panel, its menu bar chips and the live runtime run there too; before, they ran only on a desktop.
 
 ## 3.1.3
 
