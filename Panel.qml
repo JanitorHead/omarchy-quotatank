@@ -1349,7 +1349,8 @@ Ui.Panel {
           // Money providers (OpenRouter, DeepSeek) lead with the balance on the chosen side; their tightest limit, if any, sits below.
           readonly property var money: failed ? null : UsageLogic.spendable(reading)
           readonly property var moneyShown: money === null ? null : UsageLogic.moneyView(reading, providerChip.quotaMode)
-          readonly property bool moneyChip: money !== null
+          // From moneyShown, not money: while a new reading propagates, money can change before moneyShown does.
+          readonly property bool moneyChip: moneyShown !== null
           // A second line that would repeat the first (the most constrained limit is the weekly one
           // and the second line asks for weekly too) is left out.
           readonly property bool sameLimitTwice: secondaryWindow !== "none"
