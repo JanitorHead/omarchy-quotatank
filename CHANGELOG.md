@@ -16,6 +16,10 @@ All notable changes to this project will be documented here. The format follows
 
 - **A banked reset badge on every account row.** An account row with a reset Claude can spend now shows how many, as `1 Fable` when it clears only the Fable weekly limit, otherwise `1 reset` or `N resets`. The badge dims while the limit it clears still has more than the warning threshold left. Clicking it applies the reset only where Quotatank can apply one today; otherwise its tooltip says where to apply it. Resets that wait until a limit is reached count only in the tooltip.
 
+- **Leftover on a limit that resets with room to spare.** Its verdict says what it leaves over at reset, with the pace that spends it: `65% left over at reset · use 27%/day to spend it`. Its account row joins it to the subscription end when one is near: `Ends 1 Jan · 65% left over`. Only limits that reset in a day or more count, and the subscription's end replaces the reset when it comes first; 5-hour limits, balances and credits never show it, and it shows only when the current pace would leave at least 5 points unused.
+
+- **A Coming up list in the account detail.** Under the limits, the account lists its next dates in order: a banked reset that expires, the next limit reset with what it leaves over, and the subscription's end. An ended subscription lists nothing.
+
 ### Fixed
 
 - **A cancelled Kilo Pass no longer shows its last month as a live allowance.** Kilo keeps a cancelled pass with that month's figures; only an active, past-due or trialing pass counts now.
