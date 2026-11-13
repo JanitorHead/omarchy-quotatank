@@ -2155,6 +2155,11 @@ function costDayName(date) {
   return date ? COST_DAY_NAMES[date.getDay()] : ""
 }
 
+// The Costs tab's day label ("Mar 9"), used by its chart and range.
+function costMonthDay(date) {
+  return date ? COST_MONTH_NAMES[date.getMonth()] + " " + date.getDate() : ""
+}
+
 // The span a total covers, for "vs previous …".
 function costPeriodPhrase(days) {
   var count = Math.round(Number(days) || 0)
