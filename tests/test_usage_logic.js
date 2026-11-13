@@ -2435,6 +2435,11 @@ console.log("1.9 Coming up list: passed");
   assert.equal(prio.nextAccount, 1, "a higher policy priority wins between equal accounts");
   assert.equal(prio.nextReason, "priority");
   assert.deepEqual(plain(prio.ranking), [1, 0]);
+
+  const measured = together(ompProvider([ompAccount("Work", []), ompAccount("Personal", cool)]));
+  assert.equal(measured.nextAccount, 1, "an account with a usage reading beats one with none");
+  assert.equal(measured.nextReason, "measured");
+  assert.deepEqual(plain(measured.ranking), [1, 0]);
   console.log("1.10 omp's next account: passed");
 }
 
