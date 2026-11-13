@@ -509,6 +509,10 @@ ShellRoot {
     function () {
       check(widget.selectedAccount.accountId === "personal", "choosing the provider again shows the counted account")
       widget.settings = Object.assign({}, widget.settings, { subscriptionEnds: JSON.stringify({ claude: { personal: (new Date().getUTCFullYear()) + "-12-03" } }) })
+      // The detail exists only while the panel is open: open it from the chip, on the account it shows.
+      var chip = namedChild(widget, "barChip-claude")
+      widget.handleProviderChipPress("claude", Qt.LeftButton, chip.shownAccountId, chip.accountChip)
+      check(widget.opened && widget.selectedAccount.accountId === "personal", "the chip opens the panel on Personal")
       return true
     },
     function () {
@@ -527,6 +531,7 @@ ShellRoot {
       var text = meta ? String(meta.text) : ""
       if (text.indexOf("ends 5 Jan") < 0 && waited < 150) return false
       check(text.indexOf(" · ends 5 Jan " + (year + 1)) >= 0, "the detail shows the year once it is not this year: " + text)
+      widget.close()
       widget.settings = Object.assign({}, widget.settings, { sources: JSON.stringify([{ id: "p-1a2b3c4d", kind: "proxy",
         url: "https://proxy.test/prefix", keyFile: "/private/proxy key", on: true }]) })
       return true
