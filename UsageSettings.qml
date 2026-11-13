@@ -1430,8 +1430,10 @@ Column {
                   maximumLength: 10
                   source: UsageLogic.subscriptionEndOf(root.value("subscriptionEnds", "{}"), providerRow.providerId, accountId)
                   validate: function (text) { return (text === "" || UsageLogic.subscriptionEndDay(text) !== null) ? "" : "Use a real date as YYYY-MM-DD" }
-                  onApplied: root.set("subscriptionEnds", UsageLogic.setSubscriptionEnds(
-                    root.value("subscriptionEnds", "{}"), providerRow.providerId, accountId, value))
+                  onApplied: function(text) {
+                    root.set("subscriptionEnds", UsageLogic.setSubscriptionEnds(
+                      root.value("subscriptionEnds", "{}"), providerRow.providerId, accountId, text))
+                  }
                 }
               }
               Hint {
