@@ -2449,6 +2449,14 @@ console.log("1.9 Coming up list: passed");
   assert.equal(drain.nextAccount, 1, "the account that must spend its weekly headroom faster goes first");
   assert.equal(drain.nextReason, "drain");
   assert.deepEqual(plain(drain.ranking), [1, 0]);
+
+  // Work's weekly allowance is spent with no reset time, so it is not blocked, yet it must still
+  // yield to Personal, which has allowance left (rank.ts allowanceSpent, #13889).
+  const spent = [ompWin("session", 10, 7200, 18000), { ...ompWin("weekly", 100, 0, 604800), resetsAt: null }];
+  const allowance = together(ompProvider([ompAccount("Work", spent), ompAccount("Personal", cool)]));
+  assert.equal(allowance.nextAccount, 1, "an account with its allowance spent yields to one with allowance left");
+  assert.equal(allowance.nextReason, "allowance");
+  assert.deepEqual(plain(allowance.ranking), [1, 0]);
   console.log("1.10 omp's next account: passed");
 }
 

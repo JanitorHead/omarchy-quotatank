@@ -3804,7 +3804,13 @@ function ompCandidate(account, index, nowSeconds) {
   var rawPriority = account.policy ? Number(account.policy.priority) : NaN
   var priority = isFinite(rawPriority) ? rawPriority : 0
   var measured = primary !== null || secondary !== null
+  // rank.ts allowanceSpent: a limit at 100% with a reset still ahead, or no reset, has spent its allowance.
+  var spent = function (row) {
+    var resetsAt = row ? finiteOrNull(row.resetsAt) : null
+    return !!row && windowUsed(row) >= 100 && (resetsAt === null || resetsAt > now)
+  }
   return { index: index, blocked: blockedUntil !== null, blockedUntil: blockedUntil, inReserve: inReserve,
+    allowanceSpent: spent(primary) || spent(secondary),
     hot: primaryUsed >= 0.85, accountPriority: priority, measured: measured,
     primaryUsed: primaryUsed, primaryDrain: ompDrain(primary, now),
     secondaryUsed: secondaryUsed, secondaryDrain: ompDrain(secondary, now) }
@@ -3850,6 +3856,7 @@ function ompStep(a, b) {
     if (a.blockedUntil === b.blockedUntil) return { order: 0, step: "" }
     return { order: a.blockedUntil - b.blockedUntil, step: "blocked" }
   }
+  if (a.allowanceSpent !== b.allowanceSpent) return { order: a.allowanceSpent ? 1 : -1, step: "allowance" }
   if (a.inReserve !== b.inReserve) return { order: a.inReserve ? 1 : -1, step: "reserve" }
   if (a.hot !== b.hot) return { order: a.hot ? 1 : -1, step: "hot" }
   if (a.accountPriority !== b.accountPriority) return { order: b.accountPriority - a.accountPriority, step: "priority" }
