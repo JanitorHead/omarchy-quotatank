@@ -29,6 +29,7 @@ ShellRoot {
   property var onePersonalLeft: null
   property var endedPayload: null
   property var poolPayload: null
+  property var noFigurePayload: null
 
   Item {
     id: panelHost
@@ -597,6 +598,30 @@ ShellRoot {
       check(chip.plainTooltip.indexOf("Claude Code · Subscription ended") === 0, "and says it ended: " + chip.plainTooltip)
       check(tile.figure === chip.moneyShown.text && !tile.failed && !tile.alert, "so does the tile, unflagged: "
         + tile.figure)
+      return true
+    },
+    function () {
+      // A pool with no figure for its window (no account reports the 5-hour limit) shows "—", not an error.
+      var copy = JSON.parse(JSON.stringify(savedPayload))
+      copy.providers = copy.providers.map(function (item) {
+        return item.id === "claude" ? provider([account("work", "Work", 40, { windows: [] }),
+          account("personal", "Personal", 20, { windows: [] })]) : item
+      })
+      root.noFigurePayload = copy
+      widget.usageBackend.payload = copy
+      widget.settings = Object.assign({}, widget.settings, { barAccountMode: "chips", barChipValues: '{"claude":"pool"}' })
+      return true
+    },
+    function () {
+      var chip = namedChild(widget, "barChip-claude")
+      if (!chip || !chip.poolChip || widget.usageBackend.payload !== noFigurePayload) {
+        if (widget.usageBackend.payload !== noFigurePayload) widget.usageBackend.payload = noFigurePayload
+        return waited < 150 ? false : check(false, "Claude's pool chip reads with no figure: " + (chip ? chip.topText : "no pool chip"))
+      }
+      check(chip.topText === "—", "a pool with no figure shows a dash, not an error: " + chip.topText)
+      check(chip.plainTooltip.indexOf("error") < 0 && chip.plainTooltip.indexOf("no account reports this limit") >= 0,
+        "and the tooltip says why: " + chip.plainTooltip)
+      widget.settings = Object.assign({}, widget.settings, { barChipValues: "{}" })
       return true
     },
     function () {

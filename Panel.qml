@@ -1390,8 +1390,8 @@ Ui.Panel {
           readonly property string percentTag: topTag !== "" || !moneyChip || !root.barShowPeriods ? topTag
             : UsageLogic.rowPeriodTag(UsageLogic.windowRowFor(reading, topWindow, true))
           readonly property string percentLine: (percentTag ? percentTag + " " : "") + shownText + (topReset ? " · " + topReset : "")
-          readonly property string topText: ended && failed ? "ended" : failed ? UsageLogic.errorReasonLabel(failure.errorKind)
-            : moneyChip ? moneyShown.text : percentLine
+          readonly property string topText: ended && failed ? "ended" : poolChip && failed ? "—"
+            : failed ? UsageLogic.errorReasonLabel(failure.errorKind) : moneyChip ? moneyShown.text : percentLine
           readonly property string bottomText: moneyChip ? percentLine
             : (bottomTag ? bottomTag + " " : "") + secondaryText + (bottomReset ? " · " + bottomReset : "")
           // The same lines in parts: the value rolls, the tag and reset time stay put.
@@ -1429,6 +1429,7 @@ Ui.Panel {
               formatClock: root.clockText })
             : null
           readonly property string plainTooltip: ended && failed ? String(modelData.name || modelData.id) + " · Subscription ended"
+            : poolChip && failed ? String(modelData.name || modelData.id) + " · no account reports this limit"
             : failed ? String(modelData.name || modelData.id) + " · " + root.errorBody(failure)
             : String(modelData.name || modelData.id) + (ended ? " · Subscription ended" : "")
             + (moneyChip ? (moneyShown.unit === "used" ? "\nSpent: " + moneyShown.text + " of " + UsageLogic.formatMoney(moneyShown.total, moneyShown.currency) : "")
