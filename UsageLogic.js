@@ -3796,15 +3796,18 @@ function ompCandidate(account, index, nowSeconds) {
     }
   }
   var primary = ompWindow(account, "session") || ompWindow(account, "codex-primary")
+  var secondary = ompWindow(account, "weekly") || ompWindow(account, "codex-secondary")
   var primaryUsed = ((primary && windowUsed(primary)) || 0) / 100
+  var secondaryUsed = ((secondary && windowUsed(secondary)) || 0) / 100
   var inReserve = !!account.policy && account.policy.state === "inside-reserve"
   // rank.ts PRIMARY_WINDOW_HOT_FRACTION: a 5 h window at 85% or more makes the account "hot".
   var rawPriority = account.policy ? Number(account.policy.priority) : NaN
   var priority = isFinite(rawPriority) ? rawPriority : 0
-  var secondary = ompWindow(account, "weekly") || ompWindow(account, "codex-secondary")
   var measured = primary !== null || secondary !== null
   return { index: index, blocked: blockedUntil !== null, blockedUntil: blockedUntil, inReserve: inReserve,
-    hot: primaryUsed >= 0.85, accountPriority: priority, measured: measured }
+    hot: primaryUsed >= 0.85, accountPriority: priority, measured: measured,
+    primaryUsed: primaryUsed, primaryDrain: ompDrain(primary, now),
+    secondaryUsed: secondaryUsed, secondaryDrain: ompDrain(secondary, now) }
 }
 
 function ompWindow(account, id) {
@@ -3813,6 +3816,30 @@ function ompWindow(account, id) {
     if (windows[i] && windows[i].id === id) return windows[i]
   }
   return null
+}
+
+// rank.ts compares metrics within a relative tolerance so float noise does not reorder accounts.
+function ompMetric(left, right) {
+  if (left === right) return 0
+  var tolerance = Math.max(1e-9, Math.max(Math.abs(left), Math.abs(right)) * 0.000001)
+  return Math.abs(left - right) <= tolerance ? 0 : left - right
+}
+
+// Share of a window's headroom left per hour until it resets (rank.ts required drain). The time
+// left is capped at the window length and floored at a minute; a window without a reset counts
+// as its full length.
+function ompDrain(row, now) {
+  if (!row) return 0
+  var used = windowUsed(row)
+  if (typeof used !== "number" || !isFinite(used)) return 0
+  var headroom = Math.max(0, 1 - used / 100)
+  var length = finiteOrNull(row.windowSeconds)
+  var resetsAt = finiteOrNull(row.resetsAt)
+  var left = resetsAt !== null ? resetsAt - now : length
+  if (left === null) return 0
+  if (length !== null) left = Math.min(left, length)
+  left = Math.max(left, 60)
+  return headroom / (left / 3600)
 }
 
 // omp's comparator, step by step (rank.ts compareUsageRankedCandidatePriority). A negative `order`
@@ -3827,6 +3854,14 @@ function ompStep(a, b) {
   if (a.hot !== b.hot) return { order: a.hot ? 1 : -1, step: "hot" }
   if (a.accountPriority !== b.accountPriority) return { order: b.accountPriority - a.accountPriority, step: "priority" }
   if (a.measured !== b.measured) return { order: a.measured ? -1 : 1, step: "measured" }
+  var weeklyDrain = ompMetric(b.secondaryDrain, a.secondaryDrain)
+  if (weeklyDrain !== 0) return { order: weeklyDrain, step: "drain" }
+  var weeklyUsed = ompMetric(a.secondaryUsed, b.secondaryUsed)
+  if (weeklyUsed !== 0) return { order: weeklyUsed, step: "used" }
+  var fiveHourDrain = ompMetric(b.primaryDrain, a.primaryDrain)
+  if (fiveHourDrain !== 0) return { order: fiveHourDrain, step: "drain" }
+  var fiveHourUsed = ompMetric(a.primaryUsed, b.primaryUsed)
+  if (fiveHourUsed !== 0) return { order: fiveHourUsed, step: "used" }
   return { order: 0, step: "" }
 }
 

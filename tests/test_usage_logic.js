@@ -2440,6 +2440,15 @@ console.log("1.9 Coming up list: passed");
   assert.equal(measured.nextAccount, 1, "an account with a usage reading beats one with none");
   assert.equal(measured.nextReason, "measured");
   assert.deepEqual(plain(measured.ranking), [1, 0]);
+
+  // Both have the same 5 h use and are measured. Work has less weekly use but six days of
+  // headroom to spend; Personal must spend half its weekly headroom in one day.
+  const slow = [ompWin("session", 10, 3600, 18000), ompWin("weekly", 20, 518400, 604800)];
+  const fast = [ompWin("session", 10, 3600, 18000), ompWin("weekly", 50, 86400, 604800)];
+  const drain = together(ompProvider([ompAccount("Work", slow), ompAccount("Personal", fast)]));
+  assert.equal(drain.nextAccount, 1, "the account that must spend its weekly headroom faster goes first");
+  assert.equal(drain.nextReason, "drain");
+  assert.deepEqual(plain(drain.ranking), [1, 0]);
   console.log("1.10 omp's next account: passed");
 }
 
