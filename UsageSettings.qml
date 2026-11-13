@@ -1417,6 +1417,23 @@ Column {
                     root.value("hiddenAccounts", "{}"), providerRow.providerId, accountId, !hidden))
                 }
               }
+              Repeater {
+                model: providerRow.accountCount >= 2 ? providerRow.accountList : []
+                delegate: TextRow {
+                  required property var modelData
+                  required property int index
+                  readonly property string accountId: String(modelData && modelData.accountId || "")
+                  objectName: "subscriptionEnd-" + providerRow.providerId + "-" + index
+                  label: "Subscription ends for " + UsageLogic.accountSettingsLabel(modelData, root.value("extraKeys", "{}"),
+                    root.value("hideAccountEmails", true) !== false, index)
+                  placeholder: "YYYY-MM-DD"
+                  maximumLength: 10
+                  source: UsageLogic.subscriptionEndOf(root.value("subscriptionEnds", "{}"), providerRow.providerId, accountId)
+                  validate: function (text) { return (text === "" || UsageLogic.subscriptionEndDay(text) !== null) ? "" : "Use a real date as YYYY-MM-DD" }
+                  onApplied: root.set("subscriptionEnds", UsageLogic.setSubscriptionEnds(
+                    root.value("subscriptionEnds", "{}"), providerRow.providerId, accountId, value))
+                }
+              }
               Hint {
                 visible: providerRow.accountCount >= 2
                 text: "A hidden account stays signed in and keeps its key. Limits, the menu bar and the notices leave it out; one account always stays shown."

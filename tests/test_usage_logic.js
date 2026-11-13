@@ -1847,6 +1847,63 @@ console.log("omp settings, live feed and account modes: passed");
 }
 console.log("1.9 QmlLimits accounts, forecast and runway: passed");
 
+// Manual "Subscription ends" dates (`subscriptionEnds`: provider id → account id → YYYY-MM-DD): the last day of
+// a subscription that will not renew. It runs through that day and is ended from the day after on.
+{
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+  const epoch = (iso) => Date.parse(`${iso}T00:00:00Z`) / 1000;
+  const provider = { id: "claude", name: "Claude Code", status: "ok", accountId: "main", active: true, accounts: [
+    { id: "claude", status: "ok", accountId: "main", active: true, origin: "omarchy", windows: [] },
+    { id: "claude", status: "ok", accountId: "omp-0123456789ab", active: false, origin: "omp", windows: [] },
+  ] };
+  const accountOf = (reading, accountId) => reading.accounts.find((account) => account.accountId === accountId);
+  const raw = context.setSubscriptionEnds("{}", "claude", "omp-0123456789ab", "2030-06-10");
+  assert.equal(raw, '{"claude":{"omp-0123456789ab":"2030-06-10"}}');
+  const lastDay = context.withSubscriptionEnds([provider], raw, epoch("2030-06-10") + DAY - 1)[0];
+  const nextDay = context.withSubscriptionEnds([provider], raw, epoch("2030-06-11"))[0];
+  assert.equal(context.subscriptionEnded(accountOf(lastDay, "omp-0123456789ab")), false, "the end date itself is still subscribed");
+  assert.equal(context.subscriptionEnded(accountOf(nextDay, "omp-0123456789ab")), true, "ended from the day after");
+  assert.equal(context.subscriptionEnded(accountOf(nextDay, "main")), false, "the other accounts have no date");
+  assert.equal(accountOf(lastDay, "omp-0123456789ab").subscription.endsOn, "2030-06-10");
+  assert.equal(context.withSubscriptionEnds([provider], raw, epoch("2030-06-01"))[0].accounts[1].subscription.ended, false,
+    "a date ahead is not ended");
+  assert.equal(context.setSubscriptionEnds(raw, "claude", "omp-0123456789ab", ""), "{}", "clearing removes the key");
+  assert.deepEqual(plain(context.withSubscriptionEnds([provider], "{}", epoch("2030-06-11"))[0]), plain(provider),
+    "without dates the reading is left as it was");
+  assert.equal(context.setSubscriptionEnds("{}", "claude", "main", "2030-02-30"), "{}", "a date that is not real is ignored");
+  assert.equal(context.setSubscriptionEnds("{}", "claude", "main", "10/06/2030"), "{}", "only YYYY-MM-DD");
+  // A subscription the provider reports as ended stays ended, whatever the date says.
+  const reported = { ...provider, accounts: [provider.accounts[0], { ...provider.accounts[1], subscription: { ended: true } }] };
+  assert.equal(context.subscriptionEnded(accountOf(context.withSubscriptionEnds([reported], raw, epoch("2030-06-01"))[0], "omp-0123456789ab")), true,
+    "a provider's own ended stays");
+  // The row says when a dated subscription stops: "Ends <date>" within 30 days, urgent within 7 days.
+  const statusAt = (iso, now, extra = {}) => context.accountStatusLine(context.withSubscriptionEnds([{ id: "claude", name: "Claude Code",
+    status: "ok", accountId: "main", active: true, windows: [], ...extra }], context.setSubscriptionEnds("{}", "claude", "main", iso), now)[0], false, now, null);
+  const endsAt = epoch("2030-06-11");
+  assert.deepEqual(plain(statusAt("2030-06-10", endsAt - 30 * DAY)), { kind: "ends", text: "Ends 10 Jun", at: null, tone: "dim" },
+    "the row shows the end date 30 days out");
+  assert.equal(statusAt("2030-06-10", endsAt - 30 * DAY - 1).text.startsWith("Ends"), false, "no end date more than 30 days out");
+  assert.equal(statusAt("2030-06-10", endsAt - 7 * DAY).tone, "urgent", "urgent 7 days out");
+  assert.equal(statusAt("2030-06-10", endsAt - 7 * DAY - 1).tone, "dim", "not urgent more than 7 days out");
+  assert.equal(statusAt("2030-12-03", epoch("2030-12-04") - 3 * DAY).text, "Ends 3 Dec", "day without a leading zero");
+  assert.equal(statusAt("2030-06-10", endsAt).text, "Subscription ended", "ended from the day after");
+  assert.equal(statusAt("2030-06-10", endsAt - DAY, { status: "error", errorKind: "rate_limited" }).text, "rate limited",
+    "an error still wins over the end date");
+  // The JSON export carries the end date beside subscriptionEnded, on each account and on the provider.
+  const exportOf = (raw) => JSON.parse(context.exportSnapshot(context.withSubscriptionEnds([provider], raw, epoch("2030-06-01")),
+    epoch("2030-06-01"), false)).providers[0];
+  assert.deepEqual(exportOf(raw).accounts.map((row) => row.subscriptionEnds), [null, "2030-06-10"],
+    "each account exports its end date, or null");
+  assert.equal(exportOf(raw).subscriptionEnds, null, "the provider has no date of its own");
+  assert.equal(exportOf(context.setSubscriptionEnds("{}", "claude", "main", "2030-06-10")).subscriptionEnds, "2030-06-10",
+    "the provider exports the date of the account in use");
+  // Settings reads the date it shows for one account back out of the setting.
+  assert.equal(context.subscriptionEndOf(raw, "claude", "omp-0123456789ab"), "2030-06-10");
+  assert.equal(context.subscriptionEndOf(raw, "claude", "main"), "");
+  assert.equal(context.subscriptionEndOf("{}", "claude", "main"), "");
+}
+console.log("1.9 Manual subscription end dates: passed");
+
 // ---- 1.9 QmlBar ----
 {
   const now = 1760000000;

@@ -10,6 +10,8 @@ ShellRoot {
   readonly property real now: Date.now() / 1000
   property var motion: null
   property var list: null
+  property var renewal: null
+  property string renewalOn: ""
   property var rising: null
   property var group: null
   property var quiet: null
@@ -117,6 +119,12 @@ ShellRoot {
     list = create("AccountList.qml", { width: 420, providerId: "claude", accounts: accounts,
       names: ["Work", "Old", "Personal", "Spare", "Broken"], accountState: stateOf("single"), nowSeconds: now, motion: motion })
     list.useRequested.connect(function(accountId) { root.used = root.used.concat([accountId]) })
+    // A login whose subscription ends in 21 days: within 30 days its status line says when it ends.
+    renewalOn = new Date((Math.floor(now / 86400) + 21) * 86400000).toISOString().slice(0, 10)
+    var renewalAccounts = [login("renewal", { plan: "Claude Pro", subscription: { endsAt: (Math.floor(now / 86400) + 22) * 86400, endsOn: renewalOn, source: "manual", ended: false } })]
+    renewal = create("AccountList.qml", { width: 420, providerId: "claude", accounts: renewalAccounts, names: ["Renewal"],
+      accountState: UsageLogic.accountState({ id: "claude", status: "ok", accounts: renewalAccounts }, { modes: JSON.stringify({ claude: "single" }),
+        nowSeconds: now, recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 }), nowSeconds: now, motion: motion })
     rising = create("LimitCard.qml", { width: 420, window: session(70, 0.01), nowSeconds: now, motion: motion })
     quiet = create("LimitCard.qml", { width: 420, window: Object.assign(session(31, 0), { label: markup }), nowSeconds: now, motion: motion })
     group = create("LimitGroupCard.qml", { width: 420, nowSeconds: now, motion: motion, spending: true, meterStyle: "tanks",
@@ -161,6 +169,9 @@ ShellRoot {
     check(list.rowFor("personal").useButton.visible, "another login offers Use")
     check(!list.rowFor("old").useButton.visible, "an ended login without money offers no Use")
     check(list.rowFor("work").counted && !list.rowFor("personal").counted, "the chip's account has the filled dot")
+    var renewalStatus = renewal.rowFor("renewal").statusText
+    var renewalMonth = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(renewalOn.slice(5, 7)) - 1]
+    check(renewalStatus === "Ends " + Number(renewalOn.slice(8, 10)) + " " + renewalMonth, "a subscription ending within 30 days says when it ends: " + renewalStatus)
     list.rowFor("personal").useButton.clicked()
     check(root.used.length === 1 && root.used[0] === "personal", "Use asks for that account")
     list.events = ({ "claude@personal": { kind: "switch", at: now - 60 } })

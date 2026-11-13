@@ -41,8 +41,11 @@ Item {
   readonly property var ompStatus: payload && payload.omp && typeof payload.omp === "object" ? payload.omp : null
   // Every reading as the backend gave it; Settings lists hidden accounts from these.
   readonly property var allProviders: payload ? UsageLogic.listOrEmpty(payload.providers) : []
-  // What Limits, the menu bar and the notices show: the readings without the accounts hidden in Settings.
-  readonly property var providers: UsageLogic.withoutHiddenAccounts(allProviders, setting("hiddenAccounts", "{}"))
+  // What Limits, the menu bar and the notices show: the readings without the accounts hidden in Settings,
+  // with the subscription end dates set in Settings applied.
+  readonly property var providers: UsageLogic.withSubscriptionEnds(
+    UsageLogic.withoutHiddenAccounts(allProviders, setting("hiddenAccounts", "{}")),
+    setting("subscriptionEnds", "{}"), Date.now() / 1000)
   // Providers set up on this computer, monitored or not; Settings offers the ones not monitored yet.
   readonly property var detected: payload ? UsageLogic.listOrEmpty(payload.detected) : []
   // Other computers under Settings → Sources, read over SSH with the same providers.

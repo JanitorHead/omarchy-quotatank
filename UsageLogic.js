@@ -891,7 +891,8 @@ function exportWindows(rows, nowSeconds) {
 }
 
 // Account identities become "Account N" unless the caller explicitly disables hiding. `subscriptionEnded`
-// says, for the provider (its account in use) and each account, whether the subscription is over.
+// says, for the provider (its account in use) and each account, whether the subscription is over, and
+// `subscriptionEnds` gives the end date set for it (YYYY-MM-DD) or null.
 function exportProviders(providers, nowSeconds, hideEmails) {
   var result = []
   var list = listOrEmpty(providers)
@@ -903,6 +904,7 @@ function exportProviders(providers, nowSeconds, hideEmails) {
       accountRows.push({
         label: hideEmails ? "Account " + (j + 1) : String(accounts[j].account || "Account " + (j + 1)),
         subscriptionEnded: subscriptionEnded(accounts[j]),
+        subscriptionEnds: (accounts[j].subscription && accounts[j].subscription.endsOn) || null,
         windows: exportWindows(accounts[j].windows, nowSeconds)
       })
     }
@@ -911,6 +913,7 @@ function exportProviders(providers, nowSeconds, hideEmails) {
       name: String(provider.name || provider.id || ""),
       status: String(provider.status || ""),
       subscriptionEnded: subscriptionEnded(provider),
+      subscriptionEnds: (provider.subscription && provider.subscription.endsOn) || null,
       windows: exportWindows(provider.windows, nowSeconds),
       accounts: accountRows
     })
@@ -2921,6 +2924,99 @@ function withoutHiddenAccounts(providers, raw) {
   })
 }
 
+// Manual "Subscription ends" dates (`subscriptionEnds`, a JSON object of provider id → account id →
+// "YYYY-MM-DD", as text or already parsed): the last day of a subscription that will not renew. It runs
+// through that day and is ended from the day after on. Dates that are not real calendar days are dropped.
+function subscriptionEndDay(text) {
+  var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text === undefined || text === null ? "" : String(text))
+  if (!match) return null
+  var year = Number(match[1])
+  var month = Number(match[2])
+  var day = Number(match[3])
+  var leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  var lengths = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  if (month < 1 || month > 12 || day < 1 || day > lengths[month - 1]) return null
+  // Days since 1970-01-01 (civil calendar, proleptic Gregorian).
+  var y = month <= 2 ? year - 1 : year
+  var era = Math.floor(y / 400)
+  var yearOfEra = y - era * 400
+  var monthIndex = (month + 9) % 12
+  var dayOfYear = Math.floor((153 * monthIndex + 2) / 5) + day - 1
+  var dayOfEra = yearOfEra * 365 + Math.floor(yearOfEra / 4) - Math.floor(yearOfEra / 100) + dayOfYear
+  return era * 146097 + dayOfEra - 719468
+}
+
+function parseSubscriptionEnds(raw) {
+  var parsed = raw
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw === "string") {
+    if (raw.length > 65536) return {}
+    try { parsed = JSON.parse(raw) } catch (error) { return {} }
+  }
+  if (!parsed || typeof parsed !== "object" || isListLike(parsed)) return {}
+  var result = {}
+  Object.keys(parsed).forEach(function (providerId) {
+    var rows = parsed[providerId]
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(providerId) || !rows || typeof rows !== "object" || isListLike(rows)) return
+    Object.keys(rows).forEach(function (accountId) {
+      if (accountId === "" || accountId.length > 128 || subscriptionEndDay(rows[accountId]) === null) return
+      if (!result[providerId]) result[providerId] = {}
+      result[providerId][accountId] = String(rows[accountId]).trim()
+    })
+  })
+  return result
+}
+
+// Sets (a "YYYY-MM-DD" date) or clears (an empty date) one account's end date. A date that is not a real
+// calendar day leaves the setting as it was.
+function setSubscriptionEnds(raw, providerId, accountId, value) {
+  var all = parseSubscriptionEnds(raw)
+  var key = String(providerId)
+  var id = String(accountId)
+  var text = value === undefined || value === null ? "" : String(value).trim()
+  if (text !== "" && subscriptionEndDay(text) === null) return JSON.stringify(all)
+  var rows = Object.assign({}, all[key] || {})
+  if (text === "") delete rows[id]
+  else rows[id] = text
+  if (Object.keys(rows).length) all[key] = rows
+  else delete all[key]
+  return JSON.stringify(all)
+}
+
+// One account's (or provider's) reading with its manual end date: `subscription.endsOn` and `endsAt` (the
+// start of the day after), and `ended` once `nowSeconds` reaches it. A provider's own ended stays ended.
+function endSubscriptionReading(reading, rows, nowSeconds) {
+  if (!reading || reading.accountId === undefined || !Object.prototype.hasOwnProperty.call(rows, String(reading.accountId))) return reading
+  var endsOn = rows[String(reading.accountId)]
+  var endsAt = (subscriptionEndDay(endsOn) + 1) * PACE_DAY_SECONDS
+  var subscription = Object.assign({}, reading.subscription || {}, {
+    ended: !!(subscriptionEnded(reading) || nowSeconds >= endsAt), endsAt: endsAt, endsOn: endsOn, source: "manual"
+  })
+  return Object.assign({}, reading, { subscription: subscription })
+}
+
+// The providers with their manual end dates applied to each account and to the provider's own reading (the
+// active account). Providers without a date come back as they were.
+function withSubscriptionEnds(providers, raw, nowSeconds) {
+  var list = listOrEmpty(providers)
+  var ends = parseSubscriptionEnds(raw)
+  if (!Object.keys(ends).length) return list
+  return Array.prototype.map.call(list, function (provider) {
+    var rows = provider && ends[provider.id]
+    if (!rows) return provider
+    var accounts = providerAccounts(provider)
+    var dated = endSubscriptionReading(provider, rows, nowSeconds)
+    if (!accounts.length) return dated
+    return Object.assign({}, dated, { accounts: accounts.map(function (account) { return endSubscriptionReading(account, rows, nowSeconds) }) })
+  })
+}
+
+// The end date (YYYY-MM-DD) set for one account of one provider, or "" when none is set.
+function subscriptionEndOf(raw, providerId, accountId) {
+  var rows = parseSubscriptionEnds(raw)[providerId]
+  return rows && typeof rows[accountId] === "string" ? rows[accountId] : ""
+}
+
 var ACCOUNT_ORIGIN_TEXT = { omarchy: "Omarchy login", signin: "sign-in", key: "API key", proxy: "CLIProxyAPI", omp: "omp" }
 
 // An account's line in Settings → Customize: its name and where it is read from ("Account 2 · omp",
@@ -3259,6 +3355,12 @@ function accountStatusLine(account, spending, nowSeconds, event) {
   var eventAt = event ? finiteOrNull(event.at) : null
   if (event && (event.kind === "switch" || event.kind === "reset") && withinSeconds(eventAt, now, ACCOUNT_EVENT_SECONDS))
     return { kind: event.kind, text: event.kind === "switch" ? "switched" : "reset", at: eventAt, tone: "accent" }
+  // A dated subscription shows its last day within 30 days, urgent within the last 7 (the ended state is above).
+  var endsAt = account.subscription ? finiteOrNull(account.subscription.endsAt) : null
+  var endsOn = account.subscription ? String(account.subscription.endsOn || "") : ""
+  if (now !== null && endsAt !== null && endsOn !== "" && endsAt - now > 0 && endsAt - now <= 30 * PACE_DAY_SECONDS)
+    return { kind: "ends", text: "Ends " + Number(endsOn.slice(8, 10)) + " " + COST_MONTH_NAMES[Number(endsOn.slice(5, 7)) - 1],
+      at: null, tone: endsAt - now <= 7 * PACE_DAY_SECONDS ? "urgent" : "dim" }
   if (account.standIn && account.standIn.name)
     return { kind: "standin", text: (readingProxy(account) ? "read through " : "read on ") + account.standIn.name, at: null, tone: "dim" }
   // "via proxy", not the proxy's name: beside a plan, "through CLIProxyAPI" does not fit a row.

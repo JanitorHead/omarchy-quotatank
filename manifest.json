@@ -171,7 +171,8 @@
       "barAccountMode": "dots",
       "motion": "system",
       "accountModes": "{}",
-      "hiddenAccounts": "{}"
+      "hiddenAccounts": "{}",
+      "subscriptionEnds": "{}"
     },
     "schema": [
       {
@@ -1505,6 +1506,13 @@
         "label": "Hidden accounts per provider",
         "defaultValue": "{}",
         "description": "Managed by Settings → Providers → Customize. Per provider, the accounts left out of Limits, the menu bar and the notices; they stay signed in."
+      },
+      {
+        "key": "subscriptionEnds",
+        "type": "string",
+        "label": "Subscription end dates per provider",
+        "defaultValue": "{}",
+        "description": "Managed by Settings → Providers → Customize. Per provider, each account's subscription end date (YYYY-MM-DD); absent means no date. From the day after it, the account is an ended subscription."
       }
     ]
   }

@@ -276,6 +276,13 @@ ShellRoot {
       check(!shown("showAccount-claude-0").enabled, "the last account shown cannot be hidden")
       shown("showAccount-claude-1Switch").toggled()
       check(saved.hiddenAccounts === "{}" && shown("showAccount-claude-0").enabled, "turning it back on forgets it")
+      // Subscription ends: a date is saved per provider and account, an impossible date is refused, and clearing removes it.
+      edit("subscriptionEnd-claude-1Field", "2030-06-10", true)
+      check(saved.subscriptionEnds === '{"claude":{"omp-0123456789ab":"2030-06-10"}}', "Subscription ends: the date is saved for that account: " + saved.subscriptionEnds)
+      edit("subscriptionEnd-claude-1Field", "2030-02-31", true)
+      check(saved.subscriptionEnds === '{"claude":{"omp-0123456789ab":"2030-06-10"}}', "Subscription ends: an impossible date is refused")
+      edit("subscriptionEnd-claude-1Field", "", true)
+      check(saved.subscriptionEnds === "{}", "Subscription ends: clearing the date removes it: " + saved.subscriptionEnds)
       check(!find(form, "showAccount-codex-0"), "a provider with one account lists none")
       check(form.providersSummary().indexOf("· omp") > 0, "the index says omp adds accounts")
       formPhase = 7

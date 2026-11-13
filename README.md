@@ -349,7 +349,7 @@ omarchy-shell janitorhead.quotatank costs
 omarchy-shell janitorhead.quotatank refresh
 ```
 
-The other commands are `open`, `close`, `toggle`, `show`, `hide`, `next`, `configure`, `configureProviders`, `configureCosts`, and `exportJson`. While hide-emails is on, `exportJson` writes numbered account labels instead of identities. It marks each provider and account with `subscriptionEnded`.
+The other commands are `open`, `close`, `toggle`, `show`, `hide`, `next`, `configure`, `configureProviders`, `configureCosts`, and `exportJson`. While hide-emails is on, `exportJson` writes numbered account labels instead of identities. It marks each provider and account with `subscriptionEnded`, and gives each its subscription end date as `subscriptionEnds` (`YYYY-MM-DD`, or null).
 
 ## Documentation
 

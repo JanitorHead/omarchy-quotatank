@@ -2064,6 +2064,7 @@ Ui.Panel {
                     else if (kind === "proxy") parts.push("through " + String(account.proxy.name || "CLIProxyAPI"))
                     else if (account.standIn && account.standIn.name)
                       parts.push((UsageLogic.readingProxy(account) ? "read through " : "read on ") + String(account.standIn.name))
+                    if (account.subscription && account.subscription.endsOn) parts.push("ends " + account.subscription.endsOn)
                     return parts.length > 0 ? " · " + parts.join(" · ") : ""
                   }
                   color: root.dim
