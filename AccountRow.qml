@@ -25,6 +25,10 @@ Ui.BorderSurface {
   property string statusTone: "dim"
   property bool ended: false
   property bool inUse: false
+  // omp's tag for this account beside its name (UsageLogic.accountState ompTags): "next", "in reserve",
+  // "5h nearly full", or "" for none; an empty tag keeps the name line's place.
+  property string ompTag: ""
+  readonly property real ompTagGap: ompTag === "" ? 0 : Style.spacing.xs
   property bool canUse: false
   property bool useBusy: false
   // Usable-now banked resets (`UsageLogic.accountResetBadge`); null hides the badge. `resetSlot` keeps the
@@ -168,15 +172,36 @@ Ui.BorderSurface {
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.spacing.xxs
 
-      PlainText {
-        objectName: "accountName"
+      Item {
+        id: nameLine
         width: parent.width
-        text: root.name
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
-        font.weight: Font.DemiBold
-        elide: Text.ElideRight
+        height: accountName.implicitHeight
+
+        PlainText {
+          id: accountName
+          objectName: "accountName"
+          anchors.left: parent.left
+          anchors.top: parent.top
+          width: Math.min(implicitWidth, parent.width - ompTagText.width - root.ompTagGap)
+          text: root.name
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.weight: Font.DemiBold
+          elide: Text.ElideRight
+        }
+
+        PlainText {
+          id: ompTagText
+          objectName: "accountOmpTag"
+          anchors.left: accountName.right
+          anchors.leftMargin: root.ompTagGap
+          anchors.baseline: accountName.baseline
+          text: root.ompTag
+          color: root.ompTag === "next" ? root.accent : root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
       }
 
       PlainText {

@@ -186,6 +186,7 @@ Column {
         requestAt: Number(UsageLogic.accountLiveAt(accountData, root.recentByAccount)) || 0
         meterStyle: root.meterStyle
         inUse: !!root.accountState && root.accountState.inUse[accountIndex] === true
+        ompTag: root.accountState && accountIndex >= 0 ? String(UsageLogic.listOrEmpty(root.accountState.ompTags)[accountIndex] || "") : ""
         canUse: UsageLogic.accountCanUse(accountData, root.mode)
         useBusy: root.useBusyId !== "" && root.useBusyId === accountId
         // The usable-now banked resets as a badge; the badge's place is kept whenever the account can show resets.

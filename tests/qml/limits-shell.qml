@@ -232,6 +232,20 @@ ShellRoot {
       + JSON.stringify(stateOf("together").order))
     list.accountState = stateOf("together")
 
+    // omp's next account: its row shows "next" beside the name; a row with no tag keeps an empty tag line.
+    var ompNow = [login("pool-a", { origin: "omp" }), login("pool-b", { origin: "omp", windows: [session(60, 0), weekly(60)] })]
+    var ompSet = UsageLogic.accountState({ id: "claude", status: "ok", accounts: ompNow }, { modes: JSON.stringify({ claude: "together" }),
+      nowSeconds: now, recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 })
+    var ompList = create("AccountList.qml", { width: 420, providerId: "claude", accounts: ompNow, names: ["Account 1", "Account 2"],
+      accountState: ompSet, nowSeconds: now, motion: motion })
+    check(ompSet.ompTags[0] === "next", "omp's next account is tagged: " + JSON.stringify(ompSet.ompTags))
+    var nextTag = find(ompList.rowFor("pool-a"), "accountOmpTag")
+    check(nextTag && nextTag.text === "next", "the row shows next beside its name")
+    var plainTag = find(ompList.rowFor("pool-b"), "accountOmpTag")
+    check(plainTag && plainTag.text === ompSet.ompTags[1], "each row shows its state's tag: " + (plainTag ? plainTag.text : "(none)"))
+    var loginTag = find(list.rowFor("work"), "accountOmpTag")
+    check(loginTag && loginTag.text === "", "a login beside omp accounts gets no tag")
+
     // Limit cards: a dashed forecast where the pace runs out before the reset, none without a pace.
     check(rising.forecastSegment !== null && rising.meter.blocks.forecastActive, "a fast pace draws the forecast")
     check(rising.forecastSegment.runsOut === true, "the forecast runs out before the reset")
