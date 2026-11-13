@@ -106,6 +106,27 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(credits["resetCreditsUsableExpiresAt"], usage.epoch_seconds(fable["ends_at"]))
         self.assertEqual(credits["resetCreditsClears"], ["Fable weekly"])
 
+    def test_waiting_resets_are_grouped_by_what_they_clear_and_when_they_expire(self):
+        full = grant(id="full-reset")
+        fable = {"clears": ["seven_day_overage_included"], "usable_now": False, "ends_at": "2026-12-09T08:00:00+00:00"}
+        first, second = grant(id="launch-fable", **fable), grant(id="launch-fable-6mo", **fable)
+        sooner = grant(id="tenure-weekly", clears=["seven_day"], usable_now=False, ends_at="2026-11-01T00:00:00+00:00")
+        with mock.patch.object(usage.time, "time", return_value=NOW):
+            credits = self.resets(answer(grants=[first, full, second, sooner], next_grant_id=full["id"]))
+        self.assertEqual((credits["resetCreditsUsableNow"], credits["resetCreditsLater"]), (1, 3))
+        self.assertEqual(credits["resetCreditsClears"], ["5-hour", "weekly", "Fable weekly"])
+        self.assertEqual(credits["resetCreditsLaterGroups"], [
+            {"count": 1, "clears": ["weekly"], "expiresAt": usage.epoch_seconds(sooner["ends_at"])},
+            {"count": 2, "clears": ["Fable weekly"], "expiresAt": usage.epoch_seconds(fable["ends_at"])}])
+
+    def test_the_next_grant_waits_with_the_rest_while_it_cannot_be_spent(self):
+        paused = grant(id="launch-fable", clears=["seven_day_overage_included"], paused=True)
+        with mock.patch.object(usage.time, "time", return_value=NOW):
+            credits = self.resets(answer(grants=[paused], next_grant_id=paused["id"]))
+        self.assertEqual((credits["resetCreditsUsableNow"], credits["resetCreditsLater"]), (0, 1))
+        self.assertEqual(credits["resetCreditsLaterGroups"],
+                         [{"count": 1, "clears": ["Fable weekly"], "expiresAt": usage.epoch_seconds(paused["ends_at"])}])
+
 
 class Recorder:
     """Stands in for Anthropic: answers each URL from `replies` and records every request."""

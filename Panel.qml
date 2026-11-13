@@ -259,14 +259,17 @@ Ui.Panel {
     return resetBackend.begin(detail, String(detail.name || detail.id || ""))
   }
 
-  // Under the banked-reset count: when the next one expires, and why it cannot be applied from here, if so.
+  // Under the banked-reset count: Claude's resets line by line, usable now then later, with the limits each clears
+  // and when it expires (a reading without that split says when the next one expires), then why they cannot be
+  // applied from here, if so.
   function bankedResetDetail(reading) {
-    var parts = []
+    var parts = UsageLogic.accountResetLines(reading, nowSeconds)
+    var separator = parts.length > 0 ? "\n" : " · "
     var expires = reading && reading.credits ? Number(reading.credits.resetCreditsExpiresAt) : NaN
-    if (isFinite(expires) && expires > 0) parts.push("Expires " + clockText(expires))
+    if (parts.length === 0 && isFinite(expires) && expires > 0) parts.push("Expires " + clockText(expires))
     var note = UsageLogic.accountResetNote(reading)
     if (note !== "") parts.push(note)
-    return parts.join(" · ")
+    return parts.join(separator)
   }
 
   // Up/down walks the rows in their shown order; past either end the panel scrolls instead.

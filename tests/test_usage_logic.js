@@ -196,18 +196,34 @@ assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }),
   const fableWindow = (remaining) => ({ id: "fable-weekly", label: "Fable weekly", remaining });
   const weeklyWindow = (remaining) => ({ id: "weekly", label: "Weekly limit", remaining });
   const fableCredits = { resetCreditsAvailable: 2, resetCreditsUsableNow: 1, resetCreditsLater: 1,
+    resetCreditsLaterGroups: [{ count: 1, clears: ["Fable weekly"], expiresAt: 1899288000 }],
     resetCreditsUsableExpiresAt: 1899288000, resetCreditsClears: ["Fable weekly"], resetCreditsUsable: true };
+  const fableTooltip = "1 reset usable now, for the Fable weekly limit, expires 9 Mar 2030 · 1 reset later, for the Fable weekly limit, expires 9 Mar 2030";
   const badgeAccount = (credits, windows, extra) => ({ ...provider("claude", 40), credits: { ...fableCredits, ...credits }, windows, ...extra });
   const fable = badgeAccount({}, [fableWindow(88), weeklyWindow(60)]);
   assert.deepEqual(plain(context.accountResetBadge(fable, 25)),
-    { label: "1 Fable", tooltip: "1 Fable reset usable now, expires 9 Mar 2030 · 1 more later", dim: true, actionable: true });
+    { label: "1 Fable", tooltip: fableTooltip, dim: true, actionable: true });
   assert.equal(context.accountResetBadge(badgeAccount({}, [fableWindow(25)]), 25).dim, false, "at the warning threshold: not dimmed");
   assert.equal(context.accountResetBadge(badgeAccount({}, [fableWindow(10)]), 25).dim, false, "critical: not dimmed");
   const claudeFable = { id: "fable-1m-an-intentionally-long-model-label-weekly", label: "Fable 1M - an intentionally long model label weekly", remaining: 88 };
   assert.equal(context.accountResetBadge(badgeAccount({}, [claudeFable]), 25).dim, true, "Claude names the Fable meter after its model, and it is still the Fable weekly limit");
   assert.equal(context.accountResetBadge(badgeAccount({}, []), 25).dim, false, "no measured limit to compare");
-  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsLater: 0, resetCreditsAvailable: 1 }, [fableWindow(88)]), 25).tooltip,
-    "1 Fable reset usable now, expires 9 Mar 2030", "no 'more later' when none are left over");
+  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsLater: 0, resetCreditsLaterGroups: [], resetCreditsAvailable: 1 }, [fableWindow(88)]), 25).tooltip,
+    "1 reset usable now, for the Fable weekly limit, expires 9 Mar 2030", "no later line when none wait");
+  // A full reset usable now and two Fable-only resets waiting: each line names what it clears and when it expires.
+  const mixed = badgeAccount({ resetCreditsAvailable: 3, resetCreditsLater: 2, resetCreditsClears: ["weekly", "Fable weekly"],
+    resetCreditsUsableExpiresAt: 1923134400, resetCreditsLaterGroups: [{ count: 2, clears: ["Fable weekly"], expiresAt: 1930824000 }] }, [weeklyWindow(60)]);
+  assert.deepEqual(plain(context.accountResetLines(mixed, 1920974400)), ["1 reset usable now, for the weekly and Fable weekly limits, expires 10 Dec",
+    "2 resets later, for the Fable weekly limit, expire 9 Mar 2031"]);
+  assert.equal(context.accountResetBadge(mixed, 25, 1920974400).label, "1 reset", "a reset that clears more than Fable is not a Fable reset");
+  const newYear2030 = 1893499200;
+  assert.deepEqual(plain(context.accountResetLines(badgeAccount({ resetCreditsLaterGroups: undefined }, []), newYear2030)),
+    ["1 reset usable now, for the Fable weekly limit, expires 9 Mar", "1 reset later"],
+    "a reading without groups (an older reader elsewhere) still counts what waits");
+  assert.deepEqual(plain(context.accountResetLines(badgeAccount({ resetCreditsLater: 3 }, []), newYear2030)).slice(1),
+    ["1 reset later, for the Fable weekly limit, expires 9 Mar", "2 resets more later"], "waiting resets the groups miss are still counted");
+  assert.deepEqual(plain(context.accountResetLines({ ...provider("codex", 55), credits: { resetCreditsAvailable: 2 } }, 1920974400)), [],
+    "Codex has no usable-now split");
   const viaOmp = badgeAccount({}, [fableWindow(88)], { origin: "omp" });
   assert.deepEqual([context.accountResetBadge(viaOmp, 25).label, context.accountResetBadge(viaOmp, 25).actionable], ["1 Fable", false],
     "an omp row shows its badge but applies it in omp");
@@ -224,16 +240,16 @@ assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }),
     "list-like windows still dim the limit they clear");
   const elsewhere = badgeAccount({}, [fableWindow(88)], { computer: { id: "c-00000001", name: "devbox" } });
   assert.equal(context.accountResetBadge(elsewhere, 25).actionable, false, "another computer's sign-in is not applied here");
-  assert.equal(context.accountResetBadge(viaOmp, 25).tooltip, "1 Fable reset usable now, expires 9 Mar 2030 · 1 more later · Apply it in omp: omp usage reset.",
+  assert.equal(context.accountResetBadge(viaOmp, 25).tooltip, fableTooltip + " · Apply it in omp: omp usage reset.",
     "a badge that is not applied here says where it is applied");
-  assert.equal(context.accountResetBadge(elsewhere, 25).tooltip, "1 Fable reset usable now, expires 9 Mar 2030 · 1 more later · Its sign-in is on devbox: apply it there.",
+  assert.equal(context.accountResetBadge(elsewhere, 25).tooltip, fableTooltip + " · Its sign-in is on devbox: apply it there.",
     "another computer's badge names the computer that holds the sign-in");
   assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsUsable: false, resetCreditsReason: "limit" }, [fableWindow(88)]), 25).actionable, false);
   const session = { resetCreditsUsableNow: 1, resetCreditsLater: 0, resetCreditsUsableExpiresAt: 1899288000,
     resetCreditsClears: ["5-hour"], resetCreditsUsable: true };
   const sessionAccount = (windows) => ({ ...provider("claude", 40), credits: { resetCreditsAvailable: 1, ...session }, windows });
   assert.deepEqual(plain(context.accountResetBadge(sessionAccount([{ id: "session", label: "5-hour limit", remaining: 80 }]), 25)),
-    { label: "1 reset", tooltip: "1 reset usable now, expires 9 Mar 2030", dim: true, actionable: true });
+    { label: "1 reset", tooltip: "1 reset usable now, for the 5-hour limit, expires 9 Mar 2030", dim: true, actionable: true });
   const codex = { ...provider("codex", 55), accountId: "reset-account", credits: { resetCreditsAvailable: 2 },
     proxy: { id: "p-00000001", name: "CLIProxyAPI" } };
   assert.deepEqual(plain(context.accountResetBadge(codex, 25)), { label: "2 resets", tooltip: "2 banked resets", dim: false, actionable: true },

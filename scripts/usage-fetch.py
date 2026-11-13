@@ -531,6 +531,16 @@ def reset_clear_names(clears: list[str]) -> list[str]:
     return names
 
 
+def reset_later_groups(waiting: list[tuple[int, list[str], float | None]]) -> list[dict[str, Any]]:
+    """The resets that wait (`resetCreditsLaterGroups`): one group per set of limits cleared and expiry, the soonest
+    expiry first and an unknown one last. Each entry is (resets left, limit names, expiry)."""
+    groups: dict[tuple[tuple[str, ...], float | None], dict[str, Any]] = {}
+    for count, clears, expires in waiting:
+        if count > 0:
+            groups.setdefault((tuple(clears), expires), {"count": 0, "clears": clears, "expiresAt": expires})["count"] += count
+    return sorted(groups.values(), key=lambda group: (group["expiresAt"] is None, group["expiresAt"] or 0))
+
+
 def claude_grant(raw: Any) -> dict[str, Any] | None:
     """One banked-reset grant, or None when any field it is spent by is malformed."""
     if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not CLAUDE_GRANT_ID.fullmatch(raw["id"]):
@@ -581,9 +591,12 @@ def claude_banked_resets(payload: Any, now: float | None = None) -> dict[str, An
     else:
         reason = ""
     usable_now = following["left"] if reason == "" else 0
+    waiting = [(grant["left"], reset_clear_names(grant["clears"]), grant["expiresAt"])
+               for grant in live if grant is not following or reason != ""]
     return {"available": sum(grant["left"] for grant in live), "next": following, "usable": reason == "",
             "reason": reason, "usableNow": usable_now, "usableExpiresAt": following["expiresAt"] if reason == "" else None,
-            "clears": reset_clear_names(following["clears"]) if reason == "" else []}
+            "clears": reset_clear_names(following["clears"]) if reason == "" else [],
+            "laterGroups": reset_later_groups(waiting)}
 
 
 def claude_reset_credits(resets: dict[str, Any] | None, credits: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -598,6 +611,7 @@ def claude_reset_credits(resets: dict[str, Any] | None, credits: dict[str, Any] 
             "resetCreditsExpiresAt": following["expiresAt"] if following else None,
             "resetCreditsUsable": resets["usable"], "resetCreditsReason": resets["reason"],
             "resetCreditsUsableNow": resets["usableNow"], "resetCreditsLater": resets["available"] - resets["usableNow"],
+            "resetCreditsLaterGroups": resets["laterGroups"],
             "resetCreditsUsableExpiresAt": resets["usableExpiresAt"], "resetCreditsClears": resets["clears"]}
 
 
@@ -8828,16 +8842,23 @@ def omp_reset_credit_count(credit: dict[str, Any]) -> int:
 def omp_reset_usage(reset_credits: dict[str, Any]) -> dict[str, Any]:
     """What omp's banked resets do now, as the Claude reader counts them. omp spends one credit at a time: the resets
     usable now are those left in the next credit when it is usable, and only that credit sets when they expire and
-    the limits they clear. Every other live reset waits. Expired and redeemed resets count for nothing."""
+    the limits they clear. Every other live reset waits, grouped by the limits it clears and its expiry. Expired and
+    redeemed resets count for nothing."""
+    def clear_names(credit: dict[str, Any]) -> list[str]:
+        clears = credit.get("clears")
+        return reset_clear_names([clear for clear in clears if isinstance(clear, str)]) if isinstance(clears, list) else []
+
     live = [credit for credit in dict_list(reset_credits.get("credits")) if credit.get("status") not in ("expired", "redeemed")]
     following = next((credit for credit in live if credit.get("id") == reset_credits.get("nextCreditId")), None)
     usable = following is not None and following.get("usable") is True
     usable_now = omp_reset_credit_count(following) if following is not None and usable else 0
-    clears = following.get("clears") if following is not None and usable and isinstance(following.get("clears"), list) else []
+    waiting = [(omp_reset_credit_count(credit), clear_names(credit), epoch_seconds(credit.get("expiresAt")))
+               for credit in live if credit is not following or not usable]
     return {"resetCreditsUsableNow": usable_now,
             "resetCreditsLater": sum(omp_reset_credit_count(credit) for credit in live) - usable_now,
+            "resetCreditsLaterGroups": reset_later_groups(waiting),
             "resetCreditsUsableExpiresAt": epoch_seconds(following.get("expiresAt")) if following is not None and usable else None,
-            "resetCreditsClears": reset_clear_names([clear for clear in clears if isinstance(clear, str)])}
+            "resetCreditsClears": clear_names(following) if following is not None and usable else []}
 
 
 OMP_POLICY_NUMBERS = ("priority", "reservePct", "reclaimAbovePct", "remainingPct")

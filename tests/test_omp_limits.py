@@ -227,6 +227,8 @@ class ReportMappingTests(unittest.TestCase):
         self.assertEqual((credits["resetCreditsUsableNow"], credits["resetCreditsLater"]), (1, 1))
         self.assertEqual(credits["resetCreditsUsableExpiresAt"], 1899273540)  # 2030-03-09T07:59:00Z
         self.assertEqual(credits["resetCreditsClears"], ["Fable weekly"])
+        self.assertEqual(credits["resetCreditsLaterGroups"],
+                         [{"count": 1, "clears": ["Fable weekly"], "expiresAt": 1893801600}])  # 2030-01-05T00:00:00Z
 
     def test_a_reports_policy_passes_through_to_its_account(self):
         document = fixture()

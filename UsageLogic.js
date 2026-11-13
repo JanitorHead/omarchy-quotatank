@@ -1941,10 +1941,51 @@ function accountResetNote(account) {
   return CLAUDE_RESET_NOTES[String(account.credits.resetCreditsReason || "")] || CLAUDE_RESET_NOTES.unavailable
 }
 
-// The badge on an account row: the resets usable now (Claude's count; Codex's when shown), the expiry of the
-// next one, the limits it clears, and whether those limits are still above the warning threshold (dimmed when not
-// yet low). Null when the row shows no badge. Later resets (not usable now) are only counted in the tooltip; a badge
-// this widget cannot apply ends its tooltip with where the reset is applied (`accountResetNote`).
+// The limits a banked reset clears, as a phrase: "the weekly and Fable weekly limits". Empty without names.
+function resetClearsText(names) {
+  var list = []
+  var raw = listOrEmpty(names)
+  for (var i = 0; i < raw.length; i++) list.push(String(raw[i]))
+  if (list.length === 0) return ""
+  var joined = list.length === 1 ? list[0] : list.slice(0, -1).join(", ") + " and " + list[list.length - 1]
+  return "the " + joined + (list.length === 1 ? " limit" : " limits")
+}
+
+// Claude's banked resets, one line per group: those usable now, then each group that waits, with the limits it
+// clears and when it expires ("2 resets later, for the Fable weekly limit, expire 9 Mar"). Waiting resets a
+// reading does not group (an older reader on another computer) get one plain line. Empty for a reading without the
+// usable-now split (Codex). The row's badge joins the lines in its tooltip; the detail's card lists them.
+function accountResetLines(account, nowSeconds) {
+  var credits = account && account.credits
+  if (!credits || typeof credits.resetCreditsUsableNow !== "number") return []
+  function line(count, when, clears, expires) {
+    var text = count + " reset" + (count === 1 ? "" : "s") + " " + when
+    var phrase = resetClearsText(clears)
+    if (phrase !== "") text += ", for " + phrase
+    if (typeof expires === "number" && isFinite(expires) && expires > 0)
+      text += ", expire" + (count === 1 ? "s " : " ") + dayText(expires, nowSeconds)
+    return text
+  }
+  var lines = []
+  if (credits.resetCreditsUsableNow > 0)
+    lines.push(line(credits.resetCreditsUsableNow, "usable now", credits.resetCreditsClears, credits.resetCreditsUsableExpiresAt))
+  var groups = listOrEmpty(credits.resetCreditsLaterGroups)
+  var grouped = 0
+  for (var g = 0; g < groups.length; g++) {
+    var count = groups[g] ? groups[g].count : null
+    if (typeof count !== "number" || !(count > 0)) continue
+    grouped += count
+    lines.push(line(count, "later", groups[g].clears, groups[g].expiresAt))
+  }
+  var later = typeof credits.resetCreditsLater === "number" ? credits.resetCreditsLater : 0
+  if (later > grouped) lines.push(line(later - grouped, grouped > 0 ? "more later" : "later", [], null))
+  return lines
+}
+
+// The badge on an account row: the resets usable now (Claude's count; Codex's when shown) and whether the limits
+// they clear are still above the warning threshold (dimmed when not yet low). Null when the row shows no badge. The
+// tooltip says what every reset clears and when it expires (`accountResetLines`); a badge this widget cannot apply
+// ends it with where the reset is applied (`accountResetNote`).
 function accountResetBadge(account, warningThreshold, nowSeconds) {
   if (nowSeconds === undefined) nowSeconds = Date.now() / 1000
   if (!accountResetShown(account)) return null
@@ -1956,16 +1997,8 @@ function accountResetBadge(account, warningThreshold, nowSeconds) {
   var clearNames = listOrEmpty(credits.resetCreditsClears)
   for (var c = 0; c < clearNames.length; c++) clears.push(String(clearNames[c]))
   var fableOnly = clears.length > 0 && clears.every(function(name) { return name === "Fable weekly" })
-  var later = typeof credits.resetCreditsLater === "number" ? credits.resetCreditsLater : 0
-  var expires = credits.resetCreditsUsableExpiresAt
   var label = fableOnly ? usable + " Fable" : usable + " reset" + (usable === 1 ? "" : "s")
-  var tooltip = accountResetLabel(account)
-  if (claude) {
-    var noun = (fableOnly ? "Fable " : "") + "reset" + (usable === 1 ? "" : "s")
-    tooltip = usable + " " + noun + " usable now"
-      + (typeof expires === "number" && isFinite(expires) && expires > 0 ? ", expires " + dayText(expires, nowSeconds) : "")
-      + (later > 0 ? " · " + later + " more later" : "")
-  }
+  var tooltip = claude ? accountResetLines(account, nowSeconds).join(" · ") : accountResetLabel(account)
   var remaining = []
   var windows = listOrEmpty(account.windows)
   for (var w = 0; w < windows.length; w++) {
