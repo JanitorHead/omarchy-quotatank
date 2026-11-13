@@ -1162,7 +1162,8 @@ def codex_subscription_from_check(answer: Any, account_id: str) -> dict[str, Any
     entitlement = account.get("entitlement") if isinstance(account, dict) else None
     if not isinstance(entitlement, dict):
         raise ProviderFailure("malformed", "Codex's accounts check did not describe this account.")
-    if account.get("plan_type") == "free":
+    detail = account.get("account") if isinstance(account.get("account"), dict) else {}
+    if detail.get("plan_type") == "free":
         return {"source": "provider", "ended": False}
     last = account.get("last_active_subscription") if isinstance(account.get("last_active_subscription"), dict) else None
     subscription = {"source": "provider", "ended": last is not None and entitlement.get("has_active_subscription") is False}

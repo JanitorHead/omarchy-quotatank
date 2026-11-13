@@ -57,11 +57,11 @@ def grok_auth(bearer: str) -> str:
 def codex_accounts_check(account_id: str, *, active: bool = True, will_renew: bool | None = True,
                          expires_at: str | None = None, cancels_at: str | None = None, plan_type: str = "pro",
                          subscribed: bool = True) -> dict:
-    # Keys as the accounts check nests them: the entitlement, and the flag on the last subscription. A missing
-    # will_renew leaves that flag out; an account that never subscribed has no last subscription at all.
+    # Keys as the accounts check nests them: plan_type under "account", the entitlement beside it, and the flag on
+    # the last subscription. A missing will_renew leaves that flag out; an account that never subscribed has none.
     entitlement = {"has_active_subscription": active, "expires_at": expires_at, "renews_at": None,
                    "cancels_at": cancels_at}
-    account = {"plan_type": plan_type, "entitlement": entitlement}
+    account = {"account": {"plan_type": plan_type}, "entitlement": entitlement}
     if subscribed:
         account["last_active_subscription"] = {} if will_renew is None else {"will_renew": will_renew}
     return {"accounts": {account_id: account}}
@@ -381,6 +381,13 @@ class CodexSubscriptionTests(AccountsTestCase):
 
     def test_a_chatgpt_free_account_has_not_ended(self) -> None:
         self.answer = codex_accounts_check(self.ACCOUNT_ID, active=False, plan_type="free", subscribed=False)
+        result = usage.fetch_codex(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": False})
+
+    def test_a_subscribed_chatgpt_free_account_has_not_ended(self) -> None:
+        # The recorded shape keeps last_active_subscription on a Free account too, and has_active_subscription is
+        # False there; only the plan type says it is Free, so that must win over the ended rule.
+        self.answer = codex_accounts_check(self.ACCOUNT_ID, active=False, plan_type="free")
         result = usage.fetch_codex(5)
         self.assertEqual(result["subscription"], {"source": "provider", "ended": False})
 
