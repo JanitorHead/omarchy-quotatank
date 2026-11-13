@@ -1439,9 +1439,9 @@ Column {
                   readonly property string accountId: String(modelData && modelData.accountId || "")
                   // The provider's own end date takes the place of the manual date field, in the same spot.
                   readonly property string reportedEnd: UsageLogic.providerSubscriptionEndsOn(modelData && modelData.subscription)
-                  width: parent.width
+                  width: parent ? parent.width : 0
                   TextRow {
-                    width: parent.width
+                    width: endRow.width
                     objectName: "subscriptionEnd-" + providerRow.providerId + "-" + endRow.index
                     label: "Subscription ends for " + UsageLogic.accountSettingsLabel(endRow.modelData, root.value("extraKeys", "{}"),
                       root.value("hideAccountEmails", true) !== false, endRow.index)
@@ -1456,7 +1456,7 @@ Column {
                     }
                   }
                   Hint {
-                    width: parent.width
+                    width: endRow.width
                     objectName: "subscriptionReported-" + providerRow.providerId + "-" + endRow.index
                     visible: endRow.reportedEnd !== ""
                     text: providerRow.name + " reports it ends " + UsageLogic.subscriptionEndText(endRow.reportedEnd, Date.now() / 1000)
@@ -2789,7 +2789,7 @@ Column {
   // Free text that saves when editing finishes (Enter or leaving the field) and is valid.
   component TextRow: Column {
     id: textRow
-    width: parent.width
+    width: parent ? parent.width : 0
     property string label: ""
     property string placeholder: ""
     property string source: ""
