@@ -21,3 +21,15 @@ Any address that can come from the environment or settings and receives a token,
 ## The panel holds still
 
 Text or a control that appears and disappears with a read, a request or a timer keeps its place while it can come back, or lives in a line that is always there (the footer). Nothing below it moves when it changes.
+
+## One quantity, one figure
+
+Two places that show the same thing (an account's resets, a limit, a total, an end date) show the same figure, or each says what it counts ("usable now", "banked"). A change that adds or changes one of them rereads every other place that shows it.
+
+## A contract step sets what it reads
+
+The QML contracts run their steps in order on one widget. A step sets every setting and payload it depends on and waits for the state it checks, instead of relying on what an earlier step left; a step that leaves a setting changed for later steps says so.
+
+## Tests check behaviour
+
+A test drives the code and checks what it does. A check on source text only bans a pattern (an API, a field that must never be read) and says why; it never pins an expression, so a refactor that keeps the behaviour keeps the tests green.

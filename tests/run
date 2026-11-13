@@ -18,6 +18,21 @@ check_unavailable() {
   echo "$1"
 }
 
+# Every phase runs, even after one fails, and the suite ends with the list of failed phases: one run shows every
+# failure. A phase runs in a subshell started with `&`, never in an `if` or `||` condition, where bash would turn
+# off `set -e` inside it; its `exit 1` and any failing command end that phase only.
+failed=()
+phase() {
+  local name=$1 status=0
+  shift
+  ( "$@" ) &
+  wait "$!" || status=$?
+  if [[ $status -ne 0 ]]; then
+    echo "FAILED: $name" >&2
+    failed+=("$name")
+  fi
+}
+
 python3 -m py_compile "$repo_root/scripts/quotatank_common.py"
 python3 -m py_compile "$repo_root/scripts/usage-fetch.py"
 python3 -m py_compile "$repo_root/scripts/cost-fetch.py"
@@ -41,16 +56,23 @@ if [[ $# -gt 0 ]]; then
   XDG_CONFIG_HOME="$test_root/config" python3 -m unittest discover -s "$repo_root/tests" -p "${1%.py}.py" "$verbosity"
   exit
 fi
-XDG_CONFIG_HOME="$test_root/config" python3 -m unittest discover -s "$repo_root/tests" -p 'test_*.py' "$verbosity"
-node "$repo_root/tests/test_usage_logic.js"
 
-if command -v omarchy >/dev/null 2>&1 && omarchy plugin validate --help >/dev/null 2>&1; then
-  omarchy plugin validate "$repo_root"
-elif [[ -x "$quattro_root/bin/omarchy-plugin-validate" ]]; then
-  "$quattro_root/bin/omarchy-plugin-validate" "$repo_root"
-else
-  check_unavailable "omarchy plugin validate unavailable; manifest contract tests still ran"
-fi
+python_tests() {
+  XDG_CONFIG_HOME="$test_root/config" python3 -m unittest discover -s "$repo_root/tests" -p 'test_*.py' "$verbosity"
+}
+phase "Python tests" python_tests
+phase "UsageLogic.js tests" node "$repo_root/tests/test_usage_logic.js"
+
+plugin_validate() {
+  if command -v omarchy >/dev/null 2>&1 && omarchy plugin validate --help >/dev/null 2>&1; then
+    omarchy plugin validate "$repo_root"
+  elif [[ -x "$quattro_root/bin/omarchy-plugin-validate" ]]; then
+    "$quattro_root/bin/omarchy-plugin-validate" "$repo_root"
+  else
+    check_unavailable "omarchy plugin validate unavailable; manifest contract tests still ran"
+  fi
+}
+phase "omarchy plugin validate" plugin_validate
 
 # Qt 6 qmllint understands the flags below; the Qt 5 one on PATH rejects them.
 if [[ -x /usr/lib/qt6/bin/qmllint ]]; then
@@ -59,14 +81,19 @@ else
   qml_lint=$(command -v qmllint || true)
 fi
 
-if [[ -n $qml_lint && -d "$quattro_root/shell/Ui" ]]; then
-  lint_root="$test_root/lint"
+qml_lint_check() {
+  if [[ -z $qml_lint || ! -d "$quattro_root/shell/Ui" ]]; then
+    check_unavailable "qmllint or Quattro source unavailable; skipping QML lint"
+    return
+  fi
+  local lint_root="$test_root/lint"
   mkdir -p "$lint_root/qs"
   ln -s "$quattro_root/shell/Ui" "$lint_root/qs/Ui"
   ln -s "$quattro_root/shell/Commons" "$lint_root/qs/Commons"
-  lint_log="$lint_root/qmllint.log"
-  lint_flags=(-W 0 --missing-property disable --signal-handler-parameters disable)
+  local lint_log="$lint_root/qmllint.log"
+  local lint_flags=(-W 0 --missing-property disable --signal-handler-parameters disable)
   # The widget's JavaScript declares with `var` throughout, on purpose; Qt 6.12 added a warning for it.
+  local lint_help
   lint_help=$("$qml_lint" --help 2>/dev/null || true)
   if [[ $lint_help == *--block-scope-var-declaration* ]]; then
     lint_flags+=(--block-scope-var-declaration disable)
@@ -82,15 +109,15 @@ if [[ -n $qml_lint && -d "$quattro_root/shell/Ui" ]]; then
     exit 1
   fi
   echo "qmllint: passed (dynamic Omarchy/Quickshell type warnings disabled)"
-else
-  check_unavailable "qmllint or Quattro source unavailable; skipping QML lint"
-fi
+}
+phase "qmllint" qml_lint_check
 
-if command -v quickshell >/dev/null 2>&1 && [[ -d "$quattro_root/shell/Ui" ]]; then
-  quota_root="$test_root/quota"
+repo_url=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$repo_root")
+
+quota_contract() {
+  local quota_root="$test_root/quota"
   mkdir -p "$quota_root"
   cp "$repo_root/tests/qml/quota-shell.qml" "$quota_root/shell.qml"
-  repo_url=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$repo_root")
   QT_QPA_PLATFORM=offscreen \
   QUOTATANK_REPO_URL="$repo_url" \
   QUOTATANK_FAKE_BACKEND="$repo_root/tests/fake_quota_refresh.py" \
@@ -115,11 +142,12 @@ assert requests[0]["proxy"] == ["p-1a2b3c4d=https://old.example"]
 assert all(row["proxy"] == ["p-1a2b3c4d=https://new.example"] for row in requests[1:])
 PY
   echo "Quota QML contract: passed (startup refreshes and connection changes)"
+}
 
-  activity_root="$test_root/activity"
+activity_contract() {
+  local activity_root="$test_root/activity"
   mkdir -p "$activity_root"
   cp "$repo_root/tests/qml/activity-shell.qml" "$activity_root/shell.qml"
-  repo_url=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$repo_root")
   QT_QPA_PLATFORM=offscreen \
   QUOTATANK_REPO_URL="$repo_url" \
   QUOTATANK_FAKE_ACTIVITY="$repo_root/tests/fake_activity.py" \
@@ -134,13 +162,14 @@ PY
     exit 1
   fi
   echo "Activity QML contract: passed (synthetic account switches, outages, and connection changes)"
+}
 
-  cost_root="$test_root/cost"
+cost_contract() {
+  local cost_root="$test_root/cost"
   mkdir -p "$cost_root/config" "$cost_root/cache"
   cp "$repo_root/tests/qml/cost-shell.qml" "$cost_root/shell.qml"
   ln -s "$quattro_root/shell/Ui" "$cost_root/Ui"
   ln -s "$quattro_root/shell/Commons" "$cost_root/Commons"
-  repo_url=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$repo_root")
   QT_QPA_PLATFORM=offscreen \
   XDG_CONFIG_HOME="$cost_root/config" XDG_CACHE_HOME="$cost_root/cache" \
   QUOTATANK_REPO_URL="$repo_url" \
@@ -159,8 +188,10 @@ PY
     exit 1
   fi
   echo "Cost QML contract: passed (synthetic prices and processes, no popup windows)"
+}
 
-  settings_root="$test_root/settings"
+settings_contract() {
+  local settings_root="$test_root/settings"
   mkdir -p "$settings_root/config" "$settings_root/cache"
   cp "$repo_root/tests/qml/settings-shell.qml" "$settings_root/shell.qml"
   ln -s "$quattro_root/shell/Ui" "$settings_root/Ui"
@@ -200,14 +231,15 @@ assert any(call[:2] == ["--test", "devbox"] for call in calls), "Test runs the c
 assert any(call[:2] == ["--remove", "devbox"] and call[2:3] == ["--id"] for call in calls), "Remove deletes the readers there"
 PY
   echo "Settings QML contract: passed (Sources page, omp states, backend flags, shared live feed)"
+}
 
-  reset_root="$test_root/reset"
+reset_contract() {
+  local reset_root="$test_root/reset"
   mkdir -p "$reset_root/config" "$reset_root/cache"
   cp "$repo_root/tests/qml/reset-shell.qml" "$reset_root/shell.qml"
   ln -s "$quattro_root/shell/Ui" "$reset_root/Ui"
   ln -s "$quattro_root/shell/Commons" "$reset_root/Commons"
-  repo_url=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$repo_root")
-  reset_platform=offscreen
+  local reset_platform=offscreen
   if [[ -n ${WAYLAND_DISPLAY:-} ]]; then reset_platform=wayland; fi
   QT_QPA_PLATFORM="$reset_platform" \
   XDG_CONFIG_HOME="$reset_root/config" XDG_CACHE_HOME="$reset_root/cache" \
@@ -244,14 +276,16 @@ assert all(call["source"] == "direct" and call["account_id"] == "main" and call[
 assert (claude[1]["target"], claude[1]["credit_id"], claude[1]["request_id"]) == ("claude-target", "launch-reset", "claude-request")
 PY
   echo "Reset QML contract: passed (synthetic backend, no popup windows)"
+}
 
-  limits_root="$test_root/limits"
+limits_contract() {
+  local limits_root="$test_root/limits"
   mkdir -p "$limits_root/config" "$limits_root/cache" "$limits_root/markers"
   cp "$repo_root/tests/qml/limits-shell.qml" "$limits_root/shell.qml"
   ln -s "$repo_root/UsageLogic.js" "$limits_root/UsageLogic.js"
   ln -s "$quattro_root/shell/Ui" "$limits_root/Ui"
   ln -s "$quattro_root/shell/Commons" "$limits_root/Commons"
-  limits_platform=offscreen
+  local limits_platform=offscreen
   if [[ -n ${WAYLAND_DISPLAY:-} ]]; then limits_platform=wayland; fi
   QT_QPA_PLATFORM="$limits_platform" \
   XDG_CONFIG_HOME="$limits_root/config" XDG_CACHE_HOME="$limits_root/cache" \
@@ -272,15 +306,17 @@ PY
     exit 1
   fi
   echo "Limits QML contract: passed (account rows, model moves, Use, forecasts, runway gap, notices)"
+}
 
-  # Menu bar chip: components offscreen (motion, rolling digits, account dots, hints, pie, hover card);
-  # Panel.qml's chips need a layer-shell, so that half runs only inside a Wayland session.
-  bar_root="$test_root/bar"
+# Menu bar chip: components offscreen (motion, rolling digits, account dots, hints, pie, hover card);
+# Panel.qml's chips need a layer-shell, so that half runs only inside a Wayland session.
+bar_contract() {
+  local bar_root="$test_root/bar"
   mkdir -p "$bar_root/config" "$bar_root/cache"
   cp "$repo_root/tests/qml/bar-shell.qml" "$bar_root/shell.qml"
   ln -s "$quattro_root/shell/Ui" "$bar_root/Ui"
   ln -s "$quattro_root/shell/Commons" "$bar_root/Commons"
-  bar_phases=(components)
+  local bar_phases=(components) bar_phase bar_platform
   if [[ -n ${WAYLAND_DISPLAY:-} ]]; then bar_phases+=(panel); fi
   for bar_phase in "${bar_phases[@]}"; do
     bar_platform=offscreen
@@ -308,26 +344,30 @@ PY
   else
     echo "Bar QML contract: passed (motion, rolling digits, account dots, hints, pie, hover card; Panel chips need Wayland)"
   fi
+}
+
+if command -v quickshell >/dev/null 2>&1 && [[ -d "$quattro_root/shell/Ui" ]]; then
+  phase "Quota QML contract" quota_contract
+  phase "Activity QML contract" activity_contract
+  phase "Cost QML contract" cost_contract
+  phase "Settings QML contract" settings_contract
+  phase "Reset QML contract" reset_contract
+  phase "Limits QML contract" limits_contract
+  phase "Bar QML contract" bar_contract
 else
-  check_unavailable "Quickshell or Quattro source unavailable; skipping the QML contracts"
+  phase "QML contracts" check_unavailable "Quickshell or Quattro source unavailable; skipping the QML contracts"
 fi
 
-if [[ ${QUOTATANK_LIVE_TESTS:-0} != 1 ]]; then
-  echo "Live UI tests skipped; set QUOTATANK_LIVE_TESTS=1 to show test popups on the current desktop"
-elif command -v quickshell >/dev/null 2>&1 \
-    && command -v jq >/dev/null 2>&1 \
-    && command -v rg >/dev/null 2>&1 \
-    && command -v timeout >/dev/null 2>&1 \
-    && [[ -n ${WAYLAND_DISPLAY:-} ]] \
-    && [[ -d "$quattro_root/shell/Ui" ]]; then
-  runtime_root="$test_root/runtime"
-  config_dir="$runtime_root/quotatank-test"
+runtime_contract() {
+  local runtime_root="$test_root/runtime"
+  local config_dir="$runtime_root/quotatank-test"
   mkdir -p "$config_dir" "$runtime_root/home"
   cp "$repo_root/tests/qml/shell.qml" "$config_dir/shell.qml"
   ln -s "$quattro_root/shell/Ui" "$config_dir/Ui"
   ln -s "$quattro_root/shell/Commons" "$config_dir/Commons"
-  result="$runtime_root/result.json"
-  log="$runtime_root/quickshell.log"
+  local result="$runtime_root/result.json"
+  local log="$runtime_root/quickshell.log"
+  local panel_url meter_url backend_url cost_backend_url cost_view_url
   panel_url=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$repo_root/Panel.qml")
   meter_url=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$repo_root/BlockMeter.qml")
   backend_url=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$repo_root/UsageBackend.qml")
@@ -375,6 +415,23 @@ assert all(key.stat().st_mode & 0o777 == 0o600 for key in keys)
 assert {key.read_text() for key in keys} == {"qml-synthetic-management-key\n", "qml-synthetic-keeper-password\n"}
 PY
   echo "Quickshell runtime contract: passed"
+}
+
+if [[ ${QUOTATANK_LIVE_TESTS:-0} != 1 ]]; then
+  echo "Live UI tests skipped; set QUOTATANK_LIVE_TESTS=1 to show test popups on the current desktop"
+elif command -v quickshell >/dev/null 2>&1 \
+    && command -v jq >/dev/null 2>&1 \
+    && command -v rg >/dev/null 2>&1 \
+    && command -v timeout >/dev/null 2>&1 \
+    && [[ -n ${WAYLAND_DISPLAY:-} ]] \
+    && [[ -d "$quattro_root/shell/Ui" ]]; then
+  phase "Quickshell runtime contract" runtime_contract
 else
   echo "Live Wayland/Quickshell test unavailable; skipping runtime contract"
+fi
+
+if [[ ${#failed[@]} -gt 0 ]]; then
+  echo "Failed phases:" >&2
+  printf '  %s\n' "${failed[@]}" >&2
+  exit 1
 fi

@@ -34,6 +34,8 @@ OMARCHY_QUATTRO_PATH=/path/to/omarchy-quattro ./tests/run
 
 Without Quickshell, Qt 6's `qmllint` or the Omarchy shell source, the QML checks below are skipped and the run still passes. CI runs them in a second job: an Arch container with Omarchy's Quickshell build (Arch's own package hides some Quickshell types from `qmllint`), `ripgrep`, and the `basecamp/omarchy` shell at the release the plugin targets, with `QUOTATANK_REQUIRE_QML=1`, under which a QML check that cannot run fails the suite.
 
+A failing phase (the Python tests, the JavaScript tests, `qmllint`, one QML contract) does not stop the run: every phase runs, and the run ends with the list of those that failed, so one run shows every failure.
+
 The suite performs:
 
 - Python syntax checks and fixture/contract tests on Python 3.10 through 3.14 in CI.
