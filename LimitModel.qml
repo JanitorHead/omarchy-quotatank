@@ -14,9 +14,13 @@ QtObject {
   property bool spending: false
   property real readingAt: 0
   property real requestAt: 0
+  // The account the window belongs to: its subscription end bounds the leftover (UsageLogic.windowLeftover).
+  property var account: null
 
   readonly property var pace: UsageLogic.paceForWindow(window, nowSeconds)
   readonly property var forecast: UsageLogic.windowForecast(window, nowSeconds)
+  // What the pace leaves unused by the deadline (a subscription limit of a day or more); null when silent.
+  readonly property var leftover: UsageLogic.windowLeftover(window, account, nowSeconds)
   readonly property var forecastSegment: UsageLogic.forecastSegment(forecast, quotaMode)
   readonly property var live: UsageLogic.liveMeter(forecast, spending, quotaMode)
   // The figure on the chosen side (0-100) and whether the provider reported it.

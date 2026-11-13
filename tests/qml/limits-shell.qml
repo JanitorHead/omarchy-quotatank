@@ -16,6 +16,7 @@ ShellRoot {
   property var rising: null
   property var group: null
   property var quiet: null
+  property var leftoverCard: null
   property var runwayCard: null
   property var notice: null
   property var markupNotice: null
@@ -97,6 +98,14 @@ ShellRoot {
     return { id: "weekly", label: "Weekly limit", used: used, remaining: 100 - used, windowSeconds: 604800,
       resetsAt: now + 3 * 86400, samples: [] }
   }
+  // A weekly window whose used share rises at `rate` %/s over its last 50 minutes: the pace leaves room at reset.
+  function weeklyPace(used, rate) {
+    var samples = []
+    for (var span = 3000; span >= 0; span -= 300)
+      samples.push([now - span, used - rate * span])
+    return { id: "weekly", label: "Weekly limit", used: used, remaining: 100 - used, windowSeconds: 604800,
+      resetsAt: now + 3 * 86400, samples: samples }
+  }
   function login(id, extra) {
     return Object.assign({ id: "claude", name: "Claude Code", status: "ok", accountId: id, label: id,
       origin: "omarchy", windows: [session(10, 0), weekly(20)] }, extra || {})
@@ -144,6 +153,9 @@ ShellRoot {
         nowSeconds: now, recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 }), nowSeconds: now, motion: motion })
     rising = create("LimitCard.qml", { width: 420, window: session(70, 0.01), nowSeconds: now, motion: motion })
     quiet = create("LimitCard.qml", { width: 420, window: Object.assign(session(31, 0), { label: markup }), nowSeconds: now, motion: motion })
+    var paceWindow = weeklyPace(20, 0.0002)
+    leftoverCard = create("LimitCard.qml", { width: 420, window: paceWindow, nowSeconds: now, motion: motion,
+      account: { id: "claude", windows: [paceWindow], subscription: { endsAt: now + 30 * 86400, source: "manual", ended: false } } })
     group = create("LimitGroupCard.qml", { width: 420, nowSeconds: now, motion: motion, spending: true, meterStyle: "tanks",
       windows: [session(70, 0.01), weekly(31), Object.assign(weekly(12), { id: "extra", label: markup })] })
     var provider = { id: "claude", status: "ok", accounts: [accounts[0], login("personal", { windows: [session(60, 0), weekly(10)] })] }
@@ -216,6 +228,9 @@ ShellRoot {
     check(rising.verdict.text.indexOf("runs out ") === 0 && rising.verdict.urgent, "the footer says when: " + rising.verdict.text)
     check(!rising.meter.blocks.tickVisible, "the pace tick hides until the pointer is on the meter")
     check(quiet.forecastSegment === null && !quiet.meter.blocks.forecastActive, "no pace, no forecast")
+    // A weekly limit with room at reset: the footer says what is left and the pace that spends it.
+    check(find(leftoverCard, "limitVerdict").text === "65% left over at reset · use 27%/day to spend it",
+      "a leftover is the verdict: " + find(leftoverCard, "limitVerdict").text)
     // Spending: the meter would sweep, but reduced motion keeps it still; the live figure climbs.
     rising.spending = true
     rising.readingAt = now - 50

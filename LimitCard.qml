@@ -23,6 +23,8 @@ Ui.BorderSurface {
   property string fontFamily: Style.font.family
   property real cardRadius: 0
   property real nowSeconds: 0
+  // The account the window belongs to (its subscription end bounds the leftover).
+  property var account: null
   property string clockFormat: "HH:mm"
   property var motion: null
   // The account is spending now (UsageLogic.spendingNow), when its reading was taken and when omp last
@@ -37,6 +39,7 @@ Ui.BorderSurface {
 
   readonly property LimitModel model: LimitModel {
     window: root.window
+    account: root.account
     nowSeconds: root.nowSeconds
     quotaMode: root.quotaMode
     spending: root.spending
@@ -53,7 +56,7 @@ Ui.BorderSurface {
   readonly property int liveHundredths: Math.floor(Math.max(0, root.liveShown) * 100 + 1e-6)
   // The meter draws a forecast (the Limits forecast hint follows this).
   readonly property bool forecastShown: model.forecastShown
-  readonly property var verdict: UsageLogic.forecastText(root.forecast, root.quotaMode, root.clock)
+  readonly property var verdict: UsageLogic.forecastText(root.forecast, root.quotaMode, root.clock, model.leftover)
   readonly property var shown: model.shown
   readonly property bool known: model.known
   readonly property alias meter: meterView.item

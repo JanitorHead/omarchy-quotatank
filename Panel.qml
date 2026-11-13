@@ -2220,6 +2220,7 @@ Ui.Panel {
                   objectName: "limitCard-" + (row ? String(row.id || row.label || "") : "")
                   width: limitsSection.width
                   window: row
+                  account: root.detailAccount
                   severity: root.windowSeverity(row)
                   resetLabel: root.resetText(row)
                   quotaMode: root.selectedQuotaMode
