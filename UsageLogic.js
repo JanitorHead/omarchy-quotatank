@@ -3770,13 +3770,14 @@ function ompState(provider, mode, nowSeconds) {
   }
 }
 
-// The accounts omp can pick, best first (rank.ts compareUsageRankedCandidates). Ended subscriptions
-// are not candidates.
+// The accounts omp can pick, best first (rank.ts compareUsageRankedCandidates). Only accounts omp holds
+// (fromOmp) are candidates; a login from Claude Code or Omarchy in the same provider is not. Ended
+// subscriptions are not candidates either.
 function ompRanked(provider, nowSeconds) {
   var accounts = providerAccounts(provider)
   var candidates = []
   for (var i = 0; i < accounts.length; i++) {
-    if (!subscriptionEnded(accounts[i])) candidates.push(ompCandidate(accounts[i], i, nowSeconds))
+    if (fromOmp(accounts[i]) && !subscriptionEnded(accounts[i])) candidates.push(ompCandidate(accounts[i], i, nowSeconds))
   }
   candidates.sort(ompOrder)
   return candidates

@@ -2500,6 +2500,15 @@ console.log("1.9 Coming up list: passed");
   assert.equal(plainApi.nextReason, "");
   assert.deepEqual(plain(plainApi.ompTags), []);
   assert.deepEqual(plain(plainApi.ranking), []);
+
+  // A Claude Code or Omarchy login in the same provider is not an omp account: omp cannot route to it,
+  // even with the most room, so the next account is one of omp's own and the login gets no tag.
+  const login = { ...ompAccount("Account 1", [ompWin("session", 0, 7200, 18000), ompWin("weekly", 0, 300000, 604800)]),
+    origin: "omarchy" };
+  const withLogin = together(ompProvider([login, ompAccount("Work", cool), ompAccount("Personal", cool)]));
+  assert.equal(withLogin.nextAccount, 1, "the next account is one omp holds, not the login with the most room");
+  assert.deepEqual(plain(withLogin.ranking), [1, 2], "omp ranks only its own accounts");
+  assert.deepEqual(plain(withLogin.ompTags), ["", "next", ""], "the login gets no tag");
   console.log("1.10 omp's next account: passed");
 }
 
