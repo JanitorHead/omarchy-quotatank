@@ -1930,9 +1930,18 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
   // A date Codex reports wins over the manual one, and is judged on its own day.
   const providerDated = { ...provider, accounts: [provider.accounts[0], { ...provider.accounts[1], subscription: { source: "provider", ended: false, endsAt: epoch("2030-07-01") } }] };
   assert.deepEqual(plain(accountOf(context.withSubscriptionEnds([providerDated], raw, epoch("2030-06-11"))[0], "omp-0123456789ab").subscription),
-    { source: "provider", ended: false, endsAt: epoch("2030-07-01") }, "the provider's date beats the manual one");
+    { source: "provider", ended: false, endsAt: epoch("2030-07-01"), endsOn: "2030-07-01" }, "the provider's date beats the manual one");
   assert.equal(context.subscriptionEnded(accountOf(context.withSubscriptionEnds([providerDated], raw, epoch("2030-07-01"))[0], "omp-0123456789ab")), true,
     "the provider's date ends the subscription on its day");
+  // A date Codex reports with no manual setting ends the subscription too: the row, the detail and the export read it.
+  const codex = { id: "codex", name: "Codex", status: "ok", accountId: "main", active: true, windows: [], accounts: [
+    { id: "codex", status: "ok", accountId: "main", active: true, origin: "omarchy", windows: [], subscription: { source: "provider", ended: false, endsAt: epoch("2030-12-03") } }] };
+  const codexAt = (now) => context.withSubscriptionEnds([codex], "{}", now)[0].accounts[0];
+  assert.equal(codexAt(epoch("2030-11-20")).subscription.endsOn, "2030-12-03", "the provider's day is the end date");
+  assert.equal(context.accountStatusLine(codexAt(epoch("2030-11-20")), false, epoch("2030-11-20"), null).text, "Ends 3 Dec", "the row shows Codex's end");
+  assert.equal(context.subscriptionEnded(codexAt(epoch("2030-12-03"))), true, "Codex's day ends it");
+  assert.equal(JSON.parse(context.exportSnapshot([context.withSubscriptionEnds([codex], "{}", epoch("2030-11-20"))[0]], epoch("2030-11-20"), false))
+    .providers[0].accounts[0].subscriptionEnds, "2030-12-03", "the export carries Codex's end");
   // The day a provider reports, for the settings line: "" unless the provider dated it.
   assert.equal(context.providerSubscriptionEndsOn({ source: "provider", ended: false, endsAt: epoch("2030-07-01") }), "2030-07-01",
     "a provider's end day");

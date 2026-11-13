@@ -3032,17 +3032,20 @@ function setSubscriptionEnds(raw, providerId, accountId, value) {
   return JSON.stringify(all)
 }
 
-// One account's (or provider's) reading with its end date: a date the provider reports wins and stays
-// `source: "provider"`; otherwise the manual date gives `subscription.endsOn` and `endsAt` (the start of the day
-// after), with `source: "manual"`. `ended` once `nowSeconds` reaches the date, and a provider's own ended stays ended.
+// One account's (or provider's) reading with its end date. A date the provider reports wins and stays
+// `source: "provider"`, with `endsOn` the day it names; otherwise the manual date gives `subscription.endsOn` and
+// `endsAt` (the start of the day after), with `source: "manual"`. `ended` once `nowSeconds` reaches the date, and a
+// provider's own ended stays ended.
 function endSubscriptionReading(reading, rows, nowSeconds) {
-  if (!reading || reading.accountId === undefined || !Object.prototype.hasOwnProperty.call(rows, String(reading.accountId))) return reading
+  if (!reading) return reading
   var provided = reading.subscription || {}
   if (provided.source === "provider" && typeof provided.endsAt === "number") {
     return Object.assign({}, reading, { subscription: Object.assign({}, provided, {
+      endsOn: providerSubscriptionEndsOn(provided),
       ended: !!(subscriptionEnded(reading) || nowSeconds >= provided.endsAt)
     }) })
   }
+  if (reading.accountId === undefined || !Object.prototype.hasOwnProperty.call(rows, String(reading.accountId))) return reading
   var endsOn = rows[String(reading.accountId)]
   var endsAt = (subscriptionEndDay(endsOn) + 1) * PACE_DAY_SECONDS
   var subscription = Object.assign({}, provided, {
@@ -3051,15 +3054,13 @@ function endSubscriptionReading(reading, rows, nowSeconds) {
   return Object.assign({}, reading, { subscription: subscription })
 }
 
-// The providers with their manual end dates applied to each account and to the provider's own reading (the
-// active account). Providers without a date come back as they were.
+// The providers with their end dates applied to each account and to the provider's own reading (the active
+// account). Providers without a date come back as they were.
 function withSubscriptionEnds(providers, raw, nowSeconds) {
-  var list = listOrEmpty(providers)
   var ends = parseSubscriptionEnds(raw)
-  if (!Object.keys(ends).length) return list
-  return Array.prototype.map.call(list, function (provider) {
-    var rows = provider && ends[provider.id]
-    if (!rows) return provider
+  return Array.prototype.map.call(listOrEmpty(providers), function (provider) {
+    if (!provider) return provider
+    var rows = ends[provider.id] || {}
     var accounts = providerAccounts(provider)
     var dated = endSubscriptionReading(provider, rows, nowSeconds)
     if (!accounts.length) return dated
