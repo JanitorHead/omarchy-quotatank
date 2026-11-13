@@ -3804,6 +3804,9 @@ function ompCandidate(account, index, nowSeconds) {
   var rawPriority = account.policy ? Number(account.policy.priority) : NaN
   var priority = isFinite(rawPriority) ? rawPriority : 0
   var measured = primary !== null || secondary !== null
+  // rank.ts hasPriorityBoost: only Codex's 5 h window sets this; an untouched window earns the boost.
+  var codexPrimary = ompWindow(account, "codex-primary")
+  var boost = !!codexPrimary && windowUsed(codexPrimary) === 0
   // rank.ts allowanceSpent: a limit at 100% with a reset still ahead, or no reset, has spent its allowance.
   var spent = function (row) {
     var resetsAt = row ? finiteOrNull(row.resetsAt) : null
@@ -3811,6 +3814,7 @@ function ompCandidate(account, index, nowSeconds) {
   }
   return { index: index, blocked: blockedUntil !== null, blockedUntil: blockedUntil, inReserve: inReserve,
     allowanceSpent: spent(primary) || spent(secondary),
+    hasPriorityBoost: boost,
     hot: primaryUsed >= 0.85, accountPriority: priority, measured: measured,
     primaryUsed: primaryUsed, primaryDrain: ompDrain(primary, now),
     secondaryUsed: secondaryUsed, secondaryDrain: ompDrain(secondary, now) }
@@ -3858,6 +3862,7 @@ function ompStep(a, b) {
   }
   if (a.allowanceSpent !== b.allowanceSpent) return { order: a.allowanceSpent ? 1 : -1, step: "allowance" }
   if (a.inReserve !== b.inReserve) return { order: a.inReserve ? 1 : -1, step: "reserve" }
+  if (a.hasPriorityBoost !== b.hasPriorityBoost) return { order: a.hasPriorityBoost ? -1 : 1, step: "boost" }
   if (a.hot !== b.hot) return { order: a.hot ? 1 : -1, step: "hot" }
   if (a.accountPriority !== b.accountPriority) return { order: b.accountPriority - a.accountPriority, step: "priority" }
   if (a.measured !== b.measured) return { order: a.measured ? -1 : 1, step: "measured" }

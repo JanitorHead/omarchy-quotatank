@@ -2457,6 +2457,16 @@ console.log("1.9 Coming up list: passed");
   assert.equal(allowance.nextAccount, 1, "an account with its allowance spent yields to one with allowance left");
   assert.equal(allowance.nextReason, "allowance");
   assert.deepEqual(plain(allowance.ranking), [1, 0]);
+
+  // Work's untouched Codex 5 h window earns a priority boost that outranks Personal's higher
+  // policy priority (rank.ts hasPriorityBoost, which only Codex windows set).
+  const boostWork = [ompWin("codex-primary", 0, 3600, 18000), ompWin("codex-secondary", 30, 300000, 604800)];
+  const boostPersonal = [ompWin("codex-primary", 10, 3600, 18000), ompWin("codex-secondary", 30, 300000, 604800)];
+  const boost = together(ompProvider([ompAccount("Personal", boostPersonal, { policy: { state: "regular", priority: 2 } }),
+    ompAccount("Work", boostWork)]));
+  assert.equal(boost.nextAccount, 1, "an untouched 5 h window outranks a higher policy priority");
+  assert.equal(boost.nextReason, "boost");
+  assert.deepEqual(plain(boost.ranking), [1, 0]);
   console.log("1.10 omp's next account: passed");
 }
 
