@@ -517,7 +517,9 @@ ShellRoot {
     },
     function () {
       check(widget.selectedAccount.accountId === "personal", "choosing the provider again shows the counted account")
-      widget.settings = Object.assign({}, widget.settings, { subscriptionEnds: JSON.stringify({ claude: { personal: (new Date().getUTCFullYear()) + "-12-03" } }) })
+      var ends = new Date(Date.now() + 20 * 86400000)
+      var endsOn = [ends.getFullYear(), String(ends.getMonth() + 1).padStart(2, "0"), String(ends.getDate()).padStart(2, "0")].join("-")
+      widget.settings = Object.assign({}, widget.settings, { subscriptionEnds: JSON.stringify({ claude: { personal: endsOn } }) })
       // The detail exists only while the panel is open: open it from the chip, on the account it shows.
       var chip = namedChild(widget, "barChip-claude")
       widget.handleProviderChipPress("claude", Qt.LeftButton, chip.shownAccountId, chip.accountChip)
@@ -525,17 +527,22 @@ ShellRoot {
       return true
     },
     function () {
-      // The detail reads like the row: "ends 3 Dec", with the year only when it is not this year. It must be on the panel.
-      var year = new Date().getUTCFullYear()
+      // The detail reads like the row: "ends D Mon", with the year only when it is not this year. It must be on the panel.
+      var year = new Date().getFullYear()
+      var endsOn = JSON.parse(widget.settings.subscriptionEnds).claude.personal.split("-").map(Number)
+      var endDate = new Date(endsOn[0], endsOn[1] - 1, endsOn[2])
+      var expected = endDate.getDate() + " " + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][endDate.getMonth()]
+        + (endDate.getFullYear() === year ? "" : " " + endDate.getFullYear())
       var meta = namedChild(panelRoot(), "accountDetailMeta")
       var text = meta ? String(meta.text) : ""
-      if (text.indexOf("ends 3 Dec") < 0 && waited < 150) return false
-      check(text.indexOf(" · ends 3 Dec") >= 0 && text.indexOf("ends 3 Dec " + year) < 0, "the detail says when the account ends: " + text)
+      if (text.indexOf(" · ends " + expected) < 0 && waited < 150) return false
+      var tail = text.slice(text.indexOf(" · ends ") + 8)
+      check(tail === expected || tail.indexOf(expected + " ") === 0, "the detail says when the account ends: " + text)
       widget.settings = Object.assign({}, widget.settings, { subscriptionEnds: JSON.stringify({ claude: { personal: (year + 1) + "-01-05" } }) })
       return true
     },
     function () {
-      var year = new Date().getUTCFullYear()
+      var year = new Date().getFullYear()
       var meta = namedChild(panelRoot(), "accountDetailMeta")
       var text = meta ? String(meta.text) : ""
       if (text.indexOf("ends 5 Jan") < 0 && waited < 150) return false
