@@ -3482,7 +3482,8 @@ function accountSourceKind(account) {
 
 // Whether omp holds the account's sign-in, here or on the computer that read it.
 function fromOmp(account) {
-  return !!account && (account.origin === "omp" || accountSourceKind(account) === "omp")
+  if (!account) return false
+  return account.origin === "omp" || accountSourceKind(account) === "omp" || contains(listOrEmpty(account.origins), "omp")
 }
 
 function accountSourceLabel(kind) {
@@ -3650,8 +3651,7 @@ function accountModeText(provider, mode) {
     var accounts = providerAccounts(provider)
     var omp = !!provider.pool
     for (var i = 0; i < accounts.length && !omp; i++) {
-      var origins = listOrEmpty(accounts[i] && accounts[i].origins)
-      omp = fromOmp(accounts[i]) || contains(origins, "omp")
+      omp = fromOmp(accounts[i])
     }
     return "Used together" + (omp ? " · omp" : "")
   }
@@ -3783,7 +3783,7 @@ function ompRanked(provider, nowSeconds) {
   var accounts = providerAccounts(provider)
   var candidates = []
   for (var i = 0; i < accounts.length; i++) {
-    if (fromOmp(accounts[i]) && !subscriptionEnded(accounts[i])) candidates.push(ompCandidate(accounts[i], i, nowSeconds))
+    if (fromOmp(accounts[i]) && !subscriptionEnded(accounts[i]) && accounts[i].status !== "error") candidates.push(ompCandidate(accounts[i], i, nowSeconds))
   }
   candidates.sort(ompOrder)
   return candidates

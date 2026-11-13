@@ -2465,6 +2465,12 @@ console.log("1.9 Coming up list: passed");
   assert.equal(measured.nextReason, "measured");
   assert.deepEqual(plain(measured.ranking), [1, 0]);
 
+  // A reading whose origins include omp is an omp account; an omp sign-in in error is never next.
+  const fromOrigins = together(ompProvider([{ ...ompAccount("Work", cool), origin: "omarchy", origins: ["omarchy", "omp"] }]));
+  assert.equal(fromOrigins.nextAccount, 0, "a reading whose origins include omp is an omp account");
+  const erroring = together(ompProvider([{ ...ompAccount("Work", cool), status: "error" }, ompAccount("Personal", cool)]));
+  assert.equal(erroring.nextAccount, 1, "an omp sign-in in error is never next");
+
   // Both have the same 5 h use and are measured. Work has less weekly use but six days of
   // headroom to spend; Personal must spend half its weekly headroom in one day.
   const slow = [ompWin("session", 10, 3600, 18000), ompWin("weekly", 20, 518400, 604800)];
