@@ -469,6 +469,19 @@ class ClaudeSubscriptionTests(AccountsTestCase):
     def profile_calls(self) -> int:
         return self.calls.count(self.PROFILE_URL)
 
+    def test_a_profile_without_an_organization_type_keeps_the_last_answer(self) -> None:
+        usage.fetch_claude(5)
+        self.now += usage.SUBSCRIPTION_CHECK_SECONDS
+        self.profile = {"account": {"email": "dev@example.com"}, "organization": {}}
+        result = usage.fetch_claude(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": True})
+
+    def test_a_new_account_email_in_the_same_folder_asks_again(self) -> None:
+        usage.fetch_claude(5)
+        (self.home / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": "other@example.com"}}))
+        usage.fetch_claude(5)
+        self.assertEqual(self.profile_calls(), 2)
+
     def test_a_rate_limited_free_claude_account_has_ended(self) -> None:
         result = usage.fetch_claude(5)
         self.assertEqual(result["errorKind"], "rate_limited")

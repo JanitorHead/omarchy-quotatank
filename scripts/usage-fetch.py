@@ -752,25 +752,27 @@ def claude_signed_in_email(home: Path | None) -> str:
     return str(oauth_account.get("emailAddress") or "") if isinstance(oauth_account, dict) else ""
 
 
-def claude_subscription_from_profile(profile: Any) -> dict[str, Any] | None:
+def claude_subscription_from_profile(profile: Any) -> dict[str, Any]:
     """Claude's profile as a subscription. It has ended only on the free plan: a canceled paid plan still runs to the end
     of its period, and the profile gives no end date to a sign-in token, so `subscription_status` alone is not an end.
-    None when the profile names no organization type."""
+    Raises ProviderFailure when the profile names no organization type, so the last saved answer stays."""
     if not isinstance(profile, dict):
-        return None
+        raise ProviderFailure("malformed", "Claude's profile did not describe this login.")
     organization = profile.get("organization") if isinstance(profile.get("organization"), dict) else {}
     organization_type = organization.get("organization_type") or profile.get("organization_type")
     if not isinstance(organization_type, str) or not organization_type:
-        return None
+        raise ProviderFailure("malformed", "Claude's profile names no organization type.")
     return {"source": "provider", "ended": organization_type == "claude_free"}
 
 
 def claude_subscription(config_dir: Path, login: dict[str, Any], timeout: float) -> dict[str, Any] | None:
     """Claude's own word on the subscription, from its profile with the login's token, asked only after a usage read
-    the server refused. At most one call per Claude Code login every six hours; the login is keyed by its folder."""
+    the server refused. At most one call per Claude Code login every six hours; the login is keyed by its folder and its
+    account email, so signing in as another account asks again."""
     headers = claude_headers(login["accessToken"])
+    key = f"{config_dir}\n{claude_signed_in_email(config_dir)}"
     return checked_subscription(
-        subscription_cache_path("claude", str(config_dir)),
+        subscription_cache_path("claude", key),
         lambda: claude_subscription_from_profile(http_json(CLAUDE_PROFILE_URL, headers, timeout)),
         timeout,
     )
