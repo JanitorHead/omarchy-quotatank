@@ -165,10 +165,12 @@ ShellRoot {
       login("proxied", { origin: "proxy", proxy: { id: "p-1a2b3c4d", name: "CLIProxyAPI" },
         credits: { resetCreditsAvailable: 2, resetCreditsUsable: true, resetCreditsUsableNow: 2, resetCreditsLater: 0,
           resetCreditsUsableExpiresAt: now + 3 * 86400, resetCreditsClears: [], resetCreditsReason: "" } }),
-      login("empty", { credits: { resetCreditsAvailable: 0, resetCreditsUsableNow: 0, resetCreditsLater: 0 } })
+      login("empty", { credits: { resetCreditsAvailable: 0, resetCreditsUsableNow: 0, resetCreditsLater: 0 } }),
+      login("both", { credits: { resetCreditsAvailable: 1, resetCreditsUsable: true, resetCreditsUsableNow: 1, resetCreditsLater: 0,
+          resetCreditsUsableExpiresAt: now + 3 * 86400, resetCreditsClears: [], resetCreditsReason: "" } })
     ]
     resetList = create("AccountList.qml", { width: 420, providerId: "claude", accounts: resetAccounts,
-      names: ["Tenure", "Proxied", "Empty"], warningThreshold: 25, criticalThreshold: 10, resetsActionable: true,
+      names: ["Tenure", "Proxied", "Empty", "Both"], warningThreshold: 25, criticalThreshold: 10, resetsActionable: true,
       accountState: UsageLogic.accountState({ id: "claude", status: "ok", accounts: resetAccounts }, { modes: JSON.stringify({ claude: "single" }),
         nowSeconds: now, recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 }), nowSeconds: now, motion: motion })
     rising = create("LimitCard.qml", { width: 420, window: session(70, 0.01), nowSeconds: now, motion: motion })
@@ -246,6 +248,17 @@ ShellRoot {
     check(proxied.resetBadge !== null && proxied.resetBadge.label === "2 resets" && find(proxied, "accountResetAction").enabled,
       "a proxied Codex reset can be applied here")
     check(empty.resetBadge === null && !find(empty, "accountResetBadge").visible, "no badge without usable resets")
+    // The Use button and the reset chip never share space: where both show, they sit side by side on every row.
+    function apart(a, b, row) {
+      var pa = a.mapToItem(row, 0, 0), pb = b.mapToItem(row, 0, 0)
+      return pa.x + a.width <= pb.x || pb.x + b.width <= pa.x
+    }
+    var both = resetList.rowFor("both")
+    check(find(both, "accountUseButton").visible && find(both, "accountResetBadge").visible, "a row can show Use and a reset chip together")
+    ;["tenure", "proxied", "empty", "both"].forEach(function(id) {
+      var row = resetList.rowFor(id), use = find(row, "accountUseButton"), chip = find(row, "accountResetBadge")
+      check(!use.visible || !chip.visible || apart(use, chip, row), "the Use button and the reset chip do not overlap on " + id)
+    })
     list.rowFor("personal").useButton.clicked()
     check(root.used.length === 1 && root.used[0] === "personal", "Use asks for that account")
     list.events = ({ "claude@personal": { kind: "switch", at: now - 60 } })

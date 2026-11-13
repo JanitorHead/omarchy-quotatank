@@ -241,11 +241,13 @@ Ui.BorderSurface {
       id: action
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
-      width: !root.hasAction ? 0 : Math.max(useMetrics.advanceWidth("in use"),
-        useButton.visible ? useButton.implicitWidth : 0,
-        root.resetSlot ? resetMetrics.advanceWidth("10 resets") + Style.spacing.lg * 2 : 0)
-      implicitHeight: useButton.visible ? useButton.implicitHeight
-        : root.resetSlot ? resetMetrics.height + Style.spacing.xs * 2 : inUseTag.implicitHeight
+      readonly property real useWidth: root.inUse || root.canUse
+        ? Math.max(useMetrics.advanceWidth("in use"), useButton.visible ? useButton.implicitWidth : 0) : 0
+      // Reserved size of the reset chip, so the meter does not move when the chip comes and goes.
+      readonly property real resetWidth: root.resetSlot ? resetMetrics.advanceWidth("10 resets") + Style.spacing.lg * 2 : 0
+      width: useWidth + resetWidth + (useWidth > 0 && resetWidth > 0 ? Style.spacing.md : 0)
+      implicitHeight: !root.hasAction ? 0 : Math.max(useButton.visible ? useButton.implicitHeight : inUseTag.implicitHeight,
+        resetWidth > 0 ? resetMetrics.height + Style.spacing.xs * 2 : 0)
 
       FontMetrics {
         id: useMetrics
@@ -254,94 +256,111 @@ Ui.BorderSurface {
         font.weight: Font.DemiBold
       }
 
-      // Reserved size of the reset chip, so the meter does not move when the chip comes and goes.
       FontMetrics {
         id: resetMetrics
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
       }
 
-      PlainText {
-        id: inUseTag
-        objectName: "accountInUse"
-        visible: root.inUse
-        anchors.right: parent.right
+      // The in-use tag or the Use button; the two never show together.
+      Item {
+        id: useSlot
+        anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
-        text: "in use"
-        color: root.accent
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        font.weight: Font.DemiBold
-      }
+        width: action.useWidth
+        height: useButton.visible ? useButton.implicitHeight : inUseTag.implicitHeight
 
-      Ui.Button {
-        id: useButton
-        objectName: "accountUseButton"
-        visible: root.canUse && !root.inUse
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        text: root.useBusy ? "" : "Use"
-        iconText: root.useBusy ? "󰑐" : ""
-        iconSpinning: root.useBusy && !(root.motion && root.motion.reduced)
-        iconSize: Style.font.caption
-        bordered: true
-        enabled: !root.useBusy
-        foreground: root.foreground
-        fontFamily: root.fontFamily
-        fontSize: Style.font.caption
-        horizontalPadding: Style.spacing.md
-        verticalPadding: Style.spacing.xxs
-        tooltipText: root.useBusy ? "Switching new sessions to " + root.name + "…" : "Start new sessions with " + root.name
-        Accessible.name: "Use " + root.name
-        onClicked: if (!root.useBusy) root.useRequested()
+        PlainText {
+          id: inUseTag
+          objectName: "accountInUse"
+          visible: root.inUse
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          text: "in use"
+          color: root.accent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          font.weight: Font.DemiBold
+        }
+
+        Ui.Button {
+          id: useButton
+          objectName: "accountUseButton"
+          visible: root.canUse && !root.inUse
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          text: root.useBusy ? "" : "Use"
+          iconText: root.useBusy ? "󰑐" : ""
+          iconSpinning: root.useBusy && !(root.motion && root.motion.reduced)
+          iconSize: Style.font.caption
+          bordered: true
+          enabled: !root.useBusy
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          fontSize: Style.font.caption
+          horizontalPadding: Style.spacing.md
+          verticalPadding: Style.spacing.xxs
+          tooltipText: root.useBusy ? "Switching new sessions to " + root.name + "…" : "Start new sessions with " + root.name
+          Accessible.name: "Use " + root.name
+          onClicked: if (!root.useBusy) root.useRequested()
+        }
       }
 
       // Usable-now banked resets: the count, and one click starts applying one where Quotatank can apply it.
-      Rectangle {
-        id: resetChip
-        objectName: "accountResetBadge"
-        visible: root.resetBadge !== null
+      // Its own slot beside the use slot, so the chip never sits on the Use button.
+      Item {
+        id: resetHost
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
-        implicitWidth: resetLabel.implicitWidth + Style.spacing.lg * 2
-        implicitHeight: resetLabel.implicitHeight + Style.spacing.xs * 2
-        width: implicitWidth
-        height: implicitHeight
-        radius: height / 2
-        color: resetClick.containsMouse && resetClick.enabled || activeFocus ? root.alpha(root.foreground, 0.08) : "transparent"
-        border.width: Style.spacing.hairline
-        border.color: root.alpha(root.foreground, activeFocus ? 0.6 : 0.18)
-        activeFocusOnTab: resetClick.enabled
-        Accessible.role: Accessible.Button
-        Accessible.name: (root.resetBadge ? root.resetBadge.tooltip : "") + (resetClick.enabled ? ": apply a reset" : "")
-        Keys.onReturnPressed: resetClick.activate()
-        Keys.onSpacePressed: resetClick.activate()
+        width: action.resetWidth
+        height: resetMetrics.height + Style.spacing.xs * 2
 
-        MouseArea {
-          id: resetClick
-          objectName: "accountResetAction"
-          anchors.fill: parent
-          enabled: root.resetEnabled
-          hoverEnabled: true
-          cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-          function activate() {
-            if (enabled) root.resetRequested()
+        Rectangle {
+          id: resetChip
+          objectName: "accountResetBadge"
+          visible: root.resetBadge !== null
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          implicitWidth: resetLabel.implicitWidth + Style.spacing.lg * 2
+          implicitHeight: resetLabel.implicitHeight + Style.spacing.xs * 2
+          width: implicitWidth
+          height: implicitHeight
+          radius: height / 2
+          color: resetClick.containsMouse && resetClick.enabled || activeFocus ? root.alpha(root.foreground, 0.08) : "transparent"
+          border.width: Style.spacing.hairline
+          border.color: root.alpha(root.foreground, activeFocus ? 0.6 : 0.18)
+          activeFocusOnTab: resetClick.enabled
+          Accessible.role: Accessible.Button
+          Accessible.name: (root.resetBadge ? root.resetBadge.tooltip : "") + (resetClick.enabled ? ": apply a reset" : "")
+          Keys.onReturnPressed: resetClick.activate()
+          Keys.onSpacePressed: resetClick.activate()
+
+          MouseArea {
+            id: resetClick
+            objectName: "accountResetAction"
+            anchors.fill: parent
+            enabled: root.resetEnabled
+            hoverEnabled: true
+            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            function activate() {
+              if (enabled) root.resetRequested()
+            }
+            onClicked: activate()
           }
-          onClicked: activate()
-        }
 
-        ToolTip.visible: resetClick.containsMouse
-        ToolTip.text: (root.resetBadge ? root.resetBadge.tooltip : "")
-          + (resetClick.enabled ? " · click to apply one" : "")
+          ToolTip.visible: resetClick.containsMouse
+          ToolTip.text: (root.resetBadge ? root.resetBadge.tooltip : "")
+            + (resetClick.enabled ? " · click to apply one" : "")
 
-        PlainText {
-          id: resetLabel
-          objectName: "accountResetLabel"
-          anchors.centerIn: parent
-          text: root.resetBadge ? root.resetBadge.label : ""
-          color: root.resetBadge && root.resetBadge.dim ? root.dim : root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
+          PlainText {
+            id: resetLabel
+            objectName: "accountResetLabel"
+            anchors.centerIn: parent
+            text: root.resetBadge ? root.resetBadge.label : ""
+            color: root.resetBadge && root.resetBadge.dim ? root.dim : root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
         }
       }
     }
