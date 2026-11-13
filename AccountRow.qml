@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Shapes
+import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui as Ui
@@ -45,7 +46,28 @@ Ui.BorderSurface {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property bool hovered: rowMouse.containsMouse
   readonly property color valueColor: severity === "warning" || severity === "critical" ? urgent : foreground
-  readonly property bool hasAction: inUse || canUse || resetCount >= 0
+  readonly property bool hasAction: inUse || canUse || resetCount >= 0 || protoBadge !== ""
+
+  // PROTOTYPE (branch prototype/account-row, throwaway): PROTO_VARIANT A|B|C lays out the fixture's `proto`
+  // fields: tag (omp), ends, leftover, resets / resetBadge / resetsShort (banked resets), ended.
+  readonly property string protoVariant: String(Quickshell.env("PROTO_VARIANT") || "")
+  readonly property var proto: protoVariant !== "" && account && account.proto ? account.proto : null
+  function protoJoin(items) {
+    var out = []
+    for (var i = 0; i < items.length; i++) if (items[i]) out.push(items[i])
+    return out.join(" · ")
+  }
+  readonly property string protoStatus: !proto ? statusText
+    : proto.ended ? "Subscription ended"
+    : protoVariant === "A" ? protoJoin([statusText, proto.tag, proto.ends, proto.leftover, proto.resets])
+    : protoVariant === "B" ? (protoJoin([proto.ends, proto.leftover]) || statusText)
+    : protoJoin([statusText, proto.tag])
+  readonly property string protoTone: !proto ? statusTone : proto.ended ? "urgent"
+    : protoVariant === "B" && proto.ends ? "urgent" : statusTone
+  readonly property string protoDates: proto && protoVariant === "C" && !proto.ended
+    ? protoJoin([proto.ends, proto.leftover, proto.resetsShort]) : ""
+  readonly property string protoTag: proto && protoVariant === "B" && !proto.ended ? String(proto.tag || "") : ""
+  readonly property string protoBadge: proto && protoVariant === "B" && !proto.ended ? String(proto.resetBadge || "") : ""
   readonly property alias useButton: useButton
 
   signal selectRequested()
@@ -164,22 +186,51 @@ Ui.BorderSurface {
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.spacing.xxs
 
-      PlainText {
-        objectName: "accountName"
+      Item {
         width: parent.width
-        text: root.name
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
-        font.weight: Font.DemiBold
-        elide: Text.ElideRight
+        implicitHeight: nameText.implicitHeight
+
+        PlainText {
+          id: nameText
+          objectName: "accountName"
+          width: Math.min(implicitWidth, parent.width - (protoTagText.visible ? protoTagText.implicitWidth + Style.spacing.xs : 0))
+          text: root.name
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          font.weight: Font.DemiBold
+          elide: Text.ElideRight
+        }
+
+        PlainText {
+          id: protoTagText
+          visible: root.protoTag !== ""
+          anchors.left: nameText.right
+          anchors.leftMargin: Style.spacing.xs
+          anchors.baseline: nameText.baseline
+          text: root.protoTag
+          color: root.protoTag === "next" ? root.accent : root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          font.weight: Font.DemiBold
+        }
       }
 
       PlainText {
         objectName: "accountStatus"
         width: parent.width
-        text: root.statusText
-        color: root.statusTone === "urgent" ? root.urgent : root.statusTone === "accent" ? root.accent : root.dim
+        text: root.protoStatus
+        color: root.protoTone === "urgent" ? root.urgent : root.protoTone === "accent" ? root.accent : root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        elide: Text.ElideRight
+      }
+
+      PlainText {
+        visible: root.protoDates !== ""
+        width: parent.width
+        text: root.protoDates
+        color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         elide: Text.ElideRight
@@ -192,6 +243,7 @@ Ui.BorderSurface {
       anchors.right: action.left
       anchors.rightMargin: root.hasAction ? Style.spacing.lg : 0
       anchors.verticalCenter: parent.verticalCenter
+      visible: !(root.proto && root.proto.ended)
       width: Style.space(112)
       account: root.account
       quotaMode: root.quotaMode
@@ -261,7 +313,7 @@ Ui.BorderSurface {
       Rectangle {
         id: resetBadge
         objectName: "accountResetBadge"
-        visible: root.resetCount >= 0
+        visible: root.resetCount >= 0 || root.protoBadge !== ""
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         implicitWidth: resetLabel.implicitWidth + Style.spacing.lg * 2
@@ -299,8 +351,8 @@ Ui.BorderSurface {
           id: resetLabel
           objectName: "accountResetLabel"
           anchors.centerIn: parent
-          text: root.resetCount + (root.resetCount === 1 ? " reset" : " resets")
-          color: root.resetCount > 0 ? root.foreground : root.dim
+          text: root.protoBadge !== "" ? root.protoBadge : root.resetCount + (root.resetCount === 1 ? " reset" : " resets")
+          color: root.resetCount > 0 || root.protoBadge !== "" ? root.foreground : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
         }

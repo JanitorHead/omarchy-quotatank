@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui as Ui
@@ -51,6 +52,17 @@ Column {
   signal accountSelected(string accountId)
   signal useRequested(string accountId)
   signal resetRequested(string accountId)
+
+  // PROTOTYPE (branch prototype/account-row, throwaway): the variant in the header, and the omp routing
+  // block from the fixture's `protoRouting` lines (carried by the first account that has them).
+  readonly property string protoVariant: String(Quickshell.env("PROTO_VARIANT") || "")
+  readonly property var protoNames: ({ A: "one line", B: "tags and badge", C: "two lines" })
+  readonly property var protoRouting: {
+    if (protoVariant === "") return []
+    for (var i = 0; i < accounts.length; i++)
+      if (accounts[i] && accounts[i].protoRouting) return accounts[i].protoRouting
+    return []
+  }
 
   function rowKey(index) {
     var account = accounts[index]
@@ -129,7 +141,7 @@ Column {
       anchors.left: sectionTitle.right
       anchors.leftMargin: Style.spacing.controlGap
       anchors.verticalCenter: parent.verticalCenter
-      text: root.headerText
+      text: root.protoVariant !== "" ? "PROTOTYPE " + root.protoVariant + " · " + (root.protoNames[root.protoVariant] || "") : root.headerText
       color: Qt.darker(root.foreground, 1.55)
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
@@ -201,6 +213,34 @@ Column {
         onSelectRequested: root.accountSelected(accountId)
         onUseRequested: root.useRequested(accountId)
         onResetRequested: root.resetRequested(accountId)
+      }
+    }
+  }
+
+  Column {
+    objectName: "protoRouting"
+    visible: root.protoRouting.length > 0
+    width: parent.width
+    spacing: Style.spacing.xxs
+
+    Ui.PanelSectionHeader {
+      text: "OMP ROUTING"
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+    }
+
+    Repeater {
+      model: root.protoRouting
+
+      PlainText {
+        required property string modelData
+        required property int index
+        width: parent.width
+        text: modelData
+        wrapMode: Text.Wrap
+        color: index === 2 ? root.urgent : Qt.darker(root.foreground, index === 0 ? 1.0 : 1.55)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
       }
     }
   }
