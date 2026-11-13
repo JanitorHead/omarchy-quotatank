@@ -314,7 +314,7 @@ ShellRoot {
         { id: "codex", status: "ok", accounts: [{ accountId: "work", origin: "omarchy", subscription: { source: "provider", ended: false, endsAt: 1909094400 } }] }])
       shown("providerList").forceLayout()
       shown("customize-codex").expanded = true
-      check(!shown("subscriptionEnd-codex-0").visible && text("subscriptionReported-codex-0") === "Codex reports it ends 1 Jul 2030",
+      check(!shown("subscriptionEnd-codex-0").visible && text("subscriptionReported-codex-0") === "OpenAI Codex reports it ends 1 Jul 2030",
         "Codex's own end date replaces the manual field: " + text("subscriptionReported-codex-0"))
       check(form.providersSummary().indexOf("· omp") > 0, "the index says omp adds accounts")
       formPhase = 7
