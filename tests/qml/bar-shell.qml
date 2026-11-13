@@ -30,6 +30,7 @@ ShellRoot {
   property var endedPayload: null
   property var poolPayload: null
   property var noFigurePayload: null
+  property var ompIdlePayload: null
 
   Item {
     id: panelHost
@@ -655,6 +656,29 @@ ShellRoot {
       check(chip.remainingValue === 70, "the pool total is the counted accounts' average remaining, 70: " + chip.remainingValue)
       check(chip.plainTooltip.indexOf("Pool from 2 of 3 accounts") >= 0, "and the tooltip says how many count: " + chip.plainTooltip)
       widget.settings = Object.assign({}, widget.settings, { barAccountMode: "dots" })
+      return true
+    },
+    function () {
+      // Omp's pool with nothing spending: the idle chip counts omp's next account, not the one with the least headroom.
+      var copy = JSON.parse(JSON.stringify(savedPayload))
+      copy.providers = copy.providers.map(function (item) {
+        return item.id === "claude" ? provider([account("omp-aaaaaaaaaaaa", "Work", 60, { origin: "omp", policy: { state: "inside-reserve" } }),
+          account("omp-bbbbbbbbbbbb", "Personal", 10, { origin: "omp" })], { pool: { source: "omp", windows: [] } }) : item
+      })
+      root.ompIdlePayload = copy
+      widget.usageBackend.payload = copy
+      widget.settings = Object.assign({}, widget.settings, { barChipValues: "{}" })
+      return true
+    },
+    function () {
+      var chip = namedChild(widget, "barChip-claude")
+      if (!chip || widget.usageBackend.payload !== ompIdlePayload) {
+        if (widget.usageBackend.payload !== ompIdlePayload) widget.usageBackend.payload = ompIdlePayload
+        return waited < 150 ? false : check(false, "Claude's omp pool reads for the idle check")
+      }
+      var counted = countedEverywhere("claude").split(" | ")[0]
+      check(counted === "[1]", "with nothing spending the idle chip counts omp's next account, Personal, not the one with the least headroom: " + counted)
+      widget.settings = Object.assign({}, widget.settings, { barChipValues: '{"claude":"pool"}' })
       return true
     },
     function () {
