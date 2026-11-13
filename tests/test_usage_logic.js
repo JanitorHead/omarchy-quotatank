@@ -2423,6 +2423,12 @@ console.log("1.9 Coming up list: passed");
   assert.equal(reserve.nextAccount, 1, "an account inside its reserve loses to one outside it");
   assert.equal(reserve.nextReason, "reserve");
   assert.deepEqual(plain(reserve.ranking), [1, 0]);
+
+  const hotWin = [ompWin("session", 90, 3600, 18000), ompWin("weekly", 30, 300000, 604800)];
+  const hot = together(ompProvider([ompAccount("Work", hotWin), ompAccount("Personal", cool)]));
+  assert.equal(hot.nextAccount, 1, "a 5 h window at 85% or more loses to a cooler account");
+  assert.equal(hot.nextReason, "hot");
+  assert.deepEqual(plain(hot.ranking), [1, 0]);
   console.log("1.10 omp's next account: passed");
 }
 

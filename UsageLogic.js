@@ -3795,8 +3795,12 @@ function ompCandidate(account, index, nowSeconds) {
       if (blockedUntil === null || resetsAt > blockedUntil) blockedUntil = resetsAt
     }
   }
+  var primary = ompWindow(account, "session") || ompWindow(account, "codex-primary")
+  var primaryUsed = ((primary && windowUsed(primary)) || 0) / 100
   var inReserve = !!account.policy && account.policy.state === "inside-reserve"
-  return { index: index, blocked: blockedUntil !== null, blockedUntil: blockedUntil, inReserve: inReserve }
+  // rank.ts PRIMARY_WINDOW_HOT_FRACTION: a 5 h window at 85% or more makes the account "hot".
+  return { index: index, blocked: blockedUntil !== null, blockedUntil: blockedUntil, inReserve: inReserve,
+    hot: primaryUsed >= 0.85 }
 }
 
 function ompWindow(account, id) {
@@ -3816,6 +3820,7 @@ function ompStep(a, b) {
     return { order: a.blockedUntil - b.blockedUntil, step: "blocked" }
   }
   if (a.inReserve !== b.inReserve) return { order: a.inReserve ? 1 : -1, step: "reserve" }
+  if (a.hot !== b.hot) return { order: a.hot ? 1 : -1, step: "hot" }
   return { order: 0, step: "" }
 }
 
