@@ -2467,6 +2467,25 @@ console.log("1.9 Coming up list: passed");
   assert.equal(boost.nextAccount, 1, "an untouched 5 h window outranks a higher policy priority");
   assert.equal(boost.nextReason, "boost");
   assert.deepEqual(plain(boost.ranking), [1, 0]);
+
+  // Work sits inside its reserve, Hotty's 5 h window is at 90%, Personal is cool and goes next.
+  const reserveWork = { ...ompAccount("Work", cool), policy: { state: "inside-reserve", priority: 0 } };
+  const hotty = [ompWin("session", 90, 3600, 18000), ompWin("weekly", 30, 300000, 604800)];
+  const tags = together(ompProvider([reserveWork, ompAccount("Personal", cool), ompAccount("Hotty", hotty)]));
+  assert.deepEqual(plain(tags.ompTags), ["in reserve", "next", "5h nearly full"], "each account gets one tag");
+
+  // Identical accounts: rank.ts breaks the tie by the order omp lists them, so the first one wins.
+  const twins = together(ompProvider([ompAccount("Work", cool), ompAccount("Personal", cool)]));
+  assert.equal(twins.nextAccount, 0, "equal accounts keep their listed order");
+  assert.equal(twins.nextReason, "order");
+  assert.deepEqual(plain(twins.ranking), [0, 1]);
+
+  // Without omp accounts there is no ranking: the strip shows nothing extra.
+  const plainApi = together(ompProvider([{ ...ompAccount("Work", cool), origin: "api" }]));
+  assert.equal(plainApi.nextAccount, null);
+  assert.equal(plainApi.nextReason, "");
+  assert.deepEqual(plain(plainApi.ompTags), []);
+  assert.deepEqual(plain(plainApi.ranking), []);
   console.log("1.10 omp's next account: passed");
 }
 

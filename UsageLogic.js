@@ -3754,7 +3754,10 @@ function ompState(provider, mode, nowSeconds) {
   var ranking = []
   var tags = []
   for (var t = 0; t < accounts.length; t++) tags.push("")
-  for (var r = 0; r < ranked.length; r++) ranking.push(ranked[r].index)
+  for (var r = 0; r < ranked.length; r++) {
+    ranking.push(ranked[r].index)
+    tags[ranked[r].index] = ranked[r].inReserve ? "in reserve" : ranked[r].hot ? "5h nearly full" : ""
+  }
   if (ranking.length > 0) tags[ranking[0]] = "next"
   var reason = ""
   if (ranked.length === 1) reason = "only"
