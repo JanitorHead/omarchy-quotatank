@@ -517,7 +517,7 @@ CLAUDE_LIMIT_NAMES = {"five_hour": "5-hour", "seven_day": "weekly", "seven_day_o
                       "seven_day_sonnet": "Sonnet weekly", "seven_day_overage_included": "Fable weekly"}
 # omp writes its Claude scopes as `anthropic:` ids (claude-reset.ts normalization).
 OMP_RESET_SCOPES = {"anthropic:5h": "five_hour", "anthropic:7d": "seven_day", "anthropic:7d:opus": "seven_day_opus",
-                    "anthropic:7d:sonnet": "seven_day_sonnet"}
+                    "anthropic:7d:sonnet": "seven_day_sonnet", "anthropic:7d:fable": "seven_day_overage_included"}
 
 
 def reset_clear_names(clears: list[str]) -> list[str]:
@@ -8818,18 +8818,25 @@ def omp_entry(provider_id: str, account_id: str, email: Any) -> dict[str, Any]:
     return entry
 
 
+def omp_reset_credit_count(credit: dict[str, Any]) -> int:
+    """The resets a credit has left: a whole number of zero or more, else none."""
+    count = credit.get("remainingCount")
+    return count if type(count) is int and count >= 0 else 0
+
+
 def omp_reset_usage(reset_credits: dict[str, Any]) -> dict[str, Any]:
-    """What omp's banked resets do now, as the Claude reader counts them: the resets usable now, the ones that
-    wait, when the usable ones expire, and the limits they clear. Expired and redeemed resets count for nothing."""
+    """What omp's banked resets do now, as the Claude reader counts them. omp spends one credit at a time: the resets
+    usable now are those left in the next credit when it is usable, and only that credit sets when they expire and
+    the limits they clear. Every other live reset waits. Expired and redeemed resets count for nothing."""
     live = [credit for credit in dict_list(reset_credits.get("credits")) if credit.get("status") not in ("expired", "redeemed")]
-    usable = [credit for credit in live if credit.get("usable") is True]
-    later = [credit for credit in live if credit.get("usable") is not True]
-    expiries = [epoch_seconds(credit.get("expiresAt")) for credit in usable]
-    return {"resetCreditsUsableNow": sum(int(number(credit.get("remainingCount")) or 0) for credit in usable),
-            "resetCreditsLater": sum(int(number(credit.get("remainingCount")) or 0) for credit in later),
-            "resetCreditsUsableExpiresAt": min((expiry for expiry in expiries if expiry is not None), default=None),
-            "resetCreditsClears": reset_clear_names([clear for credit in usable
-                                                     for clear in (credit.get("clears") or []) if isinstance(clear, str)])}
+    following = next((credit for credit in live if credit.get("id") == reset_credits.get("nextCreditId")), None)
+    usable = following is not None and following.get("usable") is True
+    usable_now = omp_reset_credit_count(following) if following is not None and usable else 0
+    clears = following.get("clears") if following is not None and usable and isinstance(following.get("clears"), list) else []
+    return {"resetCreditsUsableNow": usable_now,
+            "resetCreditsLater": sum(omp_reset_credit_count(credit) for credit in live) - usable_now,
+            "resetCreditsUsableExpiresAt": epoch_seconds(following.get("expiresAt")) if following is not None and usable else None,
+            "resetCreditsClears": reset_clear_names([clear for clear in clears if isinstance(clear, str)])}
 
 
 OMP_POLICY_NUMBERS = ("priority", "reservePct", "reclaimAbovePct", "remainingPct")

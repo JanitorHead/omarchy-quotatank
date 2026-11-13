@@ -297,6 +297,55 @@ class ReportMappingTests(unittest.TestCase):
                          ["work@example.com"])
 
 
+class OmpResetCreditTests(unittest.TestCase):
+    def credit(self, identifier, count, *, usable=True, clears=("anthropic:reset:seven_day_overage_included",)):
+        return {"id": identifier, "remainingCount": count, "usable": usable, "status": "available",
+                "clears": list(clears), "expiresAt": "2030-03-09T07:59:00.000Z"}
+
+    def reset_credits(self, *credits, following="launch-fable"):
+        return {"nextCreditId": following, "credits": list(credits)}
+
+    def test_clears_that_are_not_a_list_clear_nothing_and_keep_the_count(self):
+        for clears in ("anthropic:7d", {"anthropic:7d": True}, 3, None):
+            with self.subTest(clears=clears):
+                reset = self.reset_credits({**self.credit("launch-fable", 1), "clears": clears})
+                credits = usage.omp_reset_usage(reset)
+                self.assertEqual(credits["resetCreditsClears"], [])
+                self.assertEqual(credits["resetCreditsUsableNow"], 1)
+
+    def test_a_remaining_count_that_is_not_a_whole_number_of_zero_or_more_counts_nothing(self):
+        for count in (-1, 1.5, "2", True, None):
+            with self.subTest(count=count):
+                credits = usage.omp_reset_usage(self.reset_credits(self.credit("launch-fable", count)))
+                self.assertEqual(credits["resetCreditsUsableNow"], 0)
+        credits = usage.omp_reset_usage(self.reset_credits(self.credit("launch-fable", 2)))
+        self.assertEqual(credits["resetCreditsUsableNow"], 2)
+
+    def test_the_fable_scope_clears_the_fable_weekly_limit(self):
+        reset = self.reset_credits(self.credit("launch-fable", 1, clears=["anthropic:7d:fable"]))
+        self.assertEqual(usage.omp_reset_usage(reset)["resetCreditsClears"], ["Fable weekly"])
+
+    def test_omp_counts_the_usable_resets_the_way_the_claude_answer_does(self):
+        # Claude spends one grant at a time: a second usable grant waits, as it does in omp.
+        grant = {"id": "launch-reset-20260921", "resets_left": 2, "starts_at": "2026-09-22T16:00:00+00:00",
+                 "ends_at": "2026-10-22T16:00:00+00:00", "clears": ["seven_day_overage_included"], "usable_now": True}
+        later = {**grant, "id": "launch-reset-20261001", "resets_left": 1}
+        payload = {"cedar_ember": {"eligible": True, "grants": [grant, later], "next_grant_id": grant["id"],
+                                   "at_limit": False, "cooldown_until": None}}
+        claude = usage.claude_banked_resets(payload, now=1792000000)
+        reset = self.reset_credits(
+            {"id": "launch-reset-20260921", "remainingCount": 2, "usable": True, "status": "available",
+             "clears": ["anthropic:reset:seven_day_overage_included"], "expiresAt": "2026-10-22T16:00:00.000Z"},
+            {"id": "launch-reset-20261001", "remainingCount": 1, "usable": True, "status": "available",
+             "clears": ["anthropic:reset:seven_day_overage_included"], "expiresAt": "2026-10-22T16:00:00.000Z"},
+            following="launch-reset-20260921")
+        omp = usage.omp_reset_usage(reset)
+        self.assertEqual(omp["resetCreditsUsableNow"], claude["usableNow"])
+        self.assertEqual(omp["resetCreditsLater"], claude["available"] - claude["usableNow"])
+        self.assertEqual(omp["resetCreditsClears"], claude["clears"])
+        self.assertEqual(omp["resetCreditsUsableExpiresAt"], claude["usableExpiresAt"])
+
+
 class AccountIdTests(unittest.TestCase):
     def test_the_id_hashes_omps_provider_and_the_email_in_lower_case(self):
         self.assertEqual(usage.omp_account_id("anthropic", " Dev@Example.com "), omp_id("anthropic", "dev@example.com"))
