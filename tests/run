@@ -73,6 +73,12 @@ if [[ -n $qml_lint && -d "$quattro_root/shell/Ui" ]]; then
   fi
   if ! "$qml_lint" "${lint_flags[@]}" -I "$lint_root" "$repo_root"/*.qml >"$lint_log" 2>&1; then
     sed -n '1,240p' "$lint_log"
+    # Some warnings (an unqualified signal parameter, on Qt 6.12) fail -W 0 without a line of plain output; the JSON
+    # report names them.
+    "$qml_lint" "${lint_flags[@]}" -I "$lint_root" --json - "$repo_root"/*.qml 2>/dev/null | jq -r '.files[]
+      | select(.success == false) | .filename as $file | .warnings[] | "\($file):\(.line):\(.column): \(.message) [\(.id)]"' \
+      || true
+    echo "qmllint failed" >&2
     exit 1
   fi
   echo "qmllint: passed (dynamic Omarchy/Quickshell type warnings disabled)"
