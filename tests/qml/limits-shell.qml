@@ -112,6 +112,22 @@ ShellRoot {
     return Object.assign({ id: "claude", name: "Claude Code", status: "ok", accountId: id, label: id,
       origin: "omarchy", windows: [session(10, 0), weekly(20)] }, extra || {})
   }
+  // OMP ROUTING fixtures: the tests/test_usage_logic.js shapes (a window resets in `resetIn` seconds from now).
+  function ompWindow(id, used, resetIn, seconds) {
+    return { id: id, label: id === "weekly" ? "Weekly limit" : "5-hour limit", used: used, remaining: 100 - used,
+      resetsAt: now + resetIn, windowSeconds: seconds }
+  }
+  function ompLogin(accountId, windows, extra) {
+    return login(accountId, Object.assign({ origin: "omp", activity: {}, windows: windows }, extra || {}))
+  }
+  function ompProvider(ompAccounts) {
+    return { id: "claude", name: "Claude Code", status: "ok", windows: ompAccounts[0].windows, accounts: ompAccounts }
+  }
+  readonly property var ompCool: [ompWindow("session", 10, 7200, 18000), ompWindow("weekly", 30, 300000, 604800)]
+  property var ompPair: null
+  property var ompDrain: null
+  property var ompEnded: null
+  property var ompNone: null
   readonly property var accounts: [
     login("work", { active: true, plan: "Claude Max 5x", activity: { lastIncreaseAt: now - 60 },
       windows: [session(70, 0.01), weekly(31)] }),
@@ -167,6 +183,16 @@ ShellRoot {
       counted: [0], runway: UsageLogic.accountRunway(provider, "single", [0], now, [0, 1]) })
     // Coming up: the account's next dates in order: a banked reset that expires, the limit's reset, the subscription's end.
     comingUp = create("ComingUpList.qml", { width: 420, nowSeconds: now, account: comingAccount })
+    ompPair = create("OmpRouting.qml", { width: 420, nowSeconds: now, mode: "together", extraKeys: "{}", hideEmails: true,
+      provider: ompProvider([ompLogin("Work", ompCool), ompLogin("Personal", ompCool)]) })
+    ompDrain = create("OmpRouting.qml", { width: 420, nowSeconds: now, mode: "together", extraKeys: "{}", hideEmails: true,
+      provider: ompProvider([ompLogin("Work", [ompWindow("session", 10, 7200, 18000), ompWindow("weekly", 30, 360000, 604800)]),
+        ompLogin("Personal", [ompWindow("session", 10, 7200, 18000), ompWindow("weekly", 30, 180000, 604800)])]) })
+    ompEnded = create("OmpRouting.qml", { width: 420, nowSeconds: now, mode: "together", extraKeys: "{}", hideEmails: true,
+      provider: ompProvider([ompLogin("Work", ompCool, { subscription: { endsAt: now - 86400, endsOn: "2020-01-01", source: "manual", ended: true } }),
+        ompLogin("Personal", ompCool)]) })
+    ompNone = create("OmpRouting.qml", { width: 420, nowSeconds: now, mode: "together", extraKeys: "{}", hideEmails: true,
+      provider: ompProvider([login("Primary", { origin: "key", windows: ompCool })]) })
     notice = create("EventNotice.qml", { width: 420, motion: motion, shown: true,
       text: "Omarchy moved new Claude sessions to Personal at 16:27: Work reached 95%. Running sessions stay on Work." })
     notice.dismissed.connect(function() { root.dismissals++ })
@@ -263,6 +289,19 @@ ShellRoot {
     // An ended subscription has nothing coming up: the list hides.
     var ended = create("ComingUpList.qml", { width: 420, nowSeconds: now, account: login("old", { subscription: { ended: true } }) })
     check(!ended.visible && find(ended, "comingUpItem-0") === null, "an ended subscription has nothing coming up")
+    // OMP ROUTING: omp's next account and why; the switch point only when drain decides; one warning; no block without omp.
+    check(find(ompPair, "ompRoutingHeading").text === "OMP ROUTING", "the block has its heading")
+    check(find(ompPair, "ompRoutingLine-0").text === "Next session: Work · first in omp's order.",
+      "omp's next account and why: " + find(ompPair, "ompRoutingLine-0").text)
+    check(find(ompPair, "ompRoutingLine-1").text === " " && find(ompPair, "ompRoutingLine-2").text === " ",
+      "stored order gives no switch point or warning")
+    check(find(ompDrain, "ompRoutingLine-1").text === "New sessions move to Work when Personal reaches about 65%.",
+      "the switch point when drain decides: " + find(ompDrain, "ompRoutingLine-1").text)
+    check(find(ompDrain, "ompRoutingSwitchHover") !== null && ompDrain.switchTooltip === "Running sessions keep their account while active.",
+      "the switch point explains that running sessions stay")
+    check(find(ompEnded, "ompRoutingLine-2").text === "Work's subscription ended, but omp still signs in with it: remove it in omp.",
+      "an ended omp account is warned: " + find(ompEnded, "ompRoutingLine-2").text)
+    check(!ompNone.visible && find(ompNone, "ompRoutingLine-0").text === " ", "no omp account, no OMP ROUTING block")
     // Spending: the meter would sweep, but reduced motion keeps it still; the live figure climbs.
     rising.spending = true
     rising.readingAt = now - 50

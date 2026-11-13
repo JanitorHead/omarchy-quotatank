@@ -2284,6 +2284,18 @@ Ui.Panel {
                 foreground: root.foreground
                 fontFamily: root.fontFamily
               }
+
+              OmpRouting {
+                objectName: "ompRouting"
+                width: limitsSection.width
+                provider: root.providerSummary
+                nowSeconds: root.nowSeconds
+                mode: root.accountMode
+                extraKeys: root.setting("extraKeys", "{}")
+                hideEmails: root.hideAccountEmails
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
             }
 
             HintLine {
