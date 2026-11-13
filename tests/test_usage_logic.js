@@ -2243,6 +2243,10 @@ console.log("1.9 Coming up list: passed");
   assert.equal(context.barChipCount(codex, "chips", 0), 4);
   assert.equal(context.barChipCount(codex, "chips", 3), 3);
   assert.equal(context.barChipCount(codex, "dots", 3), 1);
+  // A pool chip is one chip for the provider, whatever the account mode, and keeps the provider's key.
+  assert.equal(context.barChipCount(codex, "chips", 0, "pool"), 1);
+  assert.deepEqual(plain(context.barChipEntries([two], "chips", states, "{}", 0, '{"claude":"pool"}')),
+    [{ key: "claude", providerId: "claude", accountIndex: -1, initial: "", counted: false }]);
   // The cap counts chips: with "One chip per account" a provider weighs as many chips as it shows.
   const size = (provider) => context.barChipCount(provider, "chips", 4);
   const pressure = (provider) => provider.id === "codex" ? 5 : provider.id === "claude" ? 20 : 60;

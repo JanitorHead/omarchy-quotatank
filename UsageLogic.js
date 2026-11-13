@@ -4378,9 +4378,9 @@ function barAccountStrip(provider, state, options) {
 
 // How many chips a provider takes in the bar: one, or under "chips" one per account, at most four and
 // never more than the bar's cap (`max`, 0 for none), so a provider always fits the cap on its own.
-function barChipCount(provider, barAccountMode, max) {
+function barChipCount(provider, barAccountMode, max, chipValue) {
   var accounts = listOrEmpty(provider && provider.accounts)
-  if (barAccountMode !== "chips" || accounts.length < 2 || String(provider && provider.status) === "error") return 1
+  if (chipValue === "pool" || barAccountMode !== "chips" || accounts.length < 2 || String(provider && provider.status) === "error") return 1
   var cap = Math.floor(Number(max))
   return Math.min(accounts.length, 4, isFinite(cap) && cap > 0 ? cap : 4)
 }
@@ -4390,14 +4390,14 @@ function barChipCount(provider, barAccountMode, max) {
 // the account's initial; every other provider keeps one chip. `stateFor(provider)` gives its
 // accountState(); `max` is the bar's chip cap. Keys are stable across readings so chips keep their state:
 // "<provider>" or "<provider>@<account id>".
-function barChipEntries(providers, barAccountMode, stateFor, extraRaw, max) {
+function barChipEntries(providers, barAccountMode, stateFor, extraRaw, max, chipValuesRaw) {
   var list = listOrEmpty(providers)
   var result = []
   for (var i = 0; i < list.length; i++) {
     var provider = list[i]
     var id = String(provider && provider.id)
     var accounts = listOrEmpty(provider && provider.accounts)
-    var count = barChipCount(provider, barAccountMode, max)
+    var count = barChipCount(provider, barAccountMode, max, barChipValue(chipValuesRaw, id))
     var state = count > 1 && typeof stateFor === "function" ? stateFor(provider) : null
     if (!state) {
       result.push({ key: id, providerId: id, accountIndex: -1, initial: "", counted: false })
