@@ -2566,6 +2566,27 @@ console.log("1.9 Coming up list: passed");
   assert.equal(routed(ompProvider([fiveHourRunner, fiveHourNext])).switchPoint,
     "New sessions move to Work when Personal reaches about 55%.");
   assert.equal(routed(ompProvider([ompAccount("Work", cool), boosted])).switchPoint, "");
+
+  // The warning: an omp account whose subscription has ended comes first; otherwise the account behind next
+  // with the most left over at its subscription end. Omp keeps signing in with an ended account, so the line
+  // says to remove it; the leftover names the next account, which omp spends it after.
+  const endedWork = { ...ompAccount("Work", cool), subscription: { endsAt: now - DAY, endsOn: "2020-01-01", source: "manual", ended: true } };
+  assert.equal(routed(ompProvider([endedWork, ompAccount("Personal", cool)])).warning,
+    "Work's subscription ended, but omp still signs in with it: remove it in omp.", "an ended omp account is named");
+  assert.equal(routed(ompProvider([endedWork, ompAccount("Personal", cool)]), { mode: "single" }).warning,
+    "Work's subscription ended, but omp still signs in with it: remove it in omp.", "the ended line shows in any mode");
+  const endingWeekly = { ...ompAccount("Work", [ompWin("session", 100, 3600, 18000), { ...ompWin("weekly", 40, WEEK / 2, WEEK), samples: [] }]),
+    subscription: { endsAt: now + 2 * DAY, endsOn: "2030-01-01", source: "manual", ended: false } };
+  assert.equal(routed(ompProvider([endingWeekly, ompAccount("Personal", cool)])).warning,
+    "Work ends " + context.dayText(now + 2 * DAY, now) + " with 37% left over: omp spends it only after Personal. Raise its priority in omp (auth.accountPolicies).",
+    "a runner-up with leftover at its subscription end is named");
+  // Silent for a proxy pool (even with an ended omp account) and for a provider without omp accounts.
+  const proxyWork = { ...endedWork, proxy: {} };
+  assert.deepEqual(plain(routed(ompProvider([proxyWork, { ...ompAccount("Personal", cool), proxy: {} }]))), { next: "", switchPoint: "", warning: "" },
+    "a proxy pool gets no OMP ROUTING line");
+  const keyAccount = { id: "claude", accountId: "primary", label: "Primary", status: "ok", origin: "key", windows: cool, activity: {} };
+  assert.deepEqual(plain(routed(ompProvider([keyAccount]))), { next: "", switchPoint: "", warning: "" },
+    "a provider without omp accounts gets no OMP ROUTING line");
 }
 
 console.log("UsageLogic.js: all assertions passed");

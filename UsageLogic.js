@@ -3901,17 +3901,46 @@ function ompOrder(a, b) {
 function ompRouting(provider, options) {
   var opts = options || {}
   var lines = { next: "", switchPoint: "", warning: "" }
+  var accounts = providerAccounts(provider)
+  if (proxyPool(provider)) return lines
+  var now = Number(opts.nowSeconds)
+  var hasOmp = false
+  for (var i = 0; i < accounts.length; i++) {
+    if (!fromOmp(accounts[i])) continue
+    hasOmp = true
+    if (lines.warning === "" && subscriptionEnded(accounts[i])) {
+      lines.warning = accountName(accounts[i], opts.extraKeys, opts.hideEmails, i) + "'s subscription ended, but omp still signs in with it: remove it in omp."
+    }
+  }
+  if (!hasOmp) return lines
   var state = ompState(provider, opts.mode, opts.nowSeconds)
   if (state.nextAccount === null) return lines
-  var accounts = providerAccounts(provider)
-  var now = Number(opts.nowSeconds)
   var ranked = ompRanked(provider, now)
   var name = accountName(accounts[state.nextAccount], opts.extraKeys, opts.hideEmails, state.nextAccount)
   var runnerName = ranked.length > 1 ? accountName(accounts[ranked[1].index], opts.extraKeys, opts.hideEmails, ranked[1].index) : ""
   lines.next = "Next session: " + name + " · " + ompReasonText(state.nextReason, runnerName)
   var percent = state.nextReason === "drain" && ranked.length > 1 ? ompSwitchPercent(accounts[ranked[0].index], ranked[0], ranked[1], now) : null
   if (percent !== null) lines.switchPoint = "New sessions move to " + runnerName + " when " + name + " reaches about " + percent + "%."
+  if (lines.warning === "") lines.warning = ompLeftoverWarning(accounts, ranked, opts, now)
   return lines
+}
+
+// The account behind omp's next pick with the most left over at its subscription end (accountLeftover, deadline
+// "end"): omp spends that share only after the next account, so the line says to raise its priority. Empty when
+// no account behind next has a leftover at its end.
+function ompLeftoverWarning(accounts, ranked, opts, now) {
+  var best = null
+  for (var i = 1; i < ranked.length; i++) {
+    var left = accountLeftover(accounts[ranked[i].index], now)
+    if (left && left.deadline === "end" && (best === null || left.percent > best.left.percent)) {
+      best = { index: ranked[i].index, left: left }
+    }
+  }
+  if (best === null) return ""
+  var leftoverAccount = accounts[best.index]
+  var nextName = accountName(accounts[ranked[0].index], opts.extraKeys, opts.hideEmails, ranked[0].index)
+  return accountName(leftoverAccount, opts.extraKeys, opts.hideEmails, best.index) + " ends " + dayText(leftoverAccount.subscription.endsAt, now)
+    + " with " + Math.round(best.left.percent) + "% left over: omp spends it only after " + nextName + ". Raise its priority in omp (auth.accountPolicies)."
 }
 
 // The share at which the next account's drain falls to the runner-up's (rank.ts required drain): the
