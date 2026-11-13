@@ -3588,6 +3588,17 @@ function accountStatusLine(account, spending, nowSeconds, event) {
   if (usedUp !== null) return { kind: "usedup", text: "used up", at: usedUp.resetsAt, tone: "urgent" }
   var computer = account.computer && account.computer.name ? String(account.computer.name)
     : account.proxy && account.proxy.name ? String(account.proxy.name) : ""
+  // The end date comes before the stale, spending and event lines: a dated subscription shows its last day
+  // within 30 days, urgent within the last 7 (the ended state is above). The largest leftover (see windowLeftover)
+  // joins that line, dimmed; without a near end date it stands alone.
+  var now = finiteOrNull(nowSeconds)
+  var leftover = accountLeftover(account, now)
+  var leftText = leftover ? Math.round(leftover.percent) + "% left over" : ""
+  var endsAt = account.subscription ? finiteOrNull(account.subscription.endsAt) : null
+  var endsOn = account.subscription ? String(account.subscription.endsOn || "") : ""
+  if (now !== null && endsAt !== null && endsOn !== "" && endsAt - now > 0 && endsAt - now <= 30 * PACE_DAY_SECONDS)
+    return { kind: "ends", text: "Ends " + subscriptionEndText(endsOn, now) + (leftText !== "" ? " · " + leftText : ""),
+      at: null, tone: endsAt - now <= 7 * PACE_DAY_SECONDS ? "urgent" : "dim" }
   if (account.stale === true) {
     var readAt = Date.parse(String(account.readAt || "")) / 1000
     var staleReason = staleReasonText(account)
@@ -3598,19 +3609,9 @@ function accountStatusLine(account, spending, nowSeconds, event) {
       : { kind: "stale", text: "last known reading", at: null, tone: "dim" }
   }
   if (spending === true) return { kind: "spending", text: "spending now", at: null, tone: "accent" }
-  var now = finiteOrNull(nowSeconds)
   var eventAt = event ? finiteOrNull(event.at) : null
   if (event && (event.kind === "switch" || event.kind === "reset") && withinSeconds(eventAt, now, ACCOUNT_EVENT_SECONDS))
     return { kind: event.kind, text: event.kind === "switch" ? "switched" : "reset", at: eventAt, tone: "accent" }
-  // A dated subscription shows its last day within 30 days, urgent within the last 7 (the ended state is above).
-  // The largest leftover (see windowLeftover) joins that line, dimmed; without a near end date it stands alone.
-  var leftover = accountLeftover(account, now)
-  var leftText = leftover ? Math.round(leftover.percent) + "% left over" : ""
-  var endsAt = account.subscription ? finiteOrNull(account.subscription.endsAt) : null
-  var endsOn = account.subscription ? String(account.subscription.endsOn || "") : ""
-  if (now !== null && endsAt !== null && endsOn !== "" && endsAt - now > 0 && endsAt - now <= 30 * PACE_DAY_SECONDS)
-    return { kind: "ends", text: "Ends " + subscriptionEndText(endsOn, now) + (leftText !== "" ? " · " + leftText : ""),
-      at: null, tone: endsAt - now <= 7 * PACE_DAY_SECONDS ? "urgent" : "dim" }
   if (account.standIn && account.standIn.name)
     return { kind: "standin", text: (readingProxy(account) ? "read through " : "read on ") + account.standIn.name, at: null, tone: "dim" }
   if (leftText !== "") return { kind: "leftover", text: leftText, at: null, tone: "dim" }

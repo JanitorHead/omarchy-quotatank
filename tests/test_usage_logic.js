@@ -1629,6 +1629,9 @@ console.log("omp settings, live feed and account modes: passed");
   const blockedTwice = login("w", [{ ...quiet(100), resetsAt: NOW + 3600 }, { ...week(100), resetsAt: null }]);
   assert.deepEqual(line(blockedTwice), { kind: "usedup", text: "used up", at: null, tone: "urgent" },
     "a used-up window without a reset time still blocks: no back time");
+  const endingSoon = login("w", [quiet(3)], { activity: { lastIncreaseAt: NOW - 60 },
+    subscription: { endsAt: NOW + 10 * DAY, endsOn: "2030-12-03", ended: false } });
+  assert.equal(line(endingSoon).kind, "ends", "the end date beats spending now");
   assert.equal(context.accountUsedUp(blockedTwice).resetsAt, null, "the hover card reads the same helper");
   assert.equal(context.accountUsedUp(login("w", [quiet(99.6)])), null, "room left is not used up");
   assert.equal(context.compactPercent(99.6, "Used"), 99, "a meter never rounds into used up");
