@@ -180,6 +180,16 @@ class StaleReadingTests(AccountHistoryTestCase):
         self.assertEqual(failed["status"], "error")
         self.assertNotIn("stale", failed)
 
+    def test_a_failed_reading_whose_subscription_ended_is_not_replaced_by_a_stale_copy(self) -> None:
+        self.refresh(reading("claude", 35, 55), NOW)
+        failed = usage.error_provider("claude", "rate_limited", "Too many requests.")
+        failed["subscription"] = {"source": "provider", "ended": True}
+        ended = self.refresh(failed, NOW + 900)
+
+        self.assertEqual(ended["status"], "error")
+        self.assertNotIn("stale", ended)
+        self.assertEqual(ended["subscription"], {"source": "provider", "ended": True})
+
     def test_a_stale_summary_keeps_this_refreshs_accounts(self) -> None:
         self.refresh(logins(("main", 10, 40), ("work", 5, 20)), NOW)
         failed_main = dict(usage.error_provider("claude", "rate_limited", "Too many requests."),
