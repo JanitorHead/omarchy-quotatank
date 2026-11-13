@@ -173,7 +173,9 @@ assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }),
   assert.equal(context.accountResetActionable(viaOmp), false, "omp keeps that sign-in");
   assert.equal(context.accountResetNote(viaOmp), "Apply it in omp: omp usage reset.");
   assert.equal(context.accountResetActionable(claude({})), false, "a count from omp alone is not usable here");
-  assert.equal(context.accountResetShown(resetAccount), false, "Codex resets show when read through CLIProxyAPI");
+  assert.equal(context.accountResetShown(resetAccount), true, "Codex resets show when read natively too");
+  assert.equal(context.accountResetActionable(resetAccount), false, "Codex resets are applied through CLIProxyAPI");
+  assert.equal(context.accountResetNote(resetAccount), "Codex resets are applied through CLIProxyAPI.");
   const throughProxy = { ...resetAccount, proxy: { id: "p-00000001", name: "CLIProxyAPI" } };
   assert.equal(context.accountResetActionable(throughProxy), true);
   assert.equal(context.accountResetActionable({ ...resetAccount, standIn: { id: "p-00000001", name: "CLIProxyAPI" } }), true,
@@ -236,6 +238,9 @@ assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }),
     proxy: { id: "p-00000001", name: "CLIProxyAPI" } };
   assert.deepEqual(plain(context.accountResetBadge(codex, 25)), { label: "2 resets", tooltip: "2 banked resets", dim: false, actionable: true },
     "Codex has no usable-now split: its count shows");
+  assert.deepEqual(plain(context.accountResetBadge(resetAccount, 25)),
+    { label: "2 resets", tooltip: "2 banked resets · Codex resets are applied through CLIProxyAPI.", dim: false, actionable: false },
+    "a native Codex row shows its count; CLIProxyAPI applies it");
   assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsUsableNow: 0 }, []), 25), null, "later resets alone show no badge");
   assert.equal(context.accountResetBadge({ ...codex, credits: { resetCreditsAvailable: 0 } }, 25), null);
   assert.equal(context.accountResetBadge({ ...codex, status: "disabled" }, 25), null);

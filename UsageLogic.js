@@ -1914,10 +1914,9 @@ function readingProxy(account) {
   return null
 }
 
-// Whether the account's resets are shown: Claude's wherever it is read, Codex's when read through CLIProxyAPI,
-// where they can be applied.
+// Whether the account's resets are shown: wherever the account is read, so the count is the same for every reading.
 function accountResetShown(account) {
-  return accountResetLabel(account) !== "" && (account.id === "claude" || readingProxy(account) !== null)
+  return accountResetLabel(account) !== ""
 }
 
 // Whether this widget can apply one of the account's resets: Codex through CLIProxyAPI, Claude with its own
@@ -1926,7 +1925,8 @@ function accountResetShown(account) {
 function accountResetActionable(account) {
   if (!accountResetShown(account) || !(accountResetCount(account) > 0) || account.origin === "omp") return false
   if (readingComputer(account) !== null) return false
-  return account.id === "codex" || account.credits.resetCreditsUsable === true
+  if (account.id === "codex") return readingProxy(account) !== null
+  return account.credits.resetCreditsUsable === true
 }
 
 // Why a reset the account has cannot be applied from here; "" when it can, or when it has none.
@@ -1937,6 +1937,7 @@ function accountResetNote(account) {
   var where = computer ? String(computer.name || "another computer") : ""
   if (account.origin === "omp") return "Apply it in omp" + (where ? " on " + where : "") + ": omp usage reset."
   if (computer) return "Its sign-in is on " + where + ": apply it there."
+  if (account.id === "codex") return "Codex resets are applied through CLIProxyAPI."
   return CLAUDE_RESET_NOTES[String(account.credits.resetCreditsReason || "")] || CLAUDE_RESET_NOTES.unavailable
 }
 
