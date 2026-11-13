@@ -2450,6 +2450,20 @@ console.log("1.9 Coming up list: passed");
   assert.equal(drain.nextReason, "drain");
   assert.deepEqual(plain(drain.ranking), [1, 0]);
 
+  // Real case: 67% of weekly left with 5 days to reset needs 13.4% a day; 37.1% left with 7 days
+  // needs 5.3% a day. Both are cool, measured, same priority, no reserve. The faster drain goes
+  // first whichever order omp lists them in.
+  const need134 = [ompWin("session", 10, 3600, 18000), ompWin("weekly", 33, 5 * 86400, 604800)];
+  const need53 = [ompWin("session", 10, 3600, 18000), ompWin("weekly", 62.9, 7 * 86400, 604800)];
+  const drainFirst = together(ompProvider([ompAccount("Personal", need53), ompAccount("Work", need134)]));
+  assert.equal(drainFirst.nextAccount, 1, "13.4% a day beats 5.3% a day when listed second");
+  assert.equal(drainFirst.nextReason, "drain");
+  assert.deepEqual(plain(drainFirst.ranking), [1, 0]);
+  const drainLast = together(ompProvider([ompAccount("Work", need134), ompAccount("Personal", need53)]));
+  assert.equal(drainLast.nextAccount, 0, "13.4% a day beats 5.3% a day when listed first");
+  assert.equal(drainLast.nextReason, "drain");
+  assert.deepEqual(plain(drainLast.ranking), [0, 1]);
+
   // Work's weekly allowance is spent with no reset time, so it is not blocked, yet it must still
   // yield to Personal, which has allowance left (rank.ts allowanceSpent, #13889).
   const spent = [ompWin("session", 10, 7200, 18000), { ...ompWin("weekly", 100, 0, 604800), resetsAt: null }];
