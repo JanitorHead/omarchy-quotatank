@@ -61,6 +61,14 @@ ShellRoot {
     return null
   }
 
+  // The open panel's items live in its own window, not under the widget: climb from the account list to the top of
+  // that tree to search it.
+  function panelRoot() {
+    var item = widget.accountList
+    while (item && item.parent) item = item.parent
+    return item
+  }
+
   function namedChildren(item, prefix, out) {
     if (!item) return out
     if (String(item.objectName).indexOf(prefix) === 0) out.push(item)
@@ -518,7 +526,7 @@ ShellRoot {
     function () {
       // The detail reads like the row: "ends 3 Dec", with the year only when it is not this year. It must be on the panel.
       var year = new Date().getUTCFullYear()
-      var meta = namedChild(widget, "accountDetailMeta")
+      var meta = namedChild(panelRoot(), "accountDetailMeta")
       var text = meta ? String(meta.text) : ""
       if (text.indexOf("ends 3 Dec") < 0 && waited < 150) return false
       check(text.indexOf(" · ends 3 Dec") >= 0 && text.indexOf("ends 3 Dec " + year) < 0, "the detail says when the account ends: " + text)
@@ -527,7 +535,7 @@ ShellRoot {
     },
     function () {
       var year = new Date().getUTCFullYear()
-      var meta = namedChild(widget, "accountDetailMeta")
+      var meta = namedChild(panelRoot(), "accountDetailMeta")
       var text = meta ? String(meta.text) : ""
       if (text.indexOf("ends 5 Jan") < 0 && waited < 150) return false
       check(text.indexOf(" · ends 5 Jan " + (year + 1)) >= 0, "the detail shows the year once it is not this year: " + text)
