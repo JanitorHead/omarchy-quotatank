@@ -104,13 +104,39 @@ The marks in `assets/<provider>.svg`, `assets/<provider>-bar.svg`, and `assets/<
 - Each provider's own site artwork, reduced to the 24-unit frame: DevPass (`devpass.llmgateway.io`), Neuralwatt (`neuralwatt.com`), Sofya (`sofya.co`), ClawRouter, and Aixy (`aixy-gateway.com`). xKiro (`xkiro.com`) and Charm Hyper (`hyper.charm.land`) publish raster logos only, so their marks are traced from them; Umans is redrawn from its 16-pixel favicon.
 - Droid, Codebuff, and Synthetic are self-drawn monograms (a rounded square with a letter) and use no third-party artwork.
 - Codex is redistributed from `basecamp/omarchy` as noted above.
-- The omp (Oh My Pi) mark in the marketplace preview (`preview.png`) is the gradient mark from omp.sh's `favicon.svg`, published with [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi) under the MIT licence, shown without its background square.
+- The omp (Oh My Pi) mark in the marketplace preview (`preview.png`) is the gradient mark from omp.sh's `favicon.svg`, published with [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi) (commit `acc7327514f85e7a00ddc267d3ec4638984181bb`) under the MIT licence quoted last below, shown without its background square.
 
 Simple Icons is released under CC0 1.0; the Lobe Icons MIT licence follows:
 
 > MIT License
 >
 > Copyright (c) 2023 LobeHub
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
+
+The omp mark's MIT licence, from `can1357/oh-my-pi`, follows:
+
+> MIT License
+>
+> Copyright (c) 2025 Mario Zechner
+> Copyright (c) 2025-2026 Can Bölük
+> Copyright (c) 2026 Stencil Labs, Inc.
 >
 > Permission is hereby granted, free of charge, to any person obtaining a copy
 > of this software and associated documentation files (the "Software"), to deal

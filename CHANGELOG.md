@@ -4,6 +4,14 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.1.4
+
+Quotatank 3.1.4 carries the omp artwork's MIT notice; the widget is unchanged from 3.1.3.
+
+### Fixed
+
+- **`THIRD_PARTY_NOTICES.md` quotes the MIT licence of the omp mark in the marketplace preview** whole, with its copyright lines (Mario Zechner, Can Bölük, Stencil Labs, Inc.), as `can1357/oh-my-pi` publishes it. It named the licence without the notice the licence asks to keep.
+
 ## 3.1.3
 
 Quotatank 3.1.3 names what a Fable limit reset clears, shows when an omp account's next banked reset expires, and no longer mistakes a signed-out Claude Code for a rejected sign-in.
