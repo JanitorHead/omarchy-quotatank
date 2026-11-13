@@ -17,6 +17,7 @@ ShellRoot {
   property var group: null
   property var quiet: null
   property var leftoverCard: null
+  property var groupLeftover: null
   property var comingUp: null
   readonly property var comingAccount: login("coming", { windows: [weekly(20)], subscription: { endsAt: now + 10 * 86400, source: "manual", ended: false }, credits: { resetCreditsExpiresAt: now + 86400 } })
   property var runwayCard: null
@@ -183,8 +184,10 @@ ShellRoot {
     rising = create("LimitCard.qml", { width: 420, window: session(70, 0.01), nowSeconds: now, motion: motion })
     quiet = create("LimitCard.qml", { width: 420, window: Object.assign(session(31, 0), { label: markup }), nowSeconds: now, motion: motion })
     var paceWindow = weeklyPace(20, 0.0002)
-    leftoverCard = create("LimitCard.qml", { width: 420, window: paceWindow, nowSeconds: now, motion: motion,
-      account: { id: "claude", windows: [paceWindow], subscription: { endsAt: now + 30 * 86400, source: "manual", ended: false } } })
+    var paceAccount = { id: "claude", windows: [paceWindow], subscription: { endsAt: now + 30 * 86400, source: "manual", ended: false } }
+    leftoverCard = create("LimitCard.qml", { width: 420, window: paceWindow, nowSeconds: now, motion: motion, account: paceAccount })
+    groupLeftover = create("LimitGroupCard.qml", { width: 420, nowSeconds: now, motion: motion, meterStyle: "tanks",
+      windows: [paceWindow], account: paceAccount })
     group = create("LimitGroupCard.qml", { width: 420, nowSeconds: now, motion: motion, spending: true, meterStyle: "tanks",
       windows: [session(70, 0.01), weekly(31), Object.assign(weekly(12), { id: "extra", label: markup })] })
     var provider = { id: "claude", status: "ok", accounts: [accounts[0], login("personal", { windows: [session(60, 0), weekly(10)] })] }
@@ -304,6 +307,9 @@ ShellRoot {
     // A weekly limit with room at reset: the footer says what is left and the pace that spends it.
     check(find(leftoverCard, "limitVerdict").text === "65% left over at reset · use 27%/day to spend it",
       "a leftover is the verdict: " + find(leftoverCard, "limitVerdict").text)
+    // The group card gives every limit the same leftover verdict as its limit card.
+    check(find(groupLeftover, "tankVerdict").text === "65% left over at reset · use 27%/day to spend it",
+      "a group card's leftover is the verdict: " + find(groupLeftover, "tankVerdict").text)
     // Coming up: the banked reset expires first, then the limit resets, then the subscription ends.
     var coming = [find(comingUp, "comingUpItem-0"), find(comingUp, "comingUpItem-1"), find(comingUp, "comingUpItem-2")]
     check(comingUp.visible && coming[0] && coming[0].text.indexOf("Banked reset expires ") === 0, "the banked reset expires first: " + (coming[0] ? coming[0].text : "(none)"))

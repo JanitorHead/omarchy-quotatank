@@ -127,6 +127,7 @@ Item {
             spending: !!root.host && root.host.spending
             readingAt: root.host ? root.host.readingAt : 0
             requestAt: root.host ? root.host.requestAt : 0
+            account: root.host ? root.host.account : null
           }
           readonly property color tone: root.ringTone(index, row)
           readonly property bool remaining: limit.quotaMode === "Remaining"

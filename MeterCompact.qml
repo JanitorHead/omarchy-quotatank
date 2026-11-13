@@ -281,6 +281,7 @@ Item {
           spending: !!root.host && root.host.spending
           readingAt: root.host ? root.host.readingAt : 0
           requestAt: root.host ? root.host.requestAt : 0
+          account: root.host ? root.host.account : null
         }
         readonly property bool stressed: !!root.host && root.host.stressed(row)
         readonly property var verdict: root.host ? root.host.verdictOf(limit) : ({ text: "", urgent: false })

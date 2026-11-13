@@ -15,6 +15,8 @@ Ui.BorderSurface {
   // The account's windows, in card order (shortest first).
   property var windows: []
   property string quotaMode: "Used"
+  // The account the windows belong to: its subscription end bounds each limit's leftover (LimitModel.account).
+  property var account: null
   property color foreground: Commons.Color.foreground
   property color urgent: Commons.Color.urgent
   property color providerColor: foreground
@@ -90,7 +92,7 @@ Ui.BorderSurface {
   // Where this pace takes the limit (UsageLogic.forecastText): { text, urgent }.
   function verdictOf(limit) {
     if (limit && !limit.known && limit.window) return { text: "usage not reported", urgent: false }
-    return UsageLogic.forecastText(limit ? limit.forecast : null, root.quotaMode, root.clock)
+    return UsageLogic.forecastText(limit ? limit.forecast : null, root.quotaMode, root.clock, limit ? limit.leftover : null)
   }
 
   implicitHeight: meterView.implicitHeight + contentTopInset + contentBottomInset

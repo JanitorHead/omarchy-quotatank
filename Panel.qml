@@ -2268,6 +2268,7 @@ Ui.Panel {
                 width: limitsSection.width
                 windows: root.detailWindowList
                 quotaMode: root.selectedQuotaMode
+                account: root.detailAccount
                 foreground: root.foreground
                 urgent: root.urgent
                 providerColor: root.providerColors ? UsageLogic.providerAccent(String(root.provider ? root.provider.id : ""), root.foreground) : root.foreground
