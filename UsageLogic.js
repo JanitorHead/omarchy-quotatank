@@ -3259,6 +3259,15 @@ function subscriptionEndText(endsOn, nowSeconds) {
   return text + " " + day.slice(0, 4)
 }
 
+// A subscription's end as the panel names it: its day (`endsOn`) when it has one, else the local day of the instant
+// (`endsAt`, as a provider's end arrives from the reader). Empty without either.
+function subscriptionEndLabel(subscription, nowSeconds) {
+  if (!subscription) return ""
+  var text = subscriptionEndText(subscription.endsOn, nowSeconds)
+  var endsAt = finiteOrNull(subscription.endsAt)
+  return text !== "" || endsAt === null ? text : dayText(endsAt, nowSeconds)
+}
+
 // The day (YYYY-MM-DD, UTC) a provider dated its subscription to end, or "" when it did not date it.
 function providerSubscriptionEndsOn(subscription) {
   if (!subscription || subscription.source !== "provider" || typeof subscription.endsAt !== "number") return ""
@@ -3958,7 +3967,7 @@ function ompLeftoverWarning(accounts, ranked, opts, now) {
   if (best === null) return ""
   var leftoverAccount = accounts[best.index]
   var nextName = accountName(accounts[ranked[0].index], opts.extraKeys, opts.hideEmails, ranked[0].index + 1)
-  return accountName(leftoverAccount, opts.extraKeys, opts.hideEmails, best.index + 1) + " ends " + subscriptionEndText(leftoverAccount.subscription.endsOn, now)
+  return accountName(leftoverAccount, opts.extraKeys, opts.hideEmails, best.index + 1) + " ends " + subscriptionEndLabel(leftoverAccount.subscription, now)
     + " with " + Math.round(best.left.percent) + "% left over: omp spends it only after " + nextName + ". Raise its priority in omp (auth.accountPolicies)."
 }
 
@@ -4079,7 +4088,7 @@ function comingUpItems(account, nowSeconds) {
   var expires = account.credits ? finiteOrNull(account.credits.resetCreditsExpiresAt) : null
   if (expires !== null && expires > now) items.push({ kind: "banked", at: expires, tone: "dim", text: "Banked reset expires " + dayText(expires, now) })
   var endsAt = account.subscription ? finiteOrNull(account.subscription.endsAt) : null
-  var endsOn = account.subscription ? subscriptionEndText(account.subscription.endsOn, now) : ""
+  var endsOn = subscriptionEndLabel(account.subscription, now)
   if (endsAt !== null && endsAt > now && endsOn !== "") items.push({ kind: "end", at: endsAt, tone: "dim", text: "Subscription ends " + endsOn })
   return items.sort(function (a, b) { return a.at - b.at })
 }

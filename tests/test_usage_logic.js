@@ -2161,6 +2161,10 @@ console.log("1.9 Leftover at the reset: passed");
   assert.match(items[0].text, /^Weekly limit resets \d+ \w+ · \d+% left over$/, "the next reset carries its leftover");
   assert.match(items[1].text, /^Banked reset expires \d+ \w+$/);
   assert.equal(items[2].text, "Subscription ends 10 Feb", "the end date is the manual day, not the instant");
+  // A provider's end straight from the reader carries only the instant: it is listed on its local day. Noon UTC on
+  // 11 Feb (NOW is 13:46:40 UTC) is 11 Feb from UTC−11 to UTC+11.
+  const providerEnd = asJson(context.comingUpItems({ ...full, subscription: { endsAt: NOW + 30 * DAY - 6400, source: "provider" } }, NOW));
+  assert.equal(providerEnd[2].text, "Subscription ends 11 Feb", "a provider end without a day is still listed");
   const early = asJson(context.comingUpItems({ ...full, credits: { resetCreditsExpiresAt: NOW + DAY } }, NOW));
   assert.deepEqual(early.map((item) => item.kind), ["banked", "reset", "end"], "an earlier banked expiry comes first");
   const ended = { windows: [], subscription: { endsAt: NOW + DAY, endsOn: "1970-01-02", source: "manual", ended: true } };
