@@ -66,6 +66,8 @@ Column {
   // payload that arrived keeps the rows from jumping in the meantime.
   property var lastPayload: null
   readonly property var shownReadings: lastPayload ? UsageLogic.listOrEmpty(lastPayload.providers) : []
+  // The same readings with each account's custom name applied, for the labels in the provider rows.
+  readonly property var namedReadings: UsageLogic.withAccountNames(shownReadings, value("accountNames", "{}"))
   readonly property var shownDetected: lastPayload ? UsageLogic.listOrEmpty(lastPayload.detected) : []
   // The provider whose sign-in or install was just started from here, until its next good reading.
   property string pendingSetup: ""
@@ -1143,7 +1145,7 @@ Column {
         readonly property bool on: UsageLogic.contains(root.enabledProviders, providerId)
         readonly property var entry: UsageLogic.localProvider(providerId)
         readonly property bool hasKey: UsageLogic.keySaved(root.settings, providerId)
-        readonly property var reading: UsageLogic.readingFor(root.shownReadings, providerId)
+        readonly property var reading: UsageLogic.readingFor(root.namedReadings, providerId)
         readonly property var setup: reading ? UsageLogic.setupActionFor(entry, reading, root.lastPayload, root.mainComputer) : UsageLogic.setupAction(null, null, null)
         readonly property var status: entry ? UsageLogic.providerStatus(entry, reading, hasKey, root.usageLoading,
           setup.kind === "signin" || setup.kind === "install") : null
@@ -1381,7 +1383,7 @@ Column {
               }
               SelectRow {
                 objectName: "barChipValue-" + providerRow.providerId
-                visible: root.percentageDisplay && !providerRow.money
+                visible: root.percentageDisplay && !providerRow.money && providerRow.accountCount >= 2
                 label: "Menu bar shows"
                 options: [
                   { value: "account", label: "Account" },
@@ -1430,21 +1432,33 @@ Column {
               }
               Repeater {
                 model: providerRow.accountCount >= 1 ? providerRow.accountList : []
-                delegate: TextRow {
+                delegate: Column {
                   required property var modelData
                   required property int index
                   readonly property string accountId: String(modelData && modelData.accountId || "")
-                  objectName: "subscriptionEnd-" + providerRow.providerId + "-" + index
-                  label: "Subscription ends for " + UsageLogic.accountSettingsLabel(modelData, root.value("extraKeys", "{}"),
-                    root.value("hideAccountEmails", true) !== false, index)
-                  placeholder: "YYYY-MM-DD"
-                  maximumLength: 10
-                  source: UsageLogic.subscriptionEndOf(root.value("subscriptionEnds", "{}"), providerRow.providerId, accountId)
-                  visible: UsageLogic.providerSubscriptionEndsOn(modelData && modelData.subscription) === ""
-                  validate: function (text) { return (text === "" || UsageLogic.subscriptionEndDay(text) !== null) ? "" : "Use a real date as YYYY-MM-DD" }
-                  onApplied: function(text) {
-                    root.set("subscriptionEnds", UsageLogic.setSubscriptionEnds(
-                      root.value("subscriptionEnds", "{}"), providerRow.providerId, accountId, text))
+                  // The provider's own end date takes the place of the manual date field, in the same spot.
+                  readonly property string reportedEnd: UsageLogic.providerSubscriptionEndsOn(modelData && modelData.subscription)
+                  width: parent.width
+                  TextRow {
+                    width: parent.width
+                    objectName: "subscriptionEnd-" + providerRow.providerId + "-" + index
+                    label: "Subscription ends for " + UsageLogic.accountSettingsLabel(modelData, root.value("extraKeys", "{}"),
+                      root.value("hideAccountEmails", true) !== false, index)
+                    placeholder: "YYYY-MM-DD"
+                    maximumLength: 10
+                    source: UsageLogic.subscriptionEndOf(root.value("subscriptionEnds", "{}"), providerRow.providerId, accountId)
+                    visible: reportedEnd === ""
+                    validate: function (text) { return (text === "" || UsageLogic.subscriptionEndDay(text) !== null) ? "" : "Use a real date as YYYY-MM-DD" }
+                    onApplied: function(text) {
+                      root.set("subscriptionEnds", UsageLogic.setSubscriptionEnds(
+                        root.value("subscriptionEnds", "{}"), providerRow.providerId, accountId, text))
+                    }
+                  }
+                  Hint {
+                    width: parent.width
+                    objectName: "subscriptionReported-" + providerRow.providerId + "-" + index
+                    visible: reportedEnd !== ""
+                    text: providerRow.name + " reports it ends " + UsageLogic.subscriptionEndText(reportedEnd, Date.now() / 1000)
                   }
                 }
               }
@@ -1465,16 +1479,6 @@ Column {
                     root.set("accountNames", UsageLogic.setAccountName(
                       root.value("accountNames", "{}"), providerRow.providerId, accountId, text))
                   }
-                }
-              }
-              Repeater {
-                model: providerRow.accountCount >= 1 ? providerRow.accountList : []
-                delegate: Hint {
-                  required property var modelData
-                  required property int index
-                  objectName: "subscriptionReported-" + providerRow.providerId + "-" + index
-                  visible: UsageLogic.providerSubscriptionEndsOn(modelData && modelData.subscription) !== ""
-                  text: "Codex reports it ends " + UsageLogic.subscriptionEndText(UsageLogic.providerSubscriptionEndsOn(modelData && modelData.subscription), Date.now() / 1000)
                 }
               }
               Hint {
