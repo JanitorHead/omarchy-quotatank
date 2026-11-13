@@ -1433,6 +1433,7 @@ Column {
               Repeater {
                 model: providerRow.accountCount >= 1 ? providerRow.accountList : []
                 delegate: Column {
+                  id: endRow
                   required property var modelData
                   required property int index
                   readonly property string accountId: String(modelData && modelData.accountId || "")
@@ -1441,24 +1442,24 @@ Column {
                   width: parent.width
                   TextRow {
                     width: parent.width
-                    objectName: "subscriptionEnd-" + providerRow.providerId + "-" + index
-                    label: "Subscription ends for " + UsageLogic.accountSettingsLabel(modelData, root.value("extraKeys", "{}"),
-                      root.value("hideAccountEmails", true) !== false, index)
+                    objectName: "subscriptionEnd-" + providerRow.providerId + "-" + endRow.index
+                    label: "Subscription ends for " + UsageLogic.accountSettingsLabel(endRow.modelData, root.value("extraKeys", "{}"),
+                      root.value("hideAccountEmails", true) !== false, endRow.index)
                     placeholder: "YYYY-MM-DD"
                     maximumLength: 10
-                    source: UsageLogic.subscriptionEndOf(root.value("subscriptionEnds", "{}"), providerRow.providerId, accountId)
-                    visible: reportedEnd === ""
+                    source: UsageLogic.subscriptionEndOf(root.value("subscriptionEnds", "{}"), providerRow.providerId, endRow.accountId)
+                    visible: endRow.reportedEnd === ""
                     validate: function (text) { return (text === "" || UsageLogic.subscriptionEndDay(text) !== null) ? "" : "Use a real date as YYYY-MM-DD" }
                     onApplied: function(text) {
                       root.set("subscriptionEnds", UsageLogic.setSubscriptionEnds(
-                        root.value("subscriptionEnds", "{}"), providerRow.providerId, accountId, text))
+                        root.value("subscriptionEnds", "{}"), providerRow.providerId, endRow.accountId, text))
                     }
                   }
                   Hint {
                     width: parent.width
-                    objectName: "subscriptionReported-" + providerRow.providerId + "-" + index
-                    visible: reportedEnd !== ""
-                    text: providerRow.name + " reports it ends " + UsageLogic.subscriptionEndText(reportedEnd, Date.now() / 1000)
+                    objectName: "subscriptionReported-" + providerRow.providerId + "-" + endRow.index
+                    visible: endRow.reportedEnd !== ""
+                    text: providerRow.name + " reports it ends " + UsageLogic.subscriptionEndText(endRow.reportedEnd, Date.now() / 1000)
                   }
                 }
               }
