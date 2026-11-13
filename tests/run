@@ -78,6 +78,7 @@ if command -v quickshell >/dev/null 2>&1 && [[ -d "$quattro_root/shell/Ui" ]]; t
   QUOTATANK_REPO_URL="$repo_url" \
   QUOTATANK_FAKE_BACKEND="$repo_root/tests/fake_quota_refresh.py" \
   QUOTATANK_QUOTA_REQUESTS="$quota_root/requests.jsonl" \
+  XDG_STATE_HOME="$quota_root/state" \
   PATH="$repo_root/tests/fake-bin:$PATH" \
     timeout 8 quickshell -p "$quota_root" --no-color >"$quota_root/runtime.log" 2>&1 || {
       cat "$quota_root/runtime.log"
@@ -98,6 +99,26 @@ assert requests[0]["proxy"] == ["p-1a2b3c4d=https://old.example"]
 assert all(row["proxy"] == ["p-1a2b3c4d=https://new.example"] for row in requests[1:])
 PY
   echo "Quota QML contract: passed (startup refreshes and connection changes)"
+
+  restart_root="$test_root/restart"
+  mkdir -p "$restart_root"
+  cp "$repo_root/tests/qml/restart-shell.qml" "$restart_root/shell.qml"
+  QT_QPA_PLATFORM=offscreen \
+  QUOTATANK_REPO_URL="$repo_url" \
+  QUOTATANK_FAKE_BACKEND="$repo_root/tests/fake_quota_refresh.py" \
+  QUOTATANK_QUOTA_REQUESTS="$restart_root/requests.jsonl" \
+  XDG_STATE_HOME="$restart_root/state" \
+  PATH="$repo_root/tests/fake-bin:$PATH" \
+    timeout 10 quickshell -p "$restart_root" --no-color >"$restart_root/runtime.log" 2>&1 || {
+      cat "$restart_root/runtime.log"
+      exit 1
+    }
+  if ! rg -q 'Restart QML contract: passed' "$restart_root/runtime.log" \
+      || rg -n 'Error:|ReferenceError|TypeError|Binding loop|Unable to assign|failed to load|Cannot write file|RESTART TEST FAILED' "$restart_root/runtime.log"; then
+    cat "$restart_root/runtime.log"
+    exit 1
+  fi
+  echo "Restart QML contract: passed (saved reading, waiting out the interval, due and changed settings)"
 
   activity_root="$test_root/activity"
   mkdir -p "$activity_root"
@@ -125,7 +146,7 @@ PY
   ln -s "$quattro_root/shell/Commons" "$cost_root/Commons"
   repo_url=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$repo_root")
   QT_QPA_PLATFORM=offscreen \
-  XDG_CONFIG_HOME="$cost_root/config" XDG_CACHE_HOME="$cost_root/cache" \
+  XDG_CONFIG_HOME="$cost_root/config" XDG_CACHE_HOME="$cost_root/cache" XDG_STATE_HOME="$cost_root/state" \
   QUOTATANK_REPO_URL="$repo_url" \
   QUOTATANK_FAKE_COST_BACKEND="$repo_root/tests/fake_cost_backend.py" \
   QUOTATANK_COST_FIXTURE="$repo_root/tests/fixtures/normalized-costs.json" \
@@ -149,7 +170,7 @@ PY
   ln -s "$quattro_root/shell/Ui" "$settings_root/Ui"
   ln -s "$quattro_root/shell/Commons" "$settings_root/Commons"
   QT_QPA_PLATFORM=offscreen \
-  XDG_CONFIG_HOME="$settings_root/config" XDG_CACHE_HOME="$settings_root/cache" \
+  XDG_CONFIG_HOME="$settings_root/config" XDG_CACHE_HOME="$settings_root/cache" XDG_STATE_HOME="$settings_root/state" \
   QUOTATANK_REPO_URL="$repo_url" \
   QUOTATANK_FAKE_BACKEND="$repo_root/tests/fake_omp_usage.py" \
   QUOTATANK_FAKE_COST_BACKEND="$repo_root/tests/fake_omp_costs.py" \
@@ -193,7 +214,7 @@ PY
   reset_platform=offscreen
   if [[ -n ${WAYLAND_DISPLAY:-} ]]; then reset_platform=wayland; fi
   QT_QPA_PLATFORM="$reset_platform" \
-  XDG_CONFIG_HOME="$reset_root/config" XDG_CACHE_HOME="$reset_root/cache" \
+  XDG_CONFIG_HOME="$reset_root/config" XDG_CACHE_HOME="$reset_root/cache" XDG_STATE_HOME="$reset_root/state" \
   QUOTATANK_REPO_URL="$repo_url" QUOTATANK_FAKE_RESET="$repo_root/tests/fake_reset.py" \
   QUOTATANK_RESET_LOG="$reset_root/requests.jsonl" \
   QUOTATANK_FAKE_BACKEND="$repo_root/tests/fake_backend.py" \
@@ -237,7 +258,7 @@ PY
   limits_platform=offscreen
   if [[ -n ${WAYLAND_DISPLAY:-} ]]; then limits_platform=wayland; fi
   QT_QPA_PLATFORM="$limits_platform" \
-  XDG_CONFIG_HOME="$limits_root/config" XDG_CACHE_HOME="$limits_root/cache" \
+  XDG_CONFIG_HOME="$limits_root/config" XDG_CACHE_HOME="$limits_root/cache" XDG_STATE_HOME="$limits_root/state" \
   QUOTATANK_REPO_URL="$repo_url" \
   QUOTATANK_FAKE_BACKEND="$repo_root/tests/fake_accounts_backend.py" \
   QUOTATANK_FAKE_COST_BACKEND="$repo_root/tests/fake_cost_backend.py" \
@@ -269,7 +290,7 @@ PY
     bar_platform=offscreen
     if [[ $bar_phase == panel ]]; then bar_platform=wayland; fi
     QT_QPA_PLATFORM="$bar_platform" QUOTATANK_BAR_PHASE="$bar_phase" \
-    XDG_CONFIG_HOME="$bar_root/config" XDG_CACHE_HOME="$bar_root/cache" \
+    XDG_CONFIG_HOME="$bar_root/config" XDG_CACHE_HOME="$bar_root/cache" XDG_STATE_HOME="$bar_root/state" \
     QUOTATANK_REPO_URL="$repo_url" \
     QUOTATANK_FAKE_BACKEND="$repo_root/tests/fake_backend.py" \
     QUOTATANK_FAKE_COST_BACKEND="$repo_root/tests/fake_cost_backend.py" \

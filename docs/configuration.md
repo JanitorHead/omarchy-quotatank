@@ -196,7 +196,7 @@ In **Settings → Costs → Custom prices**, choose a model from the ones in you
 
 | Key | Default | Meaning |
 |---|---:|---|
-| `refreshIntervalSec` | `900` | Automatic refresh interval; clamped to 60–3600 seconds. A check that finds providers unreachable is retried once a minute later |
+| `refreshIntervalSec` | `900` | Automatic refresh interval; clamped to 60–3600 seconds. A check that finds providers unreachable is retried once a minute later. After a shell restart the last reading shows at once and the next check waits out the rest of the interval, unless monitored providers or sources changed |
 | `enabledProviders` | every sign-in provider | Providers monitored: read from every source and shown in Limits. API-key providers are off by default |
 | `dismissedProviders` | `[]` | Providers set up somewhere that **Ignore** stopped suggesting |
 | `sources` | `"[]"` | Managed by **Settings → Sources**: a JSON list of the other places read, in order, each with an `id`, a `kind` and an `on` switch. `computer` rows (`c-` id) hold an SSH destination in `host`; `proxy` rows (`p-` id) a CLIProxyAPI `url`, its management `keyFile`, and an optional CPA Usage Keeper `keeperUrl` and `keeperPasswordFile`; `t3` rows a `name`, `url` and `tokenFile`. Key fields are private file references |

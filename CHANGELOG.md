@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **A shell restart no longer checks every provider at once.** The last reading is saved with the time of its check, so a restarted shell, or a panel opened on another screen, shows it right away and waits out the rest of the refresh interval. Changed providers or sources still check at once.
+
 ## 3.1.4
 
 Quotatank 3.1.4 carries the omp artwork's MIT notice; the widget is unchanged from 3.1.3.

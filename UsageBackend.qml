@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import Quickshell.Io
 import "UsageLogic.js" as UsageLogic
 
@@ -16,6 +17,10 @@ Item {
   property double lastAttemptAt: 0
   property bool pendingRefresh: false
   property bool launchPending: false
+  // refresh.json read (or found missing); until then it, not the settings, decides the first check.
+  property bool stateLoaded: false
+  // The last good reading as saved in refresh.json: { key, lastSuccessAt, payload }.
+  property var savedReading: null
 
   readonly property int refreshIntervalSec: Math.max(60, Math.min(3600,
     Math.round(Number(setting("refreshIntervalSec", 900)) || 900)))
@@ -53,7 +58,11 @@ Item {
   readonly property var mainComputer: UsageLogic.mainComputer(settings)
   readonly property string connectionId: JSON.stringify([keyFiles, extraKeyArguments, ompArguments, computerArguments,
     proxyArguments])
+  // A saved reading stands in only for the same providers and connection.
+  readonly property string readingKey: JSON.stringify([enabledProviderIds, connectionId])
   readonly property string scriptPath: localPath(Qt.resolvedUrl("scripts/usage-fetch.py"))
+  readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")
+  readonly property string refreshStatePath: stateHome + "/omarchy/quotatank/refresh.json"
   readonly property double nextRefreshAt: lastAttemptAt > 0
     ? lastAttemptAt + refreshIntervalSec * 1000 : 0
 
@@ -80,8 +89,37 @@ Item {
     try { return decodeURIComponent(value) } catch (e) { return value }
   }
 
+  function scheduleRefresh() {
+    var delay = UsageLogic.refreshDelayMs(Date.now(), lastAttemptAt, refreshIntervalSec)
+    refreshTimer.interval = Math.max(1, delay)
+    refreshTimer.start()
+  }
+
+  function saveRefreshSchedule() {
+    if (stateLoaded) refreshState.setText(JSON.stringify({ lastAttemptAt: lastAttemptAt, reading: savedReading }))
+  }
+
+  function restoreState(saved) {
+    stateLoaded = true
+    var attempted = saved ? Number(saved.lastAttemptAt) : NaN
+    if (isFinite(attempted) && attempted > 0) lastAttemptAt = attempted
+    var reading = saved && saved.reading && typeof saved.reading === "object" ? saved.reading : null
+    var usable = reading && reading.key === readingKey && reading.payload
+      && reading.payload.schemaVersion === 1 && UsageLogic.isListLike(reading.payload.providers)
+    if (!usable) {
+      requestRefresh(false)
+      return
+    }
+    savedReading = reading
+    UsageLogic.boundUsagePayload(reading.payload)
+    payload = reading.payload
+    var succeeded = Number(reading.lastSuccessAt)
+    lastSuccessAt = isFinite(succeeded) && succeeded > 0 ? succeeded : 0
+    refreshed()
+    scheduleRefresh()
+  }
+
   function requestRefresh(manual) {
-    if (manual) refreshTimer.restart()
     if (fetchProcess.running || launchPending || pendingRefresh) {
       pendingRefresh = true
       return
@@ -98,6 +136,8 @@ Item {
     loading = true
     pendingRefresh = false
     lastAttemptAt = Date.now()
+    saveRefreshSchedule()
+    scheduleRefresh()
     var command = [
       "python3", scriptPath,
       "--providers", enabledProviderIds.join(","),
@@ -107,6 +147,7 @@ Item {
     command = command.concat(extraKeyArguments).concat(ompArguments).concat(computerArguments).concat(proxyArguments)
     fetchProcess.command = command
     fetchProcess.connectionId = connectionId
+    fetchProcess.readingKey = readingKey
     fetchProcess.running = true
   }
 
@@ -140,6 +181,8 @@ Item {
           fetchError = ""
           var generated = new Date(String(parsed.generatedAt || "")).getTime()
           lastSuccessAt = isFinite(generated) ? generated : Date.now()
+          savedReading = { key: fetchProcess.readingKey, lastSuccessAt: lastSuccessAt, payload: parsed }
+          saveRefreshSchedule()
           // The first check of a session often runs before the network is up; try once more soon
           // instead of leaving the cards on a connection error until the next interval.
           var unreachable = UsageLogic.listOrEmpty(parsed.providers).some(function(provider) {
@@ -157,8 +200,10 @@ Item {
   }
 
   // Let bindings consuming this list settle before changing loading state.
-  onEnabledProviderIdsChanged: Qt.callLater(refreshForSettings)
+  onEnabledProviderIdsChanged: if (stateLoaded) Qt.callLater(refreshForSettings)
+  onRefreshIntervalSecChanged: if (lastAttemptAt > 0) scheduleRefresh()
   onConnectionIdChanged: {
+    if (!stateLoaded) return
     payload = ({ schemaVersion: 1, generatedAt: "", providers: [] })
     lastSuccessAt = 0
     fetchError = ""
@@ -174,6 +219,7 @@ Item {
     property bool timedOut: false
     property bool outputTooLarge: false
     property string connectionId: ""
+    property string readingKey: ""
     readonly property int maxBodyChars: 2 * 1024 * 1024
 
     function appendBody(data) {
@@ -239,12 +285,23 @@ Item {
     }
   }
 
+  FileView {
+    id: refreshState
+    path: root.refreshStatePath
+    printErrors: false
+    onLoaded: {
+      var saved = null
+      try { saved = JSON.parse(text()) } catch (e) {}
+      // Deferred so the settings given at creation are in readingKey.
+      Qt.callLater(function() { if (!root.stateLoaded) root.restoreState(saved) })
+    }
+    onLoadFailed: Qt.callLater(function() { if (!root.stateLoaded) root.restoreState(null) })
+  }
+
   Timer {
     id: refreshTimer
     interval: root.refreshIntervalSec * 1000
-    running: true
-    repeat: true
-    triggeredOnStart: true
+    repeat: false
     onTriggered: root.requestRefresh(false)
   }
 }
