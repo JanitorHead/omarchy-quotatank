@@ -62,6 +62,8 @@ An error record from an HTTP failure carries the response's status as `httpStatu
 
 Codex's accounts check adds `source` `"provider"` and, when Codex gives one, `endsAt`: the Unix time in seconds when the subscription ends (its `cancels_at`, else its `expires_at`). A subscription set to renew has no `endsAt`. `ended` is `true` when Codex does not report an active subscription, or when `endsAt` has passed. A failed check keeps the last answer.
 
+Claude's profile check runs only after a usage read that Claude refused with `expired` or `rate_limited`. It adds `subscription` `{"source": "provider", "ended": true}` when the profile's organization type (`organization.organization_type`, falling back to the top-level `organization_type`) is `claude_free`, and `{"source": "provider", "ended": false}` for any other organization type. A failed profile call keeps the last saved answer. The answer is cached for six hours per Claude config folder.
+
 `detected` lists, in collector order, every provider set up on this computer, monitored or not: a credential or IDE quota file exists, a key is saved or in the environment, or the Antigravity language server runs. It is computed from local files, the environment, and `/proc` only, with no network call, and Settings uses it to offer providers that are not monitored yet.
 
 `installed` lists, in collector order, the providers whose command-line tool is on `PATH` (`claude`, `codex`, `gemini`, `gh` for Copilot, `cursor-agent`, `agy`, …). Settings uses it to choose between **Sign in** (the tool is there) and **Install and sign in** or a download link (it is not).

@@ -18,6 +18,8 @@ All notable changes to this project will be documented here. The format follows
 
 - **Codex subscription end.** Codex's own account check now says when a Codex subscription ends: a cancelled one ends on its cancellation date, an expired one has ended, and a renewing one has no end date. Codex's date replaces the manual field for that account, and the check runs at most once every six hours per account.
 
+- **Claude's own word on an ended plan.** When Claude's usage check is refused, Quotatank asks Claude's profile whether the free plan has ended, at most every six hours per Claude sign-in. A canceled paid plan is not shown as ended.
+
 - **A banked reset badge on every account row.** An account row with a reset Claude can spend now shows how many, as `1 Fable` when it clears only the Fable weekly limit, otherwise `1 reset` or `N resets`. The badge dims while the limit it clears still has more than the warning threshold left. Clicking it applies the reset only where Quotatank can apply one today; otherwise its tooltip says where to apply it. Resets that wait until a limit is reached count only in the tooltip.
 
 - **Leftover on a limit that resets with room to spare.** Its verdict says what it leaves over at reset, with the pace that spends it: `65% left over at reset · use 27%/day to spend it`. Its account row shows it alone, `65% left over`, in place of the plan when no subscription end is near, or joins it to the end when one is: `Ends 1 Jan · 65% left over`. Only limits that reset in a day or more count, and the subscription's end replaces the reset when it comes first; 5-hour limits, balances and credits never show it, and it shows only when the current pace would leave at least 5 points unused.

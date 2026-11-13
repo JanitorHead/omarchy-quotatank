@@ -501,6 +501,7 @@ def claude_scope_name(entry: dict[str, Any]) -> str:
 # `skip_spend=1`, which would drop the extra-usage figures this reader shows, so it is left out.
 CLAUDE_CODE_USER_AGENT = "claude-cli/2.1.302 (external, cli)"
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1"
+CLAUDE_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 CLAUDE_RESET_PROGRAM = "cedar_ember"
 CLAUDE_GRANT_ID = re.compile(r"[a-z0-9_-]{1,80}")
 MAX_CLAUDE_GRANTS = 16
@@ -751,6 +752,29 @@ def claude_signed_in_email(home: Path | None) -> str:
     return str(oauth_account.get("emailAddress") or "") if isinstance(oauth_account, dict) else ""
 
 
+def claude_subscription_from_profile(profile: Any) -> dict[str, Any] | None:
+    """Claude's profile as a subscription. It has ended only on the free plan: a canceled paid plan still runs to the end
+    of its period, and the profile gives no end date to a sign-in token, so `subscription_status` alone is not an end.
+    None when the profile names no organization type."""
+    if not isinstance(profile, dict):
+        return None
+    organization = profile.get("organization") if isinstance(profile.get("organization"), dict) else {}
+    organization_type = organization.get("organization_type") or profile.get("organization_type")
+    if not isinstance(organization_type, str) or not organization_type:
+        return None
+    return {"source": "provider", "ended": organization_type == "claude_free"}
+
+
+def claude_subscription(config_dir: Path, login: dict[str, Any], timeout: float) -> dict[str, Any] | None:
+    """Claude's own word on the subscription, from its profile with the login's token, asked only after a usage read
+    the server refused. At most one call per Claude Code login every six hours; the login is keyed by its folder."""
+    headers = claude_headers(login["accessToken"])
+    return checked_subscription(
+        subscription_cache_path("claude", str(config_dir)),
+        lambda: claude_subscription_from_profile(http_json(CLAUDE_PROFILE_URL, headers, timeout)),
+    )
+
+
 @provider_fetcher("claude")
 def fetch_claude_accounts(timeout: float) -> dict[str, Any]:
     return omarchy_account_result("claude", fetch_claude, timeout)
@@ -796,7 +820,13 @@ def fetch_claude(timeout: float, home: Path | None = None) -> dict[str, Any]:
             payload = request_claude_usage(login, timeout)
         windows, credits = parse_claude_usage(payload)
     except ProviderFailure as exc:
-        return dict(failure_provider(provider_id, exc), account=account)
+        result = dict(failure_provider(provider_id, exc), account=account)
+        # Only a read the server refused asks whether the plan has ended; the profile itself is asked at most every six hours.
+        if exc.kind in ("expired", "rate_limited"):
+            subscription = claude_subscription(config_dir, login, timeout)
+            if subscription is not None:
+                result["subscription"] = subscription
+        return result
 
     result = base_provider(provider_id)
     result.update(
@@ -1077,8 +1107,8 @@ CODEX_ACCOUNTS_CHECK_URL = "https://chatgpt.com/backend-api/accounts/check/v4-20
 SUBSCRIPTION_CHECK_SECONDS = 6 * 3600
 
 
-def subscription_cache_path(account_id: str) -> Path:
-    return state_folder() / "subscriptions" / f"{hashlib.sha256(account_id.encode()).hexdigest()}.json"
+def subscription_cache_path(provider_id: str, key: str) -> Path:
+    return state_folder() / "subscriptions" / f"{provider_id}-{hashlib.sha256(key.encode()).hexdigest()}.json"
 
 
 def subscription_from_check(answer: Any, account_id: str) -> dict[str, Any] | None:
@@ -1109,6 +1139,31 @@ def subscription_as_of(subscription: Any, now: float) -> dict[str, Any] | None:
     return subscription
 
 
+def checked_subscription(path: Path, check: Callable[[], dict[str, Any] | None]) -> dict[str, Any] | None:
+    """A provider's subscription as saved at `path` when it was checked less than six hours ago, else the answer of
+    `check`, which raises ProviderFailure when the provider cannot be asked, and is saved. A failed check keeps the last
+    saved answer and still waits six hours."""
+    now = time.time()
+    try:
+        saved = read_json(path)
+    except (OSError, ValueError, RecursionError):
+        saved = None
+    if not isinstance(saved, dict):
+        saved = {}
+    checked_at = saved.get("checkedAt")
+    if isinstance(checked_at, (int, float)) and 0 <= now - checked_at < SUBSCRIPTION_CHECK_SECONDS:
+        return subscription_as_of(saved.get("subscription"), now)
+    try:
+        subscription = check()
+    except ProviderFailure:
+        subscription = saved.get("subscription")  # A failed check keeps the last answer and still waits six hours.
+    try:
+        atomic_write_json(path, {"checkedAt": now, "subscription": subscription})
+    except OSError:
+        pass  # Without a saved copy the next refresh asks the provider again.
+    return subscription_as_of(subscription, now)
+
+
 def codex_subscription(home: Path | None, timeout: float) -> dict[str, Any] | None:
     """Codex's own word on the subscription, from its accounts check with the login's token. At most one call per
     account every six hours; a failed call keeps the last saved answer. None when the login names no token or account,
@@ -1122,27 +1177,11 @@ def codex_subscription(home: Path | None, timeout: float) -> dict[str, Any] | No
     account_id = tokens.get("account_id") if isinstance(tokens, dict) else None
     if not isinstance(token, str) or not token or not isinstance(account_id, str) or not account_id:
         return None
-    path = subscription_cache_path(account_id)
-    now = time.time()
-    try:
-        saved = read_json(path)
-    except (OSError, ValueError, RecursionError):
-        saved = None
-    if not isinstance(saved, dict):
-        saved = {}
-    checked_at = saved.get("checkedAt")
-    if isinstance(checked_at, (int, float)) and 0 <= now - checked_at < SUBSCRIPTION_CHECK_SECONDS:
-        return subscription_as_of(saved.get("subscription"), now)
     headers = {"Authorization": f"Bearer {token}", "ChatGPT-Account-Id": account_id, "User-Agent": SIGNIN_USER_AGENT}
-    try:
-        subscription = subscription_from_check(http_json(CODEX_ACCOUNTS_CHECK_URL, headers, timeout), account_id)
-    except ProviderFailure:
-        subscription = saved.get("subscription")  # A failed check keeps the last answer and still waits six hours.
-    try:
-        atomic_write_json(path, {"checkedAt": now, "subscription": subscription})
-    except OSError:
-        pass  # Without a saved copy the next refresh asks Codex again.
-    return subscription_as_of(subscription, now)
+    return checked_subscription(
+        subscription_cache_path("codex", account_id),
+        lambda: subscription_from_check(http_json(CODEX_ACCOUNTS_CHECK_URL, headers, timeout), account_id),
+    )
 
 
 @provider_detector("codex")
