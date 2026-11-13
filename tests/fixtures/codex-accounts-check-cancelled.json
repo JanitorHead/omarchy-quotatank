@@ -1,0 +1,14 @@
+{
+  "accounts": {
+    "acct-synthetic-1": {
+      "account": {"plan_type": "pro", "is_deactivated": false},
+      "entitlement": {
+        "has_active_subscription": true,
+        "expires_at": "2027-02-01T00:00:00Z",
+        "renews_at": null,
+        "cancels_at": "2027-02-01T00:00:00Z"
+      },
+      "last_active_subscription": {"will_renew": false, "cancellation_outcome": null}
+    }
+  }
+}

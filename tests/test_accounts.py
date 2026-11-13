@@ -67,6 +67,10 @@ def codex_accounts_check(account_id: str, *, active: bool = True, will_renew: bo
     return {"accounts": {account_id: account}}
 
 
+def recorded_accounts_check(name: str) -> dict:
+    return json.loads((FIXTURES / f"codex-accounts-check-{name}.json").read_text(encoding="utf-8"))
+
+
 def codex_rpc(stream, request_id, method, timeout, params=None) -> dict:
     # Only the account read matters here; the rate limits stay empty so the subscription is what is under test.
     if method == "account/read":
@@ -396,6 +400,26 @@ class CodexSubscriptionTests(AccountsTestCase):
         result = usage.fetch_codex(5)
         self.assertEqual(result["subscription"], {"source": "provider", "ended": False})
 
+    def test_the_recorded_renewing_answer_has_no_end_date(self) -> None:
+        self.answer = recorded_accounts_check("renewing")
+        result = usage.fetch_codex(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": False})
+
+    def test_the_recorded_cancelled_answer_ends_at_its_cancellation_date(self) -> None:
+        self.answer = recorded_accounts_check("cancelled")
+        result = usage.fetch_codex(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": False, "endsAt": self.FEB_1})
+
+    def test_the_recorded_expired_answer_has_ended(self) -> None:
+        self.answer = recorded_accounts_check("expired")
+        result = usage.fetch_codex(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": True, "endsAt": 1796083200})
+
+    def test_the_recorded_chatgpt_free_answer_has_not_ended(self) -> None:
+        self.answer = recorded_accounts_check("free")
+        result = usage.fetch_codex(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": False})
+
     def test_an_answer_without_the_account_keeps_the_last_subscription(self) -> None:
         self.answer = codex_accounts_check(self.ACCOUNT_ID, will_renew=False, expires_at="2027-03-01T00:00:00Z",
                                            cancels_at="2027-02-01T00:00:00Z")
@@ -499,9 +523,14 @@ class ClaudeSubscriptionTests(AccountsTestCase):
         self.assertEqual(result["subscription"], {"source": "provider", "ended": True})
 
     def test_a_cancelled_but_paid_claude_account_has_not_ended(self) -> None:
-        self.profile = self.profile_of("claude_pro", "canceled")
+        self.profile = json.loads((FIXTURES / "claude-profile-cancelled-paid.json").read_text(encoding="utf-8"))
         result = usage.fetch_claude(5)
         self.assertEqual(result["subscription"], {"source": "provider", "ended": False})
+
+    def test_a_recorded_free_claude_profile_has_ended(self) -> None:
+        self.profile = json.loads((FIXTURES / "claude-profile-free.json").read_text(encoding="utf-8"))
+        result = usage.fetch_claude(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": True})
 
     def test_a_working_usage_read_never_asks_the_profile(self) -> None:
         self.usage_failure = None

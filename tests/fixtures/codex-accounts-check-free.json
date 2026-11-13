@@ -1,0 +1,13 @@
+{
+  "accounts": {
+    "acct-synthetic-1": {
+      "account": {"plan_type": "free", "is_deactivated": false},
+      "entitlement": {
+        "has_active_subscription": false,
+        "expires_at": null,
+        "renews_at": null,
+        "cancels_at": null
+      }
+    }
+  }
+}

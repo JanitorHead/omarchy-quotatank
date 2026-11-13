@@ -1,0 +1,4 @@
+{
+  "account": {"email": "dev@example.com"},
+  "organization": {"organization_type": "claude_free", "subscription_status": null}
+}
