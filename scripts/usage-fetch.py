@@ -772,6 +772,7 @@ def claude_subscription(config_dir: Path, login: dict[str, Any], timeout: float)
     return checked_subscription(
         subscription_cache_path("claude", str(config_dir)),
         lambda: claude_subscription_from_profile(http_json(CLAUDE_PROFILE_URL, headers, timeout)),
+        timeout,
     )
 
 
@@ -1105,6 +1106,7 @@ CODEX_ACCOUNTS_CHECK_URL = "https://chatgpt.com/backend-api/accounts/check/v4-20
 
 
 SUBSCRIPTION_CHECK_SECONDS = 6 * 3600
+SUBSCRIPTION_MIN_BUDGET_SECONDS = 2
 
 
 def subscription_cache_path(provider_id: str, key: str) -> Path:
@@ -1142,10 +1144,11 @@ def subscription_as_of(subscription: Any, now: float) -> dict[str, Any] | None:
     return subscription
 
 
-def checked_subscription(path: Path, check: Callable[[], dict[str, Any] | None]) -> dict[str, Any] | None:
+def checked_subscription(path: Path, check: Callable[[], dict[str, Any] | None], budget: float) -> dict[str, Any] | None:
     """A provider's subscription as saved at `path` when it was checked less than six hours ago, else the answer of
     `check`, which raises ProviderFailure when the provider cannot be asked, and is saved. A failed check keeps the last
-    saved answer and still waits six hours."""
+    saved answer and still waits six hours. With less than SUBSCRIPTION_MIN_BUDGET_SECONDS of `budget` the check is
+    skipped and nothing is saved, so the next refresh asks again."""
     now = time.time()
     try:
         saved = read_json(path)
@@ -1155,6 +1158,8 @@ def checked_subscription(path: Path, check: Callable[[], dict[str, Any] | None])
         saved = {}
     checked_at = saved.get("checkedAt")
     if isinstance(checked_at, (int, float)) and 0 <= now - checked_at < SUBSCRIPTION_CHECK_SECONDS:
+        return subscription_as_of(saved.get("subscription"), now)
+    if budget < SUBSCRIPTION_MIN_BUDGET_SECONDS:
         return subscription_as_of(saved.get("subscription"), now)
     try:
         subscription = check()
@@ -1184,6 +1189,7 @@ def codex_subscription(home: Path | None, timeout: float) -> dict[str, Any] | No
     return checked_subscription(
         subscription_cache_path("codex", account_id),
         lambda: subscription_from_check(http_json(CODEX_ACCOUNTS_CHECK_URL, headers, timeout), account_id),
+        timeout,
     )
 
 

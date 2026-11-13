@@ -362,6 +362,12 @@ class CodexSubscriptionTests(AccountsTestCase):
         self.assertEqual(headers["ChatGPT-Account-Id"], self.ACCOUNT_ID)
         self.assertNotIn("codex-synthetic-token", json.dumps(result))
 
+    def test_a_check_with_less_than_two_seconds_is_skipped_and_saves_nothing(self) -> None:
+        result = usage.fetch_codex(1)
+        self.assertEqual(self.checks, [])
+        self.assertNotIn("subscription", result)
+        self.assertFalse(usage.subscription_cache_path("codex", self.ACCOUNT_ID).exists())
+
     def test_a_cancelled_subscription_ends_at_its_cancellation_date(self) -> None:
         self.answer = codex_accounts_check(self.ACCOUNT_ID, will_renew=False, expires_at="2027-03-01T00:00:00Z",
                                            cancels_at="2027-02-01T00:00:00Z")
