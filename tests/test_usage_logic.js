@@ -1804,6 +1804,24 @@ console.log("omp settings, live feed and account modes: passed");
     quiet(10)), "Pool: 1.57 of 2 accounts left this 5-hour window");
   assert.equal(context.poolLine({ windows: [{ windowSeconds: WEEK, accounts: 2, remainingAccounts: 1 }] }, quiet(10)), "");
 
+  // The pool total of a window: what is left across the accounts that carry it, as a mean share of the
+  // accounts with a reading. An Ultra with no 5-hour limit is out of the 5-hour pool, a stale reading counts,
+  // an ended subscription is out, and an account that failed without any reading counts in `total` only.
+  const poolOf = (accounts, selector = "session") => context.poolTotal({ id: "claude", name: "Claude Code", status: "ok", accounts }, selector);
+  const poolWork = login("work", [quiet(60)]);
+  const poolPersonal = login("personal", [quiet(20)]);
+  const poolUltra = login("ultra", [week(10)]);
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal])), { percent: 60, counted: 2, total: 2 });
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, poolUltra])), { percent: 60, counted: 2, total: 2 }, "an Ultra with no 5-hour limit is out of the 5-hour pool");
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, poolUltra], "weekly")), { percent: 90, counted: 1, total: 1 });
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, login("stale", [quiet(80)], { status: "error" })])), { percent: 47, counted: 3, total: 3 }, "a stale reading still counts");
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, { id: "claude", accountId: "broken", status: "error", windows: [] }])), { percent: 60, counted: 2, total: 3 }, "an account that failed without a reading is counted in the total only");
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, login("old", [quiet(10)], { subscription: { ended: true } })])), { percent: 60, counted: 2, total: 2 }, "an ended subscription is out");
+  assert.deepEqual(plain(context.poolTotal(context.withoutHiddenAccounts([{ id: "claude", name: "Claude Code", status: "ok", accounts: [poolWork, poolPersonal, poolUltra] }], '{"claude":["personal"]}')[0], "session")), { percent: 40, counted: 1, total: 1 }, "a hidden account is out");
+  assert.equal(poolOf([]), null, "no account in the pool");
+  assert.deepEqual(plain(context.poolTotal({ id: "kimi", status: "ok", windows: [quiet(30)] }, "session")), { percent: 70, counted: 1, total: 1 }, "a provider without accounts is its own pool");
+  assert.equal(poolOf([poolWork, poolPersonal], "auto"), null, "auto has no window of its own");
+
   // Events: the first reading seeds; then a switch, a reset after heavy use, and an omp sign-in lost.
   const team = (active, workUsed) => ({ id: "claude", name: "Claude Code", status: "ok", accounts: [
     login("work", [quiet(workUsed), week(31)], { active: active === "work" }),

@@ -467,6 +467,40 @@ function windowRowFor(provider, selector, allowFallback) {
   return lowestRow(windows)
 }
 
+// The pool total of one window: what is left across the provider's accounts that carry that window, as a
+// mean share of the accounts counted. An account is in the pool unless its subscription has ended. It counts
+// from its own reading of the window, stale or not. One that failed without any reading stays in `total` only,
+// so "2 of 3 accounts" says how many readings the figure rests on. A provider without accounts is its own pool.
+// Returns { percent, counted, total }, or null when no account is in the pool.
+function poolTotal(provider, selector) {
+  var want = normalizeBarWindow(selector)
+  if (!provider || !WINDOW_SELECTORS[want]) return null
+  var accounts = listOrEmpty(provider.accounts)
+  if (!accounts.length) accounts = [provider]
+  var total = 0
+  var counted = 0
+  var sum = 0
+  for (var i = 0; i < accounts.length; i++) {
+    var account = accounts[i]
+    if (!account || subscriptionEnded(account)) continue
+    var windows = listOrEmpty(account.windows)
+    var matched = []
+    for (var j = 0; j < windows.length; j++) {
+      if (windowMatches(windows[j], want)) matched.push(windows[j])
+    }
+    var row = lowestRow(matched)
+    if (row !== null) {
+      total++
+      counted++
+      sum += clamp(remainingOf(row), 0, 100)
+    } else if (!windows.length && account.status !== "ok") {
+      total++
+    }
+  }
+  if (!total) return null
+  return { percent: counted ? Math.round(sum / counted) : null, counted: counted, total: total }
+}
+
 // Limit cards in one order for every provider: shortest window first, so a 5-hour
 // limit always sits above weekly and monthly ones. Rows without a window length keep
 // their reported order after the timed ones.
