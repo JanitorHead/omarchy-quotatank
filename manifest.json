@@ -172,7 +172,8 @@
       "motion": "system",
       "accountModes": "{}",
       "hiddenAccounts": "{}",
-      "subscriptionEnds": "{}"
+      "subscriptionEnds": "{}",
+      "accountNames": "{}"
     },
     "schema": [
       {
@@ -1513,6 +1514,13 @@
         "label": "Subscription end dates per provider",
         "defaultValue": "{}",
         "description": "Managed by Settings → Providers → Customize. Per provider, each account's subscription end date (YYYY-MM-DD); absent means no date. From the day after it, the account is an ended subscription."
+      },
+      {
+        "key": "accountNames",
+        "type": "string",
+        "label": "Custom account names per provider",
+        "defaultValue": "{}",
+        "description": "Managed by Settings → Providers → Customize. Per provider, the name given to each account that has none of its own (omp, proxy, another computer); it replaces the email and \"Account N\" everywhere the account is named."
       }
     ]
   }

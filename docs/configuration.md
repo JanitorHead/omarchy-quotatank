@@ -240,6 +240,7 @@ In **Settings → Costs → Custom prices**, choose a model from the ones in you
 | `accountModes` | `"{}"` | Per provider, `single` (one account at a time) or `together` (accounts spent at once); absent means automatic |
 | `hiddenAccounts` | `"{}"` | Per provider, the `accountId`s left out of Limits, the menu bar and the notices (Settings → Providers → Customize → Accounts shown); a hidden account stays signed in, and one account always stays shown |
 | `subscriptionEnds` | `"{}"` | Per provider, the subscription end date of each account (`YYYY-MM-DD`), set under Settings → Providers → Customize → Accounts shown; absent means no date |
+| `accountNames` | `"{}"` | Per provider, the custom name of each account that has none of its own (omp, proxy, another computer), set under Settings → Providers → Customize → Accounts; it replaces the email and `Account N` everywhere, and Omarchy logins and extra keys are never renamed; absent means no name |
 
 Examples:
 

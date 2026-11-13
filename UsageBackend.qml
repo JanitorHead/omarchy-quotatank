@@ -42,9 +42,10 @@ Item {
   // Every reading as the backend gave it; Settings lists hidden accounts from these.
   readonly property var allProviders: payload ? UsageLogic.listOrEmpty(payload.providers) : []
   // What Limits, the menu bar and the notices show: the readings without the accounts hidden in Settings,
-  // with the subscription end dates set in Settings applied.
+  // with the custom account names and the subscription end dates set in Settings applied.
   readonly property var providers: UsageLogic.withSubscriptionEnds(
-    UsageLogic.withoutHiddenAccounts(allProviders, setting("hiddenAccounts", "{}")),
+    UsageLogic.withAccountNames(
+      UsageLogic.withoutHiddenAccounts(allProviders, setting("hiddenAccounts", "{}")), setting("accountNames", "{}")),
     setting("subscriptionEnds", "{}"), Date.now() / 1000)
   // Providers set up on this computer, monitored or not; Settings offers the ones not monitored yet.
   readonly property var detected: payload ? UsageLogic.listOrEmpty(payload.detected) : []

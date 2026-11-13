@@ -903,7 +903,7 @@ function exportProviders(providers, nowSeconds, hideEmails) {
     var accountRows = []
     for (var j = 0; j < accounts.length; j++) {
       accountRows.push({
-        label: hideEmails ? "Account " + (j + 1) : String(accounts[j].account || "Account " + (j + 1)),
+        label: accountExportName(accounts[j], hideEmails, j + 1),
         subscriptionEnded: subscriptionEnded(accounts[j]),
         subscriptionEnds: (accounts[j].subscription && accounts[j].subscription.endsOn) || null,
         windows: exportWindows(accounts[j].windows, nowSeconds)
@@ -1101,7 +1101,7 @@ function lastUsedAccount(provider, activityProviders, hideEmails) {
   var accounts = listOrEmpty(provider && provider.accounts)
   for (var j = 0; j < accounts.length; j++) {
     if (last.status === "ok" && accounts[j].accountId === last.accountId)
-      return { label: hideEmails ? "Account " + (j + 1) : String(accounts[j].account || "Account " + (j + 1)),
+      return { label: accountExportName(accounts[j], hideEmails, j + 1),
         reading: accounts[j], lastUsedAt: last.lastUsedAt }
   }
   // Account inventory and activity refresh independently. Never substitute the
@@ -1259,7 +1259,8 @@ var DEFAULT_SETTINGS = {
   barAccountMode: "dots",
   motion: "system",
   accountModes: "{}",
-  hiddenAccounts: "{}"
+  hiddenAccounts: "{}",
+  accountNames: "{}"
 }
 
 // Quotatank 2 keeps its private files in omarchy/quotatank; 1.x kept them in omarchy/model-usage, and the
@@ -1477,10 +1478,100 @@ function accountName(account, extraRaw, hideEmails, index) {
     for (var i = 0; i < entry.keys.length && !named; i++)
       if (entry.keys[i].id === account.accountId) named = entry.keys[i].label || "Key " + (i + 2)
   }
+  if (!named && account.customName) return String(account.customName)
   var email = String(account.account || "")
   if (named) return named + (account.label && account.active ? " · in use" : "") + (!hideEmails && email ? " · " + email : "")
   return hideEmails || !email ? "Account " + (account.accountNumber || index) : email
 }
+
+// Custom account names (`accountNames`, a JSON object of provider id → account id → name): the name the user
+// gives an account that carries none of its own (omp, proxy, another computer, native sign-in). Omarchy
+// logins and extra keys keep their own names, so a stored name for them is ignored. A custom name replaces
+// the email and "Account N" wherever the account is named, hidden emails included.
+var ACCOUNT_NAME_LIMIT = 40
+
+function accountNameText(value) {
+  return typeof value === "string" ? value.trim().slice(0, ACCOUNT_NAME_LIMIT) : ""
+}
+
+function parseAccountNames(raw) {
+  var parsed = raw
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw === "string") {
+    if (raw.length > 65536) return {}
+    try { parsed = JSON.parse(raw) } catch (error) { return {} }
+  }
+  if (!parsed || typeof parsed !== "object" || isListLike(parsed)) return {}
+  var result = {}
+  Object.keys(parsed).forEach(function (providerId) {
+    var rows = parsed[providerId]
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(providerId) || !rows || typeof rows !== "object" || isListLike(rows)) return
+    Object.keys(rows).forEach(function (accountId) {
+      var name = accountNameText(rows[accountId])
+      if (accountId === "" || accountId.length > 128 || name === "") return
+      if (!result[providerId]) result[providerId] = {}
+      result[providerId][accountId] = name
+    })
+  })
+  return result
+}
+
+// Sets (a name) or clears (a blank name) one account's name. The name is trimmed and cut to 40 characters.
+function setAccountName(raw, providerId, accountId, value) {
+  var all = parseAccountNames(raw)
+  var key = String(providerId)
+  var rows = Object.assign({}, all[key] || {})
+  var text = accountNameText(value)
+  if (text === "") delete rows[String(accountId)]
+  else rows[String(accountId)] = text
+  if (Object.keys(rows).length) all[key] = rows
+  else delete all[key]
+  return JSON.stringify(all)
+}
+
+// The name one account has in Settings (`accountNames`), or "" when none is set.
+function accountNameOf(raw, providerId, accountId) {
+  var rows = parseAccountNames(raw)[String(providerId)]
+  return rows && typeof rows[String(accountId)] === "string" ? rows[String(accountId)] : ""
+}
+
+// Whether an account may take a custom name: it has no name of its own (no Omarchy `label`, not an Omarchy
+// login) and it is not an extra key (`primary` or `k-<8 hex>`).
+function acceptsAccountName(account) {
+  if (!account || account.label || account.origin === "omarchy") return false
+  var id = String(account.accountId || "")
+  return id !== "" && id !== "primary" && !/^k-[0-9a-f]{8}$/.test(id)
+}
+
+function applyAccountName(reading, rows) {
+  var id = reading && reading.accountId
+  if (id === undefined || !acceptsAccountName(reading) || !Object.prototype.hasOwnProperty.call(rows, String(id))) return reading
+  return Object.assign({}, reading, { customName: rows[String(id)] })
+}
+
+// The providers with their custom names applied to each account that accepts one, and to the provider's own
+// reading (the active account). Providers without a name come back as they were.
+function withAccountNames(providers, raw) {
+  var names = parseAccountNames(raw)
+  var list = listOrEmpty(providers)
+  if (!Object.keys(names).length) return list
+  return Array.prototype.map.call(list, function (provider) {
+    var rows = provider && names[provider.id]
+    if (!rows) return provider
+    var accounts = providerAccounts(provider)
+    var named = applyAccountName(provider, rows)
+    if (!accounts.length) return named
+    return Object.assign({}, named, { accounts: accounts.map(function (account) { return applyAccountName(account, rows) }) })
+  })
+}
+
+// The name an account is exported and last used under: its custom name, else the email, else "Account N"
+// (never the email while emails are hidden).
+function accountExportName(account, hideEmails, index) {
+  if (account.customName) return String(account.customName)
+  return hideEmails ? "Account " + index : String(account.account || "Account " + index)
+}
+
 
 // `list` with `id` present or absent, in `order`; ids that `order` does not know are dropped.
 function withMember(list, id, present, order) {

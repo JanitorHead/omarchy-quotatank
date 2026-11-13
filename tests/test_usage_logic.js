@@ -2007,6 +2007,50 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
 }
 console.log("1.9 Manual subscription end dates: passed");
 
+// Custom account names (`accountNames`: provider id → account id → name): a name for an account that carries
+// none of its own (omp, proxy, another computer, native sign-in). It replaces the email and "Account N", hidden
+// or not, and never reaches an Omarchy login or an extra key.
+{
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+  const epoch = (iso) => Date.parse(`${iso}T00:00:00Z`) / 1000;
+  const provider = { id: "claude", name: "Claude Code", status: "ok", accountId: "main", active: true, accounts: [
+    { id: "claude", status: "ok", accountId: "main", active: true, origin: "omarchy", label: "Work", account: "work@example.com", windows: [] },
+    { id: "claude", status: "ok", accountId: "omp-0123456789ab", active: false, origin: "omp", account: "personal@example.com", accountNumber: 2, windows: [] },
+    { id: "claude", status: "ok", accountId: "k-1a2b3c4d", active: false, origin: "key", account: "key@example.com", windows: [] },
+  ] };
+  const raw = context.setAccountName("{}", "claude", "omp-0123456789ab", "Personal");
+  assert.equal(raw, '{"claude":{"omp-0123456789ab":"Personal"}}');
+  assert.equal(context.accountNameOf(raw, "claude", "omp-0123456789ab"), "Personal");
+  assert.equal(context.accountNameOf(raw, "claude", "main"), "");
+  const named = context.withAccountNames([provider], raw)[0];
+  assert.equal(context.accountName(named.accounts[1], "{}", true, 2), "Personal", "a custom name replaces Account N when emails are hidden");
+  assert.equal(context.accountName(named.accounts[1], "{}", false, 2), "Personal", "and replaces the email when emails are shown");
+  assert.equal(context.accountName(provider.accounts[1], "{}", true, 2), "Account 2", "without a name: Account N as before");
+  assert.equal(context.accountName(provider.accounts[1], "{}", false, 2), "personal@example.com", "without a name: the email as before");
+  assert.equal(context.barAccountName(named.accounts[1], 1, "{}"), "Personal", "the bar, hover card and accessible name use it");
+  assert.equal(context.accountSettingsLabel(named.accounts[1], "{}", true, 1), "Personal · omp", "Settings says where it is read from");
+  assert.equal(context.lastUsedAccount(named, [{ id: "claude", status: "ok", accountId: "omp-0123456789ab", lastUsedAt: epoch("2030-06-10") }], true).label,
+    "Personal", "last used names it");
+  const exported = context.exportProviders([named], epoch("2030-06-11"), true);
+  assert.equal(exported[0].accounts[1].label, "Personal", "the export names it");
+  assert.equal(JSON.stringify(exported).includes("personal@example.com"), false, "hidden emails never reach the export");
+  assert.equal(context.exportProviders([named], epoch("2030-06-11"), false)[0].accounts[1].label, "Personal", "the export names it with emails shown too");
+  // An Omarchy login and an extra key keep their own names: a stored name for them is ignored.
+  const stored = context.setAccountName(raw, "claude", "main", "Other");
+  const kept = context.withAccountNames([provider], context.setAccountName(stored, "claude", "k-1a2b3c4d", "Mine"));
+  assert.equal(kept[0].accounts[0].customName, undefined, "an Omarchy login keeps its own name");
+  assert.equal(kept[0].accounts[2].customName, undefined, "an extra key keeps its own name");
+  assert.equal(context.accountName(kept[0].accounts[0], "{}", true, 1), "Work · in use", "the login still says its own name");
+  // Clearing removes the entry; a blank name is no name; a long name is cut to 40 characters.
+  assert.equal(context.setAccountName(raw, "claude", "omp-0123456789ab", ""), "{}", "clearing removes the name");
+  assert.equal(context.setAccountName("{}", "claude", "omp-0123456789ab", "   "), "{}", "a blank name is no name");
+  assert.equal(JSON.parse(context.setAccountName("{}", "claude", "omp-0123456789ab", "a".repeat(60)))
+    .claude["omp-0123456789ab"].length, 40, "a long name is cut to 40 characters");
+  assert.deepEqual(plain(context.withAccountNames([provider], "{}")[0]), plain(provider), "without names the reading is left as it was");
+  assert.deepEqual(plain(context.withAccountNames([provider], "not json")[0]), plain(provider), "a broken setting is ignored");
+}
+console.log("1.10 Custom account names: passed");
+
 // Leftover: what a subscription limit of a day or more will still have unused at its deadline (the reset, or
 // the subscription end when that comes first), at the pace the runway uses. Silent when the pace would use it all,
 // when the pace is unknown, and below 5 points.
