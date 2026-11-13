@@ -1951,6 +1951,26 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
   assert.equal(statusAt("2030-06-10", endsAt).text, "Subscription ended", "ended from the day after");
   assert.equal(statusAt("2030-06-10", endsAt - DAY, { status: "error", errorKind: "rate_limited" }).text, "rate limited",
     "an error still wins over the end date");
+  // The row shows the largest leftover: "N% left over" alone, or after the end date within 30 days.
+  const weekly = { id: "weekly", label: "Weekly limit", used: 40, remaining: 60, windowSeconds: WEEK, resetsAt: NOW + WEEK / 2, samples: [] };
+  const alone = context.accountStatusLine({ id: "claude", name: "Claude Code", status: "ok", accountId: "main", active: true, windows: [weekly] }, false, NOW, null);
+  assert.deepEqual(plain(alone), { kind: "leftover", text: "20% left over", at: null, tone: "dim" }, "the largest leftover alone");
+  const dated = context.accountStatusLine({ id: "claude", name: "Claude Code", status: "ok", accountId: "main", active: true, windows: [weekly],
+    subscription: { endsAt: NOW + 20 * DAY, endsOn: "1970-01-13", source: "manual", ended: false } }, false, NOW, null);
+  assert.equal(dated.text, "Ends 13 Jan · 20% left over", "the end date, then the leftover");
+  assert.equal(dated.kind, "ends");
+  // The limit card's verdict states the leftover, at the reset or at the subscription end, with the daily share.
+  const clockOf = (t) => "at " + t
+  const leftoverAtReset = context.windowLeftover(weekly, null, NOW)
+  assert.equal(context.forecastText(context.windowForecast(weekly, NOW), "Used", clockOf, leftoverAtReset).text,
+    "20% left over at reset · use 17%/day to spend it", "the verdict at the reset");
+  const endingSoon = { subscription: { endsAt: NOW + 2 * DAY, endsOn: "1970-01-13", source: "manual", ended: false } }
+  const leftoverAtEnd = context.windowLeftover(weekly, endingSoon, NOW)
+  assert.equal(leftoverAtEnd.deadline, "end", "the subscription end comes first");
+  assert.match(context.forecastText(context.windowForecast(weekly, NOW), "Used", clockOf, leftoverAtEnd).text,
+    /^\d+% left over at subscription end · use 30%\/day to spend it$/, "the verdict at the subscription end");
+  assert.equal(context.forecastText(context.windowForecast(weekly, NOW), "Used", clockOf).text, "lasts until reset",
+    "no leftover, the verdict stays as it was");
   // The JSON export carries the end date beside subscriptionEnded, on each account and on the provider.
   const exportOf = (raw) => JSON.parse(context.exportSnapshot(context.withSubscriptionEnds([provider], raw, epoch("2030-06-01")),
     epoch("2030-06-01"), false)).providers[0];
@@ -1974,6 +1994,47 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
   assert.equal(statusAt("2031-01-05", epoch("2030-12-29")).text, "Ends 5 Jan 2031", "the row shows the year across New Year");
 }
 console.log("1.9 Manual subscription end dates: passed");
+
+// Leftover: what a subscription limit of a day or more will still have unused at its deadline (the reset, or
+// the subscription end when that comes first), at the pace the runway uses. Silent when the pace would use it all,
+// when the pace is unknown, and below 5 points.
+{
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+  const week = (extra = {}) => ({ id: "weekly", label: "Weekly limit", used: 40, remaining: 60, windowSeconds: WEEK,
+    resetsAt: NOW + WEEK / 2, samples: [], ...extra });
+  const account = (subscription = null) => ({ id: "claude", accountId: "main", status: "ok", windows: [], subscription });
+  // A weekly limit, 40% used and half elapsed: the pace is 40 points over 3.5 days, so 20 points are left at the reset.
+  const atReset = plain(context.windowLeftover(week(), account(), NOW));
+  assert.equal(Math.round(atReset.percent), 20, "at the pace, 20 points are left at the reset");
+  assert.equal(atReset.deadline, "reset");
+  assert.equal(atReset.days, 3.5);
+  assert.equal(Math.round(atReset.perDay), 17, "the 60 points left over 3.5 days");
+  // The subscription ends in two days, before the reset: the deadline moves to that end.
+  const ending = plain(context.windowLeftover(week(), account({ endsAt: NOW + 2 * DAY, endsOn: "2030-01-01", source: "manual", ended: false }), NOW));
+  assert.equal(ending.deadline, "end", "the earlier subscription end is the deadline");
+  assert.equal(ending.days, 2);
+  assert.equal(Math.round(ending.percent), 37, "40 points at the pace over 3.5 days leave 60 - 22.9 = 37 points over 2 days");
+  assert.equal(Math.round(ending.perDay), 30, "the 60 points left over the 2 days to the subscription end");
+  // Silent: the pace would use it all, the pace is unknown, less than 5 points are left, the window is shorter than a day.
+  assert.equal(context.windowLeftover(week({ used: 80, remaining: 20 }), account(), NOW), null, "the pace would use the rest");
+  assert.equal(context.windowLeftover(week({ used: 65, remaining: 35 }), account(), NOW), null, "2.5 points left is below 5");
+  assert.equal(context.windowLeftover(week({ used: 100, remaining: 0 }), account(), NOW), null, "exhausted");
+  assert.equal(context.windowLeftover(week({ resetsAt: NOW + WEEK - HOUR }), account(), NOW), null, "the pace is unknown this early");
+  assert.equal(context.windowLeftover(week(), account({ endsAt: NOW + 2 * DAY, ended: true }), NOW), null, "an ended subscription has no leftover");
+  const session = { id: "session", label: "5-hour limit", used: 20, remaining: 80, windowSeconds: SESSION, resetsAt: NOW + SESSION / 2, samples: [] };
+  assert.equal(context.windowLeftover(session, account(), NOW), null, "5-hour windows are never leftover");
+  // accountState gives each account its largest leftover (with the window it comes from), or null.
+  const monthly = { id: "monthly", label: "Monthly limit", used: 10, remaining: 90, windowSeconds: 30 * DAY, resetsAt: NOW + 15 * DAY, samples: [] };
+  const roomy = { id: "claude", accountId: "a", status: "ok", windows: [week({ used: 40, remaining: 60 }), monthly, session] };
+  const full = { id: "claude", accountId: "b", status: "ok", windows: [week({ used: 80, remaining: 20 })] };
+  const pair = { id: "claude", name: "Claude Code", status: "ok", accountId: "a", accounts: [roomy, full] };
+  const paired = plain(context.accountState(pair, { modes: "{}", nowSeconds: NOW, recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 }));
+  assert.equal(paired.leftover[0].window, "monthly", "the largest leftover of the account");
+  assert.equal(Math.round(paired.leftover[0].percent), 80);
+  assert.equal(paired.leftover[1], null, "no leftover for the account that will use it all");
+}
+console.log("1.9 Leftover at the reset: passed");
+
 
 // ---- 1.9 QmlBar ----
 {

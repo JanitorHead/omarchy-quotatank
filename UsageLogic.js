@@ -551,6 +551,7 @@ var PACE_MAX_GAP_SECONDS = 60 * 60        // a longer gap is unobserved (neither
 var PACE_IDLE_SECONDS = 60 * 60           // no increase for this long: idle, no projection
 var PACE_MIN_OBSERVED_SECONDS = 10 * 60   // less observed time than this: still collecting
 var PACE_DAY_SECONDS = 24 * 60 * 60
+var LEFTOVER_MIN_POINTS = 5               // less left over than this: not worth a line
 
 // Half-life of the recent rate for a short window: an eighth of the window, 15 minutes to 2 hours
 // (about 40 minutes for a 5-hour session).
@@ -3428,11 +3429,15 @@ function accountStatusLine(account, spending, nowSeconds, event) {
   if (event && (event.kind === "switch" || event.kind === "reset") && withinSeconds(eventAt, now, ACCOUNT_EVENT_SECONDS))
     return { kind: event.kind, text: event.kind === "switch" ? "switched" : "reset", at: eventAt, tone: "accent" }
   // A dated subscription shows its last day within 30 days, urgent within the last 7 (the ended state is above).
+  // The largest leftover (see windowLeftover) follows the end date, or stands alone; it is dimmed.
+  var leftover = accountLeftover(account, now)
+  var leftText = leftover ? Math.round(leftover.percent) + "% left over" : ""
   var endsAt = account.subscription ? finiteOrNull(account.subscription.endsAt) : null
   var endsOn = account.subscription ? String(account.subscription.endsOn || "") : ""
   if (now !== null && endsAt !== null && endsOn !== "" && endsAt - now > 0 && endsAt - now <= 30 * PACE_DAY_SECONDS)
-    return { kind: "ends", text: "Ends " + subscriptionEndText(endsOn, now),
+    return { kind: "ends", text: "Ends " + subscriptionEndText(endsOn, now) + (leftText !== "" ? " · " + leftText : ""),
       at: null, tone: endsAt - now <= 7 * PACE_DAY_SECONDS ? "urgent" : "dim" }
+  if (leftText !== "") return { kind: "leftover", text: leftText, at: null, tone: "dim" }
   if (account.standIn && account.standIn.name)
     return { kind: "standin", text: (readingProxy(account) ? "read through " : "read on ") + account.standIn.name, at: null, tone: "dim" }
   // "via proxy", not the proxy's name: beside a plan, "through CLIProxyAPI" does not fit a row.
@@ -3529,10 +3534,12 @@ function accountState(provider, options) {
   var spending = []
   var rings = []
   var inUse = []
+  var leftover = []
   for (var i = 0; i < accounts.length; i++) {
     spending.push(spendingNow(accounts[i], opts.nowSeconds, opts.recentByAccount))
     rings.push(accountRingState(accounts[i], opts.warningThreshold, opts.criticalThreshold))
     inUse.push(mode === "single" && !!accounts[i] && accounts[i].active === true && accountSourceKind(accounts[i]) !== "proxy")
+    leftover.push(accountLeftover(accounts[i], opts.nowSeconds))
   }
   var stable = accountOrder(accounts, "single")
   var shown = stable.length <= 4 ? stable : pickAccounts(stable, counted, 3)
@@ -3550,6 +3557,7 @@ function accountState(provider, options) {
     spending: spending,
     rings: rings,
     inUse: inUse,
+    leftover: leftover,
     order: mode === "together" ? accountOrder(accounts, "together") : stable,
     stable: stable,
     dots: { dots: accounts.length > 1 ? dots : [], extra: accounts.length > 1 ? stable.length - shown.length : 0 }
@@ -3575,6 +3583,49 @@ function windowForecast(row, nowSeconds) {
     runsOut: pace.runsOut === true,
     runsOutAt: pace.runsOut === true ? now + pace.etaSeconds : null
   }
+}
+
+// What a subscription limit of a day or more will still have unused at its deadline (the reset, or the
+// subscription end when that comes first), if the pace holds. `deadline` says which. Null when there is no
+// such limit, the subscription has ended, the pace is unknown or would use it all, or less than
+// LEFTOVER_MIN_POINTS is left. `percent` is the points left; `perDay` the share of what remains per day to the deadline.
+function windowLeftover(row, account, nowSeconds) {
+  var now = finiteOrNull(nowSeconds)
+  var windowSeconds = finiteOrNull(row ? row.windowSeconds : null)
+  if (now === null || windowSeconds === null || windowSeconds < PACE_DAY_SECONDS) return null
+  if (subscriptionEnded(account)) return null
+  var pace = paceForWindow(row, now)
+  if (!pace || (pace.state !== "projecting" && pace.state !== "no-usage")) return null
+
+  var remaining = 100 - pace.used
+  var deadline = finiteOrNull(row.resetsAt)
+  var endsAt = account && account.subscription ? finiteOrNull(account.subscription.endsAt) : null
+  var by = "reset"
+  if (endsAt !== null && (deadline === null || endsAt < deadline)) {
+    deadline = endsAt
+    by = "end"
+  }
+  if (deadline === null || deadline <= now) return null
+
+  var seconds = deadline - now
+  var percent = remaining - pace.rate * seconds
+  if (percent < LEFTOVER_MIN_POINTS) return null
+  var days = seconds / PACE_DAY_SECONDS
+  return { percent: percent, perDay: remaining / days, deadline: by, days: days }
+}
+
+// The largest leftover over an account's subscription limits, with the limit it comes from (`window`, its id).
+// Null when none of them has one.
+function accountLeftover(account, nowSeconds) {
+  var windows = listOrEmpty(account && account.windows)
+  var best = null
+  for (var i = 0; i < windows.length; i++) {
+    var left = windowLeftover(windows[i], account, nowSeconds)
+    if (left && (best === null || left.percent > best.percent)) {
+      best = { window: windows[i].id, percent: left.percent, perDay: left.perDay, deadline: left.deadline, days: left.days }
+    }
+  }
+  return best
 }
 
 // The dashed stretch a meter draws for the forecast, on the side the meter shows (fractions 0-1):
@@ -3670,12 +3721,17 @@ function meterStyle(id) {
   return METER_STYLES[0]
 }
 
-// The limit card's verdict beside the reset line. `clock(epochSeconds)` formats a time.
-function forecastText(forecast, mode, clock) {
+// The limit card's verdict beside the reset line. `clock(epochSeconds)` formats a time. `leftover` (from
+// `windowLeftover`) replaces the calm verdicts: what is left over at the deadline, and the share per day to spend it.
+function forecastText(forecast, mode, clock, leftover) {
   if (!forecast) return { text: "", urgent: false }
   var pace = forecast.pace
   if (pace.exhausted) return { text: "used up", urgent: true }
   if (forecast.runsOut) return { text: "runs out " + clock(forecast.runsOutAt) + " · " + expectedText(pace, mode), urgent: true }
+  if (leftover) {
+    var when = leftover.deadline === "end" ? "at subscription end" : "at reset"
+    return { text: Math.round(leftover.percent) + "% left over " + when + " · use " + Math.round(leftover.perDay) + "%/day to spend it", urgent: false }
+  }
   if (pace.state === "projecting") return { text: "lasts until reset", urgent: false }
   if (pace.state === "idle") return { text: "idle " + formatDuration(pace.idleSeconds), urgent: false }
   if (pace.state === "collecting") return { text: "measuring pace", urgent: false }
