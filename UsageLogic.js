@@ -1285,6 +1285,7 @@ var DEFAULT_SETTINGS = {
   barResetDateFormat: "DD/MM",
   hideExhaustedProviders: false,
   barMaxChips: 4,
+  barChipValues: "{}",
   quotaMode: "Used",
   providerColors: false,
   liveFigure: false,
@@ -1302,8 +1303,7 @@ var DEFAULT_SETTINGS = {
   barAccountMode: "dots",
   motion: "system",
   accountModes: "{}",
-  hiddenAccounts: "{}",
-  accountNames: "{}"
+  hiddenAccounts: "{}"
 }
 
 // Quotatank 2 keeps its private files in omarchy/quotatank; 1.x kept them in omarchy/model-usage, and the

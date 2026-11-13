@@ -857,13 +857,15 @@ const manifestDefaults = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "
 for (const key of Object.keys(context.DEFAULT_SETTINGS))
   assert.equal(JSON.stringify(context.DEFAULT_SETTINGS[key]), JSON.stringify(manifestDefaults[key]), "reset default for " + key + " matches the manifest");
 const keyFileSettings = context.KEY_PROVIDER_IDS.map((id) => id + "KeyFile");
-for (const kept of ["sources", "mainComputer", ...keyFileSettings, "costPriceOverrides"])
+for (const kept of ["sources", "mainComputer", ...keyFileSettings, "costPriceOverrides", "accountNames"])
   assert.ok(!(kept in context.DEFAULT_SETTINGS), kept + " survives a reset");
 assert.equal(context.changedFromDefaults({}).length, 0, "missing keys already read as defaults");
 assert.equal(context.changedFromDefaults({ quotaMode: "Remaining", barWindow: "auto", sources: '[{"id":"p-1a2b3c4d","kind":"proxy"}]' }).join(","), "quotaMode",
   "only preferences that differ count; connections never do");
 assert.equal(context.DEFAULT_SETTINGS.barShowPeriods, true, "chips show their limit period by default");
 assert.equal(context.changedFromDefaults({ barShowPeriods: false }).join(","), "barShowPeriods", "hiding the period is a preference Reset restores");
+assert.equal(context.changedFromDefaults({ barChipValues: '{"claude":"pool"}' }).join(","), "barChipValues", "a chip choice is a preference Reset restores");
+assert.equal(context.changedFromDefaults({ accountNames: '{"claude":{"c-1a2b3c4d":"Work"}}' }).length, 0, "custom account names are not a preference: Reset keeps them");
 console.log("Reset defaults: passed");
 
 // 2.0 moved the private folder: saved 1.x paths follow it, JSON settings included; nothing else changes.
