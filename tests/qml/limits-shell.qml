@@ -148,7 +148,8 @@ ShellRoot {
       names: ["Work", "Old", "Personal", "Spare", "Broken"], accountState: stateOf("single"), nowSeconds: now, motion: motion })
     list.useRequested.connect(function(accountId) { root.used = root.used.concat([accountId]) })
     // A login whose subscription ends in 21 days: within 30 days its status line says when it ends.
-    renewalOn = new Date((Math.floor(now / 86400) + 21) * 86400000).toISOString().slice(0, 10)
+    var renewalDay = new Date((now + 21 * 86400) * 1000)
+    renewalOn = [renewalDay.getFullYear(), String(renewalDay.getMonth() + 1).padStart(2, "0"), String(renewalDay.getDate()).padStart(2, "0")].join("-")
     var renewalEnds = { endsAt: (Math.floor(now / 86400) + 22) * 86400, endsOn: renewalOn, source: "manual", ended: false }
     var renewalAccounts = [login("renewal", { plan: "Claude Pro", subscription: renewalEnds }),
       login("paced", { plan: "Claude Pro", windows: [weeklyPace(20, 0.0002)], subscription: renewalEnds })]
@@ -234,10 +235,13 @@ ShellRoot {
     check(list.rowFor("work").counted && !list.rowFor("personal").counted, "the chip's account has the filled dot")
     var renewalStatus = renewal.rowFor("renewal").statusText
     var renewalMonth = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(renewalOn.slice(5, 7)) - 1]
-    check(renewalStatus.indexOf("Ends " + Number(renewalOn.slice(8, 10)) + " " + renewalMonth) === 0,
+    // The day, and the year only when it is not this year: the same text the row takes from subscriptionEndText.
+    var renewalYear = Number(renewalOn.slice(0, 4))
+    var renewalText = Number(renewalOn.slice(8, 10)) + " " + renewalMonth + (renewalYear === new Date().getFullYear() ? "" : " " + renewalYear)
+    check(renewalStatus.indexOf("Ends " + renewalText) === 0,
       "a subscription ending within 30 days says when it ends: " + renewalStatus)
     // The leftover joins the same line: what the pace leaves unused by the subscription end, per account.
-    check(renewal.rowFor("paced").statusText === "Ends " + Number(renewalOn.slice(8, 10)) + " " + renewalMonth + " · 65% left over",
+    check(renewal.rowFor("paced").statusText === "Ends " + renewalText + " · 65% left over",
       "the largest leftover joins the Ends line: " + renewal.rowFor("paced").statusText)
     // The badge: the usable reset's label, dimmed while the limit it clears is above the warning threshold, and
     // applied from here only where Quotatank can apply it today (an omp row keeps its sign-in in omp).
