@@ -2027,6 +2027,10 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
     /^\d+% left over at subscription end · use 30%\/day to spend it$/, "the verdict at the subscription end");
   assert.equal(context.forecastText(context.windowForecast(weekly, NOW), "Used", clockOf).text, "lasts until reset",
     "no leftover, the verdict stays as it was");
+  // A window nobody has used yet leaves its whole share over, the same as the row's leftover.
+  const unusedWeek = { used: 0, windowSeconds: WEEK, resetsAt: NOW + WEEK / 2, samples: holding(weekStart, NOW, 0) };
+  assert.equal(context.forecastText(context.windowForecast(unusedWeek, NOW), "Used", clockOf, context.windowLeftover(unusedWeek, null, NOW)).text,
+    "100% left over at reset · use 29%/day to spend it", "an unused window states its leftover, not 'not used yet'");
   // The JSON export carries the end date beside subscriptionEnded, on each account and on the provider.
   const exportOf = (raw) => JSON.parse(context.exportSnapshot(context.withSubscriptionEnds([provider], raw, epoch("2030-06-01")),
     epoch("2030-06-01"), false)).providers[0];

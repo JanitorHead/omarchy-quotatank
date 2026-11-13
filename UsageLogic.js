@@ -4175,7 +4175,7 @@ function forecastText(forecast, mode, clock, leftover) {
   var pace = forecast.pace
   if (pace.exhausted) return { text: "used up", urgent: true }
   if (forecast.runsOut) return { text: "runs out " + clock(forecast.runsOutAt) + " · " + expectedText(pace, mode), urgent: true }
-  if (leftover && pace.state === "projecting") {
+  if (leftover && (pace.state === "projecting" || pace.state === "no-usage")) {
     var when = leftover.deadline === "end" ? "at subscription end" : "at reset"
     return { text: Math.round(leftover.percent) + "% left over " + when + " · use " + Math.round(leftover.perDay) + "%/day to spend it", urgent: false }
   }
