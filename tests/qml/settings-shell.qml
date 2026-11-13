@@ -288,6 +288,13 @@ ShellRoot {
       check(saved.subscriptionEnds === '{"codex":{"work":"2030-07-01"}}', "Subscription ends: a single account has the date field: " + saved.subscriptionEnds)
       edit("subscriptionEnd-codex-0Field", "", true)
       check(saved.subscriptionEnds === "{}" && !find(form, "showAccount-codex-0"), "Subscription ends: a single account has no show switch")
+      // Codex reports its own end: the manual date field gives way to the provider's date, read only.
+      form.usagePayload = payload(ompFound, [
+        { id: "codex", status: "ok", accounts: [{ accountId: "work", origin: "omarchy", subscription: { source: "provider", ended: false, endsAt: 1909094400 } }] }])
+      shown("providerList").forceLayout()
+      shown("customize-codex").expanded = true
+      check(!shown("subscriptionEnd-codex-0").visible && text("subscriptionReported-codex-0") === "Codex reports it ends 1 Jul 2030",
+        "Codex's own end date replaces the manual field: " + text("subscriptionReported-codex-0"))
       check(form.providersSummary().indexOf("· omp") > 0, "the index says omp adds accounts")
       formPhase = 7
     } else if (formPhase === 7) {

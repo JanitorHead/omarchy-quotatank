@@ -1429,11 +1429,22 @@ Column {
                   placeholder: "YYYY-MM-DD"
                   maximumLength: 10
                   source: UsageLogic.subscriptionEndOf(root.value("subscriptionEnds", "{}"), providerRow.providerId, accountId)
+                  visible: UsageLogic.providerSubscriptionEndsOn(modelData && modelData.subscription) === ""
                   validate: function (text) { return (text === "" || UsageLogic.subscriptionEndDay(text) !== null) ? "" : "Use a real date as YYYY-MM-DD" }
                   onApplied: function(text) {
                     root.set("subscriptionEnds", UsageLogic.setSubscriptionEnds(
                       root.value("subscriptionEnds", "{}"), providerRow.providerId, accountId, text))
                   }
+                }
+              }
+              Repeater {
+                model: providerRow.accountCount >= 1 ? providerRow.accountList : []
+                delegate: Hint {
+                  required property var modelData
+                  required property int index
+                  objectName: "subscriptionReported-" + providerRow.providerId + "-" + index
+                  visible: UsageLogic.providerSubscriptionEndsOn(modelData && modelData.subscription) !== ""
+                  text: "Codex reports it ends " + UsageLogic.subscriptionEndText(UsageLogic.providerSubscriptionEndsOn(modelData && modelData.subscription), Date.now() / 1000)
                 }
               }
               Hint {
