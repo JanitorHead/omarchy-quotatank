@@ -187,6 +187,47 @@ assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }),
   assert.equal(context.creditsHaveFunds({ used: 4, limit: 50, resetCreditsAvailable: 1 }), true);
 }
 
+// The reset badge: usable-now resets on any row; dimmed while the limit they clear is not at the warning threshold.
+{
+  // Plain copies: the context's objects come from another realm, so deepEqual would compare prototypes.
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+  const fableWindow = (remaining) => ({ id: "fable-weekly", label: "Fable weekly", remaining });
+  const weeklyWindow = (remaining) => ({ id: "weekly", label: "Weekly limit", remaining });
+  const fableCredits = { resetCreditsAvailable: 2, resetCreditsUsableNow: 1, resetCreditsLater: 1,
+    resetCreditsUsableExpiresAt: 1899273540, resetCreditsClears: ["Fable weekly"], resetCreditsUsable: true };
+  const badgeAccount = (credits, windows, extra) => ({ ...provider("claude", 40), credits: { ...fableCredits, ...credits }, windows, ...extra });
+  const fable = badgeAccount({}, [fableWindow(88), weeklyWindow(60)]);
+  assert.deepEqual(plain(context.accountResetBadge(fable, 25)),
+    { label: "1 Fable", tooltip: "1 Fable reset usable now, expires Mar 9 · 1 more later", dim: true, actionable: true });
+  assert.equal(context.accountResetBadge(badgeAccount({}, [fableWindow(25)]), 25).dim, false, "at the warning threshold: not dimmed");
+  assert.equal(context.accountResetBadge(badgeAccount({}, [fableWindow(10)]), 25).dim, false, "critical: not dimmed");
+  const claudeFable = { id: "fable-1m-an-intentionally-long-model-label-weekly", label: "Fable 1M - an intentionally long model label weekly", remaining: 88 };
+  assert.equal(context.accountResetBadge(badgeAccount({}, [claudeFable]), 25).dim, true, "Claude names the Fable meter after its model, and it is still the Fable weekly limit");
+  assert.equal(context.accountResetBadge(badgeAccount({}, []), 25).dim, false, "no measured limit to compare");
+  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsLater: 0, resetCreditsAvailable: 1 }, [fableWindow(88)]), 25).tooltip,
+    "1 Fable reset usable now, expires Mar 9", "no 'more later' when none are left over");
+  const viaOmp = badgeAccount({}, [fableWindow(88)], { origin: "omp" });
+  assert.deepEqual([context.accountResetBadge(viaOmp, 25).label, context.accountResetBadge(viaOmp, 25).actionable], ["1 Fable", false],
+    "an omp row shows its badge but applies it in omp");
+  const elsewhere = badgeAccount({}, [fableWindow(88)], { computer: { id: "c-00000001", name: "devbox" } });
+  assert.equal(context.accountResetBadge(elsewhere, 25).actionable, false, "another computer's sign-in is not applied here");
+  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsUsable: false, resetCreditsReason: "limit" }, [fableWindow(88)]), 25).actionable, false);
+  const session = { resetCreditsUsableNow: 1, resetCreditsLater: 0, resetCreditsUsableExpiresAt: 1899273540,
+    resetCreditsClears: ["5-hour"], resetCreditsUsable: true };
+  const sessionAccount = (windows) => ({ ...provider("claude", 40), credits: { resetCreditsAvailable: 1, ...session }, windows });
+  assert.deepEqual(plain(context.accountResetBadge(sessionAccount([{ id: "session", label: "5-hour limit", remaining: 80 }]), 25)),
+    { label: "1 reset", tooltip: "1 reset usable now, expires Mar 9", dim: true, actionable: true });
+  const codex = { ...provider("codex", 55), accountId: "reset-account", credits: { resetCreditsAvailable: 2 },
+    proxy: { id: "p-00000001", name: "CLIProxyAPI" } };
+  assert.deepEqual(plain(context.accountResetBadge(codex, 25)), { label: "2 resets", tooltip: "2 banked resets", dim: false, actionable: true },
+    "Codex has no usable-now split: its count shows");
+  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsUsableNow: 0 }, []), 25), null, "later resets alone show no badge");
+  assert.equal(context.accountResetBadge({ ...codex, credits: { resetCreditsAvailable: 0 } }, 25), null);
+  assert.equal(context.accountResetBadge({ ...codex, status: "disabled" }, 25), null);
+  assert.equal(context.accountResetBadge({ ...provider("kimi", 40), credits: { resetCreditsAvailable: 1 } }, 25), null);
+  assert.equal(context.accountResetBadge({ ...codex, credits: null }, 25), null);
+}
+
 const customRows = [{model: " vendor/Model[1m] ", inputCostPerMillionTokens: "2",
   outputCostPerMillionTokens: "8", cacheReadCostPerMillionTokens: "0", cacheWriteCostPerMillionTokens: ""}];
 const customJson = context.encodeCostPrices(customRows);

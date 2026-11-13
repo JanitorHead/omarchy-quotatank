@@ -1794,6 +1794,50 @@ function accountResetNote(account) {
   return CLAUDE_RESET_NOTES[String(account.credits.resetCreditsReason || "")] || CLAUDE_RESET_NOTES.unavailable
 }
 
+// The badge on an account row: the resets usable now (Claude's count; Codex's when shown), the expiry of the
+// next one, the limits it clears, and whether those limits are still above the warning threshold (dimmed when not
+// yet low). Null when the row shows no badge. Later resets (not usable now) are only counted in the tooltip.
+function accountResetBadge(account, warningThreshold) {
+  if (!accountResetShown(account)) return null
+  var credits = account.credits
+  var claude = account.id === "claude"
+  var usable = claude ? credits.resetCreditsUsableNow : accountResetCount(account)
+  if (typeof usable !== "number" || !(usable > 0)) return null
+  var clears = Array.isArray(credits.resetCreditsClears) ? credits.resetCreditsClears : []
+  var fableOnly = clears.length > 0 && clears.every(function(name) { return name === "Fable weekly" })
+  var later = typeof credits.resetCreditsLater === "number" ? credits.resetCreditsLater : 0
+  var expires = credits.resetCreditsUsableExpiresAt
+  var label = fableOnly ? usable + " Fable" : usable + " reset" + (usable === 1 ? "" : "s")
+  var tooltip = accountResetLabel(account)
+  if (claude) {
+    var noun = (fableOnly ? "Fable " : "") + "reset" + (usable === 1 ? "" : "s")
+    tooltip = usable + " " + noun + " usable now"
+      + (typeof expires === "number" && isFinite(expires) && expires > 0 ? ", expires " + costMonthDay(new Date(expires * 1000)) : "")
+      + (later > 0 ? " · " + later + " more later" : "")
+  }
+  var remaining = []
+  listOrEmpty(account.windows).forEach(function(row) {
+    clears.forEach(function(name) {
+      if (windowClearsName(row, name) && typeof row.remaining === "number" && isFinite(row.remaining))
+        remaining.push(row.remaining)
+    })
+  })
+  var dim = remaining.length > 0 && Math.min.apply(null, remaining) > warningThreshold
+  return { label: label, tooltip: tooltip, dim: dim, actionable: accountResetActionable(account) }
+}
+
+// Whether a limit row is the one a reset clears, by its label ("Fable weekly", "5-hour limit"), its id slug, or
+// a model's own weekly meter, which Claude names after the model ("Fable 1M ... weekly" clears "Fable weekly").
+function windowClearsName(row, name) {
+  var want = String(name).toLowerCase()
+  var slug = want.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+  var label = String(row.label || "").toLowerCase()
+  var model = want.replace(/ weekly$/, "")
+  var modelMeter = model !== want && label.indexOf(model) === 0 && /weekly$/.test(label)
+  return label === want || label === want + " limit" || String(row.id || "") === slug || modelMeter
+}
+
+
 // The other computer a reading came from, its own (`computer`) or standing in (`standIn` with a computer's id).
 function readingComputer(account) {
   if (!account) return null
