@@ -19,6 +19,7 @@ ShellRoot {
   property var leftoverCard: null
   property var groupLeftover: null
   property var comingUp: null
+  property var justReset: null
   readonly property var comingAccount: login("coming", { windows: [weekly(20)], subscription: { endsAt: now + 10 * 86400, source: "manual", ended: false }, credits: { resetCreditsExpiresAt: now + 86400 } })
   property var runwayCard: null
   property var notice: null
@@ -195,6 +196,9 @@ ShellRoot {
       counted: [0], runway: UsageLogic.accountRunway(provider, "single", [0], now, [0, 1]) })
     // Coming up: the account's next dates in order: a banked reset that expires, the limit's reset, the subscription's end.
     comingUp = create("ComingUpList.qml", { width: 420, nowSeconds: now, account: comingAccount })
+    // A reset that passed on the live clock after the reading stays listed until the next reading.
+    justReset = create("ComingUpList.qml", { width: 420, nowSeconds: now + 120, readingAt: now,
+      account: login("reset", { windows: [Object.assign(weekly(20), { resetsAt: now + 60 })] }) })
     ompPair = create("OmpRouting.qml", { width: 420,
       routing: ompRouting(ompProvider([ompLogin("Work", ompCool), ompLogin("Personal", ompCool)]), "together") })
     ompDrain = create("OmpRouting.qml", { width: 420,
@@ -313,6 +317,8 @@ ShellRoot {
     // Coming up: the banked reset expires first, then the limit resets, then the subscription ends.
     var coming = [find(comingUp, "comingUpItem-0"), find(comingUp, "comingUpItem-1"), find(comingUp, "comingUpItem-2")]
     check(comingUp.visible && coming[0] && coming[0].text.indexOf("Banked reset expires ") === 0, "the banked reset expires first: " + (coming[0] ? coming[0].text : "(none)"))
+    check(justReset.visible && find(justReset, "comingUpItem-0") && find(justReset, "comingUpItem-0").text.indexOf("Weekly limit resets ") === 0,
+      "a reset passed since the reading stays listed: " + (find(justReset, "comingUpItem-0") ? find(justReset, "comingUpItem-0").text : "(none)"))
     check(coming[1] && coming[1].text.indexOf("Weekly limit resets ") === 0, "then the limit resets: " + (coming[1] ? coming[1].text : "(none)"))
     check(coming[2] && coming[2].text.indexOf("Subscription ends ") === 0 && find(comingUp, "comingUpItem-3") === null, "the subscription ends last")
     // An ended subscription has nothing coming up: the list hides.

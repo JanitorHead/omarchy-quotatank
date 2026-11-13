@@ -12,10 +12,12 @@ Column {
 
   property var account: null
   property real nowSeconds: 0
+  // The reading the list was built from: a reset that passes after it stays listed until the next reading.
+  property real readingAt: 0
   property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
 
-  readonly property var items: UsageLogic.comingUpItems(root.account, root.nowSeconds)
+  readonly property var items: UsageLogic.comingUpItems(root.account, root.readingAt > 0 ? root.readingAt : root.nowSeconds)
 
   visible: items.length > 0
   spacing: Style.spacing.xs

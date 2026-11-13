@@ -2292,6 +2292,7 @@ Ui.Panel {
                 width: limitsSection.width
                 account: root.detailAccount
                 nowSeconds: root.nowSeconds
+                readingAt: root.detailReadingAt
                 foreground: root.foreground
                 fontFamily: root.fontFamily
               }
