@@ -1960,11 +1960,13 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
   assert.equal(statusAt("2030-06-10", endsAt).text, "Subscription ended", "ended from the day after");
   assert.equal(statusAt("2030-06-10", endsAt - DAY, { status: "error", errorKind: "rate_limited" }).text, "rate limited",
     "an error still wins over the end date");
-  // The row shows the largest leftover after the end date within 30 days; without one, the row keeps its plan.
+  // The row shows the largest leftover: after the end date within 30 days, or on its own; a row with neither keeps its plan.
   const weekly = { id: "weekly", label: "Weekly limit", used: 40, remaining: 60, windowSeconds: WEEK, resetsAt: NOW + WEEK / 2, samples: [] };
   const planned = { id: "claude", name: "Claude Code", status: "ok", accountId: "main", active: true, plan: "Claude Max 5x", windows: [weekly] };
-  assert.equal(plain(context.accountStatusLine(planned, false, NOW, null)).text, context.accountPlanLabel(planned),
-    "a leftover with no near end date does not replace the plan");
+  assert.deepEqual(plain(context.accountStatusLine(planned, false, NOW, null)), { kind: "leftover", text: "20% left over", at: null, tone: "dim" },
+    "a leftover with no near end date stands alone, in place of the plan");
+  const planOnly = { ...planned, windows: [] };
+  assert.equal(context.accountStatusLine(planOnly, false, NOW, null).text, context.accountPlanLabel(planOnly), "a row with neither keeps its plan");
   const dated = context.accountStatusLine({ id: "claude", name: "Claude Code", status: "ok", accountId: "main", active: true, windows: [weekly],
     subscription: { endsAt: NOW + 20 * DAY, endsOn: "1970-01-13", source: "manual", ended: false } }, false, NOW, null);
   assert.equal(dated.text, "Ends 13 Jan · 20% left over", "the end date, then the leftover");
