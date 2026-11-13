@@ -301,6 +301,11 @@ ShellRoot {
     check(plainTag && plainTag.text === ompSet.ompTags[1], "each row shows its state's tag: " + (plainTag ? plainTag.text : "(none)"))
     var loginTag = find(list.rowFor("work"), "accountOmpTag")
     check(loginTag && loginTag.text === "", "a login beside omp accounts gets no tag")
+    // A proxy account beside omp accounts gets no omp tag: CLIProxyAPI is not omp's pool.
+    var proxyNow = ompNow.concat([login("proxy-x", { origin: "proxy", proxy: { id: "p-1a2b3c4d", name: "CLIProxyAPI" } })])
+    var proxySet = UsageLogic.accountState({ id: "claude", status: "ok", accounts: proxyNow }, { modes: JSON.stringify({ claude: "together" }),
+      nowSeconds: now, recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 })
+    check(proxySet.ompTags[2] === "", "a proxy account gets no omp tag: " + JSON.stringify(proxySet.ompTags))
 
     // Limit cards: a dashed forecast where the pace runs out before the reset, none without a pace.
     check(rising.forecastSegment !== null && rising.meter.blocks.forecastActive, "a fast pace draws the forecast")
