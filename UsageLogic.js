@@ -4100,21 +4100,20 @@ function accountRunway(provider, mode, counted, nowSeconds, order) {
   }
 }
 
-// "Pool: 1.57 of 2 accounts left this 5-hour window", from omp's capacity for the runway's window.
-function poolLine(pool, row) {
-  var rows = listOrEmpty(pool && pool.windows)
+// "Pool: 55% left this week · 2 accounts", the pool total (see poolTotal) of the runway's window.
+function poolLine(provider, row) {
   var seconds = finiteOrNull(row && row.windowSeconds)
-  for (var i = 0; i < rows.length; i++) {
-    var entry = rows[i]
-    var accounts = finiteOrNull(entry && entry.accounts)
-    var left = finiteOrNull(entry && entry.remainingAccounts)
-    if (seconds === null || finiteOrNull(entry && entry.windowSeconds) !== seconds) continue
-    if (accounts === null || left === null || accounts <= 0) continue
-    var shown = Math.round(clamp(left, 0, accounts) * 100) / 100
-    return "Pool: " + shown + " of " + accounts + " account" + (accounts === 1 ? "" : "s")
-      + " left this " + windowPhrase(row) + " window"
+  if (seconds === null) return ""
+  var selector = ""
+  var keys = ["session", "weekly", "monthly"]
+  for (var i = 0; i < keys.length; i++) {
+    if (windowMatches({ windowSeconds: seconds }, keys[i])) { selector = keys[i]; break }
   }
-  return ""
+  var pool = selector ? poolTotal(provider, selector) : null
+  if (pool === null || pool.percent === null) return ""
+  var period = { session: "5-hour window", weekly: "week", monthly: "month" }[selector]
+  return "Pool: " + pool.percent + "% left this " + period + " · " + pool.counted
+    + (pool.counted === 1 ? " account" : " accounts")
 }
 
 // Whether a window reset between two readings of it ({ used, resetsAt }, resetsAt in epoch seconds or

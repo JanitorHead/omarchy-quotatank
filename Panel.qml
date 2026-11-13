@@ -2304,7 +2304,7 @@ Ui.Panel {
               runway: root.runway
               names: root.runwayNames
               counted: root.accountOverview ? root.countedIndexes : [0]
-              poolText: root.runway && root.provider ? UsageLogic.poolLine(root.provider.pool, root.runway.window) : ""
+              poolText: root.runway && root.provider ? UsageLogic.poolLine(root.provider, root.runway.window) : ""
               nowSeconds: root.nowSeconds
               clockFormat: root.tickTimeFormat
               foreground: root.foreground

@@ -1811,9 +1811,10 @@ console.log("omp settings, live feed and account modes: passed");
   assert.equal(Math.round(solo.gap), 6000);
   assert.equal(context.accountRunway({ id: "kimi", status: "ok", windows: [week(40)] }, "single", [], NOW, []), null,
     "no short window, no runway");
-  assert.equal(context.poolLine({ windows: [{ windowSeconds: SESSION, accounts: 2, usedAccounts: 0.43, remainingAccounts: 1.57 }] },
-    quiet(10)), "Pool: 1.57 of 2 accounts left this 5-hour window");
-  assert.equal(context.poolLine({ windows: [{ windowSeconds: WEEK, accounts: 2, remainingAccounts: 1 }] }, quiet(10)), "");
+  const runwayPool = { id: "claude", status: "ok", accounts: [login("work", [week(45)]), login("personal", [week(45)]), login("ultra", [quiet(10)])] };
+  assert.equal(context.poolLine(runwayPool, { windowSeconds: WEEK }), "Pool: 55% left this week · 2 accounts");
+  assert.equal(context.poolLine({ id: "claude", status: "ok", accounts: [login("work", [week(45)])] }, { windowSeconds: SESSION }), "",
+    "no account carries the 5-hour window, so no pool line");
 
   // The pool total of a window: what is left across the accounts that carry it, as a mean share of the
   // accounts with a reading. An Ultra with no 5-hour limit is out of the 5-hour pool, a stale reading counts,
