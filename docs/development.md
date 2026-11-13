@@ -47,7 +47,7 @@ The suite performs:
 - JavaScript threshold and compact-percentage tests.
 - `omarchy plugin validate`, or the shell repository's `bin/omarchy-plugin-validate` when only the source tree is present.
 - `qmllint` against the supplied Quattro source tree.
-- Reset selection and account targeting, proxy HTTP requests, response outcomes, and idempotent retries. When Quickshell is available, a QML test checks confirmation state, duplicate clicks, cancellation, expiry, and connection changes using a synthetic backend; it opens no desktop popups. With Wayland it also loads the full panel and tests badge activation; otherwise it runs the reset components offscreen.
+- Reset selection and account targeting, proxy HTTP requests, response outcomes, and idempotent retries. When Quickshell is available, a QML test checks confirmation state, duplicate clicks, cancellation, expiry, and connection changes using a synthetic backend; it opens no desktop popups. With Wayland it also loads the full panel and tests badge activation; otherwise it runs the reset components offscreen. CI runs the Wayland checks under a headless sway session: `tests/headless-wayland ./tests/run`.
 
 Live UI checks are opt-in. They launch a separate Quickshell test instance and
 show popups on the current desktop; they do not restart the running shell:

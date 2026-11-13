@@ -1528,7 +1528,7 @@
         "type": "string",
         "label": "Custom account names per provider",
         "defaultValue": "{}",
-        "description": "Managed by Settings → Providers → Customize. Per provider, the name given to each account that has none of its own (omp, proxy, another computer); it replaces the email and \"Account N\" everywhere the account is named."
+        "description": "Managed by Settings → Providers → Customize. Per provider, the name given to each account that has none of its own (omp, proxy, another computer, the native sign-in); it replaces the email and \"Account N\" everywhere the account is named."
       }
     ]
   }

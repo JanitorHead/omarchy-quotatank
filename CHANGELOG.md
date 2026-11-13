@@ -8,7 +8,7 @@ All notable changes to this project will be documented here. The format follows
 
 ### Added
 
-- **Quotatank works out which omp account comes next.** In Used together · omp, Quotatank ranks the omp accounts the way oh-my-pi 18.18.8 does and finds the one it would use next. It passes over accounts blocked by a limit, then those whose allowance is spent, those inside their reserve, and those in a Codex fresh-window boost, then hot accounts, lower-priority ones, accounts with no reading, and last the account that has to spend its weekly or 5-hour headroom fastest. Ties keep the order the accounts are listed in. The reader also passes each omp account's policy through.
+- **Quotatank works out which omp account comes next.** In Used together · omp, Quotatank ranks the omp accounts the way oh-my-pi 18.18.8 does and finds the one it would use next. It skips accounts blocked, spent, or inside their reserve; it puts first the accounts in a Codex fresh-window boost and those that drain fastest; then hot accounts, lower-priority ones, and accounts with no reading. Ties keep the order the accounts are listed in. The reader also passes each omp account's policy through.
 
 - **The chip counts omp's next account while idle.** In Used together · omp, when no account is spending, the menu bar chip counts the account omp would use next instead of the one with the least headroom, and its Limits row says `next` beside its name. Accounts that are not omp's (Omarchy logins, keys, proxies) are never the next account and get no tag.
 
@@ -30,7 +30,7 @@ All notable changes to this project will be documented here. The format follows
 
 - **A Coming up list in the account detail.** Under the limits, the account lists its next dates in order: a banked reset that expires, the next reset of a limit of a day or more with what it leaves over, and the subscription's end. 5-hour resets are left out. An ended subscription lists nothing.
 
-- **OMP ROUTING shows omp's next account.** Under the limits, a block for omp accounts used together names the account the next session starts on and why, gives the share at which another account takes over when drain decides, and warns once about an omp account whose subscription has ended. It mirrors oh-my-pi 18.18.8's ranking until omp reports the next account itself, and shows nothing for a proxy pool or a provider without omp accounts.
+- **OMP ROUTING shows omp's next account.** Under the limits, a block for omp accounts used together names the account the next session starts on and why, gives the share at which another account takes over when drain decides, and warns once about an omp account whose subscription has ended while omp still signs in with it, the leftover warning for an account that still holds money. It mirrors oh-my-pi 18.18.8's ranking until omp reports the next account itself, and shows nothing for a proxy pool or a provider without omp accounts.
 
 ### Fixed
 
