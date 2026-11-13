@@ -288,6 +288,16 @@ ShellRoot {
       check(saved.subscriptionEnds === '{"codex":{"work":"2030-07-01"}}', "Subscription ends: a single account has the date field: " + saved.subscriptionEnds)
       edit("subscriptionEnd-codex-0Field", "", true)
       check(saved.subscriptionEnds === "{}" && !find(form, "showAccount-codex-0"), "Subscription ends: a single account has no show switch")
+      // Custom account names: an omp account takes a name saved per provider; Omarchy logins take none.
+      edit("accountName-claude-1Field", "Personal", true)
+      check(saved.accountNames === '{"claude":{"omp-0123456789ab":"Personal"}}', "Account names: the name is saved for that account: " + saved.accountNames)
+      check(shown("accountName-claude-1").label === "Name for Account 2 · omp", "Account names: the field says which account it names")
+      edit("accountName-claude-1Field", "", true)
+      check(saved.accountNames === "{}", "Account names: clearing the name removes it: " + saved.accountNames)
+      var omarchyName = find(form, "accountName-claude-0")
+      check(!omarchyName || !omarchyName.visible, "Account names: an Omarchy login has no name field")
+      var singleName = find(form, "accountName-codex-0")
+      check(!singleName || !singleName.visible, "Account names: a single Omarchy login has no name field")
       // Codex reports its own end: the manual date field gives way to the provider's date, read only.
       form.usagePayload = payload(ompFound, [
         { id: "codex", status: "ok", accounts: [{ accountId: "work", origin: "omarchy", subscription: { source: "provider", ended: false, endsAt: 1909094400 } }] }])

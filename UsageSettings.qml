@@ -1439,6 +1439,25 @@ Column {
               }
               Repeater {
                 model: providerRow.accountCount >= 1 ? providerRow.accountList : []
+                delegate: TextRow {
+                  required property var modelData
+                  required property int index
+                  readonly property string accountId: String(modelData && modelData.accountId || "")
+                  objectName: "accountName-" + providerRow.providerId + "-" + index
+                  label: "Name for " + UsageLogic.accountSettingsLabel(modelData, root.value("extraKeys", "{}"),
+                    root.value("hideAccountEmails", true) !== false, index)
+                  placeholder: "Name"
+                  maximumLength: UsageLogic.ACCOUNT_NAME_LIMIT
+                  source: UsageLogic.accountNameOf(root.value("accountNames", "{}"), providerRow.providerId, accountId)
+                  visible: UsageLogic.acceptsAccountName(modelData)
+                  onApplied: function(text) {
+                    root.set("accountNames", UsageLogic.setAccountName(
+                      root.value("accountNames", "{}"), providerRow.providerId, accountId, text))
+                  }
+                }
+              }
+              Repeater {
+                model: providerRow.accountCount >= 1 ? providerRow.accountList : []
                 delegate: Hint {
                   required property var modelData
                   required property int index
