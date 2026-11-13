@@ -220,6 +220,14 @@ class ReportMappingTests(unittest.TestCase):
         self.assertEqual(entry["fetchedAt"], "2030-01-01T00:00:00+00:00")
         self.assertNotIn("Organization", json.dumps(entry))
 
+    def test_usable_and_later_resets_say_what_they_clear(self):
+        _provider_id, entry = self.account("anthropic", "dev@example.com")
+        credits = entry["credits"]
+        # launch-fable can be applied now; launch-fable-6mo is a later reset of the same tenure program.
+        self.assertEqual((credits["resetCreditsUsableNow"], credits["resetCreditsLater"]), (1, 1))
+        self.assertEqual(credits["resetCreditsUsableExpiresAt"], 1899273540)  # 2030-03-09T07:59:00Z
+        self.assertEqual(credits["resetCreditsClears"], ["Fable weekly"])
+
     def test_codex_windows_and_plan_match_the_codex_reader(self):
         provider_id, entry = self.account("openai-codex", "work@example.com")
         self.assertEqual(provider_id, "codex")

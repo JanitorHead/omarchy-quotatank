@@ -511,6 +511,25 @@ def claude_headers(access_token: str) -> dict[str, str]:
             "Accept": "application/json", "User-Agent": CLAUDE_CODE_USER_AGENT}
 
 
+# `seven_day_overage_included` is the Fable weekly meter (Claude Code labels it "Fable limit").
+CLAUDE_LIMIT_NAMES = {"five_hour": "5-hour", "seven_day": "weekly", "seven_day_opus": "Opus weekly",
+                      "seven_day_sonnet": "Sonnet weekly", "seven_day_overage_included": "Fable weekly"}
+# omp writes its Claude scopes as `anthropic:` ids (claude-reset.ts normalization).
+OMP_RESET_SCOPES = {"anthropic:5h": "five_hour", "anthropic:7d": "seven_day", "anthropic:7d:opus": "seven_day_opus",
+                    "anthropic:7d:sonnet": "seven_day_sonnet"}
+
+
+def reset_clear_names(clears: list[str]) -> list[str]:
+    """The names of the limits a reset clears, as the rows name them ("Fable weekly"). Scopes no row names are
+    left out."""
+    names: list[str] = []
+    for clear in clears:
+        name = CLAUDE_LIMIT_NAMES.get(OMP_RESET_SCOPES.get(clear, clear.removeprefix("anthropic:reset:")))
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def claude_grant(raw: Any) -> dict[str, Any] | None:
     """One banked-reset grant, or None when any field it is spent by is malformed."""
     if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not CLAUDE_GRANT_ID.fullmatch(raw["id"]):
@@ -560,8 +579,10 @@ def claude_banked_resets(payload: Any, now: float | None = None) -> dict[str, An
         reason = "limit" if following["requiresLimit"] and status.get("at_limit") is not True else "unavailable"
     else:
         reason = ""
+    usable_now = following["left"] if reason == "" else 0
     return {"available": sum(grant["left"] for grant in live), "next": following, "usable": reason == "",
-            "reason": reason}
+            "reason": reason, "usableNow": usable_now, "usableExpiresAt": following["expiresAt"] if reason == "" else None,
+            "clears": reset_clear_names(following["clears"]) if reason == "" else []}
 
 
 def claude_reset_credits(resets: dict[str, Any] | None, credits: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -574,7 +595,9 @@ def claude_reset_credits(resets: dict[str, Any] | None, credits: dict[str, Any] 
                           "total": None, "unlimited": False}
     return {**credits, "resetCreditsAvailable": resets["available"],
             "resetCreditsExpiresAt": following["expiresAt"] if following else None,
-            "resetCreditsUsable": resets["usable"], "resetCreditsReason": resets["reason"]}
+            "resetCreditsUsable": resets["usable"], "resetCreditsReason": resets["reason"],
+            "resetCreditsUsableNow": resets["usableNow"], "resetCreditsLater": resets["available"] - resets["usableNow"],
+            "resetCreditsUsableExpiresAt": resets["usableExpiresAt"], "resetCreditsClears": resets["clears"]}
 
 
 def parse_claude_usage(payload: Any) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
@@ -8744,6 +8767,20 @@ def omp_entry(provider_id: str, account_id: str, email: Any) -> dict[str, Any]:
     return entry
 
 
+def omp_reset_usage(reset_credits: dict[str, Any]) -> dict[str, Any]:
+    """What omp's banked resets do now, as the Claude reader counts them: the resets usable now, the ones that
+    wait, when the usable ones expire, and the limits they clear. Expired and redeemed resets count for nothing."""
+    live = [credit for credit in dict_list(reset_credits.get("credits")) if credit.get("status") not in ("expired", "redeemed")]
+    usable = [credit for credit in live if credit.get("usable") is True]
+    later = [credit for credit in live if credit.get("usable") is not True]
+    expiries = [epoch_seconds(credit.get("expiresAt")) for credit in usable]
+    return {"resetCreditsUsableNow": sum(int(number(credit.get("remainingCount")) or 0) for credit in usable),
+            "resetCreditsLater": sum(int(number(credit.get("remainingCount")) or 0) for credit in later),
+            "resetCreditsUsableExpiresAt": min((expiry for expiry in expiries if expiry is not None), default=None),
+            "resetCreditsClears": reset_clear_names([clear for credit in usable
+                                                     for clear in (credit.get("clears") or []) if isinstance(clear, str)])}
+
+
 def omp_report_entry(provider_id: str, account_id: str, report: dict[str, Any]) -> dict[str, Any]:
     """One omp usage report as an account entry."""
     metadata = report.get("metadata") if isinstance(report.get("metadata"), dict) else {}
@@ -8759,6 +8796,8 @@ def omp_report_entry(provider_id: str, account_id: str, report: dict[str, Any]) 
                       if credit.get("id") == reset_credits.get("nextCreditId")), None)
     if credits is not None and following is not None:
         credits["resetCreditsExpiresAt"] = epoch_seconds(following.get("expiresAt"))
+    if credits is not None:
+        credits.update(omp_reset_usage(reset_credits))
     entry.update(plan=omp_plan(provider_id, metadata.get("planType")), credits=credits,
                  fetchedAt=omp_time(report.get("fetchedAt")) or entry["fetchedAt"])
     if not entry["windows"]:

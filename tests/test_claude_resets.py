@@ -97,6 +97,15 @@ class ReaderTests(unittest.TestCase):
         with mock.patch.object(usage.time, "time", return_value=NOW):
             self.assertEqual(self.resets(answer(**program))["resetCreditsAvailable"], 3)
 
+    def test_usable_and_later_resets_say_what_they_clear(self):
+        fable = grant(id="launch-fable", clears=["seven_day_overage_included"])
+        tenure = grant(id="tenure-fable", clears=["seven_day_overage_included"], usable_now=False)
+        with mock.patch.object(usage.time, "time", return_value=NOW):
+            credits = self.resets(answer(grants=[fable, tenure], next_grant_id=fable["id"]))
+        self.assertEqual((credits["resetCreditsUsableNow"], credits["resetCreditsLater"]), (1, 1))
+        self.assertEqual(credits["resetCreditsUsableExpiresAt"], usage.epoch_seconds(fable["ends_at"]))
+        self.assertEqual(credits["resetCreditsClears"], ["Fable weekly"])
+
 
 class Recorder:
     """Stands in for Anthropic: answers each URL from `replies` and records every request."""
