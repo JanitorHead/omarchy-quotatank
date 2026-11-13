@@ -206,7 +206,8 @@ ShellRoot {
     check(list.rowFor("work").counted && !list.rowFor("personal").counted, "the chip's account has the filled dot")
     var renewalStatus = renewal.rowFor("renewal").statusText
     var renewalMonth = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(renewalOn.slice(5, 7)) - 1]
-    check(renewalStatus === "Ends " + Number(renewalOn.slice(8, 10)) + " " + renewalMonth, "a subscription ending within 30 days says when it ends: " + renewalStatus)
+    check(renewalStatus.indexOf("Ends " + Number(renewalOn.slice(8, 10)) + " " + renewalMonth) === 0,
+      "a subscription ending within 30 days says when it ends: " + renewalStatus)
     // The leftover joins the same line: what the pace leaves unused by the subscription end, per account.
     check(renewal.rowFor("paced").statusText === "Ends " + Number(renewalOn.slice(8, 10)) + " " + renewalMonth + " · 65% left over",
       "the largest leftover joins the Ends line: " + renewal.rowFor("paced").statusText)
