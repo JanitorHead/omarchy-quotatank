@@ -3842,21 +3842,26 @@ function ompMetric(left, right) {
   return Math.abs(left - right) <= tolerance ? 0 : left - right
 }
 
-// Share of a window's headroom left per hour until it resets (rank.ts required drain). The time
-// left is capped at the window length and floored at a minute; a window without a reset counts
-// as its full length.
+// Hours until a window resets (rank.ts required drain): capped at the window length and floored at
+// a minute; a window without a reset counts as its full length. Null without a window.
+function ompHoursLeft(row, now) {
+  if (!row) return null
+  var length = finiteOrNull(row.windowSeconds)
+  var resetsAt = finiteOrNull(row.resetsAt)
+  var left = resetsAt !== null ? resetsAt - now : length
+  if (left === null) return null
+  if (length !== null) left = Math.min(left, length)
+  return Math.max(left, 60) / 3600
+}
+
+// Share of a window's headroom left per hour until it resets (rank.ts required drain).
 function ompDrain(row, now) {
   if (!row) return 0
   var used = windowUsed(row)
   if (typeof used !== "number" || !isFinite(used)) return 0
-  var headroom = Math.max(0, 1 - used / 100)
-  var length = finiteOrNull(row.windowSeconds)
-  var resetsAt = finiteOrNull(row.resetsAt)
-  var left = resetsAt !== null ? resetsAt - now : length
-  if (left === null) return 0
-  if (length !== null) left = Math.min(left, length)
-  left = Math.max(left, 60)
-  return headroom / (left / 3600)
+  var hours = ompHoursLeft(row, now)
+  if (hours === null) return 0
+  return Math.max(0, 1 - used / 100) / hours
 }
 
 // omp's comparator, step by step (rank.ts compareUsageRankedCandidatePriority). A negative `order`
@@ -3899,10 +3904,31 @@ function ompRouting(provider, options) {
   var state = ompState(provider, opts.mode, opts.nowSeconds)
   if (state.nextAccount === null) return lines
   var accounts = providerAccounts(provider)
+  var now = Number(opts.nowSeconds)
+  var ranked = ompRanked(provider, now)
   var name = accountName(accounts[state.nextAccount], opts.extraKeys, opts.hideEmails, state.nextAccount)
-  var runner = state.ranking.length > 1 ? accountName(accounts[state.ranking[1]], opts.extraKeys, opts.hideEmails, state.ranking[1]) : ""
-  lines.next = "Next session: " + name + " · " + ompReasonText(state.nextReason, runner)
+  var runnerName = ranked.length > 1 ? accountName(accounts[ranked[1].index], opts.extraKeys, opts.hideEmails, ranked[1].index) : ""
+  lines.next = "Next session: " + name + " · " + ompReasonText(state.nextReason, runnerName)
+  var percent = state.nextReason === "drain" && ranked.length > 1 ? ompSwitchPercent(accounts[ranked[0].index], ranked[0], ranked[1], now) : null
+  if (percent !== null) lines.switchPoint = "New sessions move to " + runnerName + " when " + name + " reaches about " + percent + "%."
   return lines
+}
+
+// The share at which the next account's drain falls to the runner-up's (rank.ts required drain): the
+// point where the next account stops being the better pick. Only drain decides it, and it is
+// computed in the window that decided: the weekly one when the weekly drains differ, else the 5 h one.
+// Null when that share is not ahead of the next account's use or is not below 100.
+function ompSwitchPercent(nextAccount, next, runner, now) {
+  var weekly = ompMetric(next.secondaryDrain, runner.secondaryDrain) !== 0
+  var row = weekly ? (ompWindow(nextAccount, "weekly") || ompWindow(nextAccount, "codex-secondary"))
+    : (ompWindow(nextAccount, "session") || ompWindow(nextAccount, "codex-primary"))
+  var hours = ompHoursLeft(row, now)
+  if (hours === null) return null
+  var runnerDrain = weekly ? runner.secondaryDrain : runner.primaryDrain
+  var percent = Math.round(100 * (1 - runnerDrain * hours))
+  var used = windowUsed(row)
+  if (!isFinite(percent) || percent <= used || percent >= 100) return null
+  return percent
 }
 
 // The reason omp's pick is the one it is, in the words the Limits panel uses. "blocked" and "only"

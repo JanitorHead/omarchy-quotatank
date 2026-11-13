@@ -2553,6 +2553,19 @@ console.log("1.9 Coming up list: passed");
     ompAccount("Personal", cool)])).next, "Next session: Work · its 5-hour window is untouched.");
   assert.equal(routed(ompProvider([ompAccount("Work", cool), ompAccount("Personal", cool)])).next,
     "Next session: Work · first in omp's order.");
+
+  // The switch point: the share at which the next account's drain falls to the runner-up's. Only shown
+  // when drain decides the pick (the weekly drain first, then the 5-hour one).
+  const weeklyNext = ompAccount("Personal", [ompWin("session", 10, 7200, 18000), ompWin("weekly", 30, 180000, 604800)]);
+  const weeklyRunner = ompAccount("Work", [ompWin("session", 10, 7200, 18000), ompWin("weekly", 30, 360000, 604800)]);
+  const weekly = routed(ompProvider([weeklyRunner, weeklyNext]));
+  assert.equal(weekly.next, "Next session: Personal · most room per hour before its reset.");
+  assert.equal(weekly.switchPoint, "New sessions move to Work when Personal reaches about 65%.");
+  const fiveHourNext = ompAccount("Personal", [ompWin("session", 10, 7200, 18000), ompWin("weekly", 30, 300000, 604800)]);
+  const fiveHourRunner = ompAccount("Work", [ompWin("session", 10, 14400, 18000), ompWin("weekly", 30, 300000, 604800)]);
+  assert.equal(routed(ompProvider([fiveHourRunner, fiveHourNext])).switchPoint,
+    "New sessions move to Work when Personal reaches about 55%.");
+  assert.equal(routed(ompProvider([ompAccount("Work", cool), boosted])).switchPoint, "");
 }
 
 console.log("UsageLogic.js: all assertions passed");
