@@ -2983,13 +2983,20 @@ function setSubscriptionEnds(raw, providerId, accountId, value) {
   return JSON.stringify(all)
 }
 
-// One account's (or provider's) reading with its manual end date: `subscription.endsOn` and `endsAt` (the
-// start of the day after), and `ended` once `nowSeconds` reaches it. A provider's own ended stays ended.
+// One account's (or provider's) reading with its end date: a date the provider reports wins and stays
+// `source: "provider"`; otherwise the manual date gives `subscription.endsOn` and `endsAt` (the start of the day
+// after), with `source: "manual"`. `ended` once `nowSeconds` reaches the date, and a provider's own ended stays ended.
 function endSubscriptionReading(reading, rows, nowSeconds) {
   if (!reading || reading.accountId === undefined || !Object.prototype.hasOwnProperty.call(rows, String(reading.accountId))) return reading
+  var provided = reading.subscription || {}
+  if (provided.source === "provider" && typeof provided.endsAt === "number") {
+    return Object.assign({}, reading, { subscription: Object.assign({}, provided, {
+      ended: !!(subscriptionEnded(reading) || nowSeconds >= provided.endsAt)
+    }) })
+  }
   var endsOn = rows[String(reading.accountId)]
   var endsAt = (subscriptionEndDay(endsOn) + 1) * PACE_DAY_SECONDS
-  var subscription = Object.assign({}, reading.subscription || {}, {
+  var subscription = Object.assign({}, provided, {
     ended: !!(subscriptionEnded(reading) || nowSeconds >= endsAt), endsAt: endsAt, endsOn: endsOn, source: "manual"
   })
   return Object.assign({}, reading, { subscription: subscription })
@@ -3026,6 +3033,12 @@ function subscriptionEndText(endsOn, nowSeconds) {
   var now = finiteOrNull(nowSeconds)
   if (now !== null && Number(day.slice(0, 4)) === new Date(now * 1000).getUTCFullYear()) return text
   return text + " " + day.slice(0, 4)
+}
+
+// The day (YYYY-MM-DD, UTC) a provider dated its subscription to end, or "" when it did not date it.
+function providerSubscriptionEndsOn(subscription) {
+  if (!subscription || subscription.source !== "provider" || typeof subscription.endsAt !== "number") return ""
+  return new Date(subscription.endsAt * 1000).toISOString().slice(0, 10)
 }
 
 var ACCOUNT_ORIGIN_TEXT = { omarchy: "Omarchy login", signin: "sign-in", key: "API key", proxy: "CLIProxyAPI", omp: "omp" }

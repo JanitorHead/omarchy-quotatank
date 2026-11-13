@@ -1876,6 +1876,17 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
   const reported = { ...provider, accounts: [provider.accounts[0], { ...provider.accounts[1], subscription: { ended: true } }] };
   assert.equal(context.subscriptionEnded(accountOf(context.withSubscriptionEnds([reported], raw, epoch("2030-06-01"))[0], "omp-0123456789ab")), true,
     "a provider's own ended stays");
+  // A date Codex reports wins over the manual one, and is judged on its own day.
+  const providerDated = { ...provider, accounts: [provider.accounts[0], { ...provider.accounts[1], subscription: { source: "provider", ended: false, endsAt: epoch("2030-07-01") } }] };
+  assert.deepEqual(plain(accountOf(context.withSubscriptionEnds([providerDated], raw, epoch("2030-06-11"))[0], "omp-0123456789ab").subscription),
+    { source: "provider", ended: false, endsAt: epoch("2030-07-01") }, "the provider's date beats the manual one");
+  assert.equal(context.subscriptionEnded(accountOf(context.withSubscriptionEnds([providerDated], raw, epoch("2030-07-01"))[0], "omp-0123456789ab")), true,
+    "the provider's date ends the subscription on its day");
+  // The day a provider reports, for the settings line: "" unless the provider dated it.
+  assert.equal(context.providerSubscriptionEndsOn({ source: "provider", ended: false, endsAt: epoch("2030-07-01") }), "2030-07-01",
+    "a provider's end day");
+  assert.equal(context.providerSubscriptionEndsOn({ source: "manual", endsAt: epoch("2030-07-01") }), "", "a manual date is not the provider's");
+  assert.equal(context.providerSubscriptionEndsOn(undefined), "", "no subscription, no day");
   // The row says when a dated subscription stops: "Ends <date>" within 30 days, urgent within 7 days.
   const statusAt = (iso, now, extra = {}) => context.accountStatusLine(context.withSubscriptionEnds([{ id: "claude", name: "Claude Code",
     status: "ok", accountId: "main", active: true, windows: [], ...extra }], context.setSubscriptionEnds("{}", "claude", "main", iso), now)[0], false, now, null);
