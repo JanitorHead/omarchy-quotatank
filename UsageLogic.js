@@ -3719,6 +3719,7 @@ function accountState(provider, options) {
     dots.push({ index: index, state: rings[index], counted: isCounted, spending: isCounted && spending[index] })
   }
   var value = leastHeadroomIndex(accounts, counted)
+  var omp = ompState(provider, mode, opts.nowSeconds)
   return {
     mode: mode,
     counted: counted,
@@ -3729,8 +3730,46 @@ function accountState(provider, options) {
     leftover: leftover,
     order: mode === "together" ? accountOrder(accounts, "together") : stable,
     stable: stable,
+    nextAccount: omp.nextAccount,
+    nextReason: omp.nextReason,
+    ompTags: omp.ompTags,
+    ranking: omp.ranking,
     dots: { dots: accounts.length > 1 ? dots : [], extra: accounts.length > 1 ? stable.length - shown.length : 0 }
   }
+}
+
+// omp's replica of its own account ranking (omp 18.18.8, rank.ts): which account omp would pick next in
+// "Used together · omp". This goes once omp reports its next account (can1357/oh-my-pi#19144). Empty
+// outside omp mode: no next account, no ranking, no tags.
+function ompState(provider, mode, nowSeconds) {
+  var accounts = providerAccounts(provider)
+  var fromOmpAccount = false
+  for (var i = 0; i < accounts.length; i++) {
+    if (fromOmp(accounts[i])) fromOmpAccount = true
+  }
+  if (mode !== "together" || proxyPool(provider) || !fromOmpAccount) {
+    return { nextAccount: null, nextReason: "", ompTags: [], ranking: [] }
+  }
+  var ranking = ompRanking(provider, nowSeconds)
+  var tags = []
+  for (var t = 0; t < accounts.length; t++) tags.push("")
+  if (ranking.length > 0) tags[ranking[0]] = "next"
+  return {
+    nextAccount: ranking.length > 0 ? ranking[0] : null,
+    nextReason: ranking.length === 1 ? "only" : "",
+    ompTags: tags,
+    ranking: ranking
+  }
+}
+
+// The accounts omp can pick, in its order. Ended subscriptions are not candidates.
+function ompRanking(provider, nowSeconds) {
+  var accounts = providerAccounts(provider)
+  var ranking = []
+  for (var i = 0; i < accounts.length; i++) {
+    if (!subscriptionEnded(accounts[i])) ranking.push(i)
+  }
+  return ranking
 }
 
 // Where a limit is heading at the current pace. `projected` is the use expected at reset (at most

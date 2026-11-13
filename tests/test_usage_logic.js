@@ -2392,4 +2392,26 @@ console.log("1.9 Coming up list: passed");
   console.log("Bar chips, flashes and hover card: passed");
 }
 
+// ---- 1.10 omp's next account: the comparator from omp 18.18.8 (rank.ts) ----
+{
+  const now = 1760000000;
+  const plain = (value) => JSON.parse(JSON.stringify(value));
+  const ompWin = (id, used, resetIn, seconds) => ({ id, label: id === "weekly" ? "Weekly limit" : "5-hour limit",
+    used, remaining: 100 - used, resetsAt: now + resetIn, windowSeconds: seconds });
+  const ompAccount = (accountId, windows, extra = {}) => ({ id: "claude", accountId, label: accountId, status: "ok",
+    origin: "omp", windows, activity: {}, ...extra });
+  const ompProvider = (accounts, extra = {}) => ({ id: "claude", name: "Claude Code", status: "ok",
+    windows: accounts[0].windows, accounts, ...extra });
+  const together = (provider) => context.accountState(provider, { modes: '{"claude":"together"}', nowSeconds: now,
+    recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 });
+  const cool = [ompWin("session", 10, 7200, 18000), ompWin("weekly", 30, 300000, 604800)];
+
+  const solo = together(ompProvider([ompAccount("Work", cool)]));
+  assert.equal(solo.nextAccount, 0, "the only candidate is next");
+  assert.equal(solo.nextReason, "only");
+  assert.deepEqual(plain(solo.ranking), [0]);
+  assert.deepEqual(plain(solo.ompTags), ["next"]);
+  console.log("1.10 omp's next account: passed");
+}
+
 console.log("UsageLogic.js: all assertions passed");
