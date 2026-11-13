@@ -2526,6 +2526,9 @@ console.log("1.9 Coming up list: passed");
   assert.equal(onlyRoute.next, "Next session: Work · only account with room.");
   assert.equal(onlyRoute.switchPoint, "");
   assert.equal(onlyRoute.warning, "");
+  // Every candidate blocked: the line says no account has room, not that this one is the only one with room.
+  assert.equal(routed(ompProvider([ompAccount("Work", blocked)])).next,
+    "Next session: Work · no account has room; its limit resets first.");
   // Unnamed omp accounts carry their row number, counted from 1: the second row is "Account 2".
   const unnamed = (accountId, windows, extra = {}) => ({ ...ompAccount(accountId, windows, extra), label: "" });
   assert.equal(routed(ompProvider([unnamed("omp-aaaaaaaaaaaa", blocked), unnamed("omp-bbbbbbbbbbbb", cool)])).next,

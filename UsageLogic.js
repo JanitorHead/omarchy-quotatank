@@ -3762,6 +3762,8 @@ function ompState(provider, mode, nowSeconds) {
   var reason = ""
   if (ranked.length === 1) reason = "only"
   if (ranked.length > 1) reason = ompStep(ranked[0], ranked[1]).step || "order"
+  // omp puts the blocked and allowance-spent candidates last, so when the first one is either, every candidate is.
+  if (ranked.length > 0 && (ranked[0].blocked || ranked[0].allowanceSpent)) reason = "noroom"
   return {
     nextAccount: ranking.length > 0 ? ranking[0] : null,
     nextReason: reason,
@@ -3968,6 +3970,7 @@ function ompReasonText(reason, runner) {
   if (reason === "allowance") return "the others are past their allowance."
   if (reason === "boost") return "its 5-hour window is untouched."
   if (reason === "measured") return "the only one with a usage reading."
+  if (reason === "noroom") return "no account has room; its limit resets first."
   return "first in omp's order."
 }
 
