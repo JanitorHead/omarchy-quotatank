@@ -402,6 +402,17 @@ class UsageComputerTests(unittest.TestCase):
         payload = self.payload({"claude": stale}, {"devbox": answer(reading("claude", "me@example.com", 42))}, ids=("claude",))
         self.assertNotIn("subscription", payload["providers"][0], "the live reading there is the newer word")
 
+    def test_a_stand_in_is_the_other_reading_whole_apart_from_the_accounts_identity(self):
+        # The other computer's reading with every field a reader sets; here a failure with every field a failure sets.
+        theirs = usage.mark_subscription_ended(reading("claude", "me@example.com", 42, "Max", credits={
+            "label": "Credits", "currency": "USD", "remaining": 5.0, "spendable": 5.0}))
+        failed = usage.error_provider("claude", "http", "Claude answered 503.", http_status=503)
+        failed["account"] = "me@example.com"
+        payload = self.payload({"claude": failed}, {"devbox": answer(copy.deepcopy(theirs))}, ids=("claude",))
+        claude = payload["providers"][0]
+        fields = (set(theirs) | set(failed)) - {"id", "name", "authCommand", "account", "notice", "history"}
+        self.assertEqual({key: claude.get(key) for key in fields}, {key: theirs.get(key) for key in fields})
+
     def test_two_other_computers_keep_their_own_account_ids_when_this_computer_has_none(self):
         payload = self.payload({}, {"devbox": answer(reading("claude", "me@example.com", 10)),
                                     "buildbox": answer(reading("claude", "work@example.com", 20))}, ids=("claude",))

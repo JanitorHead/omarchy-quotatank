@@ -14,6 +14,7 @@ All notable changes to this project will be documented here. The format follows
 
 - **A cancelled Kilo Pass no longer shows its last month as a live allowance.** Kilo keeps a cancelled pass with that month's figures; only an active, past-due or trialing pass counts now.
 - **An expired Alibaba Coding Plan no longer shows its last quota or an unreadable-data error**, and an expired Xiaomi MiMo Token Plan reads as an ended subscription beside its balance instead of a notice.
+- **A reading standing in for a failed one no longer keeps the failure's HTTP status**, whether it comes from another computer, a proxy or omp.
 - **The backend contract and the README describe 3.1.3's Claude resets as they work.** The contract still said Claude's banked resets clear the 5-hour and weekly limits, did not list the Fable weekly limit or the reset expiry that omp accounts now carry, and did not say that a signed-out Claude Code reading names no account. The README said every launch reset clears only the Fable weekly limit; the confirmation names what each one clears.
 
 ### Changed

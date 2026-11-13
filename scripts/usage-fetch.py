@@ -8779,9 +8779,13 @@ def stand_in_omp_reading(native: dict[str, Any], entry: dict[str, Any]) -> None:
     and its own failure becomes the notice, so a reader that could not reach its provider (at login, before the
     network is up) shows omp's figures instead of an error beside a second copy of the account."""
     failure = native.get("message") or ""
-    native.update({key: copy.deepcopy(entry[key]) for key in ("status", "errorKind", "message", "windows", "credits",
-                                                                "source", "fetchedAt")})
-    native["plan"] = native.get("plan") or entry["plan"]
+    plan = native.get("plan")
+    for key in READING_FIELDS:
+        if key in entry:
+            native[key] = copy.deepcopy(entry[key])
+        else:
+            native.pop(key, None)
+    native["plan"] = plan or entry["plan"]
     native["notice"] = failure or entry["notice"]
 
 
@@ -8916,7 +8920,11 @@ MAX_COMPUTERS = 16
 PROXY_ID = re.compile(r"p-[0-9a-f]{8}")
 MAX_PROXIES = 4
 NOT_SET_UP_KINDS = frozenset({"no_credentials", "cli_unavailable"})
-READING_FIELDS = ("status", "errorKind", "message", "windows", "credits", "source", "fetchedAt", "plan", "subscription")
+# What describes a reading rather than the account: a stand-in (another computer's, a proxy's or omp's reading of the
+# same account) takes each of these, and drops the ones the other reading lacks. A field a reader sets on its reading
+# belongs here; test_remote checks that a stand-in is the other reading whole.
+READING_FIELDS = ("status", "errorKind", "message", "httpStatus", "windows", "credits", "source", "fetchedAt", "plan",
+                  "subscription")
 
 
 def parse_computers(values: list[str]) -> list[tuple[str, str]]:
