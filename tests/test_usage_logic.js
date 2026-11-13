@@ -1944,6 +1944,10 @@ console.log("omp settings, live feed and account modes: passed");
   assert.equal(context.accountCanUse(ended("old", []), "single"), false, "an ended account without money offers no Use");
   assert.equal(context.accountCanUse(ended("old", [], { credits: { remaining: 5, spendable: 5, currency: "USD" } }), "single"),
     true, "with money left it still does: that money spends");
+  assert.equal(context.endedWithoutMoney(ended("old", [])), true, "ended with no money left");
+  assert.equal(context.endedWithoutMoney(ended("old", [], { credits: { remaining: 5, spendable: 5, currency: "USD" } })), false,
+    "ended but money left: not ended-without-money");
+  assert.equal(context.endedWithoutMoney(login("w", [quiet(3)])), false, "a live subscription is not ended");
   const endedSeed = context.accountEvents({}, [{ ...before, subscription: { ended: true } }], NOW - 60, 25);
   assert.equal(context.accountEvents(endedSeed.state, [{ ...after, subscription: { ended: true } }], NOW, 25).events.length, 0,
     "an ended account's limit resets quietly");

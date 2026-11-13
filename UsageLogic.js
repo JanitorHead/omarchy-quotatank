@@ -3300,6 +3300,11 @@ function subscriptionEnded(reading) {
   return !!reading && !!reading.subscription && reading.subscription.ended === true
 }
 
+// One helper for "ended with no money left": the subscription is over and no balance can still be spent.
+function endedWithoutMoney(account) {
+  return subscriptionEnded(account) && spendable(account) === null
+}
+
 // Whether every account of the provider is read through a proxy, which rotates them: they are spent together.
 function proxyPool(provider) {
   var accounts = providerAccounts(provider)
@@ -3639,7 +3644,7 @@ function accountUseArgv(providerId, account) {
 // read: Omarchy switches logins only here. An ended subscription with no money left gives a session nothing.
 function accountCanUse(account, mode) {
   return !!account && mode === "single" && account.active !== true && account.status === "ok"
-    && accountSourceKind(account) === "omarchy" && !(subscriptionEnded(account) && spendable(account) === null)
+    && accountSourceKind(account) === "omarchy" && !endedWithoutMoney(account)
 }
 
 // How new sessions pick among a provider's accounts, for the ACCOUNTS header and the hover card alike:
