@@ -30,6 +30,8 @@ All notable changes to this project will be documented here. The format follows
 
 - **A Coming up list in the account detail.** Under the limits, the account lists its next dates in order: a banked reset that expires, the next reset of a limit of a day or more with what it leaves over, and the subscription's end. 5-hour resets are left out. An ended subscription lists nothing.
 
+- **OMP ROUTING shows omp's next account.** Under the limits, a block for omp accounts used together names the account the next session starts on and why, gives the share at which another account takes over when drain decides, and warns once about an omp account whose subscription has ended. It mirrors oh-my-pi 18.18.8's ranking until omp reports the next account itself, and shows nothing for a proxy pool or a provider without omp accounts.
+
 ### Fixed
 
 - **A cancelled Kilo Pass no longer shows its last month as a live allowance.** Kilo keeps a cancelled pass with that month's figures; only an active, past-due or trialing pass counts now.

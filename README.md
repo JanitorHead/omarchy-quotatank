@@ -168,6 +168,8 @@ Local Claude Code, Codex, OpenCode, omp, and (when turned on) grok CLI history a
 
 If you work through [omp](https://github.com/can1357/oh-my-pi), Quotatank reads what omp knows, on this computer and on every other computer you added: it merges omp's accounts into the providers you already monitor and follows omp's sessions, so requests mark their account as spending and Costs gains projects and subagents. Nothing has to listen on a port: another computer is read over SSH.
 
+**OMP ROUTING** sits under the limits when omp runs accounts together. It names the account the next session starts on and why (`Next session: Work · first in omp's order.`), gives the share at which another account takes over when drain decides (`New sessions move to Work when Personal reaches about 65%.`), and shows one warning when an omp account's subscription has ended while omp still signs in with it. Until omp reports the next account itself (can1357/oh-my-pi#19144), Quotatank mirrors the ranking of oh-my-pi 18.18.8. A proxy pool or a provider without omp accounts shows no block.
+
 ## Balances, not just percentages
 
 ![OpenRouter's panel with $26.00 used of $100.00, a Balance card with purchases and this week's spend, and a monthly key limit; beside it DeepSeek's balance](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/balance.png)
