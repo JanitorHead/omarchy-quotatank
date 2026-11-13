@@ -275,6 +275,10 @@ ShellRoot {
       check(saved.barChipValues === '{"claude":"pool"}' && form.overrideSummary("claude") === "Pool in menu bar", "Menu bar shows: Pool is saved for that provider only: " + saved.barChipValues)
       shown("barChipValue-claude").changed("account")
       check(saved.barChipValues === "{}", "Menu bar shows: Account forgets the override")
+      // The same choice is offered in dots mode, where the summary names no per-account chips.
+      shown("barAccountModeControl").changed("dots")
+      check(saved.barAccountMode === "dots" && form.menuBarSummary().indexOf("a chip per account") < 0 && shown("barChipValue-claude").visible,
+        "Menu bar shows: offered in dots mode too, and the summary says no chip per account")
       check(shown("showAccount-claude-1").label === "Account 2 · omp", "each account says where it is read from: " + shown("showAccount-claude-1").label)
       shown("showAccount-claude-1Switch").toggled()
       check(saved.hiddenAccounts === '{"claude":["omp-0123456789ab"]}' && form.overrideSummary("claude") === "1 hidden",
