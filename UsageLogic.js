@@ -3628,6 +3628,35 @@ function accountLeftover(account, nowSeconds) {
   return best
 }
 
+// The dates where an account loses something, in date order: its next limit reset (with the leftover that reset
+// leaves), the banked reset's expiry and the subscription end. Empty for an ended or missing account.
+function comingUpItems(account, nowSeconds) {
+  var now = finiteOrNull(nowSeconds)
+  if (!account || now === null || subscriptionEnded(account)) return []
+  var items = []
+  var next = null
+  var windows = listOrEmpty(account.windows)
+  for (var i = 0; i < windows.length; i++) {
+    var resetsAt = finiteOrNull(windows[i].resetsAt)
+    if (resetsAt !== null && resetsAt > now && (next === null || resetsAt < next.at)) next = { row: windows[i], at: resetsAt }
+  }
+  if (next !== null) {
+    var left = windowLeftover(next.row, account, now)
+    items.push({ kind: "reset", at: next.at, tone: "dim",
+      text: String(next.row.label || "Limit") + " resets " + dayText(next.at, now) + (left ? " · " + Math.round(left.percent) + "% left over" : "") })
+  }
+  var expires = account.credits ? finiteOrNull(account.credits.resetCreditsExpiresAt) : null
+  if (expires !== null && expires > now) items.push({ kind: "banked", at: expires, tone: "dim", text: "Banked reset expires " + dayText(expires, now) })
+  var endsAt = account.subscription ? finiteOrNull(account.subscription.endsAt) : null
+  if (endsAt !== null && endsAt > now) items.push({ kind: "end", at: endsAt, tone: "dim", text: "Subscription ends " + dayText(endsAt, now) })
+  return items.sort(function (a, b) { return a.at - b.at })
+}
+
+// A UTC day (from epoch seconds) as the status line writes it: "13 Jan", with the year when it is not this one.
+function dayText(seconds, nowSeconds) {
+  return subscriptionEndText(new Date(seconds * 1000).toISOString().slice(0, 10), nowSeconds)
+}
+
 // The dashed stretch a meter draws for the forecast, on the side the meter shows (fractions 0-1):
 // past the fill under Used, the part of the fill that would be spent under Remaining. Null when there
 // is no projection or it would not move the meter.
@@ -3728,7 +3757,7 @@ function forecastText(forecast, mode, clock, leftover) {
   var pace = forecast.pace
   if (pace.exhausted) return { text: "used up", urgent: true }
   if (forecast.runsOut) return { text: "runs out " + clock(forecast.runsOutAt) + " · " + expectedText(pace, mode), urgent: true }
-  if (leftover) {
+  if (leftover && pace.state === "projecting") {
     var when = leftover.deadline === "end" ? "at subscription end" : "at reset"
     return { text: Math.round(leftover.percent) + "% left over " + when + " · use " + Math.round(leftover.perDay) + "%/day to spend it", urgent: false }
   }

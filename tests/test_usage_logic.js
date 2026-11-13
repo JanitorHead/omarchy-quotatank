@@ -2034,6 +2034,25 @@ console.log("1.9 Manual subscription end dates: passed");
   assert.equal(paired.leftover[1], null, "no leftover for the account that will use it all");
 }
 console.log("1.9 Leftover at the reset: passed");
+// comingUpItems: the next limit reset (with its leftover), the banked-reset expiry and the subscription end, by date.
+{
+  const reset = { id: "weekly", label: "Weekly limit", used: 40, remaining: 60, windowSeconds: WEEK, resetsAt: NOW + 3 * DAY, samples: [] };
+  const monthly = { id: "monthly", label: "Monthly limit", used: 10, remaining: 90, windowSeconds: 4 * WEEK, resetsAt: NOW + 20 * DAY, samples: [] };
+  const full = { windows: [monthly, reset], credits: { resetCreditsExpiresAt: NOW + 10 * DAY },
+    subscription: { endsAt: NOW + 30 * DAY, endsOn: new Date((NOW + 30 * DAY) * 1000).toISOString().slice(0, 10), source: "manual", ended: false } };
+  const items = asJson(context.comingUpItems(full, NOW));
+  assert.deepEqual(items.map((item) => item.kind), ["reset", "banked", "end"], "date order");
+  assert.equal(items[0].at, NOW + 3 * DAY, "the next reset is the earliest one");
+  assert.match(items[0].text, /^Weekly limit resets \d+ \w+ · \d+% left over$/, "the next reset carries its leftover");
+  assert.match(items[1].text, /^Banked reset expires \d+ \w+$/);
+  assert.match(items[2].text, /^Subscription ends \d+ \w+$/);
+  const early = asJson(context.comingUpItems({ ...full, credits: { resetCreditsExpiresAt: NOW + DAY } }, NOW));
+  assert.deepEqual(early.map((item) => item.kind), ["banked", "reset", "end"], "an earlier banked expiry comes first");
+  const ended = { windows: [], subscription: { endsAt: NOW + DAY, endsOn: "1970-01-02", source: "manual", ended: true } };
+  assert.equal(context.comingUpItems(ended, NOW).length, 0, "an ended subscription lists nothing");
+  assert.equal(context.comingUpItems(null, NOW).length, 0, "no account lists nothing");
+}
+console.log("1.9 Coming up list: passed");
 
 
 // ---- 1.9 QmlBar ----
