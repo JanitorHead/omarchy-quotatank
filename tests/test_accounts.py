@@ -54,12 +54,17 @@ def grok_auth(bearer: str) -> str:
                                     "expires_at": "2099-01-01T00:00:00Z", "email": "dev@example.com"}})
 
 
-def codex_accounts_check(account_id: str, *, active: bool = True, will_renew: bool = True,
-                         expires_at: str | None = None, cancels_at: str | None = None) -> dict:
-    # Keys as the accounts check nests them: the entitlement, and the flag on the last subscription.
+def codex_accounts_check(account_id: str, *, active: bool = True, will_renew: bool | None = True,
+                         expires_at: str | None = None, cancels_at: str | None = None, plan_type: str = "pro",
+                         subscribed: bool = True) -> dict:
+    # Keys as the accounts check nests them: the entitlement, and the flag on the last subscription. A missing
+    # will_renew leaves that flag out; an account that never subscribed has no last subscription at all.
     entitlement = {"has_active_subscription": active, "expires_at": expires_at, "renews_at": None,
                    "cancels_at": cancels_at}
-    return {"accounts": {account_id: {"entitlement": entitlement, "last_active_subscription": {"will_renew": will_renew}}}}
+    account = {"plan_type": plan_type, "entitlement": entitlement}
+    if subscribed:
+        account["last_active_subscription"] = {} if will_renew is None else {"will_renew": will_renew}
+    return {"accounts": {account_id: account}}
 
 
 def codex_rpc(stream, request_id, method, timeout, params=None) -> dict:
@@ -368,6 +373,34 @@ class CodexSubscriptionTests(AccountsTestCase):
                                            expires_at="2026-12-01T00:00:00Z")
         result = usage.fetch_codex(5)
         self.assertEqual(result["subscription"], {"source": "provider", "ended": True, "endsAt": 1796083200})
+
+    def test_a_chatgpt_free_account_has_not_ended(self) -> None:
+        self.answer = codex_accounts_check(self.ACCOUNT_ID, active=False, plan_type="free", subscribed=False)
+        result = usage.fetch_codex(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": False})
+
+    def test_a_missing_will_renew_gives_no_end_date(self) -> None:
+        self.answer = codex_accounts_check(self.ACCOUNT_ID, will_renew=None, expires_at="2027-02-01T00:00:00Z")
+        result = usage.fetch_codex(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": False})
+
+    def test_an_answer_without_the_account_keeps_the_last_subscription(self) -> None:
+        self.answer = codex_accounts_check(self.ACCOUNT_ID, will_renew=False, expires_at="2027-03-01T00:00:00Z",
+                                           cancels_at="2027-02-01T00:00:00Z")
+        usage.fetch_codex(5)
+        self.now += 6 * 3600
+        self.answer = {"accounts": {}}
+        result = usage.fetch_codex(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": False, "endsAt": self.FEB_1})
+
+    def test_an_answer_without_an_entitlement_keeps_the_last_subscription(self) -> None:
+        self.answer = codex_accounts_check(self.ACCOUNT_ID, will_renew=False, expires_at="2027-03-01T00:00:00Z",
+                                           cancels_at="2027-02-01T00:00:00Z")
+        usage.fetch_codex(5)
+        self.now += 6 * 3600
+        self.answer = {"accounts": {self.ACCOUNT_ID: {"last_active_subscription": {"will_renew": False}}}}
+        result = usage.fetch_codex(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": False, "endsAt": self.FEB_1})
 
     def test_a_failed_check_keeps_the_last_subscription(self) -> None:
         self.answer = codex_accounts_check(self.ACCOUNT_ID, will_renew=False, expires_at="2027-03-01T00:00:00Z",

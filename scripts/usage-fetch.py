@@ -1111,17 +1111,20 @@ def subscription_cache_path(provider_id: str, key: str) -> Path:
     return state_folder() / "subscriptions" / f"{provider_id}-{hashlib.sha256(key.encode()).hexdigest()}.json"
 
 
-def subscription_from_check(answer: Any, account_id: str) -> dict[str, Any] | None:
-    """The subscription Codex's accounts check gives `account_id`: whether it has ended, and when it ends if it is not
-    set to renew. None when the answer has no entry for the account."""
+def subscription_from_check(answer: Any, account_id: str) -> dict[str, Any]:
+    """The subscription Codex's accounts check gives `account_id`: whether it has ended, and when it ends if it is set
+    not to renew. A ChatGPT Free account has no subscription to end. Raises ProviderFailure when the answer has no
+    entitlement for the account, so the last saved answer stays."""
     accounts = answer.get("accounts") if isinstance(answer, dict) else None
     account = accounts.get(account_id) if isinstance(accounts, dict) else None
-    if not isinstance(account, dict):
-        return None
-    entitlement = account.get("entitlement") if isinstance(account.get("entitlement"), dict) else {}
-    last = account.get("last_active_subscription") if isinstance(account.get("last_active_subscription"), dict) else {}
-    subscription = {"source": "provider", "ended": entitlement.get("has_active_subscription") is not True}
-    if last.get("will_renew") is True:
+    entitlement = account.get("entitlement") if isinstance(account, dict) else None
+    if not isinstance(entitlement, dict):
+        raise ProviderFailure("malformed", "Codex's accounts check did not describe this account.")
+    if account.get("plan_type") == "free":
+        return {"source": "provider", "ended": False}
+    last = account.get("last_active_subscription") if isinstance(account.get("last_active_subscription"), dict) else None
+    subscription = {"source": "provider", "ended": last is not None and entitlement.get("has_active_subscription") is False}
+    if last is None or last.get("will_renew") is not False:
         return subscription
     ends_at = utc_timestamp(entitlement.get("cancels_at")) or utc_timestamp(entitlement.get("expires_at"))
     if ends_at is not None:
