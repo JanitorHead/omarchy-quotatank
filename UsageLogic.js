@@ -3909,15 +3909,15 @@ function ompRouting(provider, options) {
     if (!fromOmp(accounts[i])) continue
     hasOmp = true
     if (lines.warning === "" && subscriptionEnded(accounts[i])) {
-      lines.warning = accountName(accounts[i], opts.extraKeys, opts.hideEmails, i) + "'s subscription ended, but omp still signs in with it: remove it in omp."
+      lines.warning = accountName(accounts[i], opts.extraKeys, opts.hideEmails, i + 1) + "'s subscription ended, but omp still signs in with it: remove it in omp."
     }
   }
   if (!hasOmp) return lines
   var state = ompState(provider, opts.mode, opts.nowSeconds)
   if (state.nextAccount === null) return lines
   var ranked = ompRanked(provider, now)
-  var name = accountName(accounts[state.nextAccount], opts.extraKeys, opts.hideEmails, state.nextAccount)
-  var runnerName = ranked.length > 1 ? accountName(accounts[ranked[1].index], opts.extraKeys, opts.hideEmails, ranked[1].index) : ""
+  var name = accountName(accounts[state.nextAccount], opts.extraKeys, opts.hideEmails, state.nextAccount + 1)
+  var runnerName = ranked.length > 1 ? accountName(accounts[ranked[1].index], opts.extraKeys, opts.hideEmails, ranked[1].index + 1) : ""
   lines.next = "Next session: " + name + " · " + ompReasonText(state.nextReason, runnerName)
   var percent = state.nextReason === "drain" && ranked.length > 1 ? ompSwitchPercent(accounts[ranked[0].index], ranked[0], ranked[1], now) : null
   if (percent !== null) lines.switchPoint = "New sessions move to " + runnerName + " when " + name + " reaches about " + percent + "%."
@@ -3938,8 +3938,8 @@ function ompLeftoverWarning(accounts, ranked, opts, now) {
   }
   if (best === null) return ""
   var leftoverAccount = accounts[best.index]
-  var nextName = accountName(accounts[ranked[0].index], opts.extraKeys, opts.hideEmails, ranked[0].index)
-  return accountName(leftoverAccount, opts.extraKeys, opts.hideEmails, best.index) + " ends " + dayText(leftoverAccount.subscription.endsAt, now)
+  var nextName = accountName(accounts[ranked[0].index], opts.extraKeys, opts.hideEmails, ranked[0].index + 1)
+  return accountName(leftoverAccount, opts.extraKeys, opts.hideEmails, best.index + 1) + " ends " + dayText(leftoverAccount.subscription.endsAt, now)
     + " with " + Math.round(best.left.percent) + "% left over: omp spends it only after " + nextName + ". Raise its priority in omp (auth.accountPolicies)."
 }
 

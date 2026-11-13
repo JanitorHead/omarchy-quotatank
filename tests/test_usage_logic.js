@@ -2526,6 +2526,13 @@ console.log("1.9 Coming up list: passed");
   assert.equal(onlyRoute.next, "Next session: Work · only account with room.");
   assert.equal(onlyRoute.switchPoint, "");
   assert.equal(onlyRoute.warning, "");
+  // Unnamed omp accounts carry their row number, counted from 1: the second row is "Account 2".
+  const unnamed = (accountId, windows, extra = {}) => ({ ...ompAccount(accountId, windows, extra), label: "" });
+  assert.equal(routed(ompProvider([unnamed("omp-aaaaaaaaaaaa", blocked), unnamed("omp-bbbbbbbbbbbb", cool)])).next,
+    "Next session: Account 2 · only account with room.", "the next account is named by its row number");
+  const endedUnnamed = unnamed("omp-aaaaaaaaaaaa", cool, { subscription: { endsAt: now - DAY, endsOn: "2020-01-01", source: "manual", ended: true } });
+  assert.equal(routed(ompProvider([endedUnnamed, unnamed("omp-bbbbbbbbbbbb", cool)])).warning,
+    "Account 1's subscription ended, but omp still signs in with it: remove it in omp.", "the ended line names the row number");
 
   // Each reason omp gives for its pick names what decided it.
   assert.equal(routed(ompProvider([ompAccount("Work", blocked), ompAccount("Personal", cool)])).next,
