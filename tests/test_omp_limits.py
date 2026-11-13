@@ -374,6 +374,15 @@ class MergeTests(unittest.TestCase):
         # Live omp requests name omp's id for the account; the native reading answers to it too.
         self.assertEqual(providers[0]["ompAccountId"], omp_id("openai-codex", "work@example.com"))
 
+    def test_the_same_email_copies_omps_policy_onto_the_native_reading(self):
+        document = fixture()
+        codex = next(report for report in document["reports"] if report["provider"] == "openai-codex")
+        codex["policy"] = {"priority": 3, "state": "eligible"}
+        providers = [native("codex", "WORK@example.com")]
+        usage.merge_omp(providers, ["codex"], [document], None)
+        self.assertIn("omp", providers[0]["origins"])
+        self.assertEqual(providers[0]["policy"], {"priority": 3, "state": "eligible"})
+
     def test_a_single_reading_becomes_the_first_of_the_accounts(self):
         providers = [native("claude", "someone@example.com")]
         self.assertEqual(self.merge(providers, ["claude"]), 3)

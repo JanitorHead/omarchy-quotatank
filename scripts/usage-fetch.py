@@ -9043,6 +9043,8 @@ def merge_omp_provider(provider: dict[str, Any] | None, provider_id: str,
         for native in matches:
             native["origins"] = [native_origin(provider, native), "omp"]
             native.setdefault("ompAccountId", entry["accountId"])
+            if "policy" in entry:
+                native["policy"] = copy.deepcopy(entry["policy"])
             if native["status"] != "ok" and entry["status"] == "ok":
                 stand_in_omp_reading(native, entry)
         if not matches:
