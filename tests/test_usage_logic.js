@@ -2417,6 +2417,12 @@ console.log("1.9 Coming up list: passed");
   assert.equal(pair.nextAccount, 1, "a blocked account loses to a usable one, even when listed first");
   assert.equal(pair.nextReason, "blocked");
   assert.deepEqual(plain(pair.ranking), [1, 0]);
+
+  const reserved = { ...ompAccount("Work", cool), policy: { state: "inside-reserve", priority: 0 } };
+  const reserve = together(ompProvider([reserved, ompAccount("Personal", cool)]));
+  assert.equal(reserve.nextAccount, 1, "an account inside its reserve loses to one outside it");
+  assert.equal(reserve.nextReason, "reserve");
+  assert.deepEqual(plain(reserve.ranking), [1, 0]);
   console.log("1.10 omp's next account: passed");
 }
 

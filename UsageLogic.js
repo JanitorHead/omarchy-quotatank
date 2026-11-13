@@ -3795,7 +3795,8 @@ function ompCandidate(account, index, nowSeconds) {
       if (blockedUntil === null || resetsAt > blockedUntil) blockedUntil = resetsAt
     }
   }
-  return { index: index, blocked: blockedUntil !== null, blockedUntil: blockedUntil }
+  var inReserve = !!account.policy && account.policy.state === "inside-reserve"
+  return { index: index, blocked: blockedUntil !== null, blockedUntil: blockedUntil, inReserve: inReserve }
 }
 
 function ompWindow(account, id) {
@@ -3814,6 +3815,7 @@ function ompStep(a, b) {
     if (a.blockedUntil === b.blockedUntil) return { order: 0, step: "" }
     return { order: a.blockedUntil - b.blockedUntil, step: "blocked" }
   }
+  if (a.inReserve !== b.inReserve) return { order: a.inReserve ? 1 : -1, step: "reserve" }
   return { order: 0, step: "" }
 }
 
