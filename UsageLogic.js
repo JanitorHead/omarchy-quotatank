@@ -3440,8 +3440,9 @@ function leastHeadroomIndex(accounts, indexes) {
 
 // Indexes (ascending) of the accounts the chip counts. One at a time: the in-use account, else the
 // summary's, even once its subscription has ended (new sessions still go there). Together: every account
-// of the pool spending now, else the one of the pool with the least headroom; without a limit to compare,
-// the summary's account, or the pool's first when that one has ended.
+// of the pool spending now; else, with nothing spending, omp's next account when omp holds one; else the
+// one of the pool with the least headroom. Without a limit to compare, the summary's account, or the
+// pool's first when that one has ended.
 function countedAccounts(provider, mode, nowSeconds, recentByAccount) {
   var accounts = providerAccounts(provider)
   if (accounts.length === 0) return []
@@ -3451,6 +3452,8 @@ function countedAccounts(provider, mode, nowSeconds, recentByAccount) {
   for (var i = 0; i < accounts.length; i++)
     if (!subscriptionEnded(accounts[i]) && spendingNow(accounts[i], nowSeconds, recentByAccount)) spending.push(i)
   if (spending.length > 0) return spending
+  var next = ompState(provider, mode, nowSeconds).nextAccount
+  if (next !== null) return [next]
   var least = leastHeadroomIndex(accounts, null)
   if (least >= 0) return [least]
   if (!subscriptionEnded(accounts[summary])) return [summary]

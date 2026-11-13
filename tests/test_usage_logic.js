@@ -2509,6 +2509,14 @@ console.log("1.9 Coming up list: passed");
   assert.equal(withLogin.nextAccount, 1, "the next account is one omp holds, not the login with the most room");
   assert.deepEqual(plain(withLogin.ranking), [1, 2], "omp ranks only its own accounts");
   assert.deepEqual(plain(withLogin.ompTags), ["", "next", ""], "the login gets no tag");
+
+  // Nothing spending: the idle chip counts omp's next account, even when another account has less headroom.
+  const reserveHeld = ompAccount("Work", [ompWin("session", 60, 7200, 18000), ompWin("weekly", 60, 300000, 604800)],
+    { policy: { state: "inside-reserve" } });
+  const idle = together(ompProvider([reserveHeld, ompAccount("Personal", [ompWin("session", 10, 7200, 18000),
+    ompWin("weekly", 10, 300000, 604800)])]));
+  assert.equal(idle.nextAccount, 1, "Personal is outside its reserve, so omp picks it");
+  assert.deepEqual(plain(idle.counted), [1], "the idle chip counts the next account, not the least headroom");
   console.log("1.10 omp's next account: passed");
 }
 
