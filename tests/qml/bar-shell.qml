@@ -27,6 +27,7 @@ ShellRoot {
   property int waited: 0
   property var savedPayload: null
   property var onePersonalLeft: null
+  property var endedPayload: null
 
   Item {
     id: panelHost
@@ -332,6 +333,19 @@ ShellRoot {
     change(copy.providers.filter(function (provider) { return provider.id === "claude" })[0].accounts[0].windows[0])
     widget.usageBackend.payload = copy
   }
+  // A copy of the first payload whose Claude login in use (Work) has an ended subscription, holding `credits` or
+  // none; the provider-level fields are that login's, as the backend copies them.
+  function endedClaude(credits) {
+    var copy = JSON.parse(JSON.stringify(savedPayload))
+    var claude = copy.providers.filter(function (provider) { return provider.id === "claude" })[0]
+    var readings = [claude, claude.accounts[0]]
+    for (var i = 0; i < readings.length; i++) {
+      readings[i].windows = []
+      readings[i].subscription = { ended: true }
+      readings[i].credits = credits
+    }
+    return copy
+  }
 
   readonly property var panelSteps: [
     function () {
@@ -508,6 +522,40 @@ ShellRoot {
     function () {
       check(countedEverywhere("codex") === "[0] | [0] | [0]", "through a proxy, chip, tile and rows count the same account: "
         + countedEverywhere("codex"))
+      // One at a time, an ended subscription in use stays on the chip: "ended", highlighted, an error ring.
+      root.endedPayload = endedClaude(null)
+      widget.settings = Object.assign({}, widget.settings, { accountModes: '{"claude":"single"}' })
+      widget.usageBackend.payload = endedPayload
+      return true
+    },
+    function () {
+      var chip = namedChild(widget, "barChip-claude")
+      if (!chip || !chip.ended || chip.moneyChip) {
+        // A synthetic refresh can land after the step above and replace its payload.
+        if (widget.usageBackend.payload !== endedPayload) widget.usageBackend.payload = endedPayload
+        return waited < 150 ? false : check(false, "the ended login in use reaches the chip")
+      }
+      var tile = widget.providerOptions.filter(function (option) { return option.value === "claude" })[0]
+      check(chip.topText === "ended" && chip.active, "the chip reads ended, highlighted: " + chip.topText)
+      check(tile.figure === "ended" && tile.failed, "so does the tile: " + tile.figure)
+      var counted = chip.strip.dots.filter(function (dot) { return dot.counted })[0]
+      check(counted && counted.index === 0 && counted.state === "error", "its counted dot is an error ring: "
+        + JSON.stringify(counted))
+      // With money left, the chip shows that money, as for a pay-as-you-go account.
+      root.endedPayload = endedClaude({ label: "Credits", currency: "USD", remaining: 50, total: 50, spendable: 50 })
+      widget.usageBackend.payload = endedPayload
+      return true
+    },
+    function () {
+      var chip = namedChild(widget, "barChip-claude")
+      if (!chip || !chip.moneyChip) {
+        if (widget.usageBackend.payload !== endedPayload) widget.usageBackend.payload = endedPayload
+        return waited < 150 ? false : check(false, "the ended login's money reaches the chip")
+      }
+      var tile = widget.providerOptions.filter(function (option) { return option.value === "claude" })[0]
+      check(!chip.failed && chip.topText === chip.moneyShown.text, "an ended login with money shows it: " + chip.topText)
+      check(chip.plainTooltip.indexOf("Claude Code · Subscription ended") === 0, "and says it ended: " + chip.plainTooltip)
+      check(tile.figure === chip.moneyShown.text && !tile.failed, "so does the tile: " + tile.figure)
       console.log("Bar QML contract: passed (panel chips)")
       Qt.quit()
       return false
