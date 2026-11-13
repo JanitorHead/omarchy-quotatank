@@ -27,8 +27,10 @@ Ui.BorderSurface {
   property bool inUse: false
   property bool canUse: false
   property bool useBusy: false
-  // Usable-now banked resets (`UsageLogic.accountResetBadge`); null hides the badge.
+  // Usable-now banked resets (`UsageLogic.accountResetBadge`); null hides the badge. `resetSlot` keeps the
+  // badge's place while the account can show resets, so the row holds still when the badge comes and goes.
   property var resetBadge: null
+  property bool resetSlot: false
   property bool resetEnabled: false
   property string quotaMode: "Used"
   property real warningThreshold: 25
@@ -47,7 +49,7 @@ Ui.BorderSurface {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property bool hovered: rowMouse.containsMouse
   readonly property color valueColor: severity === "warning" || severity === "critical" ? urgent : foreground
-  readonly property bool hasAction: inUse || canUse || resetBadge !== null
+  readonly property bool hasAction: inUse || canUse || resetSlot
   readonly property alias useButton: useButton
 
   signal selectRequested()
@@ -216,15 +218,22 @@ Ui.BorderSurface {
       anchors.verticalCenter: parent.verticalCenter
       width: !root.hasAction ? 0 : Math.max(useMetrics.advanceWidth("in use"),
         useButton.visible ? useButton.implicitWidth : 0,
-        resetChip.visible ? resetChip.implicitWidth : 0)
+        root.resetSlot ? resetMetrics.advanceWidth("10 resets") + Style.spacing.lg * 2 : 0)
       implicitHeight: useButton.visible ? useButton.implicitHeight
-        : resetChip.visible ? resetChip.implicitHeight : inUseTag.implicitHeight
+        : root.resetSlot ? resetMetrics.height + Style.spacing.xs * 2 : inUseTag.implicitHeight
 
       FontMetrics {
         id: useMetrics
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         font.weight: Font.DemiBold
+      }
+
+      // Reserved size of the reset chip, so the meter does not move when the chip comes and goes.
+      FontMetrics {
+        id: resetMetrics
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
       }
 
       PlainText {
