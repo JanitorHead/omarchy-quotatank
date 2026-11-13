@@ -667,14 +667,18 @@ ShellRoot {
       })
       root.ompIdlePayload = copy
       widget.usageBackend.payload = copy
-      widget.settings = Object.assign({}, widget.settings, { barChipValues: "{}" })
+      // The ended-account steps left Claude one at a time; omp's next account counts only when used together, and the
+      // pool check after this one then runs in that mode too (the steps before it ran one at a time).
+      widget.settings = Object.assign({}, widget.settings, { barChipValues: "{}", accountModes: '{"claude":"together"}' })
       return true
     },
     function () {
       var chip = namedChild(widget, "barChip-claude")
-      if (!chip || widget.usageBackend.payload !== ompIdlePayload) {
+      var claudeState = widget.accountStates["claude"]
+      if (!chip || widget.usageBackend.payload !== ompIdlePayload || !claudeState || claudeState.mode !== "together") {
         if (widget.usageBackend.payload !== ompIdlePayload) widget.usageBackend.payload = ompIdlePayload
-        return waited < 150 ? false : check(false, "Claude's omp pool reads for the idle check")
+        return waited < 150 ? false : check(false, "Claude's omp pool reads, used together, for the idle check: "
+          + (claudeState ? claudeState.mode : "no state"))
       }
       var counted = countedEverywhere("claude").split(" | ")[0]
       check(counted === "[1]", "with nothing spending the idle chip counts omp's next account, Personal, not the one with the least headroom: " + counted)
