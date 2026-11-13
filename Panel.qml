@@ -92,9 +92,10 @@ Ui.Panel {
   // rest into one "+N" chip, so the bar never pushes into the clock. The cap counts chips: under "One
   // chip per account" a provider takes one chip per account it shows.
   readonly property int barMaxChips: Number(setting("barMaxChips", UsageLogic.DEFAULT_SETTINGS.barMaxChips))
+  readonly property var barChipValues: setting("barChipValues", "{}")
   readonly property var chipSelection: UsageLogic.limitChips(barCandidates, barMaxChips, chipPressure,
     function (provider) { return UsageLogic.barChipCount(provider, root.barAccountMode, root.barMaxChips,
-      UsageLogic.barChipValue(root.setting("barChipValues", "{}"), provider.id)) })
+      UsageLogic.barChipValue(barChipValues, provider.id)) })
   readonly property var percentageProviders: chipSelection.shown
   readonly property var overflowProviders: chipSelection.hidden
   function chipPressure(provider) {
@@ -381,7 +382,7 @@ Ui.Panel {
     var state = accounts.length > 1 ? accountStateOf(provider) : null
     var reading = !failed && state && state.value >= 0 ? accounts[state.value] : provider
     var ended = UsageLogic.subscriptionEnded(reading)
-    var empty = ended && UsageLogic.spendable(reading) === null
+    var empty = UsageLogic.endedWithoutMoney(reading)
     var money = failed || empty ? null : UsageLogic.moneyView(reading, mode)
     var remaining = failed || ended ? null : UsageLogic.minRemaining(reading)
     var shown = remaining === null ? null : (mode === "Remaining" ? remaining : UsageLogic.usedFromRemaining(remaining))
@@ -1071,7 +1072,7 @@ Ui.Panel {
   }
   readonly property var barChipEntries: UsageLogic.barChipEntries(root.percentageProviders, barAccountMode,
     function (provider) { return root.barAccountStateOf(provider) }, setting("extraKeys", "{}"), barMaxChips,
-    setting("barChipValues", "{}"))
+    barChipValues)
   onBarChipEntriesChanged: syncBarChips()
 
   // Keeps one row per chip key, moved and updated in place, so chips survive readings.
@@ -1321,7 +1322,7 @@ Ui.Panel {
           readonly property bool countedAccount: accountChip && counted.indexOf(accountIndex) !== -1
           // A per-provider menu bar choice of "Pool": the chip shows the pool total of its window, one chip
           // for the provider, instead of an account's figure.
-          readonly property bool poolChip: !accountChip && UsageLogic.barChipValue(root.setting("barChipValues", "{}"), providerId) === "pool"
+          readonly property bool poolChip: !accountChip && UsageLogic.barChipValue(root.barChipValues, providerId) === "pool"
           readonly property var poolFigure: poolChip ? UsageLogic.poolTotal(modelData, limits.top) : null
 
           readonly property var lastAccount: root.lastAccount(modelData)
@@ -1348,7 +1349,7 @@ Ui.Panel {
           // it reads like a failure: one word, no figures, highlighted.
           readonly property bool ended: UsageLogic.subscriptionEnded(reading)
           readonly property bool failed: poolChip ? poolFigure === null || poolFigure.counted === 0
-            : ended ? UsageLogic.spendable(reading) === null : String(failure.status) === "error"
+            : ended ? UsageLogic.endedWithoutMoney(reading) : String(failure.status) === "error"
           readonly property string blocking: failed || poolChip ? "" : UsageLogic.blockingWindow(
             limits.top, UsageLogic.exactRemainingForWindow(reading, limits.top),
             limits.bottom, UsageLogic.exactRemainingForWindow(reading, limits.bottom))
