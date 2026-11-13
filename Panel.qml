@@ -93,7 +93,8 @@ Ui.Panel {
   // chip per account" a provider takes one chip per account it shows.
   readonly property int barMaxChips: Number(setting("barMaxChips", UsageLogic.DEFAULT_SETTINGS.barMaxChips))
   readonly property var chipSelection: UsageLogic.limitChips(barCandidates, barMaxChips, chipPressure,
-    function (provider) { return UsageLogic.barChipCount(provider, root.barAccountMode, root.barMaxChips) })
+    function (provider) { return UsageLogic.barChipCount(provider, root.barAccountMode, root.barMaxChips,
+      UsageLogic.barChipValue(root.setting("barChipValues", "{}"), provider.id)) })
   readonly property var percentageProviders: chipSelection.shown
   readonly property var overflowProviders: chipSelection.hidden
   function chipPressure(provider) {
@@ -1068,7 +1069,8 @@ Ui.Panel {
     return map
   }
   readonly property var barChipEntries: UsageLogic.barChipEntries(root.percentageProviders, barAccountMode,
-    function (provider) { return root.barAccountStateOf(provider) }, setting("extraKeys", "{}"), barMaxChips)
+    function (provider) { return root.barAccountStateOf(provider) }, setting("extraKeys", "{}"), barMaxChips,
+    setting("barChipValues", "{}"))
   onBarChipEntriesChanged: syncBarChips()
 
   // Keeps one row per chip key, moved and updated in place, so chips survive readings.
@@ -1316,6 +1318,10 @@ Ui.Panel {
           readonly property string accountMode: accountState ? accountState.mode : "single"
           readonly property var counted: accountState ? accountState.counted : []
           readonly property bool countedAccount: accountChip && counted.indexOf(accountIndex) !== -1
+          // A per-provider menu bar choice of "Pool": the chip shows the pool total of its window, one chip
+          // for the provider, instead of an account's figure.
+          readonly property bool poolChip: !accountChip && UsageLogic.barChipValue(root.setting("barChipValues", "{}"), providerId) === "pool"
+          readonly property var poolFigure: poolChip ? UsageLogic.poolTotal(modelData, limits.top) : null
 
           readonly property var lastAccount: root.lastAccount(modelData)
           // Every account read through a proxy, which rotates them.
@@ -1325,7 +1331,7 @@ Ui.Panel {
           // The account whose figure the chip shows: its own on a per-account chip, else the counted
           // account with the least headroom on the chip's window; -1 shows the provider's own reading.
           readonly property int valueIndex: accountChip ? accountIndex
-            : !multiAccount ? -1
+            : !multiAccount || poolChip ? -1
             : UsageLogic.barValueIndex(modelData, counted, limits.top)
           readonly property var reading: valueIndex >= 0 ? accounts[valueIndex]
             : throughProxy && lastAccount.reading ? lastAccount.reading : modelData
@@ -1340,14 +1346,15 @@ Ui.Panel {
           // An ended subscription with money left shows that money, like a pay-as-you-go account; without any,
           // it reads like a failure: one word, no figures, highlighted.
           readonly property bool ended: UsageLogic.subscriptionEnded(reading)
-          readonly property bool failed: ended ? UsageLogic.spendable(reading) === null : String(failure.status) === "error"
-          readonly property string blocking: failed ? "" : UsageLogic.blockingWindow(
+          readonly property bool failed: poolChip ? poolFigure === null || poolFigure.counted === 0
+            : ended ? UsageLogic.spendable(reading) === null : String(failure.status) === "error"
+          readonly property string blocking: failed || poolChip ? "" : UsageLogic.blockingWindow(
             limits.top, UsageLogic.exactRemainingForWindow(reading, limits.top),
             limits.bottom, UsageLogic.exactRemainingForWindow(reading, limits.bottom))
           readonly property string topWindow: blocking !== "" ? blocking : limits.top
-          readonly property string secondaryWindow: blocking !== "" ? "none" : limits.bottom
+          readonly property string secondaryWindow: blocking !== "" || poolChip ? "none" : limits.bottom
           // Money providers (OpenRouter, DeepSeek) lead with the balance on the chosen side; their tightest limit, if any, sits below.
-          readonly property var money: failed ? null : UsageLogic.spendable(reading)
+          readonly property var money: failed || poolChip ? null : UsageLogic.spendable(reading)
           readonly property var moneyShown: money === null ? null : UsageLogic.moneyView(reading, providerChip.quotaMode)
           // From moneyShown, not money: while a new reading propagates, money can change before moneyShown does.
           readonly property bool moneyChip: moneyShown !== null
@@ -1357,9 +1364,12 @@ Ui.Panel {
             && UsageLogic.windowRowFor(reading, topWindow, true) !== null
             && UsageLogic.windowRowFor(reading, topWindow, true) === UsageLogic.windowRowFor(reading, secondaryWindow, false)
           readonly property bool windowStacked: secondaryWindow !== "none" && !failed && !moneyChip && !sameLimitTwice
-          readonly property var remainingValue: UsageLogic.remainingForWindow(reading, topWindow)
+          readonly property var remainingValue: poolChip
+            ? (poolFigure === null ? null : poolFigure.percent) : UsageLogic.remainingForWindow(reading, topWindow)
           readonly property var shownValue: providerChip.quotaMode === "Remaining"
-            ? remainingValue : UsageLogic.usedForWindow(reading, topWindow)
+            ? remainingValue : poolChip
+            ? (remainingValue === null ? null : UsageLogic.usedFromRemaining(remainingValue))
+            : UsageLogic.usedForWindow(reading, topWindow)
           readonly property bool stacked: windowStacked || (moneyChip && shownValue !== null)
           readonly property string shownText: shownValue === null
             ? (throughProxy ? "—" : "") : UsageLogic.formatPercent(shownValue) + "%"
@@ -1373,7 +1383,7 @@ Ui.Panel {
               ? secondaryRemaining : UsageLogic.usedFromRemaining(secondaryRemaining)) + "%"
           readonly property string topTag: root.barShowPeriods ? UsageLogic.barTagFor(reading, topWindow, true) : ""
           readonly property string bottomTag: root.barShowPeriods ? UsageLogic.windowShortLabel(secondaryWindow) : ""
-          readonly property string topReset: root.barShowResets
+          readonly property string topReset: root.barShowResets && !poolChip
             ? root.barResetText(UsageLogic.windowRowFor(reading, topWindow, true)) : ""
           readonly property string bottomReset: root.barShowResets && windowStacked
             ? root.barResetText(UsageLogic.windowRowFor(reading, secondaryWindow, false)) : ""
@@ -1408,12 +1418,12 @@ Ui.Panel {
           // An old reading fades the chip: the last refresh failed, or it is two intervals old.
           readonly property bool stale: UsageLogic.readingStale(root.nowMs, backend.lastSuccessAt,
             backend.refreshIntervalSec, backend.fetchError !== "", reading)
-          readonly property var strip: multiAccount && !accountChip ? UsageLogic.barAccountStrip(modelData, accountState, {
+          readonly property var strip: multiAccount && !accountChip && !poolChip ? UsageLogic.barAccountStrip(modelData, accountState, {
             selector: topWindow, nowSeconds: root.nowSeconds, stale: stale, extraKeys: root.setting("extraKeys", "{}") }) : null
           // A provider with several accounts gets the hover card instead of the plain tooltip; its model is
           // built only while this chip's card shows.
-          readonly property bool hoverCardEligible: multiAccount
-          readonly property var hoverModel: root.hoverChip === providerChip && multiAccount && root.hoverCardShown
+          readonly property bool hoverCardEligible: multiAccount && !poolChip
+          readonly property var hoverModel: root.hoverChip === providerChip && multiAccount && !poolChip && root.hoverCardShown
             ? UsageLogic.barHoverModel(modelData, accountState, { nowSeconds: root.nowSeconds,
               extraKeys: root.setting("extraKeys", "{}"), readAtSeconds: root.readingSeconds(modelData), stale: stale,
               formatClock: root.clockText })
@@ -1430,6 +1440,7 @@ Ui.Panel {
               + (secondaryRemaining === null ? ": not reported"
                 : ": " + UsageLogic.quotaText(providerChip.quotaMode === "Remaining"
                   ? secondaryRemaining : UsageLogic.usedFromRemaining(secondaryRemaining), providerChip.quotaMode)) : "")
+            + (poolFigure !== null ? "\nPool from " + poolFigure.counted + " of " + poolFigure.total + " accounts" : "")
             + (throughProxy ? "\n" + root.lastAccountTooltip(lastAccount) : "")
             + (usingPoolQuota ? "\nQuota shown: account with the most remaining capacity." : "")
 

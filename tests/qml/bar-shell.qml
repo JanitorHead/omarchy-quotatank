@@ -28,6 +28,7 @@ ShellRoot {
   property var savedPayload: null
   property var onePersonalLeft: null
   property var endedPayload: null
+  property var poolPayload: null
 
   Item {
     id: panelHost
@@ -589,6 +590,43 @@ ShellRoot {
       check(chip.plainTooltip.indexOf("Claude Code · Subscription ended") === 0, "and says it ended: " + chip.plainTooltip)
       check(tile.figure === chip.moneyShown.text && !tile.failed && !tile.alert, "so does the tile, unflagged: "
         + tile.figure)
+      return true
+    },
+    function () {
+      // The pool choice: the chip shows the pool total of the 5-hour limit, one chip for Claude in either bar mode.
+      // Work and Personal have the limit; Account 1 has no reading, so it is left out and the tooltip says so.
+      var copy = JSON.parse(JSON.stringify(savedPayload))
+      copy.providers = copy.providers.map(function (item) {
+        return item.id === "claude" ? provider([account("work", "Work", 40), account("personal", "Personal", 20),
+          account("spare", "Account 1", 0, { status: "error", windows: [] })]) : item
+      })
+      root.poolPayload = copy
+      widget.usageBackend.payload = copy
+      widget.settings = Object.assign({}, widget.settings, { barAccountMode: "chips", barChipValues: '{"claude":"pool"}' })
+      return true
+    },
+    function () {
+      var chip = namedChild(widget, "barChip-claude")
+      if (!chip || !chip.poolChip) {
+        if (widget.usageBackend.payload !== poolPayload) widget.usageBackend.payload = poolPayload
+        return waited < 150 ? false : check(false, "the pool choice gives Claude a pool chip in chips mode")
+      }
+      check(namedChildren(widget, "barChip-claude", []).length === 1, "the pool choice makes one chip for Claude in chips mode")
+      check(chip.remainingValue === 70, "the pool total is the counted accounts' average remaining, 70: " + chip.remainingValue)
+      check(chip.plainTooltip.indexOf("Pool from 2 of 3 accounts") >= 0, "and the tooltip says how many count: " + chip.plainTooltip)
+      widget.settings = Object.assign({}, widget.settings, { barAccountMode: "dots" })
+      return true
+    },
+    function () {
+      var chip = namedChild(widget, "barChip-claude")
+      if (!chip || !chip.poolChip) {
+        if (widget.usageBackend.payload !== poolPayload) widget.usageBackend.payload = poolPayload
+        return waited < 150 ? false : check(false, "the pool choice gives Claude a pool chip in dots mode")
+      }
+      check(namedChildren(widget, "barChip-claude", []).length === 1, "the pool choice makes one chip for Claude in dots mode")
+      check(chip.remainingValue === 70, "the pool total holds in dots mode: " + chip.remainingValue)
+      check(chip.plainTooltip.indexOf("Pool from 2 of 3 accounts") >= 0, "and the tooltip holds in dots mode: " + chip.plainTooltip)
+      widget.settings = Object.assign({}, widget.settings, { barAccountMode: "chips", barChipValues: "{}" })
       console.log("Bar QML contract: passed (panel chips)")
       Qt.quit()
       return false
