@@ -1048,6 +1048,80 @@ def codex_signed_in_email(home: Path | None) -> str:
     return email.strip() if isinstance(email, str) else ""
 
 
+CODEX_ACCOUNTS_CHECK_URL = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27"
+
+
+SUBSCRIPTION_CHECK_SECONDS = 6 * 3600
+
+
+def subscription_cache_path(account_id: str) -> Path:
+    return state_folder() / "subscriptions" / f"{hashlib.sha256(account_id.encode()).hexdigest()}.json"
+
+
+def subscription_from_check(answer: Any, account_id: str) -> dict[str, Any] | None:
+    """The subscription Codex's accounts check gives `account_id`: whether it has ended, and when it ends if it is not
+    set to renew. None when the answer has no entry for the account."""
+    accounts = answer.get("accounts") if isinstance(answer, dict) else None
+    account = accounts.get(account_id) if isinstance(accounts, dict) else None
+    if not isinstance(account, dict):
+        return None
+    entitlement = account.get("entitlement") if isinstance(account.get("entitlement"), dict) else {}
+    last = account.get("last_active_subscription") if isinstance(account.get("last_active_subscription"), dict) else {}
+    subscription = {"source": "provider", "ended": entitlement.get("has_active_subscription") is not True}
+    if last.get("will_renew") is True:
+        return subscription
+    ends_at = utc_timestamp(entitlement.get("cancels_at")) or utc_timestamp(entitlement.get("expires_at"))
+    if ends_at is not None:
+        subscription["endsAt"] = ends_at
+    return subscription
+
+
+def subscription_as_of(subscription: Any, now: float) -> dict[str, Any] | None:
+    """A subscription judged at `now`: an end date that has passed means it has ended."""
+    if not isinstance(subscription, dict):
+        return None
+    ends_at = subscription.get("endsAt")
+    if isinstance(ends_at, (int, float)) and ends_at <= now:
+        return {**subscription, "ended": True}
+    return subscription
+
+
+def codex_subscription(home: Path | None, timeout: float) -> dict[str, Any] | None:
+    """Codex's own word on the subscription, from its accounts check with the login's token. At most one call per
+    account every six hours; a failed call keeps the last saved answer. None when the login names no token or account,
+    so no call is made."""
+    try:
+        auth = read_json(codex_home(home) / "auth.json")
+    except (OSError, ValueError, RecursionError):
+        return None
+    tokens = auth.get("tokens") if isinstance(auth, dict) else None
+    token = tokens.get("access_token") if isinstance(tokens, dict) else None
+    account_id = tokens.get("account_id") if isinstance(tokens, dict) else None
+    if not isinstance(token, str) or not token or not isinstance(account_id, str) or not account_id:
+        return None
+    path = subscription_cache_path(account_id)
+    now = time.time()
+    try:
+        saved = read_json(path)
+    except (OSError, ValueError, RecursionError):
+        saved = None
+    if not isinstance(saved, dict):
+        saved = {}
+    checked_at = saved.get("checkedAt")
+    if isinstance(checked_at, (int, float)) and 0 <= now - checked_at < SUBSCRIPTION_CHECK_SECONDS:
+        return subscription_as_of(saved.get("subscription"), now)
+    headers = {"Authorization": f"Bearer {token}", "ChatGPT-Account-Id": account_id, "User-Agent": SIGNIN_USER_AGENT}
+    try:
+        subscription = subscription_from_check(http_json(CODEX_ACCOUNTS_CHECK_URL, headers, timeout), account_id)
+    except ProviderFailure:
+        subscription = saved.get("subscription")  # A failed check keeps the last answer and still waits six hours.
+    try:
+        atomic_write_json(path, {"checkedAt": now, "subscription": subscription})
+    except OSError:
+        pass  # Without a saved copy the next refresh asks Codex again.
+    return subscription_as_of(subscription, now)
+
+
 @provider_detector("codex")
 def detect_codex() -> bool:
     return (codex_home() / "auth.json").is_file()
@@ -1131,6 +1205,9 @@ def fetch_codex(timeout: float, home: Path | None = None) -> dict[str, Any]:
             result["notice"] = clean_message(reached.replace("_", " ").capitalize() + ".")
         elif not windows and credits is None:
             result["notice"] = "Codex returned no subscription rate limits."
+        subscription = codex_subscription(home, budget())
+        if subscription is not None:
+            result["subscription"] = subscription
         return result
     except ProviderFailure as exc:
         return dict(failure_provider(provider_id, exc), account=codex_signed_in_email(home))

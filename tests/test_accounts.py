@@ -54,6 +54,22 @@ def grok_auth(bearer: str) -> str:
                                     "expires_at": "2099-01-01T00:00:00Z", "email": "dev@example.com"}})
 
 
+def codex_accounts_check(account_id: str, *, active: bool = True, will_renew: bool = True,
+                         expires_at: str | None = None, cancels_at: str | None = None) -> dict:
+    # Keys as the accounts check nests them: the entitlement, and the flag on the last subscription.
+    entitlement = {"has_active_subscription": active, "expires_at": expires_at, "renews_at": None,
+                   "cancels_at": cancels_at}
+    return {"accounts": {account_id: {"entitlement": entitlement, "last_active_subscription": {"will_renew": will_renew}}}}
+
+
+def codex_rpc(stream, request_id, method, timeout, params=None) -> dict:
+    # Only the account read matters here; the rate limits stay empty so the subscription is what is under test.
+    if method == "account/read":
+        return {"result": {"account": {"email": "dev@example.com", "planType": "pro"}}}
+    return {"result": {}}
+
+
+
 class AccountsTestCase(unittest.TestCase):
     """HOME, the XDG folders and the Omarchy registry live in a temporary folder, so no real login is read."""
 
@@ -296,6 +312,82 @@ class LoginHomeTests(AccountsTestCase):
     def test_codex_runs_in_the_login_folder(self) -> None:
         usage.fetch_codex(1, home=self.home / "codex-work")
         self.assertEqual(self.env["CODEX_HOME"], str(self.home / "codex-work"))
+
+
+class CodexSubscriptionTests(AccountsTestCase):
+    """Codex's accounts check gives when the subscription ends: at most one call per account every six hours, silent on failure."""
+
+    ACCOUNT_ID = "acct-synthetic-1"
+    NOW = 1799971200  # 2027-01-15T00:00:00Z
+    FEB_1 = 1801440000  # 2027-02-01T00:00:00Z
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.home / ".codex").mkdir()
+        write_private(self.home / ".codex" / "auth.json", json.dumps({"tokens": {
+            "access_token": "codex-synthetic-token", "account_id": self.ACCOUNT_ID}}))
+        self.now = self.NOW
+        self.answer = codex_accounts_check(self.ACCOUNT_ID, expires_at="2027-02-01T00:00:00Z")
+        self.failure = None
+        self.checks: list[tuple[str, dict]] = []
+        for patcher in (
+            mock.patch.object(usage.shutil, "which", return_value="/usr/bin/codex"),
+            mock.patch.object(usage.subprocess, "Popen", return_value=mock.Mock(stdin=mock.Mock(), stdout=mock.Mock())),
+            mock.patch.object(usage, "CodexRpcStream", return_value=mock.Mock()),
+            mock.patch.object(usage, "rpc_request", side_effect=codex_rpc),
+            mock.patch.object(usage, "http_json", side_effect=self.fake_check),
+            mock.patch.object(usage.time, "time", side_effect=lambda: self.now),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def fake_check(self, url: str, headers: dict, timeout: float, body: dict | None = None) -> dict:
+        self.checks.append((url, headers))
+        if self.failure is not None:
+            raise self.failure
+        return self.answer
+
+    def test_a_renewing_subscription_has_no_end_date(self) -> None:
+        result = usage.fetch_codex(5)
+        self.assertEqual(result["status"], "ok", result)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": False})
+        url, headers = self.checks[0]
+        self.assertEqual(url, "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27")
+        self.assertEqual(headers["Authorization"], "Bearer " + "codex-synthetic-token")
+        self.assertEqual(headers["ChatGPT-Account-Id"], self.ACCOUNT_ID)
+        self.assertNotIn("codex-synthetic-token", json.dumps(result))
+
+    def test_a_cancelled_subscription_ends_at_its_cancellation_date(self) -> None:
+        self.answer = codex_accounts_check(self.ACCOUNT_ID, will_renew=False, expires_at="2027-03-01T00:00:00Z",
+                                           cancels_at="2027-02-01T00:00:00Z")
+        result = usage.fetch_codex(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": False, "endsAt": self.FEB_1})
+
+    def test_an_expired_subscription_has_ended(self) -> None:
+        self.answer = codex_accounts_check(self.ACCOUNT_ID, active=False, will_renew=False,
+                                           expires_at="2026-12-01T00:00:00Z")
+        result = usage.fetch_codex(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": True, "endsAt": 1796083200})
+
+    def test_a_failed_check_keeps_the_last_subscription(self) -> None:
+        self.answer = codex_accounts_check(self.ACCOUNT_ID, will_renew=False, expires_at="2027-03-01T00:00:00Z",
+                                           cancels_at="2027-02-01T00:00:00Z")
+        usage.fetch_codex(5)
+        self.now += 6 * 3600
+        self.failure = usage.ProviderFailure("http", "accounts check is down", 500)
+        result = usage.fetch_codex(5)
+        self.assertEqual(result["status"], "ok", result)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": False, "endsAt": self.FEB_1})
+        self.assertEqual(len(self.checks), 2)
+
+    def test_the_accounts_check_runs_at_most_once_every_six_hours(self) -> None:
+        usage.fetch_codex(5)
+        self.now += 6 * 3600 - 1
+        usage.fetch_codex(5)
+        self.assertEqual(len(self.checks), 1)
+        self.now += 1
+        usage.fetch_codex(5)
+        self.assertEqual(len(self.checks), 2)
 
 
 class ExtraKeyTests(AccountsTestCase):
