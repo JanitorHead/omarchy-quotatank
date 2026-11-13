@@ -301,6 +301,14 @@ ShellRoot {
         "hero keeps the subscription type visible")
       assertTrue(widget.heroMeta(widget.provider).indexOf("fixture@example.invalid") < 0,
         "hero hides account identity")
+      // A single-account provider's context line says when its subscription ends, after the plan.
+      var soon = new Date(Date.now() + 20 * 86400000)
+      var soonDay = [soon.getFullYear(), String(soon.getMonth() + 1).padStart(2, "0"), String(soon.getDate()).padStart(2, "0")].join("-")
+      var oneAccount = { plan: "Claude Max 20x", accounts: [{ accountId: "personal", subscription: { endsOn: soonDay } }] }
+      assertTrue(widget.heroMeta(oneAccount).indexOf("Claude Max 20x · ends ") === 0,
+        "a single account's end shows after its plan: " + widget.heroMeta(oneAccount))
+      var twoAccounts = { plan: "Claude Max 20x", accounts: [oneAccount.accounts[0], { accountId: "work", subscription: { endsOn: soonDay } }] }
+      assertEqual(widget.heroMeta(twoAccounts), "Claude Max 20x", "several accounts keep the per-account dates in the header")
       assertTrue(widget.accountTooltip(widget.provider).indexOf("Account: fixture@example.invalid") >= 0,
         "account identity is available in settings")
       assertTrue(widget.accountTooltip(widget.provider).indexOf("Source: Claude OAuth usage API") >= 0,
