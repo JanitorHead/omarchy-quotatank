@@ -94,7 +94,7 @@ Every source of a second account shows the same way:
 
 In the menu bar, a dot per account sits beside the chip: filled for the account counted, a ring coloured by each other account's state. Hover the chip for every account's 5-hour and weekly use and its trend. In Limits, each row says what matters now (`spending now`, `used up · back 18:02`, `switched 16:27`) beside its 5-hour and weekly meters, which move while the account spends; pick a row for its full detail.
 
-**One at a time or together.** Omarchy accounts are used one at a time, so the chip follows the one in use. Accounts that omp or a proxy spend at once are counted together: the chip shows the one closest to its limit among those spending, rows sort by headroom and slide into place as that changes, and with omp a pool line says how much of the window is left across all of them. **Customize** fixes either mode per provider, and hides an account you do not want to see.
+**One at a time or together.** Omarchy accounts are used one at a time, so the chip follows the one in use. Accounts that omp or a proxy spend at once are counted together: the chip shows the one closest to its limit among those spending. When nothing is spending and omp runs the accounts, the chip shows the one omp would use next, marked `next` in Limits. Rows sort by headroom and slide into place as that changes, and with omp a pool line says how much of the window is left across all of them. **Customize** fixes either mode per provider, and hides an account you do not want to see.
 
 **Runway.** A card under the limits shows how long each account lasts until the 5-hour reset: one taking over from the other, or all running down side by side, and the gap with nothing left when they run out first.
 
