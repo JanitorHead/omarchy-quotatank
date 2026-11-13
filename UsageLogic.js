@@ -1515,7 +1515,7 @@ function extraKeyArguments(raw, providerIds) {
 function accountName(account, extraRaw, hideEmails, index) {
   if (!account) return ""
   var named = String(account.label || "")
-  if (!named && (account.accountId === "primary" || /^k-[0-9a-f]{8}$/.test(String(account.accountId)))) {
+  if (!named && isExtraKeyId(String(account.accountId))) {
     var entry = extraKeysFor(extraRaw, account.id)
     if (account.accountId === "primary") named = entry.primary || "Main key"
     for (var i = 0; i < entry.keys.length && !named; i++)
@@ -1537,14 +1537,25 @@ function accountNameText(value) {
   return typeof value === "string" ? value.trim().slice(0, ACCOUNT_NAME_LIMIT) : ""
 }
 
-function parseAccountNames(raw) {
+function parseSettingObject(raw) {
   var parsed = raw
-  if (raw === undefined || raw === null) return {}
+  if (raw === undefined || raw === null) return null
   if (typeof raw === "string") {
-    if (raw.length > 65536) return {}
-    try { parsed = JSON.parse(raw) } catch (error) { return {} }
+    if (raw.length > 65536) return null
+    try { parsed = JSON.parse(raw) } catch (error) { return null }
   }
-  if (!parsed || typeof parsed !== "object" || isListLike(parsed)) return {}
+  if (!parsed || typeof parsed !== "object" || isListLike(parsed)) return null
+  return parsed
+}
+
+// True for the primary key row and for extra keys (ids written as k-<8 hex>).
+function isExtraKeyId(id) {
+  return id === "primary" || /^k-[0-9a-f]{8}$/.test(id)
+}
+
+function parseAccountNames(raw) {
+  var parsed = parseSettingObject(raw)
+  if (!parsed) return {}
   var result = {}
   Object.keys(parsed).forEach(function (providerId) {
     var rows = parsed[providerId]
@@ -1583,7 +1594,7 @@ function accountNameOf(raw, providerId, accountId) {
 function acceptsAccountName(account) {
   if (!account || account.label || account.origin === "omarchy") return false
   var id = String(account.accountId || "")
-  return id !== "" && id !== "primary" && !/^k-[0-9a-f]{8}$/.test(id)
+  return id !== "" && !isExtraKeyId(id)
 }
 
 function applyAccountName(reading, rows) {
@@ -3027,13 +3038,8 @@ function accountModeLabel(mode) {
 // barChipValues: what each provider's menu bar chip shows, the counted account ("account", the default) or the
 // pool total of its window ("pool"). Read the same way as accountModes; the default is not stored.
 function parseBarChipValues(raw) {
-  var parsed = raw
-  if (raw === undefined || raw === null) return {}
-  if (typeof raw === "string") {
-    if (raw.length > 65536) return {}
-    try { parsed = JSON.parse(raw) } catch (error) { return {} }
-  }
-  if (!parsed || typeof parsed !== "object" || isListLike(parsed)) return {}
+  var parsed = parseSettingObject(raw)
+  if (!parsed) return {}
   var result = {}
   var ids = Object.keys(parsed)
   for (var i = 0; i < ids.length; i++)
@@ -3161,13 +3167,8 @@ function subscriptionEndDay(text) {
 }
 
 function parseSubscriptionEnds(raw) {
-  var parsed = raw
-  if (raw === undefined || raw === null) return {}
-  if (typeof raw === "string") {
-    if (raw.length > 65536) return {}
-    try { parsed = JSON.parse(raw) } catch (error) { return {} }
-  }
-  if (!parsed || typeof parsed !== "object" || isListLike(parsed)) return {}
+  var parsed = parseSettingObject(raw)
+  if (!parsed) return {}
   var result = {}
   Object.keys(parsed).forEach(function (providerId) {
     var rows = parsed[providerId]
@@ -3471,7 +3472,7 @@ function accountSourceKind(account) {
   var origin = String(account.origin || "")
   if (origin === "omarchy" || origin === "signin" || origin === "key" || origin === "omp" || origin === "proxy") return origin
   var id = String(account.accountId || "")
-  if (id === "primary" || /^k-[0-9a-f]{8}$/.test(id)) return "key"
+  if (isExtraKeyId(id)) return "key"
   if (/^omp-/.test(id)) return "omp"
   return "omarchy"
 }
