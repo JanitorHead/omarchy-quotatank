@@ -54,7 +54,7 @@ class ProjectContractTests(unittest.TestCase):
             "sources", "mainComputer", "sourcesVersion", "sourcesNotice", "setupDone", "hintsDismissed",
             "hideAccountEmails", "squareUsageCards", "providerColors", "liveFigure", "meterStyle", "notifyLimitThresholds", "costPriceOverrides",
             "costLocalProviders", "extraKeys",
-            "ompLocal", "barAccountMode", "motion", "accountModes", "hiddenAccounts", "subscriptionEnds", "accountNames",
+            "ompLocal", "barAccountMode", "motion", "accountModes", "barChipValues", "hiddenAccounts", "subscriptionEnds", "accountNames",
             "creditWarningUsd", "creditCriticalUsd", "hideExhaustedProviders", "barMaxChips", "providerQuotaModes", "providerOrder", "dismissedProviders",
         } | key_files)
         self.assertEqual(set(manifest["barWidget"]["defaults"]), keys, "every setting has a default")

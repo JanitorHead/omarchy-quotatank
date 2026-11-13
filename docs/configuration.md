@@ -238,6 +238,7 @@ In **Settings → Costs → Custom prices**, choose a model from the ones in you
 | `barAccountMode` | `"dots"` | `dots`: one chip per provider with a dot per account; `chips`: one chip per account, counted against `barMaxChips` |
 | `motion` | `"system"` | `system` follows Hyprland's animation setting; `reduced` turns animation off |
 | `accountModes` | `"{}"` | Per provider, `single` (one account at a time) or `together` (accounts spent at once); absent means automatic |
+| `barChipValues` | `"{}"` | Per provider, what its menu bar chip shows: the account (absent, the default) or `pool`, the total left of the window across the accounts that carry it (Settings → Providers → Customize → Menu bar shows); a pool chip shows one chip for the provider |
 | `hiddenAccounts` | `"{}"` | Per provider, the `accountId`s left out of Limits, the menu bar and the notices (Settings → Providers → Customize → Accounts shown); a hidden account stays signed in, and one account always stays shown |
 | `subscriptionEnds` | `"{}"` | Per provider, the subscription end date of each account (`YYYY-MM-DD`), set under Settings → Providers → Customize → Accounts shown; absent means no date |
 | `accountNames` | `"{}"` | Per provider, the custom name of each account that has none of its own (omp, proxy, another computer), set under Settings → Providers → Customize → Accounts; it replaces the email and `Account N` everywhere, and Omarchy logins and extra keys are never renamed; absent means no name |

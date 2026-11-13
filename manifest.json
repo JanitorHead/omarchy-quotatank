@@ -171,6 +171,7 @@
       "barAccountMode": "dots",
       "motion": "system",
       "accountModes": "{}",
+      "barChipValues": "{}",
       "hiddenAccounts": "{}",
       "subscriptionEnds": "{}",
       "accountNames": "{}"
@@ -1500,6 +1501,13 @@
         "label": "Account use per provider",
         "defaultValue": "{}",
         "description": "Managed by Settings → Providers → Customize. Per provider, whether its accounts are used one at a time or together; absent means automatic."
+      },
+      {
+        "key": "barChipValues",
+        "type": "string",
+        "label": "Menu bar value per provider",
+        "defaultValue": "{}",
+        "description": "Managed by Settings → Providers → Customize. Per provider, what the menu bar chip shows: the account (absent) or the pool total of the window (pool)."
       },
       {
         "key": "hiddenAccounts",
