@@ -3458,8 +3458,8 @@ function countedAccounts(provider, mode, nowSeconds, recentByAccount) {
   for (var i = 0; i < accounts.length; i++)
     if (!subscriptionEnded(accounts[i]) && spendingNow(accounts[i], nowSeconds, recentByAccount)) spending.push(i)
   if (spending.length > 0) return spending
-  var next = ompState(provider, mode, nowSeconds).nextAccount
-  if (next !== null) return [next]
+  var ranked = ompRankedFor(provider, mode, nowSeconds)
+  if (ranked.length > 0) return [ranked[0].index]
   var least = leastHeadroomIndex(accounts, null)
   if (least >= 0) return [least]
   if (!subscriptionEnded(accounts[summary])) return [summary]
@@ -3713,12 +3713,10 @@ function accountState(provider, options) {
   var spending = []
   var rings = []
   var inUse = []
-  var leftover = []
   for (var i = 0; i < accounts.length; i++) {
     spending.push(spendingNow(accounts[i], opts.nowSeconds, opts.recentByAccount))
     rings.push(accountRingState(accounts[i], opts.warningThreshold, opts.criticalThreshold))
     inUse.push(mode === "single" && !!accounts[i] && accounts[i].active === true && accountSourceKind(accounts[i]) !== "proxy")
-    leftover.push(accountLeftover(accounts[i], opts.nowSeconds))
   }
   var stable = accountOrder(accounts, "single")
   var shown = stable.length <= 4 ? stable : pickAccounts(stable, counted, 3)
@@ -3729,7 +3727,8 @@ function accountState(provider, options) {
     dots.push({ index: index, state: rings[index], counted: isCounted, spending: isCounted && spending[index] })
   }
   var value = leastHeadroomIndex(accounts, counted)
-  var omp = ompState(provider, mode, opts.nowSeconds)
+  var ranked = ompRankedFor(provider, mode, opts.nowSeconds)
+  var routing = ompRoutingLines(provider, opts, mode, ranked)
   return {
     mode: mode,
     counted: counted,
@@ -3737,49 +3736,44 @@ function accountState(provider, options) {
     spending: spending,
     rings: rings,
     inUse: inUse,
-    leftover: leftover,
     order: mode === "together" ? accountOrder(accounts, "together") : stable,
     stable: stable,
-    nextAccount: omp.nextAccount,
-    nextReason: omp.nextReason,
-    ompTags: omp.ompTags,
-    ranking: omp.ranking,
+    ompTags: ompTagsOf(accounts, ranked),
+    routing: {
+      next: routingLine(routing.next),
+      switchPoint: routingLine(routing.switchPoint),
+      warning: routingLine(routing.warning)
+    },
     dots: { dots: accounts.length > 1 ? dots : [], extra: accounts.length > 1 ? stable.length - shown.length : 0 }
   }
 }
 
 // omp's replica of its own account ranking (omp 18.18.8, rank.ts): which account omp would pick next in
 // "Used together · omp". This goes once omp reports its next account (can1357/oh-my-pi#19144). Empty
-// outside omp mode: no next account, no ranking, no tags.
-function ompState(provider, mode, nowSeconds) {
-  var accounts = providerAccounts(provider)
-  var fromOmpAccount = false
-  for (var i = 0; i < accounts.length; i++) {
-    if (fromOmp(accounts[i])) fromOmpAccount = true
-  }
-  if (mode !== "together" || proxyPool(provider) || !fromOmpAccount) {
-    return { nextAccount: null, nextReason: "", ompTags: [], ranking: [] }
-  }
-  var ranked = ompRanked(provider, nowSeconds)
-  var ranking = []
+// outside omp mode and in a proxy pool: no candidates.
+function ompRankedFor(provider, mode, nowSeconds) {
+  if (mode !== "together" || proxyPool(provider)) return []
+  return ompRanked(provider, nowSeconds)
+}
+
+// The account rows' omp tags: "next" for omp's pick, "in reserve" or "5h nearly full" for the other candidates.
+function ompTagsOf(accounts, ranked) {
+  if (ranked.length === 0) return []
   var tags = []
   for (var t = 0; t < accounts.length; t++) tags.push("")
-  for (var r = 0; r < ranked.length; r++) {
-    ranking.push(ranked[r].index)
-    tags[ranked[r].index] = ranked[r].inReserve ? "in reserve" : ranked[r].hot ? "5h nearly full" : ""
-  }
-  if (ranking.length > 0) tags[ranking[0]] = "next"
+  for (var r = 0; r < ranked.length; r++) tags[ranked[r].index] = ranked[r].inReserve ? "in reserve" : ranked[r].hot ? "5h nearly full" : ""
+  if (ranked.length > 0) tags[ranked[0].index] = "next"
+  return tags
+}
+
+// Why omp picks its first candidate: a reason code for ompReasonText ("only", "noroom", or the ompStep step).
+function ompReason(ranked) {
   var reason = ""
   if (ranked.length === 1) reason = "only"
   if (ranked.length > 1) reason = ompStep(ranked[0], ranked[1]).step || "order"
   // omp puts the blocked and allowance-spent candidates last, so when the first one is either, every candidate is.
   if (ranked.length > 0 && (ranked[0].blocked || ranked[0].allowanceSpent)) reason = "noroom"
-  return {
-    nextAccount: ranking.length > 0 ? ranking[0] : null,
-    nextReason: reason,
-    ompTags: tags,
-    ranking: ranking
-  }
+  return reason
 }
 
 // The accounts omp can pick, best first (rank.ts compareUsageRankedCandidates). Only accounts omp holds
@@ -3909,6 +3903,16 @@ function ompOrder(a, b) {
 // warning. Only omp accounts are routed; a proxy pool or a provider without omp accounts gets nothing.
 function ompRouting(provider, options) {
   var opts = options || {}
+  return ompRoutingLines(provider, opts, opts.mode, ompRankedFor(provider, opts.mode, opts.nowSeconds))
+}
+
+// accountState's routing line: { text, tooltip } with the full text as the tooltip, or null when empty.
+function routingLine(text) {
+  return text === "" ? null : { text: text, tooltip: text }
+}
+
+// The three routing lines for `ranked`, the omp candidates the caller ranked once (ompRankedFor), in `mode`.
+function ompRoutingLines(provider, opts, mode, ranked) {
   var lines = { next: "", switchPoint: "", warning: "" }
   var accounts = providerAccounts(provider)
   if (proxyPool(provider)) return lines
@@ -3920,17 +3924,16 @@ function ompRouting(provider, options) {
     hasOmp = true
     if (endedAccount < 0 && subscriptionEnded(accounts[i])) endedAccount = i
   }
-  if (!hasOmp || opts.mode !== "together") return lines
+  if (!hasOmp || mode !== "together") return lines
   if (endedAccount >= 0) {
     lines.warning = accountName(accounts[endedAccount], opts.extraKeys, opts.hideEmails, endedAccount + 1) + "'s subscription ended, but omp still signs in with it: remove it in omp."
   }
-  var state = ompState(provider, opts.mode, opts.nowSeconds)
-  if (state.nextAccount === null) return lines
-  var ranked = ompRanked(provider, now)
-  var name = accountName(accounts[state.nextAccount], opts.extraKeys, opts.hideEmails, state.nextAccount + 1)
+  if (ranked.length === 0) return lines
+  var name = accountName(accounts[ranked[0].index], opts.extraKeys, opts.hideEmails, ranked[0].index + 1)
   var runnerName = ranked.length > 1 ? accountName(accounts[ranked[1].index], opts.extraKeys, opts.hideEmails, ranked[1].index + 1) : ""
-  lines.next = "Next session: " + name + " · " + ompReasonText(state.nextReason, runnerName)
-  var percent = state.nextReason === "drain" && ranked.length > 1 ? ompSwitchPercent(accounts[ranked[0].index], ranked[0], ranked[1], now) : null
+  var reason = ompReason(ranked)
+  lines.next = "Next session: " + name + " · " + ompReasonText(reason, runnerName)
+  var percent = reason === "drain" && ranked.length > 1 ? ompSwitchPercent(accounts[ranked[0].index], ranked[0], ranked[1], now) : null
   if (percent !== null) lines.switchPoint = "New sessions move to " + runnerName + " when " + name + " reaches about " + percent + "%."
   if (lines.warning === "") lines.warning = ompLeftoverWarning(accounts, ranked, opts, now)
   return lines

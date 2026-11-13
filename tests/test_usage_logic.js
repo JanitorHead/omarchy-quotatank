@@ -2139,15 +2139,14 @@ console.log("1.10 Custom account names: passed");
   assert.equal(context.windowLeftover(week(), account({ endsAt: NOW + 2 * DAY, ended: true }), NOW), null, "an ended subscription has no leftover");
   const session = { id: "session", label: "5-hour limit", used: 20, remaining: 80, windowSeconds: SESSION, resetsAt: NOW + SESSION / 2, samples: [] };
   assert.equal(context.windowLeftover(session, account(), NOW), null, "5-hour windows are never leftover");
-  // accountState gives each account its largest leftover (with the window it comes from), or null.
+  // accountLeftover gives an account its largest leftover (with the window it comes from), or null.
   const monthly = { id: "monthly", label: "Monthly limit", used: 10, remaining: 90, windowSeconds: 30 * DAY, resetsAt: NOW + 15 * DAY, samples: [] };
   const roomy = { id: "claude", accountId: "a", status: "ok", windows: [week({ used: 40, remaining: 60 }), monthly, session] };
   const full = { id: "claude", accountId: "b", status: "ok", windows: [week({ used: 80, remaining: 20 })] };
-  const pair = { id: "claude", name: "Claude Code", status: "ok", accountId: "a", accounts: [roomy, full] };
-  const paired = plain(context.accountState(pair, { modes: "{}", nowSeconds: NOW, recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 }));
-  assert.equal(paired.leftover[0].window, "monthly", "the largest leftover of the account");
-  assert.equal(Math.round(paired.leftover[0].percent), 80);
-  assert.equal(paired.leftover[1], null, "no leftover for the account that will use it all");
+  const roomyLeftover = plain(context.accountLeftover(roomy, NOW));
+  assert.equal(roomyLeftover.window, "monthly", "the largest leftover of the account");
+  assert.equal(Math.round(roomyLeftover.percent), 80);
+  assert.equal(context.accountLeftover(full, NOW), null, "no leftover for the account that will use it all");
 }
 console.log("1.9 Leftover at the reset: passed");
 // comingUpItems: the next limit reset (with its leftover), the banked-reset expiry and the subscription end, by date.
@@ -2438,54 +2437,40 @@ console.log("1.9 Coming up list: passed");
   const cool = [ompWin("session", 10, 7200, 18000), ompWin("weekly", 30, 300000, 604800)];
 
   const solo = together(ompProvider([ompAccount("Work", cool)]));
-  assert.equal(solo.nextAccount, 0, "the only candidate is next");
-  assert.equal(solo.nextReason, "only");
-  assert.deepEqual(plain(solo.ranking), [0]);
   assert.deepEqual(plain(solo.ompTags), ["next"]);
+  assert.deepEqual(plain(solo.routing.next), { text: "Next session: Work · only account with room.", tooltip: "Next session: Work · only account with room." }, "the routing line names omp's next account and why");
 
   const blocked = [ompWin("session", 100, 3600, 18000), ompWin("weekly", 40, 300000, 604800)];
   const pair = together(ompProvider([ompAccount("Work", blocked), ompAccount("Personal", cool)]));
-  assert.equal(pair.nextAccount, 1, "a blocked account loses to a usable one, even when listed first");
-  assert.equal(pair.nextReason, "blocked");
-  assert.deepEqual(plain(pair.ranking), [1, 0]);
+  assert.equal(pair.routing.next.text, "Next session: Personal · only account with room.", "a blocked account loses to a usable one, even when listed first");
 
   const reserved = { ...ompAccount("Work", cool), policy: { state: "inside-reserve", priority: 0 } };
   const reserve = together(ompProvider([reserved, ompAccount("Personal", cool)]));
-  assert.equal(reserve.nextAccount, 1, "an account inside its reserve loses to one outside it");
-  assert.equal(reserve.nextReason, "reserve");
-  assert.deepEqual(plain(reserve.ranking), [1, 0]);
+  assert.equal(reserve.routing.next.text, "Next session: Personal · the others are in reserve.", "an account inside its reserve loses to one outside it");
 
   const hotWin = [ompWin("session", 90, 3600, 18000), ompWin("weekly", 30, 300000, 604800)];
   const hot = together(ompProvider([ompAccount("Work", hotWin), ompAccount("Personal", cool)]));
-  assert.equal(hot.nextAccount, 1, "a 5 h window at 85% or more loses to a cooler account");
-  assert.equal(hot.nextReason, "hot");
-  assert.deepEqual(plain(hot.ranking), [1, 0]);
+  assert.equal(hot.routing.next.text, "Next session: Personal · Work's 5-hour window is nearly full.", "a 5 h window at 85% or more loses to a cooler account");
 
   const boosted = { ...ompAccount("Personal", cool), policy: { state: "regular", priority: 2 } };
   const prio = together(ompProvider([ompAccount("Work", cool), boosted]));
-  assert.equal(prio.nextAccount, 1, "a higher policy priority wins between equal accounts");
-  assert.equal(prio.nextReason, "priority");
-  assert.deepEqual(plain(prio.ranking), [1, 0]);
+  assert.equal(prio.routing.next.text, "Next session: Personal · higher priority in omp.", "a higher policy priority wins between equal accounts");
 
   const measured = together(ompProvider([ompAccount("Work", []), ompAccount("Personal", cool)]));
-  assert.equal(measured.nextAccount, 1, "an account with a usage reading beats one with none");
-  assert.equal(measured.nextReason, "measured");
-  assert.deepEqual(plain(measured.ranking), [1, 0]);
+  assert.equal(measured.routing.next.text, "Next session: Personal · the only one with a usage reading.", "an account with a usage reading beats one with none");
 
   // A reading whose origins include omp is an omp account; an omp sign-in in error is never next.
   const fromOrigins = together(ompProvider([{ ...ompAccount("Work", cool), origin: "omarchy", origins: ["omarchy", "omp"] }]));
-  assert.equal(fromOrigins.nextAccount, 0, "a reading whose origins include omp is an omp account");
+  assert.equal(fromOrigins.routing.next.text, "Next session: Work · only account with room.", "a reading whose origins include omp is an omp account");
   const erroring = together(ompProvider([{ ...ompAccount("Work", cool), status: "error" }, ompAccount("Personal", cool)]));
-  assert.equal(erroring.nextAccount, 1, "an omp sign-in in error is never next");
+  assert.equal(erroring.routing.next.text, "Next session: Personal · only account with room.", "an omp sign-in in error is never next");
 
   // Both have the same 5 h use and are measured. Work has less weekly use but six days of
   // headroom to spend; Personal must spend half its weekly headroom in one day.
   const slow = [ompWin("session", 10, 3600, 18000), ompWin("weekly", 20, 518400, 604800)];
   const fast = [ompWin("session", 10, 3600, 18000), ompWin("weekly", 50, 86400, 604800)];
   const drain = together(ompProvider([ompAccount("Work", slow), ompAccount("Personal", fast)]));
-  assert.equal(drain.nextAccount, 1, "the account that must spend its weekly headroom faster goes first");
-  assert.equal(drain.nextReason, "drain");
-  assert.deepEqual(plain(drain.ranking), [1, 0]);
+  assert.equal(drain.routing.next.text, "Next session: Personal · most room per hour before its reset.", "the account that must spend its weekly headroom faster goes first");
 
   // Real case: 67% of weekly left with 5 days to reset needs 13.4% a day; 37.1% left with 7 days
   // needs 5.3% a day. Both are cool, measured, same priority, no reserve. The faster drain goes
@@ -2493,21 +2478,15 @@ console.log("1.9 Coming up list: passed");
   const need134 = [ompWin("session", 10, 3600, 18000), ompWin("weekly", 33, 5 * 86400, 604800)];
   const need53 = [ompWin("session", 10, 3600, 18000), ompWin("weekly", 62.9, 7 * 86400, 604800)];
   const drainFirst = together(ompProvider([ompAccount("Personal", need53), ompAccount("Work", need134)]));
-  assert.equal(drainFirst.nextAccount, 1, "13.4% a day beats 5.3% a day when listed second");
-  assert.equal(drainFirst.nextReason, "drain");
-  assert.deepEqual(plain(drainFirst.ranking), [1, 0]);
+  assert.equal(drainFirst.routing.next.text, "Next session: Work · most room per hour before its reset.", "13.4% a day beats 5.3% a day when listed second");
   const drainLast = together(ompProvider([ompAccount("Work", need134), ompAccount("Personal", need53)]));
-  assert.equal(drainLast.nextAccount, 0, "13.4% a day beats 5.3% a day when listed first");
-  assert.equal(drainLast.nextReason, "drain");
-  assert.deepEqual(plain(drainLast.ranking), [0, 1]);
+  assert.equal(drainLast.routing.next.text, "Next session: Work · most room per hour before its reset.", "13.4% a day beats 5.3% a day when listed first");
 
   // Work's weekly allowance is spent with no reset time, so it is not blocked, yet it must still
   // yield to Personal, which has allowance left (rank.ts allowanceSpent, #13889).
   const spent = [ompWin("session", 10, 7200, 18000), { ...ompWin("weekly", 100, 0, 604800), resetsAt: null }];
   const allowance = together(ompProvider([ompAccount("Work", spent), ompAccount("Personal", cool)]));
-  assert.equal(allowance.nextAccount, 1, "an account with its allowance spent yields to one with allowance left");
-  assert.equal(allowance.nextReason, "allowance");
-  assert.deepEqual(plain(allowance.ranking), [1, 0]);
+  assert.equal(allowance.routing.next.text, "Next session: Personal · the others are past their allowance.", "an account with its allowance spent yields to one with allowance left");
 
   // Work's untouched Codex 5 h window earns a priority boost that outranks Personal's higher
   // policy priority (rank.ts hasPriorityBoost, which only Codex windows set).
@@ -2515,9 +2494,7 @@ console.log("1.9 Coming up list: passed");
   const boostPersonal = [ompWin("codex-primary", 10, 3600, 18000), ompWin("codex-secondary", 30, 300000, 604800)];
   const boost = together(ompProvider([ompAccount("Personal", boostPersonal, { policy: { state: "regular", priority: 2 } }),
     ompAccount("Work", boostWork)]));
-  assert.equal(boost.nextAccount, 1, "an untouched 5 h window outranks a higher policy priority");
-  assert.equal(boost.nextReason, "boost");
-  assert.deepEqual(plain(boost.ranking), [1, 0]);
+  assert.equal(boost.routing.next.text, "Next session: Work · its 5-hour window is untouched.", "an untouched 5 h window outranks a higher policy priority");
 
   // Work sits inside its reserve, Hotty's 5 h window is at 90%, Personal is cool and goes next.
   const reserveWork = { ...ompAccount("Work", cool), policy: { state: "inside-reserve", priority: 0 } };
@@ -2527,24 +2504,19 @@ console.log("1.9 Coming up list: passed");
 
   // Identical accounts: rank.ts breaks the tie by the order omp lists them, so the first one wins.
   const twins = together(ompProvider([ompAccount("Work", cool), ompAccount("Personal", cool)]));
-  assert.equal(twins.nextAccount, 0, "equal accounts keep their listed order");
-  assert.equal(twins.nextReason, "order");
-  assert.deepEqual(plain(twins.ranking), [0, 1]);
+  assert.equal(twins.routing.next.text, "Next session: Work · first in omp's order.", "equal accounts keep their listed order");
 
   // Without omp accounts there is no ranking: the strip shows nothing extra.
   const plainApi = together(ompProvider([{ ...ompAccount("Work", cool), origin: "api" }]));
-  assert.equal(plainApi.nextAccount, null);
-  assert.equal(plainApi.nextReason, "");
+  assert.equal(plainApi.routing.next, null, "without omp accounts there is no routing line");
   assert.deepEqual(plain(plainApi.ompTags), []);
-  assert.deepEqual(plain(plainApi.ranking), []);
 
   // A Claude Code or Omarchy login in the same provider is not an omp account: omp cannot route to it,
   // even with the most room, so the next account is one of omp's own and the login gets no tag.
   const login = { ...ompAccount("Account 1", [ompWin("session", 0, 7200, 18000), ompWin("weekly", 0, 300000, 604800)]),
     origin: "omarchy" };
   const withLogin = together(ompProvider([login, ompAccount("Work", cool), ompAccount("Personal", cool)]));
-  assert.equal(withLogin.nextAccount, 1, "the next account is one omp holds, not the login with the most room");
-  assert.deepEqual(plain(withLogin.ranking), [1, 2], "omp ranks only its own accounts");
+  assert.equal(withLogin.routing.next.text, "Next session: Work · first in omp's order.", "the next account is one omp holds, not the login with the most room");
   assert.deepEqual(plain(withLogin.ompTags), ["", "next", ""], "the login gets no tag");
 
   // Nothing spending: the idle chip counts omp's next account, even when another account has less headroom.
@@ -2552,7 +2524,7 @@ console.log("1.9 Coming up list: passed");
     { policy: { state: "inside-reserve" } });
   const idle = together(ompProvider([reserveHeld, ompAccount("Personal", [ompWin("session", 10, 7200, 18000),
     ompWin("weekly", 10, 300000, 604800)])]));
-  assert.equal(idle.nextAccount, 1, "Personal is outside its reserve, so omp picks it");
+  assert.equal(idle.routing.next.text, "Next session: Personal · the others are in reserve.", "Personal is outside its reserve, so omp picks it");
   assert.deepEqual(plain(idle.counted), [1], "the idle chip counts the next account, not the least headroom");
   console.log("1.10 omp's next account: passed");
 
@@ -2610,7 +2582,7 @@ console.log("1.9 Coming up list: passed");
   assert.equal(routed(proxiedPool).next, "", "a pool of proxy accounts shows no omp routing");
   // L15: drain decides the pick, but the runner has no weekly window to drain against, so there is no switch point.
   const noRunnerWeekly = ompProvider([ompAccount("Work", slow), ompAccount("Personal", [ompWin("session", 10, 3600, 18000)])]);
-  assert.equal(together(noRunnerWeekly).nextReason, "drain");
+  assert.equal(together(noRunnerWeekly).routing.next.text, "Next session: Work · most room per hour before its reset.");
   assert.equal(routed(noRunnerWeekly).switchPoint, "", "no switch point when the share cannot be computed");
 
   // The switch point: the share at which the next account's drain falls to the runner-up's. Only shown
