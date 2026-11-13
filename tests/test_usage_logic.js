@@ -1441,6 +1441,17 @@ console.log("Provider setup: passed");
     "an id Settings does not show is not applied either");
   assert.equal(context.accountModeChoice({ codex: "single" }, "codex"), "single");
   assert.equal(context.setAccountMode('{"claude":"together"}', "codex", "single"), '{"claude":"together","codex":"single"}');
+
+  // One reading of barChipValues: what each provider's menu bar chip shows, "account" (default) or "pool".
+  assert.deepEqual(plain(context.parseBarChipValues('{"claude":"pool","codex":"account","kimi":"total","Bad Id":"pool"}')),
+    { claude: "pool", codex: "account" });
+  assert.deepEqual(plain(context.parseBarChipValues("not json")), {});
+  assert.equal(context.barChipValue('{"claude":"pool"}', "claude"), "pool");
+  assert.equal(context.barChipValue('{"claude":"pool"}', "codex"), "account", "an unset provider shows its account");
+  assert.equal(context.setBarChipValue('{"claude":"pool"}', "codex", "pool"), '{"claude":"pool","codex":"pool"}');
+  assert.equal(context.setBarChipValue('{"claude":"pool"}', "claude", "account"), "{}", "account is the default, so it is not stored");
+  assert.equal(context.barChipValueLabel("pool"), "Pool");
+  assert.equal(context.barChipValueLabel("account"), "Account");
   assert.equal(context.setAccountMode('{"claude":"together"}', "claude", "auto"), "{}", "Automatic removes the override");
   assert.equal(context.accountModeLabel("single") + "/" + context.accountModeLabel("together") + "/" + context.accountModeLabel(undefined),
     "One at a time/Together/Automatic");

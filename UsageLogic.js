@@ -3018,6 +3018,40 @@ function accountModeLabel(mode) {
   return mode === "single" ? "One at a time" : mode === "together" ? "Together" : "Automatic"
 }
 
+// barChipValues: what each provider's menu bar chip shows, the counted account ("account", the default) or the
+// pool total of its window ("pool"). Read the same way as accountModes; the default is not stored.
+function parseBarChipValues(raw) {
+  var parsed = raw
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw === "string") {
+    if (raw.length > 65536) return {}
+    try { parsed = JSON.parse(raw) } catch (error) { return {} }
+  }
+  if (!parsed || typeof parsed !== "object" || isListLike(parsed)) return {}
+  var result = {}
+  var ids = Object.keys(parsed)
+  for (var i = 0; i < ids.length; i++)
+    if (/^[a-z0-9][a-z0-9_-]{0,63}$/.test(ids[i]) && (parsed[ids[i]] === "account" || parsed[ids[i]] === "pool"))
+      result[ids[i]] = parsed[ids[i]]
+  return result
+}
+
+function barChipValue(raw, providerId) {
+  return parseBarChipValues(raw)[providerId] || "account"
+}
+
+// `value` "account" follows the default again.
+function setBarChipValue(raw, providerId, value) {
+  var values = parseBarChipValues(raw)
+  if (value === "pool") values[providerId] = "pool"
+  else delete values[providerId]
+  return JSON.stringify(values)
+}
+
+function barChipValueLabel(value) {
+  return value === "pool" ? "Pool" : "Account"
+}
+
 // Accounts hidden under Settings → Providers → Customize (`hiddenAccounts`, a JSON object of provider id →
 // account ids, as text or already parsed). A hidden account stays signed in and keeps its key; it is only
 // left out of Limits, the menu bar and the notices. The one reading of the setting.
