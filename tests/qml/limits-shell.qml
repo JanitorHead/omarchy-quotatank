@@ -131,7 +131,9 @@ ShellRoot {
     list.useRequested.connect(function(accountId) { root.used = root.used.concat([accountId]) })
     // A login whose subscription ends in 21 days: within 30 days its status line says when it ends.
     renewalOn = new Date((Math.floor(now / 86400) + 21) * 86400000).toISOString().slice(0, 10)
-    var renewalAccounts = [login("renewal", { plan: "Claude Pro", subscription: { endsAt: (Math.floor(now / 86400) + 22) * 86400, endsOn: renewalOn, source: "manual", ended: false } })]
+    var renewalEnds = { endsAt: (Math.floor(now / 86400) + 22) * 86400, endsOn: renewalOn, source: "manual", ended: false }
+    var renewalAccounts = [login("renewal", { plan: "Claude Pro", subscription: renewalEnds }),
+      login("paced", { plan: "Claude Pro", windows: [weeklyPace(20, 0.0002)], subscription: renewalEnds })]
     renewal = create("AccountList.qml", { width: 420, providerId: "claude", accounts: renewalAccounts, names: ["Renewal"],
       accountState: UsageLogic.accountState({ id: "claude", status: "ok", accounts: renewalAccounts }, { modes: JSON.stringify({ claude: "single" }),
         nowSeconds: now, recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 }), nowSeconds: now, motion: motion })
@@ -201,6 +203,9 @@ ShellRoot {
     var renewalStatus = renewal.rowFor("renewal").statusText
     var renewalMonth = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(renewalOn.slice(5, 7)) - 1]
     check(renewalStatus === "Ends " + Number(renewalOn.slice(8, 10)) + " " + renewalMonth, "a subscription ending within 30 days says when it ends: " + renewalStatus)
+    // The leftover joins the same line: what the pace leaves unused by the subscription end, per account.
+    check(renewal.rowFor("paced").statusText === "Ends " + Number(renewalOn.slice(8, 10)) + " " + renewalMonth + " · 65% left over",
+      "the largest leftover joins the Ends line: " + renewal.rowFor("paced").statusText)
     // The badge: the usable reset's label, dimmed while the limit it clears is above the warning threshold, and
     // applied from here only where Quotatank can apply it today (an omp row keeps its sign-in in omp).
     var tenure = resetList.rowFor("tenure"), proxied = resetList.rowFor("proxied"), empty = resetList.rowFor("empty")
