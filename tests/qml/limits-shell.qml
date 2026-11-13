@@ -11,6 +11,7 @@ ShellRoot {
   property var motion: null
   property var list: null
   property var renewal: null
+  property var resetList: null
   property string renewalOn: ""
   property var rising: null
   property var group: null
@@ -125,6 +126,22 @@ ShellRoot {
     renewal = create("AccountList.qml", { width: 420, providerId: "claude", accounts: renewalAccounts, names: ["Renewal"],
       accountState: UsageLogic.accountState({ id: "claude", status: "ok", accounts: renewalAccounts }, { modes: JSON.stringify({ claude: "single" }),
         nowSeconds: now, recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 }), nowSeconds: now, motion: motion })
+    // Banked resets: the badge shows where the account's usable resets are; it dims while the limit it clears is high.
+    var fableWindow = { id: "fable-weekly", label: "Fable weekly", used: 40, remaining: 60, windowSeconds: 604800,
+      resetsAt: now + 3 * 86400, samples: [] }
+    var resetAccounts = [
+      login("tenure", { origin: "omp", windows: [session(10, 0), fableWindow],
+        credits: { resetCreditsAvailable: 2, resetCreditsUsable: true, resetCreditsUsableNow: 1, resetCreditsLater: 1,
+          resetCreditsUsableExpiresAt: now + 3 * 86400, resetCreditsClears: ["Fable weekly"], resetCreditsReason: "" } }),
+      login("proxied", { origin: "proxy", proxy: { id: "p-1a2b3c4d", name: "CLIProxyAPI" },
+        credits: { resetCreditsAvailable: 2, resetCreditsUsable: true, resetCreditsUsableNow: 2, resetCreditsLater: 0,
+          resetCreditsUsableExpiresAt: now + 3 * 86400, resetCreditsClears: [], resetCreditsReason: "" } }),
+      login("empty", { credits: { resetCreditsAvailable: 0, resetCreditsUsableNow: 0, resetCreditsLater: 0 } })
+    ]
+    resetList = create("AccountList.qml", { width: 420, providerId: "claude", accounts: resetAccounts,
+      names: ["Tenure", "Proxied", "Empty"], warningThreshold: 25, criticalThreshold: 10, resetsActionable: true,
+      accountState: UsageLogic.accountState({ id: "claude", status: "ok", accounts: resetAccounts }, { modes: JSON.stringify({ claude: "single" }),
+        nowSeconds: now, recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10 }), nowSeconds: now, motion: motion })
     rising = create("LimitCard.qml", { width: 420, window: session(70, 0.01), nowSeconds: now, motion: motion })
     quiet = create("LimitCard.qml", { width: 420, window: Object.assign(session(31, 0), { label: markup }), nowSeconds: now, motion: motion })
     group = create("LimitGroupCard.qml", { width: 420, nowSeconds: now, motion: motion, spending: true, meterStyle: "tanks",
@@ -172,6 +189,15 @@ ShellRoot {
     var renewalStatus = renewal.rowFor("renewal").statusText
     var renewalMonth = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(renewalOn.slice(5, 7)) - 1]
     check(renewalStatus === "Ends " + Number(renewalOn.slice(8, 10)) + " " + renewalMonth, "a subscription ending within 30 days says when it ends: " + renewalStatus)
+    // The badge: the usable reset's label, dimmed while the limit it clears is above the warning threshold, and
+    // applied from here only where Quotatank can apply it today (an omp row keeps its sign-in in omp).
+    var tenure = resetList.rowFor("tenure"), proxied = resetList.rowFor("proxied"), empty = resetList.rowFor("empty")
+    check(tenure.resetBadge !== null && tenure.resetBadge.label === "1 Fable", "an omp row shows its usable reset: " + JSON.stringify(tenure.resetBadge))
+    check(find(tenure, "accountResetBadge").visible && find(tenure, "accountResetLabel").text === "1 Fable", "the badge's label is on the row")
+    check(tenure.resetBadge.dim && !find(tenure, "accountResetAction").enabled, "an omp reset is dimmed and not applied here")
+    check(proxied.resetBadge !== null && proxied.resetBadge.label === "2 resets" && find(proxied, "accountResetAction").enabled,
+      "a proxied Codex reset can be applied here")
+    check(empty.resetBadge === null && !find(empty, "accountResetBadge").visible, "no badge without usable resets")
     list.rowFor("personal").useButton.clicked()
     check(root.used.length === 1 && root.used[0] === "personal", "Use asks for that account")
     list.events = ({ "claude@personal": { kind: "switch", at: now - 60 } })

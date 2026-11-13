@@ -27,8 +27,10 @@ Ui.BorderSurface {
   property bool inUse: false
   property bool canUse: false
   property bool useBusy: false
-  // Banked resets of a proxy account; empty hides the badge.
-  property int resetCount: -1
+  // Usable-now banked resets (`UsageLogic.accountResetBadge`); null hides the badge. `resetSlot` keeps the
+  // badge's place while the account can show resets, so the row holds still when the badge comes and goes.
+  property var resetBadge: null
+  property bool resetSlot: false
   property bool resetEnabled: false
   property string quotaMode: "Used"
   property real warningThreshold: 25
@@ -47,7 +49,7 @@ Ui.BorderSurface {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property bool hovered: rowMouse.containsMouse
   readonly property color valueColor: severity === "warning" || severity === "critical" ? urgent : foreground
-  readonly property bool hasAction: inUse || canUse || resetCount >= 0
+  readonly property bool hasAction: inUse || canUse || resetSlot
   readonly property alias useButton: useButton
 
   signal selectRequested()
@@ -215,14 +217,23 @@ Ui.BorderSurface {
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
       width: !root.hasAction ? 0 : Math.max(useMetrics.advanceWidth("in use"),
-        useButton.visible ? useButton.implicitWidth : 0, resetBadge.visible ? resetBadge.implicitWidth : 0)
-      implicitHeight: useButton.visible ? useButton.implicitHeight : resetBadge.visible ? resetBadge.implicitHeight : inUseTag.implicitHeight
+        useButton.visible ? useButton.implicitWidth : 0,
+        root.resetSlot ? resetMetrics.advanceWidth("10 resets") + Style.spacing.lg * 2 : 0)
+      implicitHeight: useButton.visible ? useButton.implicitHeight
+        : root.resetSlot ? resetMetrics.height + Style.spacing.xs * 2 : inUseTag.implicitHeight
 
       FontMetrics {
         id: useMetrics
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         font.weight: Font.DemiBold
+      }
+
+      // Reserved size of the reset chip, so the meter does not move when the chip comes and goes.
+      FontMetrics {
+        id: resetMetrics
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
       }
 
       PlainText {
@@ -260,11 +271,11 @@ Ui.BorderSurface {
         onClicked: if (!root.useBusy) root.useRequested()
       }
 
-      // Banked resets of a proxy account: the count, and one click starts applying one.
+      // Usable-now banked resets: the count, and one click starts applying one where Quotatank can apply it.
       Rectangle {
-        id: resetBadge
+        id: resetChip
         objectName: "accountResetBadge"
-        visible: root.resetCount >= 0
+        visible: root.resetBadge !== null
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         implicitWidth: resetLabel.implicitWidth + Style.spacing.lg * 2
@@ -277,7 +288,7 @@ Ui.BorderSurface {
         border.color: root.alpha(root.foreground, activeFocus ? 0.6 : 0.18)
         activeFocusOnTab: resetClick.enabled
         Accessible.role: Accessible.Button
-        Accessible.name: root.resetCount + " banked reset" + (root.resetCount === 1 ? "" : "s") + ": apply a reset"
+        Accessible.name: (root.resetBadge ? root.resetBadge.tooltip : "") + (resetClick.enabled ? ": apply a reset" : "")
         Keys.onReturnPressed: resetClick.activate()
         Keys.onSpacePressed: resetClick.activate()
 
@@ -295,15 +306,15 @@ Ui.BorderSurface {
         }
 
         ToolTip.visible: resetClick.containsMouse
-        ToolTip.text: root.resetCount + " banked reset" + (root.resetCount === 1 ? "" : "s")
-          + (resetClick.enabled ? " · click to apply one" : " · none to apply now")
+        ToolTip.text: (root.resetBadge ? root.resetBadge.tooltip : "")
+          + (resetClick.enabled ? " · click to apply one" : "")
 
         PlainText {
           id: resetLabel
           objectName: "accountResetLabel"
           anchors.centerIn: parent
-          text: root.resetCount + (root.resetCount === 1 ? " reset" : " resets")
-          color: root.resetCount > 0 ? root.foreground : root.dim
+          text: root.resetBadge ? root.resetBadge.label : ""
+          color: root.resetBadge && root.resetBadge.dim ? root.dim : root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
         }

@@ -188,8 +188,9 @@ Column {
         inUse: !!root.accountState && root.accountState.inUse[accountIndex] === true
         canUse: UsageLogic.accountCanUse(accountData, root.mode)
         useBusy: root.useBusyId !== "" && root.useBusyId === accountId
-        // Rows read through a proxy carry their banked resets; elsewhere the selected account's detail does, beside Use.
-        resetCount: UsageLogic.readingProxy(accountData) && UsageLogic.accountResetShown(accountData) ? UsageLogic.accountResetCount(accountData) : -1
+        // The usable-now banked resets as a badge; the badge's place is kept whenever the account can show resets.
+        resetBadge: UsageLogic.accountResetBadge(accountData, root.warningThreshold)
+        resetSlot: UsageLogic.accountResetShown(accountData)
         resetEnabled: root.resetsActionable && UsageLogic.accountResetActionable(accountData)
         quotaMode: root.quotaMode
         warningThreshold: root.warningThreshold

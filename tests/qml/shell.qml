@@ -237,7 +237,7 @@ ShellRoot {
       assertEqual(proxyWidget.accountList.view.count, 3, "three separate Codex account rows are rendered")
       assertTrue(proxyWidget.accountOverview, "proxy defaults to account overview")
       assertEqual(proxyWidget.accountMode, "together", "proxy accounts are used together")
-      var expectedAccounts = { "0": { remaining: 20, resets: "0 resets" }, "1": { remaining: 55, resets: "1 reset" },
+      var expectedAccounts = { "0": { remaining: 20, resets: "" }, "1": { remaining: 55, resets: "1 reset" },
         "2": { remaining: 90, resets: "2 resets" } }
       proxyWidget.proxyAccounts.forEach(function (account) {
         var id = String(account.accountId)
@@ -250,8 +250,9 @@ ShellRoot {
         assertEqual(weekly ? weekly.remaining : null, expected.remaining, "account " + id + " keeps its own quota")
         var badge = namedChild(row, "accountResetBadge")
         var label = namedChild(row, "accountResetLabel")
-        assertTrue(badge !== null && badge.width > 0 && badge.height > 0, "account " + id + " reset badge has a visible size")
-        assertEqual(label ? label.text : "", expected.resets, "account " + id + " shows its own banked resets, including zero")
+        assertEqual(badge ? badge.visible : false, expected.resets !== "", "account " + id + " shows its badge only with usable resets")
+        assertTrue(expected.resets === "" || (badge !== null && badge.width > 0 && badge.height > 0), "account " + id + " reset badge has a visible size")
+        assertEqual(label ? label.text : "", expected.resets, "account " + id + " shows its usable resets")
       })
       assertEqual(proxyWidget.accountList.rowModel.get(0).rowKey, "codex@0", "least headroom first")
       proxyWidget.selectAccount("2")
