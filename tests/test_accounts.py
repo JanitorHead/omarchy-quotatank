@@ -74,7 +74,6 @@ def codex_rpc(stream, request_id, method, timeout, params=None) -> dict:
     return {"result": {}}
 
 
-
 class AccountsTestCase(unittest.TestCase):
     """HOME, the XDG folders and the Omarchy registry live in a temporary folder, so no real login is read."""
 

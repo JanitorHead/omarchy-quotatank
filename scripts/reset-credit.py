@@ -29,7 +29,6 @@ MAX_OFFERED_CREDITS = 8
 
 # Claude spends a banked reset with the organization's `reset_rate_limits`, naming the grant and a request id
 # that makes a retry of the same request safe (as omp spends them, packages/ai/src/usage/claude-reset.ts).
-CLAUDE_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 CLAUDE_RESET_URL = "https://api.anthropic.com/api/organizations/{}/reset_rate_limits"
 CLAUDE_ORGANIZATION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 CLAUDE_OUTCOMES = {"reset": "reset", "already_used": "already_redeemed", "not_limited": "nothing_to_reset"}
@@ -244,7 +243,7 @@ def claude_details(payload, now=None):
 
 
 def claude_organization(login, remaining):
-    profile = login.send(CLAUDE_PROFILE_URL, {}, remaining())
+    profile = login.send(usage.CLAUDE_PROFILE_URL, {}, remaining())
     organization = profile.get("organization") if isinstance(profile, dict) else None
     value = organization.get("uuid") if isinstance(organization, dict) else None
     if value is None and isinstance(profile, dict):

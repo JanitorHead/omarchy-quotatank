@@ -128,7 +128,7 @@ RESET_URL = reset.CLAUDE_RESET_URL.format(ORGANIZATION)
 
 class ActionTests(unittest.TestCase):
     def login(self, **replies):
-        recorder = Recorder({usage.CLAUDE_USAGE_URL: answer(), reset.CLAUDE_PROFILE_URL: {"organization": {"uuid": ORGANIZATION}},
+        recorder = Recorder({usage.CLAUDE_USAGE_URL: answer(), usage.CLAUDE_PROFILE_URL: {"organization": {"uuid": ORGANIZATION}},
                              RESET_URL: {"result": "reset", "cleared": ["five_hour", "seven_day"]}, **replies})
         return reset.ClaudeLogin(recorder.send, "fingerprint"), recorder
 
@@ -178,7 +178,7 @@ class ActionTests(unittest.TestCase):
         recorder.requests.clear()
         self.assertEqual(self.consume(login, details), {"outcome": "reset"})
         profile, spend = recorder.requests
-        self.assertEqual(profile["url"], reset.CLAUDE_PROFILE_URL)
+        self.assertEqual(profile["url"], usage.CLAUDE_PROFILE_URL)
         self.assertIsNone(profile["data"])
         self.assertEqual(spend["url"], RESET_URL)
         self.assertEqual(spend["data"], {"program": "cedar_ember", "grant_id": GRANT["id"], "request_id": details["requestId"]})
@@ -196,7 +196,7 @@ class ActionTests(unittest.TestCase):
             with self.subTest(reply=reply), self.assertRaises(usage.ProviderFailure) as raised:
                 self.consume(login, details)
             self.assertTrue(raised.exception.submitted, "the outcome of a sent reset is unknown")
-        login, recorder = self.login(**{reset.CLAUDE_PROFILE_URL: {"organization": {}}})
+        login, recorder = self.login(**{usage.CLAUDE_PROFILE_URL: {"organization": {}}})
         details = self.prepare(login)
         recorder.requests.clear()
         with self.assertRaises(usage.ProviderFailure) as raised:
@@ -223,7 +223,7 @@ class ProxyLoginTests(unittest.TestCase):
         client.auth_files.return_value = [other, entry]
         client.usage.side_effect = lambda _entry, url, headers, timeout, data=None: (
             answer() if url == usage.CLAUDE_USAGE_URL else {"organization": {"uuid": ORGANIZATION}}
-            if url == reset.CLAUDE_PROFILE_URL else {"result": "reset"})
+            if url == usage.CLAUDE_PROFILE_URL else {"result": "reset"})
         login = reset.proxy_claude_login(client, account_id, lambda: 5)
         with mock.patch.object(usage.time, "time", return_value=NOW):
             details = reset.execute_claude(login, "prepare")
@@ -255,7 +255,7 @@ class DirectLoginTests(unittest.TestCase):
 
     def sent_token(self, login):
         with mock.patch.object(usage, "http_json", return_value={}) as http_json:
-            login.send(reset.CLAUDE_PROFILE_URL, {}, 5)
+            login.send(usage.CLAUDE_PROFILE_URL, {}, 5)
         headers = http_json.call_args.args[1]
         self.assertEqual(headers["User-Agent"], usage.CLAUDE_CODE_USER_AGENT, "Claude offers banked resets to Claude Code")
         return headers["Authorization"]
