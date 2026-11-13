@@ -607,15 +607,16 @@ ShellRoot {
       return true
     },
     function () {
-      // A pool with no figure for its window (no account reports the 5-hour limit) shows "—", not an error.
+      // A pool with no figure: Claude's top limit is monthly and no account reports one, so the chip shows "—", not an error.
       var copy = JSON.parse(JSON.stringify(savedPayload))
       copy.providers = copy.providers.map(function (item) {
-        return item.id === "claude" ? provider([account("work", "Work", 40, { windows: [] }),
-          account("personal", "Personal", 20, { windows: [] })]) : item
+        return item.id === "claude" ? provider([account("work", "Work", 40),
+          account("personal", "Personal", 20)]) : item
       })
       root.noFigurePayload = copy
       widget.usageBackend.payload = copy
-      widget.settings = Object.assign({}, widget.settings, { barAccountMode: "chips", barChipValues: '{"claude":"pool"}' })
+      widget.settings = Object.assign({}, widget.settings, { barAccountMode: "chips", barChipValues: '{"claude":"pool"}',
+        barProviderLimits: '{"claude":{"top":"monthly"}}' })
       return true
     },
     function () {
@@ -627,7 +628,7 @@ ShellRoot {
       check(chip.topText === "—", "a pool with no figure shows a dash, not an error: " + chip.topText)
       check(chip.plainTooltip.indexOf("error") < 0 && chip.plainTooltip.indexOf("no account reports this limit") >= 0,
         "and the tooltip says why: " + chip.plainTooltip)
-      widget.settings = Object.assign({}, widget.settings, { barChipValues: "{}" })
+      widget.settings = Object.assign({}, widget.settings, { barChipValues: "{}", barProviderLimits: "{}" })
       return true
     },
     function () {
