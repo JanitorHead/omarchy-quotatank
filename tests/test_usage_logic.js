@@ -1901,6 +1901,15 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
   assert.equal(context.subscriptionEndOf(raw, "claude", "omp-0123456789ab"), "2030-06-10");
   assert.equal(context.subscriptionEndOf(raw, "claude", "main"), "");
   assert.equal(context.subscriptionEndOf("{}", "claude", "main"), "");
+  // The panel and the row say the last day as "3 Dec"; the year shows only when it is not the current year.
+  const thisYear = epoch("2030-06-01");
+  assert.equal(context.subscriptionEndText("2030-12-03", thisYear), "3 Dec", "this year: no year");
+  assert.equal(context.subscriptionEndText("2031-01-05", thisYear), "5 Jan 2031", "next year: the year shows");
+  assert.equal(context.subscriptionEndText("2030-06-10", epoch("2031-02-01")), "10 Jun 2030", "a year past: the year shows");
+  assert.equal(context.subscriptionEndText("2030-06-10", null), "10 Jun 2030", "no clock: the year shows");
+  assert.equal(context.subscriptionEndText("10/06/2030", thisYear), "", "only YYYY-MM-DD");
+  assert.equal(context.subscriptionEndText("", thisYear), "", "no date, no text");
+  assert.equal(statusAt("2031-01-05", epoch("2030-12-29")).text, "Ends 5 Jan 2031", "the row shows the year across New Year");
 }
 console.log("1.9 Manual subscription end dates: passed");
 

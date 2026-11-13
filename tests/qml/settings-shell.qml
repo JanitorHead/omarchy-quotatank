@@ -260,7 +260,7 @@ ShellRoot {
       form.page = "providers"
       form.usagePayload = payload(ompFound, [
         { id: "claude", status: "ok", accounts: [{ accountId: "main", origin: "omarchy" }, { accountId: "omp-0123456789ab", origin: "omp" }] },
-        { id: "codex", status: "ok" }])
+        { id: "codex", status: "ok", accounts: [{ accountId: "work", origin: "omarchy" }] }])
       shown("providerList").forceLayout()
       shown("customize-claude").expanded = true
       shown("customize-codex").expanded = true
@@ -283,7 +283,11 @@ ShellRoot {
       check(saved.subscriptionEnds === '{"claude":{"omp-0123456789ab":"2030-06-10"}}', "Subscription ends: an impossible date is refused")
       edit("subscriptionEnd-claude-1Field", "", true)
       check(saved.subscriptionEnds === "{}", "Subscription ends: clearing the date removes it: " + saved.subscriptionEnds)
-      check(!find(form, "showAccount-codex-0"), "a provider with one account lists none")
+      // A single account gets the date field too, with no "Accounts shown" switch.
+      edit("subscriptionEnd-codex-0Field", "2030-07-01", true)
+      check(saved.subscriptionEnds === '{"codex":{"work":"2030-07-01"}}', "Subscription ends: a single account has the date field: " + saved.subscriptionEnds)
+      edit("subscriptionEnd-codex-0Field", "", true)
+      check(saved.subscriptionEnds === "{}" && !find(form, "showAccount-codex-0"), "Subscription ends: a single account has no show switch")
       check(form.providersSummary().indexOf("· omp") > 0, "the index says omp adds accounts")
       formPhase = 7
     } else if (formPhase === 7) {

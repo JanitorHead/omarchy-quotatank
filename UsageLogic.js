@@ -3017,6 +3017,17 @@ function subscriptionEndOf(raw, providerId, accountId) {
   return rows && typeof rows[accountId] === "string" ? rows[accountId] : ""
 }
 
+// A subscription's last day as the panel and the row say it: "3 Dec", with the year only when it is not the
+// current year (UTC, like the day arithmetic above). Empty for anything but YYYY-MM-DD.
+function subscriptionEndText(endsOn, nowSeconds) {
+  var day = String(endsOn || "")
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return ""
+  var text = Number(day.slice(8, 10)) + " " + COST_MONTH_NAMES[Number(day.slice(5, 7)) - 1]
+  var now = finiteOrNull(nowSeconds)
+  if (now !== null && Number(day.slice(0, 4)) === new Date(now * 1000).getUTCFullYear()) return text
+  return text + " " + day.slice(0, 4)
+}
+
 var ACCOUNT_ORIGIN_TEXT = { omarchy: "Omarchy login", signin: "sign-in", key: "API key", proxy: "CLIProxyAPI", omp: "omp" }
 
 // An account's line in Settings → Customize: its name and where it is read from ("Account 2 · omp",
@@ -3359,7 +3370,7 @@ function accountStatusLine(account, spending, nowSeconds, event) {
   var endsAt = account.subscription ? finiteOrNull(account.subscription.endsAt) : null
   var endsOn = account.subscription ? String(account.subscription.endsOn || "") : ""
   if (now !== null && endsAt !== null && endsOn !== "" && endsAt - now > 0 && endsAt - now <= 30 * PACE_DAY_SECONDS)
-    return { kind: "ends", text: "Ends " + Number(endsOn.slice(8, 10)) + " " + COST_MONTH_NAMES[Number(endsOn.slice(5, 7)) - 1],
+    return { kind: "ends", text: "Ends " + subscriptionEndText(endsOn, now),
       at: null, tone: endsAt - now <= 7 * PACE_DAY_SECONDS ? "urgent" : "dim" }
   if (account.standIn && account.standIn.name)
     return { kind: "standin", text: (readingProxy(account) ? "read through " : "read on ") + account.standIn.name, at: null, tone: "dim" }

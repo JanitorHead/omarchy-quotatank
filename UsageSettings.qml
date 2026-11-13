@@ -1418,7 +1418,7 @@ Column {
                 }
               }
               Repeater {
-                model: providerRow.accountCount >= 2 ? providerRow.accountList : []
+                model: providerRow.accountCount >= 1 ? providerRow.accountList : []
                 delegate: TextRow {
                   required property var modelData
                   required property int index

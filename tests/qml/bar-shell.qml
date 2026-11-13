@@ -508,6 +508,25 @@ ShellRoot {
     },
     function () {
       check(widget.selectedAccount.accountId === "personal", "choosing the provider again shows the counted account")
+      widget.settings = Object.assign({}, widget.settings, { subscriptionEnds: JSON.stringify({ claude: { personal: (new Date().getUTCFullYear()) + "-12-03" } }) })
+      return true
+    },
+    function () {
+      // The detail reads like the row: "ends 3 Dec", with the year only when it is not this year. It must be on the panel.
+      var year = new Date().getUTCFullYear()
+      var meta = namedChild(widget, "accountDetailMeta")
+      var text = meta ? String(meta.text) : ""
+      if (text.indexOf("ends 3 Dec") < 0 && waited < 150) return false
+      check(text.indexOf(" · ends 3 Dec") >= 0 && text.indexOf("ends 3 Dec " + year) < 0, "the detail says when the account ends: " + text)
+      widget.settings = Object.assign({}, widget.settings, { subscriptionEnds: JSON.stringify({ claude: { personal: (year + 1) + "-01-05" } }) })
+      return true
+    },
+    function () {
+      var year = new Date().getUTCFullYear()
+      var meta = namedChild(widget, "accountDetailMeta")
+      var text = meta ? String(meta.text) : ""
+      if (text.indexOf("ends 5 Jan") < 0 && waited < 150) return false
+      check(text.indexOf(" · ends 5 Jan " + (year + 1)) >= 0, "the detail shows the year once it is not this year: " + text)
       widget.settings = Object.assign({}, widget.settings, { sources: JSON.stringify([{ id: "p-1a2b3c4d", kind: "proxy",
         url: "https://proxy.test/prefix", keyFile: "/private/proxy key", on: true }]) })
       return true
