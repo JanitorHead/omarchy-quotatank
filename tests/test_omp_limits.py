@@ -235,6 +235,11 @@ class ReportMappingTests(unittest.TestCase):
         by_id = {entry["accountId"]: entry for _provider_id, _identity, entry in usage.omp_accounts([document], REQUESTED)}
         self.assertEqual(by_id[omp_id("anthropic", "dev@example.com")]["policy"], policy)
 
+    def test_the_recorded_codex_account_carries_omps_policy(self):
+        _provider_id, entry = self.account("openai-codex", "work@example.com")
+        self.assertEqual(entry["policy"], {"priority": 3, "reservePct": 10, "reserveSource": "global", "state": "eligible",
+                                           "remainingPct": 62.5})
+
     def test_an_account_without_a_policy_has_none(self):
         _provider_id, entry = self.account("anthropic", "dev@example.com")
         self.assertNotIn("policy", entry)

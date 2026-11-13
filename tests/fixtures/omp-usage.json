@@ -103,7 +103,8 @@
         }
       ],
       "resetCredits": {"availableCount": 2},
-      "metadata": {"email": "work@example.com", "accountId": "acc-synthetic-codex", "planType": "prolite", "allowed": true, "limitReached": false}
+      "metadata": {"email": "work@example.com", "accountId": "acc-synthetic-codex", "planType": "prolite", "allowed": true, "limitReached": false},
+      "policy": {"priority": 3, "reservePct": 10, "reserveSource": "global", "state": "eligible", "remainingPct": 62.5}
     },
     {
       "provider": "opencode-go",
