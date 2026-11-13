@@ -14,6 +14,8 @@ All notable changes to this project will be documented here. The format follows
 
 - **Codex subscription end.** Codex's own account check now says when a Codex subscription ends: a cancelled one ends on its cancellation date, an expired one has ended, and a renewing one has no end date. Codex's date replaces the manual field for that account, and the check runs at most once every six hours per account.
 
+- **A banked reset badge on every account row.** An account row with a reset Claude can spend now shows how many, as `1 Fable` when it clears only the Fable weekly limit, otherwise `1 reset` or `N resets`. The badge dims while the limit it clears still has more than the warning threshold left. Clicking it applies the reset only where Quotatank can apply one today; otherwise its tooltip says where to apply it. Resets that wait until a limit is reached count only in the tooltip.
+
 ### Fixed
 
 - **A cancelled Kilo Pass no longer shows its last month as a live allowance.** Kilo keeps a cancelled pass with that month's figures; only an active, past-due or trialing pass counts now.
