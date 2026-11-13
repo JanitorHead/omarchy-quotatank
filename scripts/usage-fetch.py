@@ -8313,6 +8313,7 @@ def stale_reading(saved: dict[str, Any], failed: dict[str, Any], stamp: int) -> 
         failed.get("status") != "error"
         or failed.get("errorKind") not in STALE_READING_ERROR_KINDS
         or (failed.get("errorKind") == "http" and not temporary_http_status(failed.get("httpStatus")))
+        or (isinstance(failed.get("subscription"), dict) and failed["subscription"].get("ended") is True)
         or not isinstance(read_at, int)
         or stamp - read_at > STALE_READING_SECONDS
         or not isinstance(reading, dict)
