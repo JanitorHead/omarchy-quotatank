@@ -194,18 +194,18 @@ assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }),
   const fableWindow = (remaining) => ({ id: "fable-weekly", label: "Fable weekly", remaining });
   const weeklyWindow = (remaining) => ({ id: "weekly", label: "Weekly limit", remaining });
   const fableCredits = { resetCreditsAvailable: 2, resetCreditsUsableNow: 1, resetCreditsLater: 1,
-    resetCreditsUsableExpiresAt: 1899273540, resetCreditsClears: ["Fable weekly"], resetCreditsUsable: true };
+    resetCreditsUsableExpiresAt: 1899288000, resetCreditsClears: ["Fable weekly"], resetCreditsUsable: true };
   const badgeAccount = (credits, windows, extra) => ({ ...provider("claude", 40), credits: { ...fableCredits, ...credits }, windows, ...extra });
   const fable = badgeAccount({}, [fableWindow(88), weeklyWindow(60)]);
   assert.deepEqual(plain(context.accountResetBadge(fable, 25)),
-    { label: "1 Fable", tooltip: "1 Fable reset usable now, expires Mar 9 · 1 more later", dim: true, actionable: true });
+    { label: "1 Fable", tooltip: "1 Fable reset usable now, expires 9 Mar 2030 · 1 more later", dim: true, actionable: true });
   assert.equal(context.accountResetBadge(badgeAccount({}, [fableWindow(25)]), 25).dim, false, "at the warning threshold: not dimmed");
   assert.equal(context.accountResetBadge(badgeAccount({}, [fableWindow(10)]), 25).dim, false, "critical: not dimmed");
   const claudeFable = { id: "fable-1m-an-intentionally-long-model-label-weekly", label: "Fable 1M - an intentionally long model label weekly", remaining: 88 };
   assert.equal(context.accountResetBadge(badgeAccount({}, [claudeFable]), 25).dim, true, "Claude names the Fable meter after its model, and it is still the Fable weekly limit");
   assert.equal(context.accountResetBadge(badgeAccount({}, []), 25).dim, false, "no measured limit to compare");
   assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsLater: 0, resetCreditsAvailable: 1 }, [fableWindow(88)]), 25).tooltip,
-    "1 Fable reset usable now, expires Mar 9", "no 'more later' when none are left over");
+    "1 Fable reset usable now, expires 9 Mar 2030", "no 'more later' when none are left over");
   const viaOmp = badgeAccount({}, [fableWindow(88)], { origin: "omp" });
   assert.deepEqual([context.accountResetBadge(viaOmp, 25).label, context.accountResetBadge(viaOmp, 25).actionable], ["1 Fable", false],
     "an omp row shows its badge but applies it in omp");
@@ -217,16 +217,16 @@ assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }),
     "list-like clears still dim the limit they clear");
   const elsewhere = badgeAccount({}, [fableWindow(88)], { computer: { id: "c-00000001", name: "devbox" } });
   assert.equal(context.accountResetBadge(elsewhere, 25).actionable, false, "another computer's sign-in is not applied here");
-  assert.equal(context.accountResetBadge(viaOmp, 25).tooltip, "1 Fable reset usable now, expires Mar 9 · 1 more later · Apply it in omp: omp usage reset.",
+  assert.equal(context.accountResetBadge(viaOmp, 25).tooltip, "1 Fable reset usable now, expires 9 Mar 2030 · 1 more later · Apply it in omp: omp usage reset.",
     "a badge that is not applied here says where it is applied");
-  assert.equal(context.accountResetBadge(elsewhere, 25).tooltip, "1 Fable reset usable now, expires Mar 9 · 1 more later · Its sign-in is on devbox: apply it there.",
+  assert.equal(context.accountResetBadge(elsewhere, 25).tooltip, "1 Fable reset usable now, expires 9 Mar 2030 · 1 more later · Its sign-in is on devbox: apply it there.",
     "another computer's badge names the computer that holds the sign-in");
   assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsUsable: false, resetCreditsReason: "limit" }, [fableWindow(88)]), 25).actionable, false);
-  const session = { resetCreditsUsableNow: 1, resetCreditsLater: 0, resetCreditsUsableExpiresAt: 1899273540,
+  const session = { resetCreditsUsableNow: 1, resetCreditsLater: 0, resetCreditsUsableExpiresAt: 1899288000,
     resetCreditsClears: ["5-hour"], resetCreditsUsable: true };
   const sessionAccount = (windows) => ({ ...provider("claude", 40), credits: { resetCreditsAvailable: 1, ...session }, windows });
   assert.deepEqual(plain(context.accountResetBadge(sessionAccount([{ id: "session", label: "5-hour limit", remaining: 80 }]), 25)),
-    { label: "1 reset", tooltip: "1 reset usable now, expires Mar 9", dim: true, actionable: true });
+    { label: "1 reset", tooltip: "1 reset usable now, expires 9 Mar 2030", dim: true, actionable: true });
   const codex = { ...provider("codex", 55), accountId: "reset-account", credits: { resetCreditsAvailable: 2 },
     proxy: { id: "p-00000001", name: "CLIProxyAPI" } };
   assert.deepEqual(plain(context.accountResetBadge(codex, 25)), { label: "2 resets", tooltip: "2 banked resets", dim: false, actionable: true },
@@ -1050,7 +1050,7 @@ console.log("Provider setup: passed");
   assert.notEqual(context.costBucketKey("2030-01-15T10:27:13Z"), context.costBucketKey("2030-01-15T11:27:13Z"));
   assert.equal(context.costBucketKey("nonsense"), "");
   assert.equal(context.costDayName(new Date(2030, 0, 15)), "Tue");
-  assert.equal(context.costMonthDay(new Date(2030, 0, 9)), "Jan 9");
+  assert.equal(context.dayText(new Date(2030, 0, 9, 12).getTime() / 1000, 1000000), "9 Jan 2030");
   assert.equal(context.costPeriodPhrase(1), "24 h");
   assert.equal(context.costPeriodPhrase(30), "30 days");
 
@@ -2129,13 +2129,13 @@ console.log("1.9 Leftover at the reset: passed");
   const reset = { id: "weekly", label: "Weekly limit", used: 40, remaining: 60, windowSeconds: WEEK, resetsAt: NOW + 3 * DAY, samples: [] };
   const monthly = { id: "monthly", label: "Monthly limit", used: 10, remaining: 90, windowSeconds: 4 * WEEK, resetsAt: NOW + 20 * DAY, samples: [] };
   const full = { windows: [monthly, reset], credits: { resetCreditsExpiresAt: NOW + 10 * DAY },
-    subscription: { endsAt: NOW + 30 * DAY, endsOn: new Date((NOW + 30 * DAY) * 1000).toISOString().slice(0, 10), source: "manual", ended: false } };
+    subscription: { endsAt: NOW + 30 * DAY, endsOn: "1970-02-10", source: "manual", ended: false } };
   const items = asJson(context.comingUpItems(full, NOW));
   assert.deepEqual(items.map((item) => item.kind), ["reset", "banked", "end"], "date order");
   assert.equal(items[0].at, NOW + 3 * DAY, "the next reset is the earliest one");
   assert.match(items[0].text, /^Weekly limit resets \d+ \w+ · \d+% left over$/, "the next reset carries its leftover");
   assert.match(items[1].text, /^Banked reset expires \d+ \w+$/);
-  assert.match(items[2].text, /^Subscription ends \d+ \w+$/);
+  assert.equal(items[2].text, "Subscription ends 10 Feb", "the end date is the manual day, not the instant");
   const early = asJson(context.comingUpItems({ ...full, credits: { resetCreditsExpiresAt: NOW + DAY } }, NOW));
   assert.deepEqual(early.map((item) => item.kind), ["banked", "reset", "end"], "an earlier banked expiry comes first");
   const ended = { windows: [], subscription: { endsAt: NOW + DAY, endsOn: "1970-01-02", source: "manual", ended: true } };
@@ -2585,7 +2585,7 @@ console.log("1.9 Coming up list: passed");
   const endingWeekly = { ...ompAccount("Work", [ompWin("session", 100, 3600, 18000), { ...ompWin("weekly", 40, WEEK / 2, WEEK), samples: [] }]),
     subscription: { endsAt: now + 2 * DAY, endsOn: "2030-01-01", source: "manual", ended: false } };
   assert.equal(routed(ompProvider([endingWeekly, ompAccount("Personal", cool)])).warning,
-    "Work ends " + context.dayText(now + 2 * DAY, now) + " with 37% left over: omp spends it only after Personal. Raise its priority in omp (auth.accountPolicies).",
+    "Work ends 1 Jan 2030 with 37% left over: omp spends it only after Personal. Raise its priority in omp (auth.accountPolicies).",
     "a runner-up with leftover at its subscription end is named");
   // Silent for a proxy pool (even with an ended omp account) and for a provider without omp accounts.
   const proxyWork = { ...endedWork, proxy: {} };

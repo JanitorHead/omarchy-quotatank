@@ -1933,7 +1933,8 @@ function accountResetNote(account) {
 // next one, the limits it clears, and whether those limits are still above the warning threshold (dimmed when not
 // yet low). Null when the row shows no badge. Later resets (not usable now) are only counted in the tooltip; a badge
 // this widget cannot apply ends its tooltip with where the reset is applied (`accountResetNote`).
-function accountResetBadge(account, warningThreshold) {
+function accountResetBadge(account, warningThreshold, nowSeconds) {
+  if (nowSeconds === undefined) nowSeconds = Date.now() / 1000
   if (!accountResetShown(account)) return null
   var credits = account.credits
   var claude = account.id === "claude"
@@ -1950,7 +1951,7 @@ function accountResetBadge(account, warningThreshold) {
   if (claude) {
     var noun = (fableOnly ? "Fable " : "") + "reset" + (usable === 1 ? "" : "s")
     tooltip = usable + " " + noun + " usable now"
-      + (typeof expires === "number" && isFinite(expires) && expires > 0 ? ", expires " + costMonthDay(new Date(expires * 1000)) : "")
+      + (typeof expires === "number" && isFinite(expires) && expires > 0 ? ", expires " + dayText(expires, nowSeconds) : "")
       + (later > 0 ? " · " + later + " more later" : "")
   }
   var remaining = []
@@ -2138,10 +2139,6 @@ function costBucketKey(start) {
 
 function costDayName(date) {
   return date ? COST_DAY_NAMES[date.getDay()] : ""
-}
-
-function costMonthDay(date) {
-  return date ? COST_MONTH_NAMES[date.getMonth()] + " " + date.getDate() : ""
 }
 
 // The span a total covers, for "vs previous …".
@@ -3243,13 +3240,13 @@ function subscriptionEndOf(raw, providerId, accountId) {
 }
 
 // A subscription's last day as the panel and the row say it: "3 Dec", with the year only when it is not the
-// current year (UTC, like the day arithmetic above). Empty for anything but YYYY-MM-DD.
+// current year (local time, like dayText). Empty for anything but YYYY-MM-DD.
 function subscriptionEndText(endsOn, nowSeconds) {
   var day = String(endsOn || "")
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return ""
   var text = Number(day.slice(8, 10)) + " " + COST_MONTH_NAMES[Number(day.slice(5, 7)) - 1]
   var now = finiteOrNull(nowSeconds)
-  if (now !== null && Number(day.slice(0, 4)) === new Date(now * 1000).getUTCFullYear()) return text
+  if (now !== null && Number(day.slice(0, 4)) === new Date(now * 1000).getFullYear()) return text
   return text + " " + day.slice(0, 4)
 }
 
@@ -3939,7 +3936,7 @@ function ompLeftoverWarning(accounts, ranked, opts, now) {
   if (best === null) return ""
   var leftoverAccount = accounts[best.index]
   var nextName = accountName(accounts[ranked[0].index], opts.extraKeys, opts.hideEmails, ranked[0].index + 1)
-  return accountName(leftoverAccount, opts.extraKeys, opts.hideEmails, best.index + 1) + " ends " + dayText(leftoverAccount.subscription.endsAt, now)
+  return accountName(leftoverAccount, opts.extraKeys, opts.hideEmails, best.index + 1) + " ends " + subscriptionEndText(leftoverAccount.subscription.endsOn, now)
     + " with " + Math.round(best.left.percent) + "% left over: omp spends it only after " + nextName + ". Raise its priority in omp (auth.accountPolicies)."
 }
 
@@ -4059,13 +4056,17 @@ function comingUpItems(account, nowSeconds) {
   var expires = account.credits ? finiteOrNull(account.credits.resetCreditsExpiresAt) : null
   if (expires !== null && expires > now) items.push({ kind: "banked", at: expires, tone: "dim", text: "Banked reset expires " + dayText(expires, now) })
   var endsAt = account.subscription ? finiteOrNull(account.subscription.endsAt) : null
-  if (endsAt !== null && endsAt > now) items.push({ kind: "end", at: endsAt, tone: "dim", text: "Subscription ends " + dayText(endsAt, now) })
+  var endsOn = account.subscription ? subscriptionEndText(account.subscription.endsOn, now) : ""
+  if (endsAt !== null && endsAt > now && endsOn !== "") items.push({ kind: "end", at: endsAt, tone: "dim", text: "Subscription ends " + endsOn })
   return items.sort(function (a, b) { return a.at - b.at })
 }
 
-// A UTC day (from epoch seconds) as the status line writes it: "13 Jan", with the year when it is not this one.
+// A local day (from epoch seconds) as the status line writes it: "13 Jan", with the year when it is not this one.
 function dayText(seconds, nowSeconds) {
-  return subscriptionEndText(new Date(seconds * 1000).toISOString().slice(0, 10), nowSeconds)
+  var date = new Date(seconds * 1000)
+  var month = date.getMonth() + 1
+  var day = date.getDate()
+  return subscriptionEndText(date.getFullYear() + "-" + (month < 10 ? "0" : "") + month + "-" + (day < 10 ? "0" : "") + day, nowSeconds)
 }
 
 // The dashed stretch a meter draws for the forecast, on the side the meter shows (fractions 0-1):
