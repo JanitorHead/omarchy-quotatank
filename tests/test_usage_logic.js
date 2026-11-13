@@ -209,6 +209,12 @@ assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }),
   const viaOmp = badgeAccount({}, [fableWindow(88)], { origin: "omp" });
   assert.deepEqual([context.accountResetBadge(viaOmp, 25).label, context.accountResetBadge(viaOmp, 25).actionable], ["1 Fable", false],
     "an omp row shows its badge but applies it in omp");
+  // Quickshell hands list values over without Array.isArray(), so the clears must be read by length and index.
+  const listLikeClears = { 0: "Fable weekly", length: 1 };
+  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsClears: listLikeClears }, [fableWindow(88)]), 25).label, "1 Fable",
+    "list-like clears still name the Fable reset");
+  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsClears: listLikeClears }, [fableWindow(88)]), 25).dim, true,
+    "list-like clears still dim the limit they clear");
   const elsewhere = badgeAccount({}, [fableWindow(88)], { computer: { id: "c-00000001", name: "devbox" } });
   assert.equal(context.accountResetBadge(elsewhere, 25).actionable, false, "another computer's sign-in is not applied here");
   assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsUsable: false, resetCreditsReason: "limit" }, [fableWindow(88)]), 25).actionable, false);

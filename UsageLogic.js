@@ -1803,7 +1803,9 @@ function accountResetBadge(account, warningThreshold) {
   var claude = account.id === "claude"
   var usable = claude ? credits.resetCreditsUsableNow : accountResetCount(account)
   if (typeof usable !== "number" || !(usable > 0)) return null
-  var clears = Array.isArray(credits.resetCreditsClears) ? credits.resetCreditsClears : []
+  var clears = []
+  var clearNames = listOrEmpty(credits.resetCreditsClears)
+  for (var c = 0; c < clearNames.length; c++) clears.push(String(clearNames[c]))
   var fableOnly = clears.length > 0 && clears.every(function(name) { return name === "Fable weekly" })
   var later = typeof credits.resetCreditsLater === "number" ? credits.resetCreditsLater : 0
   var expires = credits.resetCreditsUsableExpiresAt
