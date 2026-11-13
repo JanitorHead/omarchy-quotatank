@@ -12,6 +12,8 @@ All notable changes to this project will be documented here. The format follows
 
 - **Subscription end dates.** In Settings → Providers → Customize → Accounts shown, each account can take a **Subscription ends** date (`YYYY-MM-DD`), with or without other accounts. From the day after it, the account is an ended subscription; its row reads `Ends 3 Dec` from 30 days before (urgent within 7 days), and its detail reads `ends 3 Dec`. The year shows only when it is not the current year. The JSON export carries it as `subscriptionEnds`.
 
+- **Codex subscription end.** Codex's own account check now says when a Codex subscription ends: a cancelled one ends on its cancellation date, an expired one has ended, and a renewing one has no end date. Codex's date replaces the manual field for that account, and the check runs at most once every six hours per account.
+
 ### Fixed
 
 - **A cancelled Kilo Pass no longer shows its last month as a live allowance.** Kilo keeps a cancelled pass with that month's figures; only an active, past-due or trialing pass counts now.
