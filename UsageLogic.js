@@ -3890,6 +3890,35 @@ function ompOrder(a, b) {
   return step.order !== 0 ? step.order : a.index - b.index
 }
 
+// The OMP ROUTING block under the account rows (ticket 48). Three lines, each empty when it has nothing
+// to say: omp's next account and why, the share at which another account would take over, and one
+// warning. Only omp accounts are routed; a proxy pool or a provider without omp accounts gets nothing.
+function ompRouting(provider, options) {
+  var opts = options || {}
+  var lines = { next: "", switchPoint: "", warning: "" }
+  var state = ompState(provider, opts.mode, opts.nowSeconds)
+  if (state.nextAccount === null) return lines
+  var accounts = providerAccounts(provider)
+  var name = accountName(accounts[state.nextAccount], opts.extraKeys, opts.hideEmails, state.nextAccount)
+  var runner = state.ranking.length > 1 ? accountName(accounts[state.ranking[1]], opts.extraKeys, opts.hideEmails, state.ranking[1]) : ""
+  lines.next = "Next session: " + name + " · " + ompReasonText(state.nextReason, runner)
+  return lines
+}
+
+// The reason omp's pick is the one it is, in the words the Limits panel uses. "blocked" and "only"
+// both mean the others have no room; "hot" names the runner-up, whose 5-hour window is nearly full.
+function ompReasonText(reason, runner) {
+  if (reason === "only" || reason === "blocked") return "only account with room."
+  if (reason === "reserve") return "the others are in reserve."
+  if (reason === "hot") return runner + "'s 5-hour window is nearly full."
+  if (reason === "priority") return "higher priority in omp."
+  if (reason === "drain" || reason === "used") return "most room per hour before its reset."
+  if (reason === "allowance") return "the others are past their allowance."
+  if (reason === "boost") return "its 5-hour window is untouched."
+  if (reason === "measured") return "the only one with a usage reading."
+  return "first in omp's order."
+}
+
 // Where a limit is heading at the current pace. `projected` is the use expected at reset (at most
 // 100), `runsOutAt` when it reaches 100 before then. `rate` (percent per second) is 0 without a
 // projection (idle, collecting, stale, starting). Null without a pace.

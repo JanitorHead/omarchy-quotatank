@@ -2518,6 +2518,41 @@ console.log("1.9 Coming up list: passed");
   assert.equal(idle.nextAccount, 1, "Personal is outside its reserve, so omp picks it");
   assert.deepEqual(plain(idle.counted), [1], "the idle chip counts the next account, not the least headroom");
   console.log("1.10 omp's next account: passed");
+
+  // OMP ROUTING block (ticket 48): the line under the account rows names omp's next account and why.
+  const routed = (provider, extra = {}) => context.ompRouting(provider, { mode: "together", nowSeconds: now,
+    extraKeys: "{}", hideEmails: true, ...extra });
+  const onlyRoute = routed(ompProvider([ompAccount("Work", cool)]));
+  assert.equal(onlyRoute.next, "Next session: Work · only account with room.");
+  assert.equal(onlyRoute.switchPoint, "");
+  assert.equal(onlyRoute.warning, "");
+
+  // Each reason omp gives for its pick names what decided it.
+  assert.equal(routed(ompProvider([ompAccount("Work", blocked), ompAccount("Personal", cool)])).next,
+    "Next session: Personal · only account with room.");
+  assert.equal(routed(ompProvider([reserved, ompAccount("Personal", cool)])).next,
+    "Next session: Personal · the others are in reserve.");
+  assert.equal(routed(ompProvider([ompAccount("Work", hotWin), ompAccount("Personal", cool)])).next,
+    "Next session: Personal · Work's 5-hour window is nearly full.");
+  assert.equal(routed(ompProvider([ompAccount("Work", cool), boosted])).next,
+    "Next session: Personal · higher priority in omp.");
+  assert.equal(routed(ompProvider([ompAccount("Work", []), ompAccount("Personal", cool)])).next,
+    "Next session: Personal · the only one with a usage reading.");
+  const soonWeekly = [ompWin("session", 10, 7200, 18000), ompWin("weekly", 30, 100000, 604800)];
+  assert.equal(routed(ompProvider([ompAccount("Work", cool), ompAccount("Personal", soonWeekly)])).next,
+    "Next session: Personal · most room per hour before its reset.");
+  // Equal drain (1800 / 257143 s and 0.7 / 360000 s agree within rank.ts's tolerance): the used step decides.
+  assert.equal(routed(ompProvider([ompAccount("Work", [ompWin("session", 10, 7200, 18000), ompWin("weekly", 30, 360000, 604800)]),
+    ompAccount("Personal", [ompWin("session", 10, 7200, 18000), ompWin("weekly", 50, 257143, 604800)])])).next,
+    "Next session: Work · most room per hour before its reset.");
+  const spentNoReset = [ompWin("session", 10, 7200, 18000), { id: "weekly", label: "Weekly limit", used: 100,
+    remaining: 0, windowSeconds: 604800 }];
+  assert.equal(routed(ompProvider([ompAccount("Work", spentNoReset), ompAccount("Personal", cool)])).next,
+    "Next session: Personal · the others are past their allowance.");
+  assert.equal(routed(ompProvider([ompAccount("Work", [ompWin("codex-primary", 0, 7200, 18000), ompWin("weekly", 30, 300000, 604800)]),
+    ompAccount("Personal", cool)])).next, "Next session: Work · its 5-hour window is untouched.");
+  assert.equal(routed(ompProvider([ompAccount("Work", cool), ompAccount("Personal", cool)])).next,
+    "Next session: Work · first in omp's order.");
 }
 
 console.log("UsageLogic.js: all assertions passed");
