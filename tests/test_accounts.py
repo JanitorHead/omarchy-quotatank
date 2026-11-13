@@ -390,6 +390,91 @@ class CodexSubscriptionTests(AccountsTestCase):
         self.assertEqual(len(self.checks), 2)
 
 
+class ClaudeSubscriptionTests(AccountsTestCase):
+    """Claude's profile says whether the account is on the free plan: asked only after a usage read fails, at most once every six hours per login, silent on failure."""
+
+    NOW = 1799971200  # 2027-01-15T00:00:00Z
+    PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.home / ".claude").mkdir()
+        write_private(self.home / ".claude" / ".credentials.json", claude_credentials("primary-token"))
+        self.now = self.NOW
+        self.usage_failure: usage.ProviderFailure | None = usage.ProviderFailure("rate_limited", "usage is rate limited", 429)
+        self.profile_failure: usage.ProviderFailure | None = None
+        self.profile: dict = self.profile_of("claude_free")
+        self.calls: list[str] = []
+        for patcher in (
+            mock.patch.object(usage, "http_json", side_effect=self.fake_http),
+            mock.patch.object(usage.time, "time", side_effect=lambda: self.now),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def profile_of(organization_type: str, subscription_status: str = "active") -> dict:
+        return {"account": {"email": "dev@example.com"},
+                "organization": {"organization_type": organization_type, "subscription_status": subscription_status}}
+
+    def fake_http(self, url: str, headers: dict, timeout: float, body: dict | None = None) -> dict:
+        self.calls.append(url)
+        if url == self.PROFILE_URL:
+            if self.profile_failure is not None:
+                raise self.profile_failure
+            return self.profile
+        if self.usage_failure is not None:
+            raise self.usage_failure
+        return json.loads((FIXTURES / "claude-usage.json").read_text(encoding="utf-8"))
+
+    def profile_calls(self) -> int:
+        return self.calls.count(self.PROFILE_URL)
+
+    def test_a_rate_limited_free_claude_account_has_ended(self) -> None:
+        result = usage.fetch_claude(5)
+        self.assertEqual(result["errorKind"], "rate_limited")
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": True})
+
+    def test_a_rejected_sign_in_on_a_free_claude_account_has_ended(self) -> None:
+        self.usage_failure = usage.ProviderFailure("expired", "usage rejected the token", 401)
+        result = usage.fetch_claude(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": True})
+
+    def test_a_cancelled_but_paid_claude_account_has_not_ended(self) -> None:
+        self.profile = self.profile_of("claude_pro", "canceled")
+        result = usage.fetch_claude(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": False})
+
+    def test_a_working_usage_read_never_asks_the_profile(self) -> None:
+        self.usage_failure = None
+        result = usage.fetch_claude(5)
+        self.assertEqual(result["status"], "ok", result)
+        self.assertNotIn("subscription", result)
+        self.assertEqual(self.profile_calls(), 0)
+
+    def test_the_profile_is_asked_at_most_once_every_six_hours(self) -> None:
+        usage.fetch_claude(5)
+        self.now += 6 * 3600 - 1
+        usage.fetch_claude(5)
+        self.assertEqual(self.profile_calls(), 1)
+        self.now += 1
+        usage.fetch_claude(5)
+        self.assertEqual(self.profile_calls(), 2)
+
+    def test_a_failed_profile_keeps_the_last_answer(self) -> None:
+        usage.fetch_claude(5)
+        self.now += 6 * 3600
+        self.profile_failure = usage.ProviderFailure("http", "profile is down", 500)
+        result = usage.fetch_claude(5)
+        self.assertEqual(result["subscription"], {"source": "provider", "ended": True})
+        self.assertEqual(self.profile_calls(), 2)
+
+    def test_an_omp_claude_account_never_asks_the_profile(self) -> None:
+        entry = usage.omp_report_entry("claude", "omp-claude-1", {"metadata": {"email": "dev@example.com"}})
+        self.assertNotIn("subscription", entry)
+        self.assertEqual(self.calls, [])
+
+
 class ExtraKeyTests(AccountsTestCase):
     def setUp(self) -> None:
         super().setUp()
