@@ -3750,26 +3750,77 @@ function ompState(provider, mode, nowSeconds) {
   if (mode !== "together" || proxyPool(provider) || !fromOmpAccount) {
     return { nextAccount: null, nextReason: "", ompTags: [], ranking: [] }
   }
-  var ranking = ompRanking(provider, nowSeconds)
+  var ranked = ompRanked(provider, nowSeconds)
+  var ranking = []
   var tags = []
   for (var t = 0; t < accounts.length; t++) tags.push("")
+  for (var r = 0; r < ranked.length; r++) ranking.push(ranked[r].index)
   if (ranking.length > 0) tags[ranking[0]] = "next"
+  var reason = ""
+  if (ranked.length === 1) reason = "only"
+  if (ranked.length > 1) reason = ompStep(ranked[0], ranked[1]).step || "order"
   return {
     nextAccount: ranking.length > 0 ? ranking[0] : null,
-    nextReason: ranking.length === 1 ? "only" : "",
+    nextReason: reason,
     ompTags: tags,
     ranking: ranking
   }
 }
 
-// The accounts omp can pick, in its order. Ended subscriptions are not candidates.
-function ompRanking(provider, nowSeconds) {
+// The accounts omp can pick, best first (rank.ts compareUsageRankedCandidates). Ended subscriptions
+// are not candidates.
+function ompRanked(provider, nowSeconds) {
   var accounts = providerAccounts(provider)
-  var ranking = []
+  var candidates = []
   for (var i = 0; i < accounts.length; i++) {
-    if (!subscriptionEnded(accounts[i])) ranking.push(i)
+    if (!subscriptionEnded(accounts[i])) candidates.push(ompCandidate(accounts[i], i, nowSeconds))
   }
-  return ranking
+  candidates.sort(ompOrder)
+  return candidates
+}
+
+// One account as omp's ranking sees it. Windows match by id: `session` or `codex-primary` is the
+// 5 h window, `weekly` or `codex-secondary` the weekly one. A window at 100% with a reset still ahead
+// blocks the account until that reset.
+function ompCandidate(account, index, nowSeconds) {
+  var now = Number(nowSeconds)
+  var ids = ["session", "codex-primary", "weekly", "codex-secondary"]
+  var blockedUntil = null
+  for (var w = 0; w < ids.length; w++) {
+    var row = ompWindow(account, ids[w])
+    if (!row) continue
+    var used = windowUsed(row)
+    var resetsAt = finiteOrNull(row.resetsAt)
+    if (used !== null && used >= 100 && resetsAt !== null && resetsAt > now) {
+      if (blockedUntil === null || resetsAt > blockedUntil) blockedUntil = resetsAt
+    }
+  }
+  return { index: index, blocked: blockedUntil !== null, blockedUntil: blockedUntil }
+}
+
+function ompWindow(account, id) {
+  var windows = listOrEmpty(account.windows)
+  for (var i = 0; i < windows.length; i++) {
+    if (windows[i] && windows[i].id === id) return windows[i]
+  }
+  return null
+}
+
+// omp's comparator, step by step (rank.ts compareUsageRankedCandidatePriority). A negative `order`
+// puts `a` first; `step` names the step that separates them, "" when none does.
+function ompStep(a, b) {
+  if (a.blocked !== b.blocked) return { order: a.blocked ? 1 : -1, step: "blocked" }
+  if (a.blocked) {
+    if (a.blockedUntil === b.blockedUntil) return { order: 0, step: "" }
+    return { order: a.blockedUntil - b.blockedUntil, step: "blocked" }
+  }
+  return { order: 0, step: "" }
+}
+
+// Ties go to the account that comes first in the provider's list.
+function ompOrder(a, b) {
+  var step = ompStep(a, b)
+  return step.order !== 0 ? step.order : a.index - b.index
 }
 
 // Where a limit is heading at the current pace. `projected` is the use expected at reset (at most

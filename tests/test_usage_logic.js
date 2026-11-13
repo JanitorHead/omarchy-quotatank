@@ -2411,6 +2411,12 @@ console.log("1.9 Coming up list: passed");
   assert.equal(solo.nextReason, "only");
   assert.deepEqual(plain(solo.ranking), [0]);
   assert.deepEqual(plain(solo.ompTags), ["next"]);
+
+  const blocked = [ompWin("session", 100, 3600, 18000), ompWin("weekly", 40, 300000, 604800)];
+  const pair = together(ompProvider([ompAccount("Work", blocked), ompAccount("Personal", cool)]));
+  assert.equal(pair.nextAccount, 1, "a blocked account loses to a usable one, even when listed first");
+  assert.equal(pair.nextReason, "blocked");
+  assert.deepEqual(plain(pair.ranking), [1, 0]);
   console.log("1.10 omp's next account: passed");
 }
 
