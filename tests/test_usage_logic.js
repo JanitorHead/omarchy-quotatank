@@ -215,6 +215,11 @@ assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }),
     "list-like clears still name the Fable reset");
   assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsClears: listLikeClears }, [fableWindow(88)]), 25).dim, true,
     "list-like clears still dim the limit they clear");
+  // A list-like windows value (Quickshell) must not throw; the clear is still found by index.
+  assert.equal(context.accountResetBadge(badgeAccount({}, { 0: fableWindow(88), length: 1 }), 25).label, "1 Fable",
+    "list-like windows still name the Fable reset");
+  assert.equal(context.accountResetBadge(badgeAccount({}, { 0: fableWindow(88), length: 1 }), 25).dim, true,
+    "list-like windows still dim the limit they clear");
   const elsewhere = badgeAccount({}, [fableWindow(88)], { computer: { id: "c-00000001", name: "devbox" } });
   assert.equal(context.accountResetBadge(elsewhere, 25).actionable, false, "another computer's sign-in is not applied here");
   assert.equal(context.accountResetBadge(viaOmp, 25).tooltip, "1 Fable reset usable now, expires 9 Mar 2030 · 1 more later · Apply it in omp: omp usage reset.",
@@ -2342,6 +2347,11 @@ console.log("1.9 Coming up list: passed");
   assert.equal(hoverOf(claude(hoverAccounts), {}, { modes: '{"claude":"single"}' }).modeText, "", "no Omarchy switching, nothing");
   assert.equal(hoverOf(claude(hoverAccounts, { pool: { source: "omp" } })).modeText, "Used together · omp",
     "the same words as the ACCOUNTS header");
+  // A list-like counted set (Quickshell) must not throw; the ended in-use account still gets its notice.
+  const endedMain = { ...claude(hoverAccounts), accounts: [{ ...hoverAccounts[0], subscription: { ended: true } }, ...hoverAccounts.slice(1)] };
+  const listCounted = { ...stateOf(endedMain, { modes: '{"claude":"single"}' }), counted: { 0: 0, length: 1 } };
+  assert.equal(context.barHoverModel(endedMain, listCounted, { nowSeconds: now, formatClock: clock }).notice, "Subscription ended: switch account",
+    "a list-like counted set still gets the ended notice");
   const viaProxy = claude(hoverAccounts.map((account) => ({ ...account, proxy: { id: "p-00000001", name: "CLIProxyAPI" } })));
   const proxyHover = hoverOf(viaProxy, {}, {});
   assert.equal(proxyHover.modeText, "Used together · CLIProxyAPI");

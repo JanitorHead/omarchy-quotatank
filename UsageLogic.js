@@ -1966,12 +1966,14 @@ function accountResetBadge(account, warningThreshold, nowSeconds) {
       + (later > 0 ? " · " + later + " more later" : "")
   }
   var remaining = []
-  listOrEmpty(account.windows).forEach(function(row) {
-    clears.forEach(function(name) {
-      if (windowClearsName(row, name) && typeof row.remaining === "number" && isFinite(row.remaining))
+  var windows = listOrEmpty(account.windows)
+  for (var w = 0; w < windows.length; w++) {
+    var row = windows[w]
+    for (var k = 0; k < clears.length; k++) {
+      if (windowClearsName(row, clears[k]) && typeof row.remaining === "number" && isFinite(row.remaining))
         remaining.push(row.remaining)
-    })
-  })
+    }
+  }
   var dim = remaining.length > 0 && Math.min.apply(null, remaining) > warningThreshold
   var note = accountResetNote(account)
   return { label: label, tooltip: note ? tooltip + " · " + note : tooltip, dim: dim, actionable: accountResetActionable(account) }
@@ -4786,8 +4788,10 @@ function barHoverModel(provider, state, options) {
                 counted: contains(counted, i), state: ring, status: status, tone: tone, ended: subscriptionEnded(account),
                 spark: listOrEmpty(history.h24), account: account })
   }
-  var inUseEnded = !!state && state.mode === "single"
-    && counted.some(function (index) { return subscriptionEnded(accounts[index]) })
+  var inUseEnded = false
+  if (state && state.mode === "single") {
+    for (var slot = 0; slot < counted.length && !inUseEnded; slot++) inUseEnded = subscriptionEnded(accounts[counted[slot]])
+  }
   var readAtSeconds = Number(opts.readAtSeconds) || 0
   var readText = readAtSeconds <= 0 ? "" : opts.stale
     ? "Read " + barAgoText(now - readAtSeconds) + " ago" : "Read at " + clock(readAtSeconds)
