@@ -1815,6 +1815,9 @@ console.log("omp settings, live feed and account modes: passed");
     "no short window, no runway");
   const runwayPool = { id: "claude", status: "ok", accounts: [login("work", [week(45)]), login("personal", [week(45)]), login("ultra", [quiet(10)])] };
   assert.equal(context.poolLine(runwayPool, { windowSeconds: WEEK }), "Pool: 55% left this week · 2 accounts");
+  const failedPool = { id: "claude", status: "ok", accounts: [login("work", [week(45)]), { accountId: "broken", status: "error", windows: [] }] };
+  assert.equal(context.poolLine(failedPool, { windowSeconds: WEEK }), "Pool: 55% left this week · 1 of 2 accounts",
+    "an account that failed without a reading is in the pool but not counted, so the line says so");
   assert.equal(context.poolLine({ id: "claude", status: "ok", accounts: [login("work", [week(45)])] }, { windowSeconds: SESSION }), "",
     "no account carries the 5-hour window, so no pool line");
 

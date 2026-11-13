@@ -4360,15 +4360,16 @@ function poolLine(provider, row) {
   var seconds = finiteOrNull(row && row.windowSeconds)
   if (seconds === null) return ""
   var selector = ""
-  var keys = ["session", "weekly", "monthly"]
-  for (var i = 0; i < keys.length; i++) {
-    if (windowMatches({ windowSeconds: seconds }, keys[i])) { selector = keys[i]; break }
+  for (var name in WINDOW_SELECTORS) {
+    if (windowMatches({ windowSeconds: seconds }, name)) { selector = name; break }
   }
   var pool = selector ? poolTotal(provider, selector) : null
   if (pool === null || pool.percent === null) return ""
   var period = { session: "5-hour window", weekly: "week", monthly: "month" }[selector]
-  return "Pool: " + pool.percent + "% left this " + period + " · " + pool.counted
-    + (pool.counted === 1 ? " account" : " accounts")
+  var counts = pool.counted < pool.total
+    ? pool.counted + " of " + pool.total + " accounts"
+    : pool.counted + (pool.counted === 1 ? " account" : " accounts")
+  return "Pool: " + pool.percent + "% left this " + period + " · " + counts
 }
 
 // Whether a window reset between two readings of it ({ used, resetsAt }, resetsAt in epoch seconds or
