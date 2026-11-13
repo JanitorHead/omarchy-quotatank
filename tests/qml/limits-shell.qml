@@ -17,6 +17,8 @@ ShellRoot {
   property var group: null
   property var quiet: null
   property var leftoverCard: null
+  property var comingUp: null
+  readonly property var comingAccount: login("coming", { windows: [weekly(20)], subscription: { endsAt: now + 10 * 86400, source: "manual", ended: false }, credits: { resetCreditsExpiresAt: now + 86400 } })
   property var runwayCard: null
   property var notice: null
   property var markupNotice: null
@@ -163,6 +165,8 @@ ShellRoot {
     var provider = { id: "claude", status: "ok", accounts: [accounts[0], login("personal", { windows: [session(60, 0), weekly(10)] })] }
     runwayCard = create("RunwayCard.qml", { width: 420, motion: motion, nowSeconds: now, names: ["Work", "Personal"],
       counted: [0], runway: UsageLogic.accountRunway(provider, "single", [0], now, [0, 1]) })
+    // Coming up: the account's next dates in order: a banked reset that expires, the limit's reset, the subscription's end.
+    comingUp = create("ComingUpList.qml", { width: 420, nowSeconds: now, account: comingAccount })
     notice = create("EventNotice.qml", { width: 420, motion: motion, shown: true,
       text: "Omarchy moved new Claude sessions to Personal at 16:27: Work reached 95%. Running sessions stay on Work." })
     notice.dismissed.connect(function() { root.dismissals++ })
@@ -236,6 +240,14 @@ ShellRoot {
     // A weekly limit with room at reset: the footer says what is left and the pace that spends it.
     check(find(leftoverCard, "limitVerdict").text === "65% left over at reset · use 27%/day to spend it",
       "a leftover is the verdict: " + find(leftoverCard, "limitVerdict").text)
+    // Coming up: the banked reset expires first, then the limit resets, then the subscription ends.
+    var coming = [find(comingUp, "comingUpItem-0"), find(comingUp, "comingUpItem-1"), find(comingUp, "comingUpItem-2")]
+    check(comingUp.visible && coming[0] && coming[0].text.indexOf("Banked reset expires ") === 0, "the banked reset expires first: " + (coming[0] ? coming[0].text : "(none)"))
+    check(coming[1] && coming[1].text.indexOf("Weekly limit resets ") === 0, "then the limit resets: " + (coming[1] ? coming[1].text : "(none)"))
+    check(coming[2] && coming[2].text.indexOf("Subscription ends ") === 0 && find(comingUp, "comingUpItem-3") === null, "the subscription ends last")
+    // An ended subscription has nothing coming up: the list hides.
+    var ended = create("ComingUpList.qml", { width: 420, nowSeconds: now, account: login("old", { subscription: { ended: true } }) })
+    check(!ended.visible && find(ended, "comingUpItem-0") === null, "an ended subscription has nothing coming up")
     // Spending: the meter would sweep, but reduced motion keeps it still; the live figure climbs.
     rising.spending = true
     rising.readingAt = now - 50

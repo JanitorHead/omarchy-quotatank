@@ -2264,6 +2264,15 @@ Ui.Panel {
                 severityOf: function(row) { return root.windowSeverity(row) }
                 resetLabelOf: function(row) { return root.resetText(row) }
               }
+
+              ComingUpList {
+                objectName: "comingUpList"
+                width: limitsSection.width
+                account: root.detailAccount
+                nowSeconds: root.nowSeconds
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
             }
 
             HintLine {
