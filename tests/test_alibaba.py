@@ -63,9 +63,9 @@ def by_id(windows):
 
 class ParseTests(unittest.TestCase):
     def test_quota_windows_are_read_from_the_live_instance(self):
-        windows, plan, notice = usage.parse_alibaba(ACTIVE, NOW)
+        windows, plan, notice, ended = usage.parse_alibaba(ACTIVE, NOW)
         self.assertEqual(plan, "Coding Plan Pro")
-        self.assertEqual(notice, "")
+        self.assertEqual((notice, ended), ("", False))
         windows = by_id(windows)
         self.assertEqual(set(windows), {"session", "weekly", "monthly"})
         session = windows["session"]
@@ -84,7 +84,7 @@ class ParseTests(unittest.TestCase):
     def test_wrapped_json_string_payload_is_decoded(self):
         # CodexBar's wrapped successResponse.body string holding the same JSON.
         wrapped = {"successResponse": {"body": json.dumps(ACTIVE)}}
-        windows, plan, _ = usage.parse_alibaba(wrapped, NOW)
+        windows, plan, _, _ = usage.parse_alibaba(wrapped, NOW)
         self.assertEqual(plan, "Coding Plan Pro")
         self.assertEqual(by_id(windows)["session"]["used"], 5.2)
 
@@ -92,14 +92,14 @@ class ParseTests(unittest.TestCase):
         payload = json.loads(json.dumps(ACTIVE))
         quota = payload["data"]["codingPlanInstanceInfos"][0]["codingPlanQuotaInfo"]
         quota["per5HourQuotaNextRefreshTime"] = (NOW - 100) * MS
-        windows, _, _ = usage.parse_alibaba(payload, NOW)
+        windows, _, _, _ = usage.parse_alibaba(payload, NOW)
         self.assertEqual(by_id(windows)["session"]["resetsAt"], NOW - 100 + 5 * 3600)
 
     def test_missing_five_hour_reset_is_left_empty(self):
         payload = json.loads(json.dumps(ACTIVE))
         quota = payload["data"]["codingPlanInstanceInfos"][0]["codingPlanQuotaInfo"]
         del quota["per5HourQuotaNextRefreshTime"]
-        windows, _, _ = usage.parse_alibaba(payload, NOW)
+        windows, _, _, _ = usage.parse_alibaba(payload, NOW)
         self.assertIsNone(by_id(windows)["session"]["resetsAt"])
 
     def test_live_instance_owns_the_quota_and_no_other_instance_is_borrowed(self):
@@ -116,10 +116,10 @@ class ParseTests(unittest.TestCase):
                 ]
             },
         }
-        windows, plan, notice = usage.parse_alibaba(payload, NOW)
+        windows, plan, notice, ended = usage.parse_alibaba(payload, NOW)
         # The live instance has no quota, so the expired instance's 7/100 must not be shown.
         self.assertEqual(windows, [])
-        self.assertEqual(plan, "Coding Plan Pro")
+        self.assertEqual((plan, ended), ("Coding Plan Pro", False))
         self.assertIn("active plan", notice)
 
     def test_live_instance_quota_is_used_over_an_expired_instance(self):
@@ -132,7 +132,8 @@ class ParseTests(unittest.TestCase):
                 "codingPlanQuotaInfo": {"per5HourUsedQuota": 7, "per5HourTotalQuota": 100},
             },
         )
-        windows, plan, _ = usage.parse_alibaba(payload, NOW)
+        windows, plan, _, ended = usage.parse_alibaba(payload, NOW)
+        self.assertFalse(ended, "a live instance beside a dead one has not ended")
         self.assertEqual(plan, "Coding Plan Pro")
         self.assertEqual(by_id(windows)["session"]["detail"], "52 / 1000 used")
 
@@ -142,14 +143,14 @@ class ParseTests(unittest.TestCase):
             "status_code": 0,
             "codingPlanQuotaInfo": [{"perWeekUsedQuota": 40, "perWeekTotalQuota": 400}],
         }
-        windows, _, _ = usage.parse_alibaba(payload, NOW)
+        windows, _, _, _ = usage.parse_alibaba(payload, NOW)
         self.assertEqual(by_id(windows)["weekly"]["used"], 10.0)
 
     def test_zero_limit_gives_no_window_and_is_not_an_error(self):
         payload = json.loads(json.dumps(ACTIVE))
         quota = payload["data"]["codingPlanInstanceInfos"][0]["codingPlanQuotaInfo"]
         quota["per5HourTotalQuota"] = 0
-        windows, _, notice = usage.parse_alibaba(payload, NOW)
+        windows, _, notice, _ = usage.parse_alibaba(payload, NOW)
         self.assertEqual(set(by_id(windows)), {"weekly", "monthly"})
         self.assertEqual(notice, "")
 
@@ -166,7 +167,7 @@ class ParseTests(unittest.TestCase):
                 ]
             },
         }
-        windows, plan, notice = usage.parse_alibaba(payload, NOW)
+        windows, plan, notice, _ = usage.parse_alibaba(payload, NOW)
         self.assertEqual(windows, [])
         self.assertEqual(plan, "Coding Plan Lite")
         self.assertIn("no usable quota", notice)
@@ -175,7 +176,7 @@ class ParseTests(unittest.TestCase):
         payload = json.loads(json.dumps(ACTIVE))
         quota = payload["data"]["codingPlanInstanceInfos"][0]["codingPlanQuotaInfo"]
         quota["per5HourUsedQuota"] = None
-        windows, _, _ = usage.parse_alibaba(payload, NOW)
+        windows, _, _, _ = usage.parse_alibaba(payload, NOW)
         self.assertEqual(set(by_id(windows)), {"weekly", "monthly"})
 
     def test_rejected_key_in_the_body_is_expired(self):
@@ -200,7 +201,7 @@ class ParseTests(unittest.TestCase):
             "status_code": 0,
             "data": {"codingPlanInstanceInfos": [{"planName": "Coding Plan Pro", "status": "VALID"}]},
         }
-        windows, plan, notice = usage.parse_alibaba(payload, NOW)
+        windows, plan, notice, _ = usage.parse_alibaba(payload, NOW)
         self.assertEqual(windows, [])
         self.assertEqual(plan, "Coding Plan Pro")
         self.assertIn("no quota figures", notice)
@@ -210,7 +211,7 @@ class ParseTests(unittest.TestCase):
             "status_code": 0,
             "data": {"codingPlanInstanceInfos": [{"planName": "Coding Plan Lite", "endTime": "2030-04-01 17:00"}]},
         }
-        windows, plan, _ = usage.parse_alibaba(payload, NOW)
+        windows, plan, _, _ = usage.parse_alibaba(payload, NOW)
         self.assertEqual((windows, plan), ([], "Coding Plan Lite"))
 
     def test_plan_usage_alone_is_not_proof_of_an_active_plan(self):
@@ -223,10 +224,29 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "malformed")
 
     def test_malformed_payloads_are_rejected(self):
-        for payload in ([], {}, {"data": {}}, {"data": {"codingPlanInstanceInfos": [{"status": "EXPIRED"}]}}):
+        for payload in ([], {}, {"data": {}}):
             with self.subTest(payload=payload), self.assertRaises(usage.ProviderFailure) as raised:
                 usage.parse_alibaba(payload, NOW)
             self.assertEqual(raised.exception.kind, "malformed")
+
+    def test_an_instance_in_the_dead_set_is_an_ended_subscription_without_its_quota(self):
+        for status in ("EXPIRED", "TERMINATED", "stopped"):
+            payload = json.loads(json.dumps(ACTIVE))
+            payload["data"]["codingPlanInstanceInfos"][0]["status"] = status
+            with self.subTest(status=status):
+                windows, plan, notice, ended = usage.parse_alibaba(payload, NOW)
+                self.assertEqual((windows, plan, notice, ended), ([], "Coding Plan Pro", "", True))
+        bare = {"status_code": 0, "data": {"codingPlanInstanceInfos": [{"planName": "Coding Plan Lite", "status": "EXPIRED"},
+                                                                       {"planName": "Coding Plan Pro", "isActive": False}]}}
+        self.assertEqual(usage.parse_alibaba(bare, NOW), ([], "Coding Plan Lite", "", True),
+                         "every instance dead, without quota figures: ended, not malformed")
+
+    def test_an_instance_without_a_live_or_dead_signal_has_not_ended(self):
+        payload = {"status_code": 0, "data": {"codingPlanInstanceInfos": [
+            {"planName": "Expired Lite", "status": "EXPIRED"},
+            {"planName": "Coding Plan Pro", "codingPlanQuotaInfo": {"perWeekUsedQuota": 40, "perWeekTotalQuota": 400}}]}}
+        _, _, _, ended = usage.parse_alibaba(payload, NOW)
+        self.assertFalse(ended)
 
 
 class FetchTests(unittest.TestCase):
@@ -257,6 +277,16 @@ class FetchTests(unittest.TestCase):
         self.assertEqual((result["status"], result["plan"], result["source"]),
                          ("ok", "Coding Plan Pro", "Model Studio API"))
         self.assertEqual({window["id"] for window in result["windows"]}, {"session", "weekly", "monthly"})
+
+    def test_a_terminated_plan_reads_as_an_ended_subscription(self):
+        terminated = json.loads(json.dumps(ACTIVE))
+        terminated["data"]["codingPlanInstanceInfos"][0]["status"] = "TERMINATED"
+        with mock.patch.object(usage, "http_json", return_value=terminated):
+            result = usage.fetch_alibaba(3)
+        self.assertEqual((result["status"], result["plan"], result["windows"]), ("ok", "Coding Plan Pro", []))
+        self.assertEqual(result["subscription"], {"ended": True})
+        with mock.patch.object(usage, "http_json", return_value=ACTIVE):
+            self.assertNotIn("subscription", usage.fetch_alibaba(3))
 
     def test_rejected_key_on_the_international_gateway_is_retried_on_the_china_gateway(self):
         with mock.patch.object(

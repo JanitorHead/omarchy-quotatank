@@ -70,13 +70,19 @@ class FetchTests(unittest.TestCase):
         self.assertEqual((result["status"], result["plan"], result["windows"]), ("ok", "Pay as you go", []))
         self.assertEqual(http.call_count, 2)
 
-    def test_an_expired_plan_says_so_and_shows_no_limit(self):
+    def test_an_expired_plan_is_an_ended_subscription_beside_its_balance(self):
         expired = {"code": 0, "data": {**DETAIL["data"], "planCode": "lite:year", "expired": True}}
         with console({BALANCE_URL: BALANCE, DETAIL_URL: expired}) as http:
             result = self.fetch()
         self.assertEqual((result["status"], result["plan"], result["windows"]), ("ok", "Token Plan Lite", []))
-        self.assertIn("expired", result["notice"])
+        self.assertEqual(result["subscription"], {"ended": True})
+        self.assertEqual((result["notice"], result["credits"]["remaining"]), ("", 25.51),
+                         "the ended state says it; the balance stays")
         self.assertEqual(http.call_count, 2)
+
+    def test_a_current_plan_has_not_ended(self):
+        with console({BALANCE_URL: BALANCE, DETAIL_URL: DETAIL, USAGE_URL: USAGE}):
+            self.assertNotIn("subscription", self.fetch())
 
     def test_a_failed_plan_request_never_hides_the_balance(self):
         down = usage.ProviderFailure("http", "The usage endpoint returned HTTP 500.")

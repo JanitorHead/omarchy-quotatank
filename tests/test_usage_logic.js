@@ -618,6 +618,14 @@ assert.equal(exportedWindow.resetsAt, 1080);
 assert.equal(exportedWindow.pace.expected, 70);
 assert.equal(exportedWindow.pace.state, "stale", "no samples in the export: no projection from the average");
 assert.equal(exportedWindow.pace.runsOut, false);
+const endedExport = JSON.parse(context.exportSnapshot([{
+  id: "kilo", name: "Kilo Code", status: "ok", windows: [], subscription: { ended: true },
+  accounts: [{ accountId: "primary", status: "ok", windows: [], subscription: { ended: true } },
+    { accountId: "k-0123abcd", status: "ok", windows: [] }],
+}], 1050, true));
+assert.deepEqual([endedExport.providers[0].subscriptionEnded, endedExport.providers[0].accounts.map((row) => row.subscriptionEnded)],
+  [true, [true, false]], "the export says which accounts have ended");
+assert.equal(hidden.providers[0].subscriptionEnded, false);
 
 // Bar reset text: a window of at most a day shows a time; longer windows show a date.
 assert.equal(context.barResetKind({ id: "session", windowSeconds: 18000 }), "time")
@@ -1792,6 +1800,45 @@ console.log("omp settings, live feed and account modes: passed");
   assert.equal(context.eventNoticeText(expired.events[0], ompAccount("error"), { "omp-0123456789ab": "Team" }, clock, false),
     "omp can no longer renew Team's sign-in. Sign in again in omp.");
   assert.equal(context.accountEvents(expired.state, [ompAccount("error")], NOW + 1800, 25).events.length, 0, "said once");
+
+  // An ended subscription: one line that says so, an error ring, and the bottom of the list.
+  const ended = (accountId, windows, extra = {}) => login(accountId, windows, { subscription: { ended: true }, plan: "Claude Pro", ...extra });
+  assert.deepEqual(line(ended("old", [quiet(3)], { activity: { lastIncreaseAt: NOW - 30 } })),
+    { kind: "ended", text: "Subscription ended", at: null, tone: "urgent" }, "ended beats spending now and the plan");
+  assert.equal(line(ended("old", [], { status: "error", errorKind: "rate_limited" })).text, "Subscription ended",
+    "ended beats the provider's error");
+  assert.equal(line(login("old", [quiet(3)], { subscription: { ended: false }, plan: "Claude Pro" })).text, "Claude Pro");
+  const withEnded = [ended("old", [quiet(95)]), login("work", [quiet(50)], { active: true }), login("personal", [quiet(20)])];
+  assert.deepEqual(Array.from(context.accountOrder(withEnded, "single")), [1, 2, 0], "ended goes last one at a time");
+  assert.deepEqual(Array.from(context.accountOrder(withEnded, "together")), [1, 2, 0],
+    "and together, however little room it reports");
+  assert.deepEqual(stateOf({ id: "claude", accounts: withEnded }).rings, ["error", "ok", "ok"], "an ended account rings as an error");
+  // It counts toward nothing: together it is never counted, spending or not. One at a time the account in use
+  // stays counted once it has ended, so the chip keeps showing where new sessions still go.
+  const endedTeam = { id: "claude", accountId: "work", accounts: withEnded };
+  const togetherEnded = stateOf(endedTeam, { modes: '{"claude":"together"}' });
+  assert.deepEqual([togetherEnded.counted, togetherEnded.value], [[1], 1], "the least headroom among the live accounts");
+  assert.deepEqual(stateOf(endedTeam, { modes: '{"claude":"together"}', recentByAccount: { "claude@old": NOW - 30 } }).counted, [1],
+    "an ended account spending now is not counted either");
+  assert.equal(context.leastHeadroomIndex(withEnded, null), 1);
+  const noLimits = { id: "claude", accountId: "old", accounts: [ended("old", [], { active: true }), login("work", [])] };
+  assert.deepEqual(stateOf(noLimits, { modes: '{"claude":"together"}' }).counted, [1],
+    "together without a limit to compare, the live account is counted, not the ended one in use");
+  const endedInUse = { id: "claude", accountId: "old", accounts: [ended("old", [quiet(95)], { active: true }), login("work", [quiet(50)])] };
+  const stuck = stateOf(endedInUse);
+  assert.deepEqual([stuck.mode, stuck.counted, stuck.value, stuck.inUse], ["single", [0], 0, [true, false]],
+    "one at a time, the ended account in use stays counted");
+  // The runway has no lane for it, and its limits make no reset notice.
+  const sharing = [ended("old", [rising(70, 0.01)]), login("work", [rising(60, 0.005)])];
+  assert.deepEqual(runwayOf(sharing, "together", [1]).lanes.map((lane) => lane.index), [1], "together: no lane for the ended account");
+  const stuckRunway = runwayOf([ended("old", [rising(70, 0.01)], { active: true }), login("work", [rising(60, 0.005)])], "single", [0]);
+  assert.deepEqual([stuckRunway.base, stuckRunway.lanes.map((lane) => lane.index)], [1, [1]],
+    "one at a time: the live account is the runway, not the ended one in use");
+  assert.equal(context.accountRunway({ id: "claude", status: "ok", subscription: { ended: true }, windows: [rising(70, 0.01)] },
+    "single", [], NOW, []), null, "a provider whose only reading has ended has no runway");
+  const endedSeed = context.accountEvents({}, [{ ...before, subscription: { ended: true } }], NOW - 60, 25);
+  assert.equal(context.accountEvents(endedSeed.state, [{ ...after, subscription: { ended: true } }], NOW, 25).events.length, 0,
+    "an ended account's limit resets quietly");
 }
 console.log("1.9 QmlLimits accounts, forecast and runway: passed");
 
@@ -2008,6 +2055,28 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
       strip: strip(claude(busy, { accountSwitch: { mode: "manual", threshold: 95 } }), [0], "single") }).split(", ").pop(), "switch to Lab");
   assert.equal(context.barAccessibleName(claude(spent), stateOf(claude(spent)), { selector: "session", quotaMode: "Used",
     strip: strip(claude(spent), [0], "single") }).split(", ").slice(-2).join(", "), "all used up, back in 1h 0m");
+
+  // An ended subscription: one at a time, the chip keeps the account in use, rings it as an error and says why
+  // on hover; together, a live account is shown. A provider whose only reading has ended keeps its chip.
+  const endedLogin = (accountId, label, extra = {}) => ({ ...login(accountId, label, 0), windows: [], subscription: { ended: true }, ...extra });
+  // The provider-level fields are the account in use, as the backend copies them.
+  const stuck = { ...claude([endedLogin("main", "Work", { active: true }), login("personal", "Personal", 30)]), windows: [],
+    subscription: { ended: true } };
+  const single = { modes: '{"claude":"single"}' };
+  assert.deepEqual(plain(context.barProviders([stuck, { id: "alibaba", status: "ok", windows: [], subscription: { ended: true } }], "auto")
+    .map((provider) => provider.id)), ["claude", "alibaba"], "an ended reading keeps its chip");
+  assert.equal(context.barValueIndex(stuck, stateOf(stuck, single).counted, "auto"), 0, "the chip shows the ended account in use");
+  assert.equal(context.barValueIndex(stuck, [0, 1], "auto"), 1, "a live counted account wins over an ended one");
+  assert.deepEqual(plain(strip(stuck, null, "single").dots), [{ index: 1, state: "ok", counted: false, spending: false },
+    { index: 0, state: "error", counted: true, spending: false }], "its dot is counted, with the error ring, and comes last");
+  const stuckHover = hoverOf(stuck, {}, single);
+  assert.equal(stuckHover.notice, "Subscription ended: switch account");
+  assert.deepEqual(plain(stuckHover.rows.map((row) => [row.key, row.status, row.tone, row.state])),
+    [["personal", "idle", "dim", "ok"], ["main", "Subscription ended", "urgent", "error"]], "in the dots' order");
+  assert.equal(hoverOf(stuck, {}, { modes: '{"claude":"together"}' }).notice, "", "together, new sessions go to a live account");
+  assert.equal(hover.notice, "", "nothing to say while the account in use is live");
+  assert.equal(context.barAccessibleName(stuck, stateOf(stuck, single), { selector: "auto", quotaMode: "Used" }),
+    "Claude, Work in use, subscription ended, Personal 30% used");
   console.log("Bar chips, flashes and hover card: passed");
 }
 

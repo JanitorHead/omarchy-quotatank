@@ -393,6 +393,15 @@ class UsageComputerTests(unittest.TestCase):
                                              "accountId": "c-00000001/" + usage.PRIMARY_ACCOUNT_ID})
         self.assertEqual(claude["notice"], "Claude did not answer.")
 
+    def test_a_stand_in_brings_the_other_readings_subscription_and_drops_this_ones(self):
+        failed = reading("claude", "me@example.com", status="error", errorKind="network", message="Claude did not answer.")
+        ended = reading("claude", "me@example.com", 42, subscription={"ended": True})
+        payload = self.payload({"claude": failed}, {"devbox": answer(ended)}, ids=("claude",))
+        self.assertEqual(payload["providers"][0]["subscription"], {"ended": True})
+        stale = reading("claude", "me@example.com", 42, stale=True, readAt="2030-01-15T12:00:00Z", subscription={"ended": True})
+        payload = self.payload({"claude": stale}, {"devbox": answer(reading("claude", "me@example.com", 42))}, ids=("claude",))
+        self.assertNotIn("subscription", payload["providers"][0], "the live reading there is the newer word")
+
     def test_two_other_computers_keep_their_own_account_ids_when_this_computer_has_none(self):
         payload = self.payload({}, {"devbox": answer(reading("claude", "me@example.com", 10)),
                                     "buildbox": answer(reading("claude", "work@example.com", 20))}, ids=("claude",))

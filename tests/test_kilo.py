@@ -35,7 +35,7 @@ def procedure(data):
 
 class ParseTests(unittest.TestCase):
     def test_credit_blocks_and_kilo_pass_become_credits_and_a_monthly_window(self):
-        windows, credits, plan = usage.parse_kilo_usage([procedure(BLOCKS), procedure(PASS)], NOW)
+        windows, credits, plan, ended = usage.parse_kilo_usage([procedure(BLOCKS), procedure(PASS)], NOW)
         # Amounts are millionths of a dollar: 25 USD bought, 12.5 USD left.
         self.assertEqual((credits["remaining"], credits["total"], credits["used"]), (12.5, 25.0, 12.5))
         self.assertEqual((credits["currency"], credits["spendable"]), ("USD", 12.5))
@@ -46,18 +46,18 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(window["resetsAt"], FEBRUARY_START)
         self.assertEqual(window["windowSeconds"], usage.THIRTY_DAYS)
         self.assertEqual(window["detail"], "$5.50 of $23.00 (includes $4.00 bonus)")
-        self.assertEqual(plan, "Kilo Pass Starter")
+        self.assertEqual((plan, ended), ("Kilo Pass Starter", False))
 
     def test_blocks_without_amounts_leave_total_and_used_unknown(self):
         blocks = {"creditBlocks": [{"balance_mUsd": 2_000_000}]}
-        windows, credits, _ = usage.parse_kilo_usage([procedure(blocks), procedure(None)], NOW)
+        windows, credits, _, _ = usage.parse_kilo_usage([procedure(blocks), procedure(None)], NOW)
         self.assertEqual(windows, [])
         self.assertEqual(credits["remaining"], 2.0)
         self.assertIsNone(credits["total"])
         self.assertIsNone(credits["used"])
 
     def test_account_total_balance_is_the_fallback_when_no_blocks_are_listed(self):
-        windows, credits, _ = usage.parse_kilo_usage([procedure({"totalBalance_mUsd": 3_000_000}), procedure(None)], NOW)
+        windows, credits, _, _ = usage.parse_kilo_usage([procedure({"totalBalance_mUsd": 3_000_000}), procedure(None)], NOW)
         self.assertEqual(windows, [])
         self.assertEqual((credits["remaining"], credits["spendable"]), (3.0, 3.0))
         self.assertIsNone(credits["total"])
@@ -65,14 +65,14 @@ class ParseTests(unittest.TestCase):
     def test_pass_without_bonus_maps_the_tier_and_has_no_renewal_when_absent(self):
         pass_data = {"subscription": {"tier": "tier_49", "currentPeriodBaseCreditsUsd": 49,
                                       "currentPeriodBonusCreditsUsd": 0, "currentPeriodUsageUsd": 10}}
-        windows, credits, plan = usage.parse_kilo_usage([procedure({}), procedure(pass_data)], NOW)
+        windows, credits, plan, _ = usage.parse_kilo_usage([procedure({}), procedure(pass_data)], NOW)
         self.assertIsNone(credits)
         self.assertEqual(windows[0]["detail"], "$10.00 of $49.00")
         self.assertIsNone(windows[0]["resetsAt"])
         self.assertEqual(plan, "Kilo Pass Pro")
 
     def test_batch_keyed_by_procedure_index_is_read_the_same_way(self):
-        windows, credits, _ = usage.parse_kilo_usage({"0": procedure(BLOCKS), "1": procedure(PASS)}, NOW)
+        windows, credits, _, _ = usage.parse_kilo_usage({"0": procedure(BLOCKS), "1": procedure(PASS)}, NOW)
         self.assertEqual(credits["remaining"], 12.5)
         self.assertEqual(len(windows), 1)
 
@@ -167,6 +167,31 @@ class FetchTests(unittest.TestCase):
             result = usage.fetch_kilo(3)
         self.assertEqual(result["errorKind"], "malformed")
         self.assertNotIn("sk-synthetic", result["message"])
+
+    def fetch_pass(self, pass_data, blocks=BLOCKS):
+        with mock.patch.dict(os.environ, {"KILO_API_KEY": "sk-synthetic"}), \
+                mock.patch.object(usage, "http_json", return_value=[procedure(blocks), procedure(pass_data)]):
+            return usage.fetch_kilo(3)
+
+    def test_a_cancelled_pass_is_an_ended_subscription_without_its_last_month(self):
+        # Kilo keeps the pass record after cancellation; its own client counts only these statuses as live.
+        for status in ("canceled", "unpaid", "incomplete_expired"):
+            with self.subTest(status=status):
+                result = self.fetch_pass({"subscription": {**PASS["subscription"], "status": status}})
+                self.assertEqual((result["status"], result["plan"], result["windows"]), ("ok", "Kilo Pass Starter", []))
+                self.assertEqual(result["subscription"], {"ended": True})
+                self.assertEqual(result["credits"]["remaining"], 12.5, "prepaid credits are not the pass")
+
+    def test_a_cancelled_pass_without_credits_is_still_a_reading(self):
+        result = self.fetch_pass({"subscription": {**PASS["subscription"], "status": "canceled"}}, blocks={})
+        self.assertEqual((result["status"], result["subscription"], result["credits"]), ("ok", {"ended": True}, None))
+
+    def test_a_live_pass_keeps_its_month_and_has_not_ended(self):
+        for status in ("active", "past_due", "trialing", "Active", None):
+            with self.subTest(status=status):
+                result = self.fetch_pass({"subscription": {**PASS["subscription"], "status": status}})
+                self.assertEqual([window["id"] for window in result["windows"]], ["pass"])
+                self.assertNotIn("subscription", result)
 
     def test_detector_follows_the_cli_auth_file(self):
         self.assertFalse(usage.detect_kilo())

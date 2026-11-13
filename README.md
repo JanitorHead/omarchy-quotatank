@@ -127,7 +127,7 @@ Every limit card has a meter and a forecast: a dashed stretch after the fill sho
 
 ![Three panels: Codex with a used-up weekly limit and when it comes back, OpenCode Go with a sign-in expired card that quotes the command to run, and two Claude accounts both used up with a gap until the reset](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/states.png)
 
-When something is wrong, the panel says what and what to do: a used-up limit names when it comes back, a failed refresh names the command to run, and a drained balance says it needs topping up. A signed-out provider has a **Sign in** button; the panel refreshes on its own until the sign-in lands. An old reading fades and says how old it is.
+When something is wrong, the panel says what and what to do: a used-up limit names when it comes back, a failed refresh names the command to run, a drained balance says it needs topping up, and a subscription that is over reads **Subscription ended** and counts toward nothing. A signed-out provider has a **Sign in** button; the panel refreshes on its own until the sign-in lands. An old reading fades and says how old it is.
 
 ### Meter styles
 
@@ -349,7 +349,7 @@ omarchy-shell janitorhead.quotatank costs
 omarchy-shell janitorhead.quotatank refresh
 ```
 
-The other commands are `open`, `close`, `toggle`, `show`, `hide`, `next`, `configure`, `configureProviders`, `configureCosts`, and `exportJson`. While hide-emails is on, `exportJson` writes numbered account labels instead of identities.
+The other commands are `open`, `close`, `toggle`, `show`, `hide`, `next`, `configure`, `configureProviders`, `configureCosts`, and `exportJson`. While hide-emails is on, `exportJson` writes numbered account labels instead of identities. It marks each provider and account with `subscriptionEnded`.
 
 ## Documentation
 

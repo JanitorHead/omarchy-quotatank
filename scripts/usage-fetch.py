@@ -291,6 +291,12 @@ def base_provider(provider_id: str) -> dict[str, Any]:
     }
 
 
+def mark_subscription_ended(result: dict[str, Any]) -> dict[str, Any]:
+    """`result` marked as an account whose provider says its subscription is over, in place (backend contract)."""
+    result["subscription"] = {"ended": True}
+    return result
+
+
 def error_provider(provider_id: str, kind: str, message: str, http_status: int | None = None) -> dict[str, Any]:
     result = base_provider(provider_id)
     result.update(status="error", errorKind=kind, message=clean_message(message))
@@ -3620,6 +3626,8 @@ def fetch_amp(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
 
 KILO_PROCEDURES = ("user.getCreditBlocks", "kiloPass.getState")
 KILO_PASS_TIERS = {"tier_19": "Starter", "tier_49": "Pro", "tier_199": "Expert"}
+# Kilo keeps a pass after it is cancelled; its own client counts only these statuses as a live pass.
+KILO_LIVE_PASS_STATUSES = ("active", "past_due", "trialing")
 
 
 def kilo_usage_url() -> str:
@@ -3659,8 +3667,9 @@ def kilo_result(entry: Any) -> Any:
     return data if data is not None else result.get("json")
 
 
-def parse_kilo_usage(payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str]:
-    """The prepaid credit balance (amounts are millionths of a dollar) and the Kilo Pass month."""
+def parse_kilo_usage(payload: Any, now: float) -> tuple[list[dict[str, Any]], dict[str, Any] | None, str, bool]:
+    """The prepaid credit balance (amounts are millionths of a dollar), the Kilo Pass month, and whether the pass
+    has ended. An ended pass gives no month: its last one is not usable."""
     if isinstance(payload, dict):
         entries = [payload] if "result" in payload or "error" in payload \
             else [payload.get(str(index)) for index in range(len(KILO_PROCEDURES))]
@@ -3685,15 +3694,18 @@ def parse_kilo_usage(payload: Any, now: float) -> tuple[list[dict[str, Any]], di
                        "used": round(max(0.0, total - remaining), 2) if total is not None else None, "limit": None,
                        "remaining": round(remaining, 2), "total": round(total, 2) if total is not None else None,
                        "unlimited": False, "resetCreditsAvailable": None, "spendable": round(remaining, 2), "spend": {}}
-    windows, plan = [], ""
+    windows, plan, ended = [], "", False
     subscription = pass_data.get("subscription") if isinstance(pass_data, dict) else None
     if isinstance(subscription, dict):
+        status = subscription.get("status")
+        status = status.strip().lower() if isinstance(status, str) else ""
+        ended = status != "" and status not in KILO_LIVE_PASS_STATUSES
         base = number(subscription.get("currentPeriodBaseCreditsUsd"))
         bonus = max(0.0, number(subscription.get("currentPeriodBonusCreditsUsd")) or 0.0)
         spent = number(subscription.get("currentPeriodUsageUsd"))
         reset = next((stamp for key in ("nextBillingAt", "nextRenewalAt", "renewsAt", "renewAt")
                       if (stamp := utc_timestamp(subscription.get(key)))), None)
-        if base is not None and spent is not None and base + bonus > 0:
+        if not ended and base is not None and spent is not None and base + bonus > 0:
             window = money_window("pass", "Kilo Pass · Monthly limit", max(0.0, spent), base + bonus, None, reset, now)
             window["windowSeconds"] = THIRTY_DAYS
             if bonus:
@@ -3701,9 +3713,9 @@ def parse_kilo_usage(payload: Any, now: float) -> tuple[list[dict[str, Any]], di
             windows.append(window)
         tier = str(subscription.get("tier") or "").strip()
         plan = clean_message("Kilo Pass " + KILO_PASS_TIERS.get(tier, tier)) if tier else "Kilo Pass"
-    if not windows and credits is None:
+    if not windows and credits is None and not ended:
         raise ProviderFailure("malformed", "Kilo returned no credit balance.")
-    return windows, credits, plan
+    return windows, credits, plan, ended
 
 
 @provider_detector("kilo")
@@ -3724,7 +3736,7 @@ def fetch_kilo(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
     try:
         payload = http_json(kilo_usage_url(), {"Authorization": "Bearer " + token, "Accept": "application/json",
                                                "User-Agent": SIGNIN_USER_AGENT}, timeout)
-        windows, credits, plan = parse_kilo_usage(payload, time.time())
+        windows, credits, plan, ended = parse_kilo_usage(payload, time.time())
     except ProviderFailure as exc:
         if exc.kind == "expired":
             message = ("Kilo rejected the saved key. Enter a new one under Settings → Providers." if origin == "key"
@@ -3733,7 +3745,7 @@ def fetch_kilo(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
         return failure_provider(provider_id, exc)
     result = base_provider(provider_id)
     result.update(plan=plan, source="Kilo API", windows=windows, credits=credits)
-    return result
+    return mark_subscription_ended(result) if ended else result
 
 
 # --------------------------------------------------------------- Codebuff
@@ -5832,24 +5844,28 @@ def alibaba_windows(quota: dict[str, Any], now: float) -> tuple[list[dict[str, A
     return windows, figures
 
 
-def parse_alibaba(payload: Any, now: float) -> tuple[list[dict[str, Any]], str, str]:
-    """Windows, plan and a notice from the instance query. A rejected key raises `expired`."""
+def parse_alibaba(payload: Any, now: float) -> tuple[list[dict[str, Any]], str, str, bool]:
+    """Windows, plan, a notice, and whether the plan has ended, from the instance query. A rejected key raises
+    `expired`."""
     data = alibaba_expand(payload)
     if not isinstance(data, dict):
         raise ProviderFailure("malformed", "Alibaba Coding Plan returned unreadable quota data.")
     alibaba_check_status(data)
     instances = dict_list(alibaba_nested(ALIBABA_INSTANCE_KEYS, data, alibaba_list))
     instance = alibaba_active_instance(instances, now)
+    plan = alibaba_plan(instance, data)
+    # Every instance dead (or the plan itself, without instances): it has ended, and its last quota is no use.
+    if all(alibaba_active_signal(node, now) < 0 for node in instances or [data]):
+        return [], plan, "", True
     # With several instances, a live one owns the quota; another instance's numbers are never borrowed.
     scoped = len(instances) > 1 and instance is not None and alibaba_active_signal(instance, now) > 0
     quota = alibaba_quota_in(instance) if instance is not None else None
     if quota is None and not scoped:
         quota = alibaba_quota_in(data)
-    plan = alibaba_plan(instance, data)
     windows, figures = alibaba_windows(quota, now) if quota is not None else ([], False)
     if figures:
         notice = "" if windows else "Alibaba Coding Plan reported no usable quota for this key."
-        return windows, plan, notice
+        return windows, plan, notice, False
     if alibaba_login_required(data):
         raise ProviderFailure(
             "unsupported",
@@ -5858,7 +5874,7 @@ def parse_alibaba(payload: Any, now: float) -> tuple[list[dict[str, Any]], str, 
         )
     live = instance if instance is not None else data
     if alibaba_active_signal(live, now) > 0:
-        return [], plan, "Alibaba Coding Plan reports an active plan but no quota figures for this key."
+        return [], plan, "Alibaba Coding Plan reports an active plan but no quota figures for this key.", False
     raise ProviderFailure("malformed", "Alibaba Coding Plan returned no quota data.")
 
 
@@ -5895,20 +5911,20 @@ def fetch_alibaba(timeout: float, key_file: Path | None = None) -> dict[str, Any
         return missing
     now = time.time()
 
-    def read(gateway: str) -> tuple[list[dict[str, Any]], str, str]:
+    def read(gateway: str) -> tuple[list[dict[str, Any]], str, str, bool]:
         body = {"queryCodingPlanInstanceInfoRequest": {"commodityCode": ALIBABA_GATEWAYS[gateway][1]}}
         payload = http_json(alibaba_quota_url(gateway), alibaba_headers(token, gateway), timeout, body)
         return parse_alibaba(payload, now)
 
     try:
-        gateway, (windows, plan, notice) = first_accepting_host(tuple(ALIBABA_GATEWAYS), read)
+        gateway, (windows, plan, notice, ended) = first_accepting_host(tuple(ALIBABA_GATEWAYS), read)
     except ProviderFailure as exc:
         return keyed_error(provider_id, exc, "Alibaba Coding Plan")
     result = base_provider(provider_id)
     result.update(plan=plan, source=ALIBABA_GATEWAYS[gateway][3], windows=windows)
     if notice:
         result["notice"] = notice
-    return result
+    return mark_subscription_ended(result) if ended else result
 
 # --------------------------------------------------------------- Command Code
 #
@@ -7412,17 +7428,17 @@ def parse_mimo_balance(data: Any) -> dict[str, Any]:
                            granted=usd(fields.get("giftBalance")), toppedUp=usd(fields.get("cashBalance")))
 
 
-def parse_mimo_plan(data: Any) -> tuple[str, int | None, str]:
-    """The plan's name, when its month ends, and a notice. An account without a Token Plan pays as it
-    goes. The code can carry the billing period (`lite:year`); `currentPeriodEnd` is UTC wall time."""
+def parse_mimo_plan(data: Any) -> tuple[str, int | None, bool]:
+    """The plan's name, when its month ends, and whether it has ended (`expired`). An account without a Token
+    Plan pays as it goes. The code can carry the billing period (`lite:year`); `currentPeriodEnd` is UTC wall time."""
     fields = data if isinstance(data, dict) else {}
     code = str(fields.get("planCode") or "").split(":")[0].strip()
     if not code:
-        return MIMO_PAY_AS_YOU_GO, None, ""
+        return MIMO_PAY_AS_YOU_GO, None, False
     plan = "Token Plan " + code.title()
     if fields.get("expired") is True:
-        return plan, None, f"The Xiaomi MiMo {plan} has expired."
-    return plan, utc_timestamp(fields.get("currentPeriodEnd")), ""
+        return plan, None, True
+    return plan, utc_timestamp(fields.get("currentPeriodEnd")), False
 
 
 def parse_mimo_usage(data: Any, resets_at: int | None) -> list[dict[str, Any]]:
@@ -7456,17 +7472,17 @@ def fetch_mimo(timeout: float, key_file: Path | None = None) -> dict[str, Any]:
     except ProviderFailure as exc:
         return keyed_error(provider_id, exc, "Xiaomi MiMo",
                            fix="Paste a fresh Cookie header under Settings → Providers.")
-    plan, windows, notice = "", [], ""
+    plan, windows, ended = "", [], False
     # The Token Plan adds to the balance: a failed plan request never hides what was read.
     try:
-        plan, resets_at, notice = parse_mimo_plan(mimo_data("/tokenPlan/detail", headers, deadline))
-        if plan != MIMO_PAY_AS_YOU_GO and not notice:
+        plan, resets_at, ended = parse_mimo_plan(mimo_data("/tokenPlan/detail", headers, deadline))
+        if plan != MIMO_PAY_AS_YOU_GO and not ended:
             windows = parse_mimo_usage(mimo_data("/tokenPlan/usage", headers, deadline), resets_at)
     except ProviderFailure:
         pass
     result = base_provider(provider_id)
-    result.update(plan=plan, source="Xiaomi MiMo console", windows=windows, credits=credits, notice=notice)
-    return result
+    result.update(plan=plan, source="Xiaomi MiMo console", windows=windows, credits=credits)
+    return mark_subscription_ended(result) if ended else result
 
 
 # --------------------------------------------------------------- CLIProxyAPI
@@ -8900,7 +8916,7 @@ MAX_COMPUTERS = 16
 PROXY_ID = re.compile(r"p-[0-9a-f]{8}")
 MAX_PROXIES = 4
 NOT_SET_UP_KINDS = frozenset({"no_credentials", "cli_unavailable"})
-READING_FIELDS = ("status", "errorKind", "message", "windows", "credits", "source", "fetchedAt", "plan")
+READING_FIELDS = ("status", "errorKind", "message", "windows", "credits", "source", "fetchedAt", "plan", "subscription")
 
 
 def parse_computers(values: list[str]) -> list[tuple[str, str]]:

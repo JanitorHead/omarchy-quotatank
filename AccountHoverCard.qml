@@ -8,9 +8,9 @@ import qs.Ui as Ui
 // Hover card of a menu bar chip whose provider has two or more accounts (DESIGN §2.4), drawn from
 // UsageLogic.barHoverModel(). Same surface as Omarchy's popup cards. A header with the provider, the
 // account count and how accounts are chosen; a row per account (at most six, then "+N more") with its
-// dot, name, one status line, a 24 h sparkline and compact meters; a footer with when the reading was
-// taken. Rows are keyed by account, so a new reading updates them in place. It fades and scales in from
-// the chip, and it never takes focus or input.
+// dot, name, one status line, a 24 h sparkline and compact meters (none for an ended subscription); a footer
+// with when the reading was taken, or that the account in use has ended. Rows are keyed by account, so a
+// new reading updates them in place. It fades and scales in from the chip, and it never takes focus or input.
 Ui.BorderSurface {
   id: root
 
@@ -121,7 +121,7 @@ Ui.BorderSurface {
           required property string modelData
           required property int index
           readonly property var row: root.rowByKey[modelData]
-            || ({ name: "", inUse: false, counted: false, state: "unknown", status: "", tone: "dim", spark: [], account: null })
+            || ({ name: "", inUse: false, counted: false, state: "unknown", status: "", tone: "dim", ended: false, spark: [], account: null })
           readonly property bool spending: row.tone === "accent"
 
           objectName: "hoverCardRow-" + index
@@ -207,6 +207,7 @@ Ui.BorderSurface {
 
           AccountMeters {
             id: meters
+            visible: !accountRow.row.ended
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             width: Style.space(96)
@@ -229,6 +230,7 @@ Ui.BorderSurface {
       color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
     }
 
+    // The footer is always there, so the notice takes the reading time's place instead of moving the rows.
     Item {
       width: parent.width
       height: Math.max(readLabel.implicitHeight, detailsLabel.implicitHeight)
@@ -236,8 +238,21 @@ Ui.BorderSurface {
       PlainText {
         id: readLabel
         objectName: "hoverCardRead"
+        visible: !noticeLabel.visible
         text: root.model ? String(root.model.readText || "") : ""
         color: root.model && root.model.stale ? root.urgent : root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      PlainText {
+        id: noticeLabel
+        objectName: "hoverCardNotice"
+        visible: text !== ""
+        width: Math.max(0, parent.width - detailsLabel.implicitWidth - Style.spacing.lg)
+        text: root.model ? String(root.model.notice || "") : ""
+        color: root.urgent
+        elide: Text.ElideRight
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
       }

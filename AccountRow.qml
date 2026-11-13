@@ -9,6 +9,7 @@ import qs.Ui as Ui
 
 // One account in the ACCOUNTS list: state dot · name and one status line · short and long limits, which
 // move while the account spends · action (the "in use" tag, a Use button, or a proxy account's banked resets).
+// An ended subscription shows no limits: there is nothing left to spend.
 Ui.BorderSurface {
   id: root
 
@@ -22,6 +23,7 @@ Ui.BorderSurface {
   property string severity: "unknown"
   property string statusText: ""
   property string statusTone: "dim"
+  property bool ended: false
   property bool inUse: false
   property bool canUse: false
   property bool useBusy: false
@@ -159,7 +161,7 @@ Ui.BorderSurface {
       id: textColumn
       anchors.left: dot.right
       anchors.leftMargin: Style.spacing.controlGap
-      anchors.right: meters.left
+      anchors.right: root.ended ? action.left : meters.left
       anchors.rightMargin: Style.spacing.lg
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.spacing.xxs
@@ -189,6 +191,7 @@ Ui.BorderSurface {
     AccountMeters {
       id: meters
       objectName: "accountMeters"
+      visible: !root.ended
       anchors.right: action.left
       anchors.rightMargin: root.hasAction ? Style.spacing.lg : 0
       anchors.verticalCenter: parent.verticalCenter

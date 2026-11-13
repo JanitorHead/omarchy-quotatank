@@ -101,6 +101,7 @@ ShellRoot {
   readonly property var accounts: [
     login("work", { active: true, plan: "Claude Max 5x", activity: { lastIncreaseAt: now - 60 },
       windows: [session(70, 0.01), weekly(31)] }),
+    login("old", { plan: "Claude Pro", subscription: { ended: true } }),
     login("personal", { plan: "Claude Max 20x" }),
     login("spare", { plan: "Claude Pro", windows: [session(100, 0, 3600), weekly(50)] }),
     login("broken", { status: "error", errorKind: "expired", windows: [] })
@@ -114,7 +115,7 @@ ShellRoot {
   Component.onCompleted: {
     motion = create("Motion.qml", { preference: "reduced" })
     list = create("AccountList.qml", { width: 420, providerId: "claude", accounts: accounts,
-      names: ["Work", "Personal", "Spare", "Broken"], accountState: stateOf("single"), nowSeconds: now, motion: motion })
+      names: ["Work", "Old", "Personal", "Spare", "Broken"], accountState: stateOf("single"), nowSeconds: now, motion: motion })
     list.useRequested.connect(function(accountId) { root.used = root.used.concat([accountId]) })
     rising = create("LimitCard.qml", { width: 420, window: session(70, 0.01), nowSeconds: now, motion: motion })
     quiet = create("LimitCard.qml", { width: 420, window: Object.assign(session(31, 0), { label: markup }), nowSeconds: now, motion: motion })
@@ -146,11 +147,16 @@ ShellRoot {
 
   function checkComponents() {
     // Rows: one per account, each with the most useful status line.
-    check(list.view.count === 4, "a row per account")
+    check(list.view.count === 5, "a row per account")
     check(rowText("work") === "spending now", "spending now beats the plan: " + rowText("work"))
     check(rowText("personal") === "Claude Max 20x", "an idle account shows its plan: " + rowText("personal"))
     check(rowText("spare").indexOf("used up · back ") === 0, "used up says when it is back: " + rowText("spare"))
     check(rowText("broken") === "sign-in expired", "a failed reading says why: " + rowText("broken"))
+    check(rowText("old") === "Subscription ended", "an ended subscription says so: " + rowText("old"))
+    check(!find(list.rowFor("old"), "accountMeters").visible && find(list.rowFor("work"), "accountMeters").visible,
+      "an ended subscription shows no meters")
+    check(list.rowFor("old").severity === "error", "an ended subscription has the error ring")
+    check(list.view.itemAt(4) === list.rowFor("old"), "an ended subscription is the last row")
     check(list.rowFor("work").inUse && !list.rowFor("work").canUse, "the account in use is tagged, not offered")
     check(list.rowFor("personal").useButton.visible, "another login offers Use")
     check(list.rowFor("work").counted && !list.rowFor("personal").counted, "the chip's account has the filled dot")
@@ -162,7 +168,8 @@ ShellRoot {
     // Together: least headroom first, by moves that keep each row's delegate.
     workRow = list.rowFor("work")
     check(list.view.itemAt(0) === workRow, "Work starts first")
-    check(JSON.stringify(stateOf("together").order) === "[2,0,1,3]", "together: least headroom first")
+    check(JSON.stringify(stateOf("together").order) === "[3,0,2,4,1]", "together: least headroom first, ended last: "
+      + JSON.stringify(stateOf("together").order))
     list.accountState = stateOf("together")
 
     // Limit cards: a dashed forecast where the pace runs out before the reset, none without a pace.
@@ -235,7 +242,7 @@ ShellRoot {
       root.ticks++
       root.check(root.ticks < 400, "timed out in phase " + root.phase)
       if (root.phase === 0) {
-        if (root.list.view.count < 4) return
+        if (root.list.view.count < 5) return
         root.checkComponents()
         root.phase++
       } else if (root.phase === 1 && root.refreshes > 0) {

@@ -195,6 +195,13 @@ ShellRoot {
       check(namedChild(dots, "accountDot-1").dashed && namedChild(dots, "accountDot-1").dotState === "error",
         "a failed account is a dashed ring")
       check(!namedChild(dots, "accountDot-0").dashed, "a healthy account keeps a solid ring")
+      // One at a time, an ended subscription in use stays counted: a dashed error ring, after the live login.
+      var ended = provider([account("main", "Work", 0, { active: true, windows: [], subscription: { ended: true } }),
+        account("personal", "Personal", 30)], { windows: [], subscription: { ended: true } })
+      dots.strip = strip(ended, [0], "single")
+      var endedDot = namedChild(dots, "accountDot-1")
+      check(endedDot.info.index === 0 && endedDot.counted && endedDot.dashed && endedDot.dotState === "error",
+        "an ended account in use is a counted dashed ring, last: " + JSON.stringify(endedDot.info))
       dots.stale = true
       check(namedChild(dots, "accountDot-0").dashed && !namedChild(dots, "accountDotsFill").shown,
         "a stale reading dashes every ring and drops the fill")
@@ -264,6 +271,17 @@ ShellRoot {
       card.model = logic.hover(crowd, logic.state(crowd, Object.assign({ modes: "{}", nowSeconds: now }, thresholds)), { nowSeconds: now })
       check(namedChildren(card, "hoverCardRow-", []).length === 6, "the card lists six accounts at most")
       check(namedChild(card, "hoverCardMore").text === "+3 more · Click for details", "and says how many more: " + namedChild(card, "hoverCardMore").text)
+      // One at a time with the account in use ended, the card says to switch.
+      var notice = namedChild(card, "hoverCardNotice")
+      check(!notice.visible, "no notice while the account in use is live")
+      var stuck = provider([account("main", "Work", 0, { active: true, windows: [], subscription: { ended: true } }),
+        account("personal", "Personal", 30)], { windows: [], subscription: { ended: true } })
+      card.model = logic.hover(stuck, logic.state(stuck, Object.assign({ modes: '{"claude":"single"}', nowSeconds: now }, thresholds)),
+        { nowSeconds: now })
+      check(notice.visible && notice.text === "Subscription ended: switch account", "the card says the account in use has ended: "
+        + notice.text)
+      check(!namedChild(card, "hoverCardRead").visible, "in the footer, where the reading time was")
+      check(namedChild(card, "hoverCardStatus-1").text === "Subscription ended", "and its row says so")
       // Provider tiles keep their delegates across readings: a tick changes figures, not tiles.
       var tileOptions = function (figure) {
         return ["claude", "codex"].map(function (id) { return { value: id, label: id, name: id, iconUrl: "", mark: "C", figure: figure,

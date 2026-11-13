@@ -890,7 +890,8 @@ function exportWindows(rows, nowSeconds) {
   return result
 }
 
-// Account identities become "Account N" unless the caller explicitly disables hiding.
+// Account identities become "Account N" unless the caller explicitly disables hiding. `subscriptionEnded`
+// says, for the provider (its account in use) and each account, whether the subscription is over.
 function exportProviders(providers, nowSeconds, hideEmails) {
   var result = []
   var list = listOrEmpty(providers)
@@ -901,6 +902,7 @@ function exportProviders(providers, nowSeconds, hideEmails) {
     for (var j = 0; j < accounts.length; j++) {
       accountRows.push({
         label: hideEmails ? "Account " + (j + 1) : String(accounts[j].account || "Account " + (j + 1)),
+        subscriptionEnded: subscriptionEnded(accounts[j]),
         windows: exportWindows(accounts[j].windows, nowSeconds)
       })
     }
@@ -908,6 +910,7 @@ function exportProviders(providers, nowSeconds, hideEmails) {
       id: String(provider.id || ""),
       name: String(provider.name || provider.id || ""),
       status: String(provider.status || ""),
+      subscriptionEnded: subscriptionEnded(provider),
       windows: exportWindows(provider.windows, nowSeconds),
       accounts: accountRows
     })
@@ -980,13 +983,15 @@ function notificationBody(text) {
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
 
-// Providers that get a bar chip: a reading for the chosen window, money left to spend, or a failure the user must see.
+// Providers that get a bar chip: a reading for the chosen window, money left to spend, or a failure or an
+// ended subscription the user must see.
 function barProviders(providers, selector) {
   var result = []
   var list = listOrEmpty(providers)
   for (var i = 0; i < list.length; i++) {
     var chosen = typeof selector === "function" ? selector(list[i]) : selector
-    if (String(list[i].status) === "error" || remainingForWindow(list[i], chosen) !== null || spendable(list[i]) !== null)
+    if (String(list[i].status) === "error" || subscriptionEnded(list[i]) || remainingForWindow(list[i], chosen) !== null
+        || spendable(list[i]) !== null)
       result.push(list[i])
   }
   return result
@@ -2949,6 +2954,13 @@ function providerAccounts(provider) {
   return listOrEmpty(provider && provider.accounts)
 }
 
+// Whether the reading's provider says its subscription is over (backend contract, `subscription`). An ended
+// account leaves the pool: it never counts toward least headroom, the runway or the notices, and the chip
+// shows it only while it is the account in use, one at a time.
+function subscriptionEnded(reading) {
+  return !!reading && !!reading.subscription && reading.subscription.ended === true
+}
+
 // Whether every account of the provider is read through a proxy, which rotates them: they are spent together.
 function proxyPool(provider) {
   var accounts = providerAccounts(provider)
@@ -3063,7 +3075,8 @@ function summaryAccountIndex(provider) {
 
 // Of `indexes` (every account when null), the one closest to a limit that still has room. When none
 // has room, the first used-up one; -1 when no account reports usage. A used-up account is skipped
-// while another has room: together, new sessions spend from the ones that still can.
+// while another has room: together, new sessions spend from the ones that still can. Ended subscriptions
+// are never chosen.
 function leastHeadroomIndex(accounts, indexes) {
   var list = listOrEmpty(accounts)
   var all = indexes === null || indexes === undefined
@@ -3073,7 +3086,7 @@ function leastHeadroomIndex(accounts, indexes) {
   var empty = -1
   for (var k = 0; k < count; k++) {
     var i = all ? k : indexes[k]
-    var headroom = minRemaining(list[i])
+    var headroom = subscriptionEnded(list[i]) ? null : minRemaining(list[i])
     if (headroom === null) continue
     if (headroom <= 0) {
       if (empty < 0) empty = i
@@ -3088,17 +3101,24 @@ function leastHeadroomIndex(accounts, indexes) {
 }
 
 // Indexes (ascending) of the accounts the chip counts. One at a time: the in-use account, else the
-// summary's. Together: every account spending now, else the one with the least headroom.
+// summary's, even once its subscription has ended (new sessions still go there). Together: every account
+// of the pool spending now, else the one of the pool with the least headroom; without a limit to compare,
+// the summary's account, or the pool's first when that one has ended.
 function countedAccounts(provider, mode, nowSeconds, recentByAccount) {
   var accounts = providerAccounts(provider)
   if (accounts.length === 0) return []
-  if (mode !== "together") return [summaryAccountIndex(provider)]
+  var summary = summaryAccountIndex(provider)
+  if (mode !== "together") return [summary]
   var spending = []
   for (var i = 0; i < accounts.length; i++)
-    if (spendingNow(accounts[i], nowSeconds, recentByAccount)) spending.push(i)
+    if (!subscriptionEnded(accounts[i]) && spendingNow(accounts[i], nowSeconds, recentByAccount)) spending.push(i)
   if (spending.length > 0) return spending
   var least = leastHeadroomIndex(accounts, null)
-  return [least >= 0 ? least : summaryAccountIndex(provider)]
+  if (least >= 0) return [least]
+  if (!subscriptionEnded(accounts[summary])) return [summary]
+  for (var k = 0; k < accounts.length; k++)
+    if (!subscriptionEnded(accounts[k])) return [k]
+  return [summary]
 }
 
 // Where an account's reading comes from (its `origin`): "omarchy" (a login in Omarchy's registry),
@@ -3135,16 +3155,19 @@ function accountSourceLabel(kind) {
 
 // Row order as account indexes. One at a time keeps the stable order (Omarchy's registry order, then
 // keys, then omp). Together puts the account with the least headroom first; accounts without a reading
-// go last. Ties keep the stable order, so rows only move when headroom really changes places.
+// go last. Ended subscriptions go after all of them. Ties keep the stable order, so rows only move when
+// headroom really changes places.
 function accountOrder(accounts, mode) {
   var list = listOrEmpty(accounts)
   var rows = []
   for (var i = 0; i < list.length; i++) {
     var headroom = minRemaining(list[i])
     var rank = ACCOUNT_SOURCE_RANK[accountSourceKind(list[i])]
-    rows.push({ index: i, rank: rank === undefined ? 0 : rank, headroom: headroom === null ? Infinity : headroom })
+    rows.push({ index: i, ended: subscriptionEnded(list[i]), rank: rank === undefined ? 0 : rank,
+      headroom: headroom === null ? Infinity : headroom })
   }
   rows.sort(function (a, b) {
+    if (a.ended !== b.ended) return a.ended ? 1 : -1
     if (mode === "together" && a.headroom !== b.headroom) return a.headroom < b.headroom ? -1 : 1
     if (a.rank !== b.rank) return a.rank - b.rank
     return a.index - b.index
@@ -3203,13 +3226,14 @@ function accountUsedUp(account) {
   return found
 }
 
-// One status line for an account row, most useful first: a failed or paused reading, a limit used up
-// (with when it is back), a last-known reading, spending now (`spending`, from accountState), a recent
-// switch or reset, the plan, the source. `event` is this account's newest {kind: "switch"|"reset", at},
+// One status line for an account row, most useful first: an ended subscription, a failed or paused reading,
+// a limit used up (with when it is back), a last-known reading, spending now (`spending`, from accountState),
+// a recent switch or reset, the plan, the source. `event` is this account's newest {kind: "switch"|"reset", at},
 // or null. Returns {kind, text, at, tone}; tone is "urgent", "accent" or "dim", and `at` is a time to
 // append.
 function accountStatusLine(account, spending, nowSeconds, event) {
   if (!account) return { kind: "", text: "", at: null, tone: "dim" }
+  if (subscriptionEnded(account)) return { kind: "ended", text: "Subscription ended", at: null, tone: "urgent" }
   var status = String(account.status || "")
   if (status === "error") {
     var kind = String(account.errorKind || "")
@@ -3290,10 +3314,10 @@ function accountModeText(provider, mode) {
 
 // An account's ring wherever it has a dot (chip, tile, hover card, row): "ok", "warning" or "critical"
 // from its tightest limit, so an account blocked on a used-up weekly limit is critical whatever window a
-// chip shows; "error" for a failed or paused reading, "unknown" without one.
+// chip shows; "error" for a failed or paused reading or an ended subscription, "unknown" without one.
 function accountRingState(account, warningThreshold, criticalThreshold) {
   if (!account) return "unknown"
-  if (account.status === "error" || account.status === "disabled") return "error"
+  if (account.status === "error" || account.status === "disabled" || subscriptionEnded(account)) return "error"
   if (account.status !== "ok") return "unknown"
   var level = severity(account, warningThreshold, criticalThreshold)
   return level === "ok" || level === "warning" || level === "critical" ? level : "unknown"
@@ -3550,7 +3574,8 @@ function windowPhrase(row) {
 // One at a time: the in-use account runs down at the current pace, then the next one (in `order`)
 // takes over at that same pace, and so on. Together: every account runs down side by side at its own
 // pace. Times are seconds from now, capped at the reset. A provider without accounts is its own single
-// account. Null without a short window that resets in the future.
+// account. Only the pool gets lanes (ended subscriptions none); when the counted account has ended, the
+// pool's first account in `order` leads. Null without a pool, or without a short window that resets in the future.
 // Lane kinds: "runs" (empties before the reset), "lasts", "takesover", "notneeded", "usedup",
 // "unavailable"; together, a lane not being spent is marked `idle`. `gap` is the time with nothing
 // left before the reset.
@@ -3559,18 +3584,20 @@ function accountRunway(provider, mode, counted, nowSeconds, order) {
   if (accounts.length === 0 && provider) accounts = [provider]
   var now = finiteOrNull(nowSeconds)
   if (accounts.length === 0 || now === null) return null
+  var source = listOrEmpty(order).length === accounts.length ? listOrEmpty(order) : accountOrder(accounts, mode)
+  var pool = Array.prototype.filter.call(source, function (index) { return !subscriptionEnded(accounts[index]) })
+  if (pool.length === 0) return null
   var countedList = listOrEmpty(counted).length > 0 ? listOrEmpty(counted) : [0]
   var base = leastHeadroomIndex(accounts, countedList)
-  if (base < 0) base = countedList[0]
+  if (base < 0) base = contains(pool, countedList[0]) ? countedList[0] : pool[0]
   var baseRow = accountMeterRows(accounts[base]).short
   var resetsAt = finiteOrNull(baseRow && baseRow.resetsAt)
   if (!baseRow || resetsAt === null || resetsAt <= now) return null
   var horizon = resetsAt - now
   var sequence = []
-  var source = listOrEmpty(order).length === accounts.length ? listOrEmpty(order) : accountOrder(accounts, mode)
   if (mode !== "together") sequence.push(base)
-  for (var s = 0; s < source.length; s++)
-    if (mode === "together" || source[s] !== base) sequence.push(source[s])
+  for (var s = 0; s < pool.length; s++)
+    if (mode === "together" || pool[s] !== base) sequence.push(pool[s])
 
   function reading(index) {
     var account = accounts[index]
@@ -3746,7 +3773,8 @@ function accountEvents(previous, providers, nowSeconds, warningThreshold) {
             accountId: accountId, from: "", fromUsed: null, label: "", at: now,
             where: there ? String(there.name || "") : "" })
       }
-      var rows = account.status === "ok" ? listOrEmpty(account.windows) : []
+      // An ended subscription's limits are no use: their resets make no notice.
+      var rows = account.status === "ok" && !subscriptionEnded(account) ? listOrEmpty(account.windows) : []
       for (var w = 0; w < rows.length; w++) {
         var row = rows[w]
         var used = windowUsed(row)
@@ -3840,7 +3868,8 @@ function barAccountInitials(names) {
 
 // The counted account whose figure the chip shows: the one with the least headroom on the chip's
 // window, so a chip never claims more room than the busiest account has. A used-up account only wins
-// when every counted account is used up: new sessions go where there is room. -1 without a counted
+// when every counted account is used up: new sessions go where there is room. An ended subscription only
+// when no other is counted: one at a time, the account in use stays on the chip. -1 without a counted
 // reading.
 function barValueIndex(provider, counted, selector) {
   var accounts = listOrEmpty(provider && provider.accounts)
@@ -3849,9 +3878,10 @@ function barValueIndex(provider, counted, selector) {
   var bestRank = Infinity
   for (var i = 0; i < wanted.length; i++) {
     var account = accounts[wanted[i]]
-    if (!account || account.status !== "ok") continue
+    var ended = subscriptionEnded(account)
+    if (!account || (account.status !== "ok" && !ended)) continue
     var left = remainingForWindow(account, selector)
-    var rank = (minRemaining(account) === 0 ? 1000 : 0) + (left === null ? 101 : left)
+    var rank = (ended ? 2000 : 0) + (minRemaining(account) === 0 ? 1000 : 0) + (left === null ? 101 : left)
     if (best < 0 || rank < bestRank) {
       best = wanted[i]
       bestRank = rank
@@ -4019,8 +4049,9 @@ function barAgoText(seconds) {
 // The hover card of a chip with several accounts (DESIGN §2.4), as plain text and values, from the
 // provider's accountState() so it says what the chip and Limits say. It lists every account up to
 // BAR_HOVER_ROWS; past that the counted ones, then those closest to a limit, and `more` for the rest.
-// Rows follow the dots' order and are keyed by account. `options`: nowSeconds,
-// extraKeys, readAtSeconds, stale, formatClock(epochSeconds) → "18:02".
+// Rows follow the dots' order and are keyed by account. `notice` says when the account in use, one at a
+// time, has ended: new sessions still go to it. `options`: nowSeconds, extraKeys, readAtSeconds, stale,
+// formatClock(epochSeconds) → "18:02".
 function barHoverModel(provider, state, options) {
   var opts = options || {}
   var accounts = listOrEmpty(provider && provider.accounts)
@@ -4055,7 +4086,10 @@ function barHoverModel(provider, state, options) {
     var readAt = finiteOrNull(activity.lastReadingAt)
     var status = "idle"
     var tone = "dim"
-    if (ring === "error") {
+    if (subscriptionEnded(account)) {
+      status = "Subscription ended"
+      tone = "urgent"
+    } else if (ring === "error") {
       status = errorReasonLabel(account.errorKind)
       tone = "urgent"
     } else if (blocked) {
@@ -4071,14 +4105,17 @@ function barHoverModel(provider, state, options) {
     var accountId = account.accountId
     rows.push({ key: accountId !== undefined && accountId !== null && accountId !== "" ? String(accountId) : "#" + i,
                 index: i, name: barAccountName(account, i, opts.extraKeys), inUse: state.inUse[i] === true,
-                counted: contains(counted, i), state: ring, status: status, tone: tone,
+                counted: contains(counted, i), state: ring, status: status, tone: tone, ended: subscriptionEnded(account),
                 spark: listOrEmpty(history.h24), account: account })
   }
+  var inUseEnded = !!state && state.mode === "single"
+    && counted.some(function (index) { return subscriptionEnded(accounts[index]) })
   var readAtSeconds = Number(opts.readAtSeconds) || 0
   var readText = readAtSeconds <= 0 ? "" : opts.stale
     ? "Read " + barAgoText(now - readAtSeconds) + " ago" : "Read at " + clock(readAtSeconds)
   return { title: providerShortName(provider) + " · " + accounts.length + " accounts",
            modeText: accountModeText(provider, state ? state.mode : "single"),
+           notice: inUseEnded ? "Subscription ended: switch account" : "",
            rows: rows, more: Math.max(0, accounts.length - rows.length), readText: readText, stale: !!opts.stale }
 }
 
@@ -4096,7 +4133,8 @@ function barAccessibleName(provider, state, options) {
     var account = accounts[i]
     var left = remainingForWindow(account, opts.selector)
     var shown = left === null ? null : opts.quotaMode === "Remaining" ? left : usedFromRemaining(left)
-    var figure = account.status === "error" ? errorReasonLabel(account.errorKind)
+    var figure = subscriptionEnded(account) ? "subscription ended"
+      : account.status === "error" ? errorReasonLabel(account.errorKind)
       : shown === null ? "no reading" : quotaText(shown, opts.quotaMode)
     var name = barAccountName(account, i, opts.extraKeys)
     parts.push(state && state.inUse[i] === true ? name + " in use, " + figure : name + " " + figure)

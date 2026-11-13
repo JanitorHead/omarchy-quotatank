@@ -181,6 +181,7 @@ Column {
         severity: root.accountState && accountIndex >= 0 ? String(root.accountState.rings[accountIndex]) : "unknown"
         statusText: root.statusText(status)
         statusTone: status.tone
+        ended: UsageLogic.subscriptionEnded(accountData)
         nowSeconds: root.nowSeconds
         requestAt: Number(UsageLogic.accountLiveAt(accountData, root.recentByAccount)) || 0
         meterStyle: root.meterStyle

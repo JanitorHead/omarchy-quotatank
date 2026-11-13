@@ -368,9 +368,9 @@ Ui.Panel {
   }
 
   // One overview tile: logo, short name, the most pressing figure on the chosen side, and a mini
-  // meter. Money providers show dollars on that side too. A failed refresh shows its short reason.
-  // A provider with several accounts shows the counted account with the least headroom and the dots
-  // of its account state, like its chip.
+  // meter. Money providers show dollars on that side too. A failed refresh shows its short reason, an
+  // ended subscription "ended". A provider with several accounts shows the counted account with the least
+  // headroom and the dots of its account state, like its chip.
   function providerTile(provider) {
     var id = String(provider.id)
     var failed = String(provider.status) === "error"
@@ -378,8 +378,9 @@ Ui.Panel {
     var accounts = UsageLogic.providerAccounts(provider)
     var state = accounts.length > 1 ? accountStateOf(provider) : null
     var reading = !failed && state && state.value >= 0 ? accounts[state.value] : provider
-    var money = failed ? null : UsageLogic.moneyView(reading, mode)
-    var remaining = failed ? null : UsageLogic.minRemaining(reading)
+    var ended = UsageLogic.subscriptionEnded(reading)
+    var money = failed || ended ? null : UsageLogic.moneyView(reading, mode)
+    var remaining = failed || ended ? null : UsageLogic.minRemaining(reading)
     var shown = remaining === null ? null : (mode === "Remaining" ? remaining : UsageLogic.usedFromRemaining(remaining))
     return {
       value: id,
@@ -387,13 +388,14 @@ Ui.Panel {
       name: String(provider.name || id),
       iconUrl: barIconUrl(provider),
       mark: UsageLogic.providerMark(id),
-      figure: failed ? UsageLogic.errorReasonLabel(provider.errorKind)
+      figure: ended ? "ended"
+        : failed ? UsageLogic.errorReasonLabel(provider.errorKind)
         : money !== null ? money.text
         : (shown === null ? "—" : UsageLogic.formatPercent(shown) + "%"),
       unit: money !== null ? money.unit : shown === null ? "" : (mode === "Remaining" ? "left" : "used"),
       fill: money !== null ? (money.share === null ? 0 : money.share / 100) : shown === null ? 0 : shown / 100,
-      alert: providerNeedsAttention(provider),
-      failed: failed,
+      alert: ended || providerNeedsAttention(provider),
+      failed: failed || ended,
       dots: state ? state.dots : null
     }
   }
@@ -463,6 +465,7 @@ Ui.Panel {
   function headlineFor(reading) {
     var empty = { text: "", urgent: false }
     var provider = reading
+    if (UsageLogic.subscriptionEnded(provider)) return { text: "Subscription ended", urgent: true }
     if (!provider || String(provider.status) !== "ok") return empty
     var rows = UsageLogic.listOrEmpty(provider.windows)
     var soonest = null
@@ -721,7 +724,9 @@ Ui.Panel {
       // A stale reading repeats what another computer said before it stopped answering: "none" leaves it out,
       // so the level noted before stays and nothing crosses a threshold again when it answers.
       var stale = provider.stale === true
-      var rows = UsageLogic.listOrEmpty(provider.windows)
+      // An ended subscription counts toward nothing: neither its limits nor its balance cross a threshold.
+      var ended = UsageLogic.subscriptionEnded(provider)
+      var rows = ended ? [] : UsageLogic.listOrEmpty(provider.windows)
       for (var j = 0; j < rows.length; j++) {
         var row = rows[j]
         readings.push({
@@ -732,7 +737,7 @@ Ui.Panel {
           mode: quotaModeFor(provider.id)
         })
       }
-      var money = UsageLogic.spendable(provider)
+      var money = ended ? null : UsageLogic.spendable(provider)
       if (money !== null) {
         var level = stale ? "none" : moneySeverityOf(provider)
         readings.push({
@@ -1332,7 +1337,9 @@ Ui.Panel {
           readonly property var limits: root.barLimitsFor(modelData.id)
           readonly property string quotaMode: root.quotaModeFor(modelData.id)
           readonly property var failure: accountChip ? reading : modelData
-          readonly property bool failed: String(failure.status) === "error"
+          // An ended subscription reads like a failure: one word, no figures, highlighted.
+          readonly property bool ended: UsageLogic.subscriptionEnded(reading)
+          readonly property bool failed: ended || String(failure.status) === "error"
           readonly property string blocking: failed ? "" : UsageLogic.blockingWindow(
             limits.top, UsageLogic.exactRemainingForWindow(reading, limits.top),
             limits.bottom, UsageLogic.exactRemainingForWindow(reading, limits.bottom))
@@ -1371,7 +1378,7 @@ Ui.Panel {
           readonly property string percentTag: topTag !== "" || !moneyChip || !root.barShowPeriods ? topTag
             : UsageLogic.rowPeriodTag(UsageLogic.windowRowFor(reading, topWindow, true))
           readonly property string percentLine: (percentTag ? percentTag + " " : "") + shownText + (topReset ? " · " + topReset : "")
-          readonly property string topText: failed ? UsageLogic.errorReasonLabel(failure.errorKind)
+          readonly property string topText: ended ? "ended" : failed ? UsageLogic.errorReasonLabel(failure.errorKind)
             : moneyChip ? moneyShown.text : percentLine
           readonly property string bottomText: moneyChip ? percentLine
             : (bottomTag ? bottomTag + " " : "") + secondaryText + (bottomReset ? " · " + bottomReset : "")
@@ -1409,8 +1416,8 @@ Ui.Panel {
               extraKeys: root.setting("extraKeys", "{}"), readAtSeconds: root.readingSeconds(modelData), stale: stale,
               formatClock: root.clockText })
             : null
-          readonly property string plainTooltip: failed
-            ? String(modelData.name || modelData.id) + " · " + root.errorBody(failure)
+          readonly property string plainTooltip: ended ? String(modelData.name || modelData.id) + " · Subscription ended"
+            : failed ? String(modelData.name || modelData.id) + " · " + root.errorBody(failure)
             : String(modelData.name || modelData.id)
             + (moneyChip ? (moneyShown.unit === "used" ? "\nSpent: " + moneyShown.text + " of " + UsageLogic.formatMoney(moneyShown.total, moneyShown.currency) : "")
               + "\nCan spend now: " + UsageLogic.formatMoney(money, moneyShown.currency) : "")

@@ -6,8 +6,14 @@ All notable changes to this project will be documented here. The format follows
 
 ## Unreleased
 
+### Added
+
+- **Ended subscriptions.** When Kilo Code, Xiaomi MiMo or Alibaba Coding Plan says an account's subscription is over (a cancelled Kilo Pass, an expired Token Plan, a Coding Plan whose every instance is expired or terminated), its row reads **Subscription ended** in the urgent colour, without meters, at the bottom of the list, and it counts toward nothing: not the account with the least headroom, the runway, or limit and balance notices. Its dot is a dashed error ring. One at a time, an ended account in use stays on the chip, as `ended`, and its hover card says **Subscription ended: switch account**. `exportJson` marks each provider and account with `subscriptionEnded`. Muse Code and Chutes keep their "no subscription" notice.
+
 ### Fixed
 
+- **A cancelled Kilo Pass no longer shows its last month as a live allowance.** Kilo keeps a cancelled pass with that month's figures; only an active, past-due or trialing pass counts now.
+- **An expired Alibaba Coding Plan no longer shows its last quota or an unreadable-data error**, and an expired Xiaomi MiMo Token Plan reads as an ended subscription beside its balance instead of a notice.
 - **The backend contract and the README describe 3.1.3's Claude resets as they work.** The contract still said Claude's banked resets clear the 5-hour and weekly limits, did not list the Fable weekly limit or the reset expiry that omp accounts now carry, and did not say that a signed-out Claude Code reading names no account. The README said every launch reset clears only the Fable weekly limit; the confirmation names what each one clears.
 
 ### Changed
