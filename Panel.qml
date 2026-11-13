@@ -147,7 +147,8 @@ Ui.Panel {
     ompActivity && ompActivity.recentByAccount ? ompActivity.recentByAccount : null, activityBackend.providers)
   readonly property var accountModeChoices: UsageLogic.parseAccountModes(setting("accountModes", "{}"))
   readonly property var accountStateOptions: ({ modes: accountModeChoices, nowSeconds: nowSeconds,
-    recentByAccount: recentByAccount, warningThreshold: warningThreshold, criticalThreshold: criticalThreshold })
+    recentByAccount: recentByAccount, warningThreshold: warningThreshold, criticalThreshold: criticalThreshold,
+    extraKeys: setting("extraKeys", "{}"), hideEmails: hideAccountEmails })
   readonly property var accountStates: {
     var states = {}
     for (var i = 0; i < providers.length; i++)
@@ -1969,6 +1970,13 @@ Ui.Panel {
               onUseRequested: function(accountId) { root.useAccount(accountId) }
               onResetRequested: function(accountId) { root.resetAccount(accountId) }
             }
+            OmpRouting {
+              objectName: "ompRouting"
+              width: parent.width
+              routing: root.providerState ? root.providerState.routing : null
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
           }
 
           // A slow first reading: placeholder blocks where the tiles and cards will be.
@@ -2282,18 +2290,6 @@ Ui.Panel {
                 width: limitsSection.width
                 account: root.detailAccount
                 nowSeconds: root.nowSeconds
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-              }
-
-              OmpRouting {
-                objectName: "ompRouting"
-                width: limitsSection.width
-                provider: root.providerSummary
-                nowSeconds: root.nowSeconds
-                mode: root.accountMode
-                extraKeys: root.setting("extraKeys", "{}")
-                hideEmails: root.hideAccountEmails
                 foreground: root.foreground
                 fontFamily: root.fontFamily
               }

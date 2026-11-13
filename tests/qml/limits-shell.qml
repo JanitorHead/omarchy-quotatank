@@ -124,6 +124,12 @@ ShellRoot {
     return { id: "claude", name: "Claude Code", status: "ok", windows: ompAccounts[0].windows, accounts: ompAccounts }
   }
   readonly property var ompCool: [ompWindow("session", 10, 7200, 18000), ompWindow("weekly", 30, 300000, 604800)]
+  // The routing lines come from the logic, as the panel gets them: accountState(...).routing for the provider.
+  function ompRouting(provider, mode) {
+    var state = UsageLogic.accountState(provider, { modes: '{"claude":"' + mode + '"}', nowSeconds: now,
+      recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10, extraKeys: "{}", hideEmails: true })
+    return state ? state.routing : null
+  }
   property var ompPair: null
   property var ompDrain: null
   property var ompEnded: null
@@ -186,16 +192,16 @@ ShellRoot {
       counted: [0], runway: UsageLogic.accountRunway(provider, "single", [0], now, [0, 1]) })
     // Coming up: the account's next dates in order: a banked reset that expires, the limit's reset, the subscription's end.
     comingUp = create("ComingUpList.qml", { width: 420, nowSeconds: now, account: comingAccount })
-    ompPair = create("OmpRouting.qml", { width: 420, nowSeconds: now, mode: "together", extraKeys: "{}", hideEmails: true,
-      provider: ompProvider([ompLogin("Work", ompCool), ompLogin("Personal", ompCool)]) })
-    ompDrain = create("OmpRouting.qml", { width: 420, nowSeconds: now, mode: "together", extraKeys: "{}", hideEmails: true,
-      provider: ompProvider([ompLogin("Work", [ompWindow("session", 10, 7200, 18000), ompWindow("weekly", 30, 360000, 604800)]),
-        ompLogin("Personal", [ompWindow("session", 10, 7200, 18000), ompWindow("weekly", 30, 180000, 604800)])]) })
-    ompEnded = create("OmpRouting.qml", { width: 420, nowSeconds: now, mode: "together", extraKeys: "{}", hideEmails: true,
-      provider: ompProvider([ompLogin("Work", ompCool, { subscription: { endsAt: now - 86400, endsOn: "2020-01-01", source: "manual", ended: true } }),
-        ompLogin("Personal", ompCool)]) })
-    ompNone = create("OmpRouting.qml", { width: 420, nowSeconds: now, mode: "together", extraKeys: "{}", hideEmails: true,
-      provider: ompProvider([login("Primary", { origin: "key", windows: ompCool })]) })
+    ompPair = create("OmpRouting.qml", { width: 420,
+      routing: ompRouting(ompProvider([ompLogin("Work", ompCool), ompLogin("Personal", ompCool)]), "together") })
+    ompDrain = create("OmpRouting.qml", { width: 420,
+      routing: ompRouting(ompProvider([ompLogin("Work", [ompWindow("session", 10, 7200, 18000), ompWindow("weekly", 30, 360000, 604800)]),
+        ompLogin("Personal", [ompWindow("session", 10, 7200, 18000), ompWindow("weekly", 30, 180000, 604800)])]), "together") })
+    ompEnded = create("OmpRouting.qml", { width: 420,
+      routing: ompRouting(ompProvider([ompLogin("Work", ompCool, { subscription: { endsAt: now - 86400, endsOn: "2020-01-01", source: "manual", ended: true } }),
+        ompLogin("Personal", ompCool)]), "together") })
+    ompNone = create("OmpRouting.qml", { width: 420,
+      routing: ompRouting(ompProvider([login("Primary", { origin: "key", windows: ompCool })]), "together") })
     notice = create("EventNotice.qml", { width: 420, motion: motion, shown: true,
       text: "Omarchy moved new Claude sessions to Personal at 16:27: Work reached 95%. Running sessions stay on Work." })
     notice.dismissed.connect(function() { root.dismissals++ })
@@ -319,6 +325,8 @@ ShellRoot {
     check(find(ompEnded, "ompRoutingLine-2").text === "Work's subscription ended, but omp still signs in with it: remove it in omp.",
       "an ended omp account is warned: " + find(ompEnded, "ompRoutingLine-2").text)
     check(!ompNone.visible && find(ompNone, "ompRoutingLine-0").text === " ", "no omp account, no OMP ROUTING block")
+    // The block stays with an ended omp account: the warning is what the user needs to see.
+    check(ompEnded.visible && find(ompEnded, "ompRoutingLine-2").text !== " ", "an ended omp account keeps the OMP ROUTING block visible")
     // Spending: the meter would sweep, but reduced motion keeps it still; the live figure climbs.
     rising.spending = true
     rising.readingAt = now - 50
