@@ -3908,14 +3908,16 @@ function ompRouting(provider, options) {
   if (proxyPool(provider)) return lines
   var now = Number(opts.nowSeconds)
   var hasOmp = false
+  var endedAccount = -1
   for (var i = 0; i < accounts.length; i++) {
     if (!fromOmp(accounts[i])) continue
     hasOmp = true
-    if (lines.warning === "" && subscriptionEnded(accounts[i])) {
-      lines.warning = accountName(accounts[i], opts.extraKeys, opts.hideEmails, i + 1) + "'s subscription ended, but omp still signs in with it: remove it in omp."
-    }
+    if (endedAccount < 0 && subscriptionEnded(accounts[i])) endedAccount = i
   }
-  if (!hasOmp) return lines
+  if (!hasOmp || opts.mode !== "together") return lines
+  if (endedAccount >= 0) {
+    lines.warning = accountName(accounts[endedAccount], opts.extraKeys, opts.hideEmails, endedAccount + 1) + "'s subscription ended, but omp still signs in with it: remove it in omp."
+  }
   var state = ompState(provider, opts.mode, opts.nowSeconds)
   if (state.nextAccount === null) return lines
   var ranked = ompRanked(provider, now)

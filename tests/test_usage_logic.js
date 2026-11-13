@@ -2607,8 +2607,8 @@ console.log("1.9 Coming up list: passed");
   const endedWork = { ...ompAccount("Work", cool), subscription: { endsAt: now - DAY, endsOn: "2020-01-01", source: "manual", ended: true } };
   assert.equal(routed(ompProvider([endedWork, ompAccount("Personal", cool)])).warning,
     "Work's subscription ended, but omp still signs in with it: remove it in omp.", "an ended omp account is named");
-  assert.equal(routed(ompProvider([endedWork, ompAccount("Personal", cool)]), { mode: "single" }).warning,
-    "Work's subscription ended, but omp still signs in with it: remove it in omp.", "the ended line shows in any mode");
+  assert.equal(routed(ompProvider([endedWork, ompAccount("Personal", cool)]), { mode: "single" }).warning, "",
+    "the ended line is omp-mode only, like the rest of the OMP ROUTING line");
   const endingWeekly = { ...ompAccount("Work", [ompWin("session", 100, 3600, 18000), { ...ompWin("weekly", 40, WEEK / 2, WEEK), samples: [] }]),
     subscription: { endsAt: now + 2 * DAY, endsOn: "2030-01-01", source: "manual", ended: false } };
   assert.equal(routed(ompProvider([endingWeekly, ompAccount("Personal", cool)])).warning,
