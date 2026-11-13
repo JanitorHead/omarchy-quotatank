@@ -269,6 +269,11 @@ ShellRoot {
       check(saved.accountModes === '{"claude":"together"}' && form.overrideSummary("claude") === "Together", "Accounts are used: Together")
       shown("accountMode-claude").changed("auto")
       check(saved.accountModes === "{}", "Automatically forgets the override")
+      check(shown("barChipValue-claude").visible && shown("barChipValue-codex").visible, "the menu bar choice is offered for each provider")
+      shown("barChipValue-claude").changed("pool")
+      check(saved.barChipValues === '{"claude":"pool"}' && form.overrideSummary("claude") === "Pool in menu bar", "Menu bar shows: Pool is saved for that provider only: " + saved.barChipValues)
+      shown("barChipValue-claude").changed("account")
+      check(saved.barChipValues === "{}", "Menu bar shows: Account forgets the override")
       check(shown("showAccount-claude-1").label === "Account 2 · omp", "each account says where it is read from: " + shown("showAccount-claude-1").label)
       shown("showAccount-claude-1Switch").toggled()
       check(saved.hiddenAccounts === '{"claude":["omp-0123456789ab"]}' && form.overrideSummary("claude") === "1 hidden",

@@ -1380,6 +1380,17 @@ Column {
                 onChanged: function(next) { root.set("barProviderLimits", UsageLogic.setBarLimit(root.value("barProviderLimits", "{}"), providerRow.providerId, "bottom", next)) }
               }
               SelectRow {
+                objectName: "barChipValue-" + providerRow.providerId
+                visible: root.percentageDisplay && !providerRow.money
+                label: "Menu bar shows"
+                options: [
+                  { value: "account", label: "Account" },
+                  { value: "pool", label: "Pool" }
+                ]
+                value: UsageLogic.barChipValue(root.value("barChipValues", "{}"), providerRow.providerId)
+                onChanged: function(next) { root.set("barChipValues", UsageLogic.setBarChipValue(root.value("barChipValues", "{}"), providerRow.providerId, next)) }
+              }
+              SelectRow {
                 objectName: "accountMode-" + providerRow.providerId
                 visible: providerRow.accountCount >= 2
                 label: "Accounts are used"
@@ -3520,6 +3531,7 @@ Column {
     if (bottom !== "default") parts.push("+ " + (bottom === "none" ? "none" : UsageLogic.windowSelectorLabel(bottom)))
     var accounts = UsageLogic.parseAccountModes(value("accountModes", "{}"))[providerId]
     if (accounts) parts.push(UsageLogic.accountModeLabel(accounts))
+    if (UsageLogic.barChipValue(value("barChipValues", "{}"), providerId) === "pool") parts.push("Pool in menu bar")
     var hidden = (UsageLogic.parseHiddenAccounts(value("hiddenAccounts", "{}"))[providerId] || []).length
     if (hidden) parts.push(hidden + " hidden")
     return parts.length ? parts.join(" · ") : "Default"
