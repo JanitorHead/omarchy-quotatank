@@ -228,6 +228,23 @@ class ReportMappingTests(unittest.TestCase):
         self.assertEqual(credits["resetCreditsUsableExpiresAt"], 1899273540)  # 2030-03-09T07:59:00Z
         self.assertEqual(credits["resetCreditsClears"], ["Fable weekly"])
 
+    def test_a_reports_policy_passes_through_to_its_account(self):
+        document = fixture()
+        policy = {"priority": 2, "reservePct": 10, "reserveSource": "override", "state": "inside-reserve", "remainingPct": 8}
+        document["reports"][0]["policy"] = policy  # Dev@Example.com, the row omp_accounts keeps
+        by_id = {entry["accountId"]: entry for _provider_id, _identity, entry in usage.omp_accounts([document], REQUESTED)}
+        self.assertEqual(by_id[omp_id("anthropic", "dev@example.com")]["policy"], policy)
+
+    def test_an_account_without_a_policy_has_none(self):
+        _provider_id, entry = self.account("anthropic", "dev@example.com")
+        self.assertNotIn("policy", entry)
+
+    def test_policy_values_that_are_not_omps_are_left_out(self):
+        document = fixture()
+        document["reports"][0]["policy"] = {"priority": "high", "reservePct": 10, "reserveSource": "elsewhere", "state": "inside-reserve"}
+        by_id = {entry["accountId"]: entry for _provider_id, _identity, entry in usage.omp_accounts([document], REQUESTED)}
+        self.assertEqual(by_id[omp_id("anthropic", "dev@example.com")]["policy"], {"reservePct": 10, "state": "inside-reserve"})
+
     def test_codex_windows_and_plan_match_the_codex_reader(self):
         provider_id, entry = self.account("openai-codex", "work@example.com")
         self.assertEqual(provider_id, "codex")

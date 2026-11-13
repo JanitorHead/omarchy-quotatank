@@ -163,6 +163,7 @@ Each omp report becomes an account entry shaped like any provider reading:
 - `credits.resetCreditsAvailable` is omp's `resetCredits.availableCount`, in the shape the Codex reader uses. `credits.resetCreditsExpiresAt` is the `expiresAt`, in Unix seconds or `null`, of the entry in `resetCredits.credits` whose `id` is `resetCredits.nextCreditId`: the reset omp spends next, as the Claude reader gives it. It is absent when omp names no next credit. `resetCreditsUsable` and `resetCreditsReason` are never set: omp applies these resets (`omp usage reset`).
 - `resetCreditsUsableNow`, `resetCreditsLater`, `resetCreditsUsableExpiresAt` and `resetCreditsClears` split omp's live resets (not expired or redeemed) by their `usable` flag, as the Claude reader does: the resets usable now, the rest, the earliest expiry of the usable ones, and the limit names the usable ones clear.
 - Each `disabledCredentials` entry becomes an account with `status: "error"`, `errorKind: "expired"` and the message "omp can't renew this sign-in. Sign in again in omp." omp's `cause` text is never passed on.
+- `policy` is omp's policy for a report's account, when the report has one: `priority`, `reservePct`, `reserveSource` (`global` or `override`), `reclaimAbovePct`, `remainingPct` and `state` (`unknown`, `exhausted`, `eligible` or `inside-reserve`). Only these fields are passed on, and only those with values of the expected kind; the field is absent when none remain. Disabled sign-ins carry no policy.
 
 A disabled sign-in of an account that also has a report is not listed.
 

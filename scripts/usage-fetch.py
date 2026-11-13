@@ -8821,6 +8821,28 @@ def omp_reset_usage(reset_credits: dict[str, Any]) -> dict[str, Any]:
                                                      for clear in (credit.get("clears") or []) if isinstance(clear, str)])}
 
 
+OMP_POLICY_NUMBERS = ("priority", "reservePct", "reclaimAbovePct", "remainingPct")
+OMP_POLICY_WORDS = {"reserveSource": ("global", "override"),
+                    "state": ("unknown", "exhausted", "eligible", "inside-reserve")}
+
+
+def omp_policy(policy: Any) -> dict[str, Any] | None:
+    """omp's policy for an account (its priority and reserve), keeping only the fields it names with values this
+    reader knows. None when omp sends none."""
+    if not isinstance(policy, dict):
+        return None
+    kept: dict[str, Any] = {}
+    for key in OMP_POLICY_NUMBERS:
+        value = policy.get(key)
+        if isinstance(value, (int, float)) and number(value) is not None:
+            kept[key] = value
+    for key, words in OMP_POLICY_WORDS.items():
+        if isinstance(policy.get(key), str) and policy[key] in words:
+            kept[key] = policy[key]
+    return kept or None
+
+
+
 def omp_report_entry(provider_id: str, account_id: str, report: dict[str, Any]) -> dict[str, Any]:
     """One omp usage report as an account entry."""
     metadata = report.get("metadata") if isinstance(report.get("metadata"), dict) else {}
@@ -8842,6 +8864,9 @@ def omp_report_entry(provider_id: str, account_id: str, report: dict[str, Any]) 
                  fetchedAt=omp_time(report.get("fetchedAt")) or entry["fetchedAt"])
     if not entry["windows"]:
         entry["notice"] = "omp reported no usage limits for this account."
+    policy = omp_policy(report.get("policy"))
+    if policy is not None:
+        entry["policy"] = policy
     return entry
 
 
