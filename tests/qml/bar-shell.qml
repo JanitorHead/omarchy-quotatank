@@ -607,9 +607,10 @@ ShellRoot {
     },
     function () {
       var chip = namedChild(widget, "barChip-claude")
-      if (!chip || !chip.poolChip) {
+      // A synthetic refresh can replace the pool payload between steps: put it back and wait for the chip to read it.
+      if (!chip || !chip.poolChip || widget.usageBackend.payload !== poolPayload || chip.remainingValue !== 70) {
         if (widget.usageBackend.payload !== poolPayload) widget.usageBackend.payload = poolPayload
-        return waited < 150 ? false : check(false, "the pool choice gives Claude a pool chip in chips mode")
+        return waited < 150 ? false : check(false, "Claude's pool chip shows 70 in chips mode: " + (chip ? chip.remainingValue : "no pool chip"))
       }
       check(namedChildren(widget, "barChip-claude", []).length === 1, "the pool choice makes one chip for Claude in chips mode")
       check(chip.remainingValue === 70, "the pool total is the counted accounts' average remaining, 70: " + chip.remainingValue)
@@ -619,9 +620,9 @@ ShellRoot {
     },
     function () {
       var chip = namedChild(widget, "barChip-claude")
-      if (!chip || !chip.poolChip) {
+      if (!chip || !chip.poolChip || widget.usageBackend.payload !== poolPayload || chip.remainingValue !== 70) {
         if (widget.usageBackend.payload !== poolPayload) widget.usageBackend.payload = poolPayload
-        return waited < 150 ? false : check(false, "the pool choice gives Claude a pool chip in dots mode")
+        return waited < 150 ? false : check(false, "Claude's pool chip shows 70 in dots mode: " + (chip ? chip.remainingValue : "no pool chip"))
       }
       check(namedChildren(widget, "barChip-claude", []).length === 1, "the pool choice makes one chip for Claude in dots mode")
       check(chip.remainingValue === 70, "the pool total holds in dots mode: " + chip.remainingValue)
