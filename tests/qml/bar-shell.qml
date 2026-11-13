@@ -539,15 +539,21 @@ ShellRoot {
       if (text.indexOf(" · ends " + expected) < 0 && waited < 150) return false
       var tail = text.slice(text.indexOf(" · ends ") + 8)
       check(tail === expected || tail.indexOf(expected + " ") === 0, "the detail says when the account ends: " + text)
-      widget.settings = Object.assign({}, widget.settings, { subscriptionEnds: JSON.stringify({ claude: { personal: (year + 1) + "-01-05" } }) })
+      var later = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate() + 400)
+      var laterOn = [later.getFullYear(), String(later.getMonth() + 1).padStart(2, "0"), String(later.getDate()).padStart(2, "0")].join("-")
+      widget.settings = Object.assign({}, widget.settings, { subscriptionEnds: JSON.stringify({ claude: { personal: laterOn } }) })
       return true
     },
     function () {
-      var year = new Date().getFullYear()
+      // 400 days out is always next year or later, so the detail must carry the year.
+      var today = new Date()
+      var target = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 400)
+      var label = target.getDate() + " " + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][target.getMonth()]
+        + " " + target.getFullYear()
       var meta = namedChild(panelRoot(), "accountDetailMeta")
       var text = meta ? String(meta.text) : ""
-      if (text.indexOf("ends 5 Jan") < 0 && waited < 150) return false
-      check(text.indexOf(" · ends 5 Jan " + (year + 1)) >= 0, "the detail shows the year once it is not this year: " + text)
+      if (text.indexOf(" · ends " + label) < 0 && waited < 150) return false
+      check(text.indexOf(" · ends " + label) >= 0, "the detail shows the year for an end date 400 days away: " + text)
       widget.close()
       widget.settings = Object.assign({}, widget.settings, { sources: JSON.stringify([{ id: "p-1a2b3c4d", kind: "proxy",
         url: "https://proxy.test/prefix", keyFile: "/private/proxy key", on: true }]) })
