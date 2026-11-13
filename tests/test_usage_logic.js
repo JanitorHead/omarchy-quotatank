@@ -2601,6 +2601,18 @@ console.log("1.9 Coming up list: passed");
   assert.equal(routed(ompProvider([ompAccount("Work", cool), ompAccount("Personal", cool)])).next,
     "Next session: Work · first in omp's order.");
 
+  // L15: a proxy account gets no omp tag, even when it is listed as an omp account; a pool of proxies has none.
+  const proxy = { id: "p-00000001", name: "CLIProxyAPI" };
+  const proxiedPair = together(ompProvider([{ ...ompAccount("Work", cool), proxy }, ompAccount("Personal", cool)]));
+  assert.deepEqual(plain(proxiedPair.ompTags), ["", "next"], "a proxy account gets no omp tag");
+  const proxiedPool = ompProvider([{ ...ompAccount("Work", cool), proxy }, { ...ompAccount("Personal", cool), proxy }]);
+  assert.deepEqual(plain(together(proxiedPool).ompTags), [], "a pool of proxy accounts gets no omp tags");
+  assert.equal(routed(proxiedPool).next, "", "a pool of proxy accounts shows no omp routing");
+  // L15: drain decides the pick, but the runner has no weekly window to drain against, so there is no switch point.
+  const noRunnerWeekly = ompProvider([ompAccount("Work", slow), ompAccount("Personal", [ompWin("session", 10, 3600, 18000)])]);
+  assert.equal(together(noRunnerWeekly).nextReason, "drain");
+  assert.equal(routed(noRunnerWeekly).switchPoint, "", "no switch point when the share cannot be computed");
+
   // The switch point: the share at which the next account's drain falls to the runner-up's. Only shown
   // when drain decides the pick (the weekly drain first, then the 5-hour one).
   const weeklyNext = ompAccount("Personal", [ompWin("session", 10, 7200, 18000), ompWin("weekly", 30, 180000, 604800)]);

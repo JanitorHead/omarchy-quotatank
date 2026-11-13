@@ -3487,7 +3487,7 @@ function accountSourceKind(account) {
 
 // Whether omp holds the account's sign-in, here or on the computer that read it.
 function fromOmp(account) {
-  if (!account) return false
+  if (!account || accountSourceKind(account) === "proxy") return false
   return account.origin === "omp" || accountSourceKind(account) === "omp" || contains(listOrEmpty(account.origins), "omp")
 }
 
