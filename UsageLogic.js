@@ -1796,7 +1796,8 @@ function accountResetNote(account) {
 
 // The badge on an account row: the resets usable now (Claude's count; Codex's when shown), the expiry of the
 // next one, the limits it clears, and whether those limits are still above the warning threshold (dimmed when not
-// yet low). Null when the row shows no badge. Later resets (not usable now) are only counted in the tooltip.
+// yet low). Null when the row shows no badge. Later resets (not usable now) are only counted in the tooltip; a badge
+// this widget cannot apply ends its tooltip with where the reset is applied (`accountResetNote`).
 function accountResetBadge(account, warningThreshold) {
   if (!accountResetShown(account)) return null
   var credits = account.credits
@@ -1825,7 +1826,8 @@ function accountResetBadge(account, warningThreshold) {
     })
   })
   var dim = remaining.length > 0 && Math.min.apply(null, remaining) > warningThreshold
-  return { label: label, tooltip: tooltip, dim: dim, actionable: accountResetActionable(account) }
+  var note = accountResetNote(account)
+  return { label: label, tooltip: note ? tooltip + " · " + note : tooltip, dim: dim, actionable: accountResetActionable(account) }
 }
 
 // Whether a limit row is the one a reset clears, by its label ("Fable weekly", "5-hour limit"), its id slug, or

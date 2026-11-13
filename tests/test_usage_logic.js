@@ -217,6 +217,10 @@ assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }),
     "list-like clears still dim the limit they clear");
   const elsewhere = badgeAccount({}, [fableWindow(88)], { computer: { id: "c-00000001", name: "devbox" } });
   assert.equal(context.accountResetBadge(elsewhere, 25).actionable, false, "another computer's sign-in is not applied here");
+  assert.equal(context.accountResetBadge(viaOmp, 25).tooltip, "1 Fable reset usable now, expires Mar 9 · 1 more later · Apply it in omp: omp usage reset.",
+    "a badge that is not applied here says where it is applied");
+  assert.equal(context.accountResetBadge(elsewhere, 25).tooltip, "1 Fable reset usable now, expires Mar 9 · 1 more later · Its sign-in is on devbox: apply it there.",
+    "another computer's badge names the computer that holds the sign-in");
   assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsUsable: false, resetCreditsReason: "limit" }, [fableWindow(88)]), 25).actionable, false);
   const session = { resetCreditsUsableNow: 1, resetCreditsLater: 0, resetCreditsUsableExpiresAt: 1899273540,
     resetCreditsClears: ["5-hour"], resetCreditsUsable: true };
