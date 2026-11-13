@@ -471,9 +471,18 @@ function windowRowFor(provider, selector, allowFallback) {
 // mean share of the accounts counted. An account is in the pool unless its subscription has ended. It counts
 // from its own reading of the window, stale or not. One that failed without any reading stays in `total` only,
 // so "2 of 3 accounts" says how many readings the figure rests on. A provider without accounts is its own pool.
-// Returns { percent, counted, total }, or null when no account is in the pool.
+// Returns { percent, counted, total }, or null when no account is in the pool. `auto`, the menu bar's default,
+// pools each window and returns the one with the least left, as an auto chip shows a reading's tightest window.
 function poolTotal(provider, selector) {
   var want = normalizeBarWindow(selector)
+  if (want === "auto") {
+    var tightest = null
+    for (var name in WINDOW_SELECTORS) {
+      var pool = poolTotal(provider, name)
+      if (pool !== null && pool.percent !== null && (tightest === null || pool.percent < tightest.percent)) tightest = pool
+    }
+    return tightest
+  }
   if (!provider || !WINDOW_SELECTORS[want]) return null
   var accounts = listOrEmpty(provider.accounts)
   if (!accounts.length) accounts = [provider]

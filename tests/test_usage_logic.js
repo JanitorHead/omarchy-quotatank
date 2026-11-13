@@ -1832,7 +1832,11 @@ console.log("omp settings, live feed and account modes: passed");
   assert.deepEqual(plain(context.poolTotal(context.withoutHiddenAccounts([{ id: "claude", name: "Claude Code", status: "ok", accounts: [poolWork, poolPersonal, poolUltra] }], '{"claude":["personal"]}')[0], "session")), { percent: 40, counted: 1, total: 1 }, "a hidden account is out");
   assert.equal(poolOf([]), null, "no account in the pool");
   assert.deepEqual(plain(context.poolTotal({ id: "kimi", status: "ok", windows: [quiet(30)] }, "session")), { percent: 70, counted: 1, total: 1 }, "a provider without accounts is its own pool");
-  assert.equal(poolOf([poolWork, poolPersonal], "auto"), null, "auto has no window of its own");
+  // The menu bar's default window is auto: the pool chip shows the window whose pool has the least left.
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, poolUltra], "auto")), { percent: 60, counted: 2, total: 2 },
+    "auto pools the 5-hour window when its pool has less left than the weekly one");
+  assert.deepEqual(plain(poolOf([login("work", [quiet(10), week(80)]), login("personal", [quiet(10), week(70)])], "auto")),
+    { percent: 25, counted: 2, total: 2 }, "and the weekly window when that pool has less left");
 
   // Events: the first reading seeds; then a switch, a reset after heavy use, and an omp sign-in lost.
   const team = (active, workUsed) => ({ id: "claude", name: "Claude Code", status: "ok", accounts: [
