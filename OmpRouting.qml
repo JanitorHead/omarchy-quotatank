@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Controls
 import qs.Commons
 import qs.Commons as Commons
 import "UsageLogic.js" as UsageLogic
