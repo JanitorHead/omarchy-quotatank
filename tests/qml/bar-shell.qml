@@ -748,8 +748,11 @@ ShellRoot {
       var limits = namedChild(top, "limitsSection")
       if (!widget.opened || !block || !block.visible || block.height <= 0 || !rows || !limits) {
         if (!widget.opened) widget.showLimits()
-        return waited < 150 ? false : check(false, "Claude's open panel shows OMP ROUTING: "
-          + (block ? "visible " + block.visible + ", height " + block.height : "no block"))
+        return waited < 150 ? false : check(false, "Claude's open panel shows OMP ROUTING: " + (block
+          ? "visible " + block.visible + ", routing " + JSON.stringify(block.routing) + ", section " + block.parent.visible
+            + ", view " + widget.viewMode + ", provider " + (widget.provider ? widget.provider.id : "none")
+            + ", opened " + widget.opened
+          : "no block"))
       }
       var blockTop = block.mapToItem(null, 0, 0).y
       check(blockTop >= rows.mapToItem(null, 0, rows.height).y, "OMP ROUTING sits under the account rows")
