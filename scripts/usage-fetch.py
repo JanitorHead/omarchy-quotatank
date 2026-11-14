@@ -770,8 +770,8 @@ SUBSCRIPTION_CHECK_SECONDS = 6 * 3600
 SUBSCRIPTION_MIN_BUDGET_SECONDS = 2
 
 
-def subscription_cache_path(provider_id: str, key: str) -> Path:
-    return state_folder() / "subscriptions" / f"{provider_id}-{hashlib.sha256(key.encode()).hexdigest()}.json"
+def subscription_cache_path(provider_id: str, key: str, state_dir: Path | None = None) -> Path:
+    return (state_dir or state_folder()) / "subscriptions" / f"{provider_id}-{hashlib.sha256(key.encode()).hexdigest()}.json"
 
 
 def subscription_as_of(subscription: Any, now: float) -> dict[str, Any] | None:
@@ -825,25 +825,25 @@ def claude_subscription_from_profile(profile: Any) -> dict[str, Any]:
     return {"source": "provider", "ended": organization_type == "claude_free"}
 
 
-def claude_subscription(config_dir: Path, login: dict[str, Any], timeout: float) -> dict[str, Any] | None:
+def claude_subscription(config_dir: Path, login: dict[str, Any], timeout: float, state_dir: Path | None = None) -> dict[str, Any] | None:
     """Claude's own word on the subscription, from its profile with the login's token, asked only after a usage read
     the server refused. At most one call per Claude Code login every six hours; the login is keyed by its folder and its
     account email, so signing in as another account asks again."""
     headers = claude_headers(login["accessToken"])
     key = f"{config_dir}\n{claude_signed_in_email(config_dir)}"
     return checked_subscription(
-        subscription_cache_path("claude", key),
+        subscription_cache_path("claude", key, state_dir),
         lambda: claude_subscription_from_profile(http_json(CLAUDE_PROFILE_URL, headers, timeout)),
         timeout,
     )
 
 
 @provider_fetcher("claude")
-def fetch_claude_accounts(timeout: float) -> dict[str, Any]:
-    return omarchy_account_result("claude", fetch_claude, timeout)
+def fetch_claude_accounts(timeout: float, state_dir: Path | None = None) -> dict[str, Any]:
+    return omarchy_account_result("claude", functools.partial(fetch_claude, state_dir=state_dir), timeout)
 
 
-def fetch_claude(timeout: float, home: Path | None = None) -> dict[str, Any]:
+def fetch_claude(timeout: float, home: Path | None = None, state_dir: Path | None = None) -> dict[str, Any]:
     provider_id = "claude"
     config_dir = claude_config_dir() if home is None else home
     credentials_path = config_dir / ".credentials.json"
@@ -886,7 +886,7 @@ def fetch_claude(timeout: float, home: Path | None = None) -> dict[str, Any]:
         result = dict(failure_provider(provider_id, exc), account=account)
         # Only a read the server refused asks whether the plan has ended; the profile itself is asked at most every six hours.
         if exc.kind in ("expired", "rate_limited"):
-            subscription = claude_subscription(config_dir, login, timeout)
+            subscription = claude_subscription(config_dir, login, timeout, state_dir)
             if subscription is not None:
                 result["subscription"] = subscription
         return result
@@ -1189,7 +1189,7 @@ def codex_subscription_from_check(answer: Any, account_id: str) -> dict[str, Any
     return subscription
 
 
-def codex_subscription(home: Path | None, timeout: float) -> dict[str, Any] | None:
+def codex_subscription(home: Path | None, timeout: float, state_dir: Path | None = None) -> dict[str, Any] | None:
     """Codex's own word on the subscription, from its accounts check with the login's token. At most one call per
     account every six hours; a failed call keeps the last saved answer. None when the login names no token or account,
     so no call is made."""
@@ -1204,7 +1204,7 @@ def codex_subscription(home: Path | None, timeout: float) -> dict[str, Any] | No
         return None
     headers = {"Authorization": f"Bearer {token}", "ChatGPT-Account-Id": account_id, "User-Agent": SIGNIN_USER_AGENT}
     return checked_subscription(
-        subscription_cache_path("codex", account_id),
+        subscription_cache_path("codex", account_id, state_dir),
         lambda: codex_subscription_from_check(http_json(CODEX_ACCOUNTS_CHECK_URL, headers, timeout), account_id),
         timeout,
     )
@@ -1216,11 +1216,11 @@ def detect_codex() -> bool:
 
 
 @provider_fetcher("codex")
-def fetch_codex_accounts(timeout: float) -> dict[str, Any]:
-    return omarchy_account_result("codex", fetch_codex, timeout)
+def fetch_codex_accounts(timeout: float, state_dir: Path | None = None) -> dict[str, Any]:
+    return omarchy_account_result("codex", functools.partial(fetch_codex, state_dir=state_dir), timeout)
 
 
-def fetch_codex(timeout: float, home: Path | None = None) -> dict[str, Any]:
+def fetch_codex(timeout: float, home: Path | None = None, state_dir: Path | None = None) -> dict[str, Any]:
     provider_id = "codex"
     env = runtime_environment()
     if home is not None:
@@ -1293,7 +1293,7 @@ def fetch_codex(timeout: float, home: Path | None = None) -> dict[str, Any]:
             result["notice"] = clean_message(reached.replace("_", " ").capitalize() + ".")
         elif not windows and credits is None:
             result["notice"] = "Codex returned no subscription rate limits."
-        subscription = codex_subscription(home, budget())
+        subscription = codex_subscription(home, budget(), state_dir)
         if subscription is not None:
             result["subscription"] = subscription
         return result
@@ -8061,7 +8061,6 @@ def save_refresh_state(path: Path, key: str, attempted_ms: int, payload: dict[st
         pass
 
 
-
 def load_good_readings(path: Path, stamp: int) -> tuple[dict[str, dict[str, Any]], bool]:
     """The saved readings still young enough to stand in, and whether any saved entry was dropped."""
     try:
@@ -8925,6 +8924,8 @@ def omp_report_entry(provider_id: str, account_id: str, report: dict[str, Any]) 
         credits["resetCreditsExpiresAt"] = epoch_seconds(following.get("expiresAt"))
     if credits is not None:
         credits.update(omp_reset_usage(reset_credits))
+        if isinstance(reset_credits.get("credits"), list):
+            credits["resetCreditsAvailable"] = credits["resetCreditsUsableNow"] + credits["resetCreditsLater"]
     entry.update(plan=omp_plan(provider_id, metadata.get("planType")), credits=credits,
                  fetchedAt=omp_time(report.get("fetchedAt")) or entry["fetchedAt"])
     if not entry["windows"]:
@@ -9490,7 +9491,8 @@ def safe_fetch(provider_id: str, timeout: float,
 
 def collect_providers(provider_ids: list[str], timeout: float,
                       key_files: dict[str, Path] | None = None,
-                      extra_keys: dict[str, list[tuple[str, Path]]] | None = None) -> list[dict[str, Any]]:
+                      extra_keys: dict[str, list[tuple[str, Path]]] | None = None,
+                      state_dir: Path | None = None) -> list[dict[str, Any]]:
     if not provider_ids:
         return []
     fetchers = dict(FETCHERS)
@@ -9502,6 +9504,8 @@ def collect_providers(provider_ids: list[str], timeout: float,
         keyed = KEYED_FETCHERS.get(provider_id)
         if keyed is not None and FETCHERS.get(provider_id) is keyed:
             fetchers[provider_id] = functools.partial(key_account_result, provider_id, fetchers[provider_id], keyed, extras)
+    for provider_id in ("claude", "codex"):
+        fetchers[provider_id] = functools.partial(fetchers[provider_id], state_dir=state_dir)
     results: dict[str, dict[str, Any]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(provider_ids)) as executor:
         futures = {executor.submit(safe_fetch, provider_id, timeout, fetchers): provider_id for provider_id in provider_ids}
@@ -9595,7 +9599,7 @@ def build_payload(
         version = pool.submit(omp_version, omp, state_dir) if reads_local else None
         remote = [pool.submit(read_computer, computer_id, host, provider_ids, timeout, omp_local, base_state)
                   for computer_id, host in computers]
-        providers = collect_providers(provider_ids, timeout, key_files, extra_keys)
+        providers = collect_providers(provider_ids, timeout, key_files, extra_keys, state_dir)
         healthy = healthy_accounts(providers)
         proxied = [pool.submit(read_proxy, proxy_id, url, key_file, provider_ids, timeout, healthy, base_state)
                    for proxy_id, url, key_file in proxies]

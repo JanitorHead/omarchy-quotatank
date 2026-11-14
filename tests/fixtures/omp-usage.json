@@ -37,7 +37,7 @@
         }
       ],
       "resetCredits": {
-        "availableCount": 1, "redeemableCount": 1, "nextCreditId": "launch-fable", "eligible": true,
+        "availableCount": 2, "redeemableCount": 1, "nextCreditId": "launch-fable", "eligible": true,
         "credits": [
           {"id": "launch-fable-6mo", "title": "New model launch: one more Fable reset at 6 months' tenure",
            "program": "cedar_ember", "remainingCount": 1, "usable": false, "requiresLimit": false,
