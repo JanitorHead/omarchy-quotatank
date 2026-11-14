@@ -351,7 +351,7 @@ done
                 # fake's PATH; the codex in the temp dir is the one found first.
                 with mock.patch.object(usage, "runtime_environment",
                                        return_value={**os.environ, "PATH": str(bin_dir) + os.pathsep + "/usr/bin:/bin"}):
-                    result = usage.fetch_codex(0.5)
+                    result = usage.fetch_codex(0.5, home=root)  # no auth.json here: the subscription check makes no call
                 self.assertEqual(result["status"], "ok", result)
                 self.assertEqual(result["account"], "dev@example.com")
                 self.assertEqual(result["windows"], [])
@@ -374,7 +374,9 @@ done
                 mock.patch.object(usage.subprocess, "Popen", return_value=process), \
                 mock.patch.object(usage, "CodexRpcStream", return_value=mock.Mock()), \
                 mock.patch.object(usage, "rpc_request", side_effect=respond):
-            result = usage.fetch_codex(10)
+            # An empty login folder: the subscription check finds no token and makes no call.
+            with tempfile.TemporaryDirectory() as login:
+                result = usage.fetch_codex(10, home=Path(login))
         self.assertEqual(result["status"], "ok", result)
         self.assertEqual(seen["initialize"], 10)
         self.assertEqual(seen["account/read"], 10)
@@ -503,11 +505,11 @@ done
                 usage.read_json(path, max_bytes=32)
 
     def test_one_provider_failure_does_not_suppress_others(self):
-        def failed(_timeout):
+        def failed(_timeout, **_):
             raise RuntimeError("collector exploded")
 
         def valid(provider_id):
-            return lambda _timeout: usage.base_provider(provider_id)
+            return lambda _timeout, **_: usage.base_provider(provider_id)
 
         replacements = {
             "claude": valid("claude"),
@@ -530,7 +532,7 @@ done
         self.assertEqual(providers[0]["status"], "ok")
 
     def test_invalid_normalized_result_is_isolated(self):
-        with mock.patch.dict(usage.FETCHERS, {"claude": lambda _timeout: []}, clear=False):
+        with mock.patch.dict(usage.FETCHERS, {"claude": lambda _timeout, **_: []}, clear=False):
             result = usage.safe_fetch("claude", 1)
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["errorKind"], "internal")

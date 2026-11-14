@@ -211,7 +211,7 @@ class ReportMappingTests(unittest.TestCase):
         native_windows, _credits = usage.parse_claude_usage({"five_hour": {"utilization": 4}, "seven_day": {"utilization": 37}})
         self.assertEqual([row[:3] for row in window_rows({"windows": native_windows})], [row[:3] for row in window_rows(entry)[:2]])
         self.assertEqual(entry["windows"][0]["resetsAt"], 1893474000)
-        self.assertEqual(entry["credits"]["resetCreditsAvailable"], 1)
+        self.assertEqual(entry["credits"]["resetCreditsAvailable"], 2)  # one usable reset and one later reset
         # The expiry is the one of the reset omp spends next, as the Claude reader shows it.
         self.assertEqual(entry["credits"]["resetCreditsExpiresAt"], 1899273540)  # 2030-03-09T07:59:00Z
         self.assertEqual((entry["source"], entry["origin"], entry["label"], entry["account"], entry["plan"]),
@@ -351,6 +351,10 @@ class OmpResetCreditTests(unittest.TestCase):
         self.assertEqual(omp["resetCreditsLater"], claude["available"] - claude["usableNow"])
         self.assertEqual(omp["resetCreditsClears"], claude["clears"])
         self.assertEqual(omp["resetCreditsUsableExpiresAt"], claude["usableExpiresAt"])
+        # The header is the same count through omp's own entry, even when omp's availableCount is stale.
+        report = {"resetCredits": {**reset, "availableCount": 1}, "limits": [], "metadata": {}}
+        entry = usage.omp_report_entry("claude", "acc-synthetic-claude", report)
+        self.assertEqual(entry["credits"]["resetCreditsAvailable"], claude["available"])
 
 
 class AccountIdTests(unittest.TestCase):
@@ -570,7 +574,7 @@ class OmpTestCase(unittest.TestCase):
 
     def run_main(self, *arguments: str, fetchers: dict | None = None) -> dict:
         output = io.StringIO()
-        defaults = {provider_id: (lambda timeout, provider_id=provider_id: native(provider_id)) for provider_id in usage.FETCHERS}
+        defaults = {provider_id: (lambda timeout, provider_id=provider_id, **_: native(provider_id)) for provider_id in usage.FETCHERS}
         with mock.patch.dict(usage.FETCHERS, {**defaults, **(fetchers or {})}), contextlib.redirect_stdout(output):
             self.assertEqual(usage.main(["--state-dir", str(self.state), *arguments]), 0)
         return json.loads(output.getvalue())
@@ -658,8 +662,8 @@ class UnreadableOmpDataTests(OmpTestCase):
 
     def setUp(self):
         super().setUp()
-        self.fetchers = {"claude": lambda timeout: native("claude", "dev@example.com"),
-                         "codex": lambda timeout: native("codex", "work@example.com")}
+        self.fetchers = {"claude": lambda timeout, **_: native("claude", "dev@example.com"),
+                         "codex": lambda timeout, **_: native("codex", "work@example.com")}
 
     def test_an_integer_too_large_for_a_float_is_no_number(self):
         for value in (10 ** 400, -10 ** 400, "1e999", float("nan"), True, None):
