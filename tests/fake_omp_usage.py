@@ -16,6 +16,7 @@ parser.add_argument("--proxy-key-file", action="append", default=[])
 parser.add_argument("--key-file", action="append", default=[])
 parser.add_argument("--extra-key", action="append", default=[])
 parser.add_argument("--omp", choices=("local",))
+parser.add_argument("--refresh-key")
 args = parser.parse_args()
 
 generated = datetime.datetime.now(datetime.timezone.utc).isoformat()

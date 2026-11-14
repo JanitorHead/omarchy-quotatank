@@ -1941,6 +1941,8 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
     "a restarted panel waits for the remaining refresh interval");
   assert.equal(context.refreshDelayMs(now * 1000, now * 1000 - 900000, 900), 0,
     "a due refresh runs immediately");
+  assert.equal(context.refreshDelayMs(now * 1000, now * 1000 + 6 * 3600000, 900), 900000,
+    "a check time ahead of the clock waits one interval at most");
   const readAtIso = new Date((now - 120) * 1000).toISOString();
   const offsetClock = function (seconds) { return "T+" + (seconds - now) };
   assert.equal(context.staleReadingText({ stale: true, errorKind: "rate_limited", readAt: readAtIso }, offsetClock),

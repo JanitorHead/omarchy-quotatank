@@ -3987,10 +3987,12 @@ function readingStale(nowMs, lastSuccessMs, intervalSeconds, refreshFailed, read
   return Number(nowMs) - last > 2 * Math.max(60, Number(intervalSeconds) || 900) * 1000
 }
 
+// How long a panel waits before its next check: the rest of the interval since the last one started, never more
+// than one interval (a check time ahead of the clock, as before network time sets it at boot, is not waited out).
 function refreshDelayMs(nowMs, lastAttemptMs, intervalSeconds) {
   var interval = Math.max(60, Number(intervalSeconds) || 900) * 1000
   var attempted = Number(lastAttemptMs)
-  return !isFinite(attempted) || attempted <= 0 ? 0 : Math.max(0, attempted + interval - Number(nowMs))
+  return !isFinite(attempted) || attempted <= 0 ? 0 : Math.min(interval, Math.max(0, attempted + interval - Number(nowMs)))
 }
 
 var STALE_REASON_TEXT = { rate_limited: "rate limited", timeout: "timed out", network: "offline", http: "unavailable" }

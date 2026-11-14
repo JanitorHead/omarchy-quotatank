@@ -19,8 +19,6 @@ Item {
   property bool launchPending: false
   // refresh.json read (or found missing); until then it, not the settings, decides the first check.
   property bool stateLoaded: false
-  // The last good reading as saved in refresh.json: { key, lastSuccessAt, payload }.
-  property var savedReading: null
 
   readonly property int refreshIntervalSec: Math.max(60, Math.min(3600,
     Math.round(Number(setting("refreshIntervalSec", 900)) || 900)))
@@ -89,16 +87,23 @@ Item {
     try { return decodeURIComponent(value) } catch (e) { return value }
   }
 
+  // restart(), not start(): a running timer would keep its old deadline, and the automatic check would come
+  // too soon after a manual one.
   function scheduleRefresh() {
     var delay = UsageLogic.refreshDelayMs(Date.now(), lastAttemptAt, refreshIntervalSec)
     refreshTimer.interval = Math.max(1, delay)
-    refreshTimer.start()
+    refreshTimer.restart()
   }
 
-  function saveRefreshSchedule() {
-    if (stateLoaded) refreshState.setText(JSON.stringify({ lastAttemptAt: lastAttemptAt, reading: savedReading }))
+  // A reading with a provider that could not be reached (no network yet, a timeout): worth a second try soon.
+  function hasUnreachable(reading) {
+    return UsageLogic.listOrEmpty(reading.providers).some(function(provider) {
+      return provider && (provider.errorKind === "network" || provider.errorKind === "timeout")
+    })
   }
 
+  // The backend saves refresh.json (usage-fetch.py --refresh-key) as privately as its other state files; the
+  // widget only reads it. A reading stands in only for the providers and sources it was read for.
   function restoreState(saved) {
     stateLoaded = true
     var attempted = saved ? Number(saved.lastAttemptAt) : NaN
@@ -110,13 +115,15 @@ Item {
       requestRefresh(false)
       return
     }
-    savedReading = reading
     UsageLogic.boundUsagePayload(reading.payload)
     payload = reading.payload
-    var succeeded = Number(reading.lastSuccessAt)
-    lastSuccessAt = isFinite(succeeded) && succeeded > 0 ? succeeded : 0
-    refreshed()
+    var generated = new Date(String(reading.payload.generatedAt || "")).getTime()
+    lastSuccessAt = isFinite(generated) ? generated : 0
+    // No refreshed(): threshold notices, account events and the trackers they compare with start from the first
+    // live reading, as on a start without a saved one, never from a reading that may be hours old.
     scheduleRefresh()
+    if (UsageLogic.refreshDelayMs(Date.now(), lastAttemptAt, refreshIntervalSec) > 0 && hasUnreachable(payload))
+      networkRetry.start()
   }
 
   function requestRefresh(manual) {
@@ -136,18 +143,17 @@ Item {
     loading = true
     pendingRefresh = false
     lastAttemptAt = Date.now()
-    saveRefreshSchedule()
     scheduleRefresh()
     var command = [
       "python3", scriptPath,
       "--providers", enabledProviderIds.join(","),
-      "--timeout", "12"
+      "--timeout", "12",
+      "--refresh-key", readingKey
     ]
     for (var i = 0; i < keyFiles.length; i++) command.push("--key-file", keyFiles[i][0] + "=" + keyFiles[i][1])
     command = command.concat(extraKeyArguments).concat(ompArguments).concat(computerArguments).concat(proxyArguments)
     fetchProcess.command = command
     fetchProcess.connectionId = connectionId
-    fetchProcess.readingKey = readingKey
     fetchProcess.running = true
   }
 
@@ -181,14 +187,9 @@ Item {
           fetchError = ""
           var generated = new Date(String(parsed.generatedAt || "")).getTime()
           lastSuccessAt = isFinite(generated) ? generated : Date.now()
-          savedReading = { key: fetchProcess.readingKey, lastSuccessAt: lastSuccessAt, payload: parsed }
-          saveRefreshSchedule()
           // The first check of a session often runs before the network is up; try once more soon
           // instead of leaving the cards on a connection error until the next interval.
-          var unreachable = UsageLogic.listOrEmpty(parsed.providers).some(function(provider) {
-            return provider && (provider.errorKind === "network" || provider.errorKind === "timeout")
-          })
-          if (!unreachable) networkRetry.stop()
+          if (!hasUnreachable(parsed)) networkRetry.stop()
           else if (!wasRetry) networkRetry.start()
           refreshed()
         }
@@ -219,7 +220,6 @@ Item {
     property bool timedOut: false
     property bool outputTooLarge: false
     property string connectionId: ""
-    property string readingKey: ""
     readonly property int maxBodyChars: 2 * 1024 * 1024
 
     function appendBody(data) {
