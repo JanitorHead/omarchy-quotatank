@@ -190,7 +190,7 @@ Column {
         canUse: UsageLogic.accountCanUse(accountData, root.mode)
         useBusy: root.useBusyId !== "" && root.useBusyId === accountId
         // The usable-now banked resets as a badge; the badge's place is kept whenever the account can show resets.
-        resetBadge: UsageLogic.accountResetBadge(accountData, root.warningThreshold)
+        resetBadge: UsageLogic.accountResetBadge(accountData, root.warningThreshold, root.nowSeconds)
         resetSlot: UsageLogic.accountResetShown(accountData)
         resetEnabled: root.resetsActionable && UsageLogic.accountResetActionable(accountData)
         quotaMode: root.quotaMode

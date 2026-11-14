@@ -348,9 +348,14 @@ Ui.BorderSurface {
             onClicked: activate()
           }
 
-          ToolTip.visible: resetClick.containsMouse
-          ToolTip.text: (root.resetBadge ? root.resetBadge.tooltip : "")
-            + (resetClick.enabled ? " · click to apply one" : "")
+          HoverHandler {
+            id: resetHover
+          }
+
+          Ui.PanelToolTip {
+            visible: resetHover.hovered
+            text: (root.resetBadge ? root.resetBadge.tooltip : "") + (resetClick.enabled ? " · click to apply one" : "")
+          }
 
           PlainText {
             id: resetLabel
