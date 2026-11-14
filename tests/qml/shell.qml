@@ -288,6 +288,22 @@ ShellRoot {
       proxyWidget.accountActivity.providers = [{id: "codex", status: "ambiguous", lastUsedAt: nowSeconds}]
       assertEqual(barRemaining.text, "20%", "ambiguous activity names no account")
     }
+    // OMP ROUTING sits between the account rows and the limit cards: give Claude two omp accounts.
+    if (proxyWidget) {
+      var ompNow = Math.floor(Date.now() / 1000)
+      var ompPayload = JSON.parse(JSON.stringify(proxyWidget.usageBackend.payload))
+      var ompClaude = ompPayload.providers.filter(function (provider) { return provider.id === "claude" })[0]
+      ompClaude.accounts = ["Work", "Personal"].map(function (name, index) {
+        return { id: "claude", name: "Claude Code", status: "ok", accountId: name, label: name, origin: "omp", activity: {},
+          windows: [
+            { id: "session", label: "5-hour limit", used: 10 + index, remaining: 90 - index, windowSeconds: 18000, resetsAt: ompNow + 7200 },
+            { id: "weekly", label: "Weekly limit", used: 30, remaining: 70, windowSeconds: 604800, resetsAt: ompNow + 300000 }] }
+      })
+      ompClaude.windows = ompClaude.accounts[0].windows
+      proxyWidget.usageBackend.payload = ompPayload
+      proxyWidget.selectProviderId("claude")
+      ompSettle.restart()
+    }
     if (widget) {
       assertEqual(widget.moduleName, "janitorhead.quotatank", "moduleName injection")
       assertEqual(widget.ipcTarget, "janitorhead.quotatank", "IPC target")
@@ -592,6 +608,28 @@ ShellRoot {
     interval: 50
     repeat: false
     onTriggered: root.runChecks()
+  }
+
+  // The OMP ROUTING check reads geometry after the Panel lays out the swapped accounts.
+  Timer {
+    id: ompSettle
+    interval: 50
+    repeat: false
+    onTriggered: root.checkOmpRoutingPlacement()
+  }
+
+  function checkOmpRoutingPlacement() {
+    var panel = root.proxyWidget
+    var block = root.namedChild(panel, "ompRouting")
+    assertTrue(block !== null && block.visible, "OMP routing block is missing")
+    if (!block) return
+    var blockTop = block.mapToItem(panel, 0, 0).y
+    var rows = panel.accountList
+    var rowsBottom = rows.mapToItem(panel, 0, 0).y + rows.height
+    var card = panel.limitCards.itemAt(0)
+    assertTrue(blockTop >= rowsBottom, "OMP routing block must sit under the account rows")
+    assertTrue(!!card && blockTop + block.height <= card.mapToItem(panel, 0, 0).y,
+      "OMP routing block must sit between account rows and limit cards")
   }
 
   Timer {
