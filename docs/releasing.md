@@ -1,7 +1,7 @@
 # Release checklist
 
-1. Update `manifest.json` and `CHANGELOG.md` together.
-2. Run `./tests/run` from the development checkout.
+1. Update `manifest.json` and `CHANGELOG.md` together: in the changelog, rename `## Unreleased` to `## X.Y.Z`.
+2. Run `./tests/run` from the development checkout, then `tests/check-release vX.Y.Z`. CI runs the same check only after the tag is pushed, so run it here first.
 3. Create a clean archive or clone and run `omarchy plugin validate` against it.
    The packaged tree must contain no symlinks.
 4. Smoke-test Limits and Costs with each available provider account. Record any
