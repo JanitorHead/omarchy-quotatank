@@ -477,12 +477,20 @@ function windowRowFor(provider, selector, allowFallback) {
 function poolTotal(provider, selector) {
   var want = normalizeBarWindow(selector)
   if (want === "auto") {
+    // Accounts that failed without a reading have no percent: when no window has one, the failed pool still
+    // counts, so the chip reads the failure instead of a dash.
     var tightest = null
+    var failedPool = null
     for (var name in WINDOW_SELECTORS) {
       var pool = poolTotal(provider, name)
-      if (pool !== null && pool.percent !== null && (tightest === null || pool.percent < tightest.percent)) tightest = pool
+      if (pool === null) continue
+      if (pool.percent === null) {
+        if (failedPool === null) failedPool = pool
+        continue
+      }
+      if (tightest === null || pool.percent < tightest.percent) tightest = pool
     }
-    return tightest
+    return tightest !== null ? tightest : failedPool
   }
   if (!provider || !WINDOW_SELECTORS[want]) return null
   var accounts = listOrEmpty(provider.accounts)

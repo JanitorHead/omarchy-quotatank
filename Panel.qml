@@ -1331,7 +1331,9 @@ Ui.Panel {
           // A per-provider menu bar choice of "Pool": the chip shows the pool total of its window, one chip
           // for the provider, instead of an account's figure.
           readonly property bool poolChip: !accountChip && UsageLogic.barChipValue(root.barChipValues, providerId) === "pool"
-          readonly property var poolFigure: poolChip ? UsageLogic.poolTotal(modelData, limits.top) : null
+          // The pool chip pools the full reading, so its figure matches the Limits runway.
+          readonly property var poolSource: poolChip ? (UsageLogic.readingFor(root.providers, providerId) || modelData) : modelData
+          readonly property var poolFigure: poolChip ? UsageLogic.poolTotal(poolSource, limits.top) : null
 
           readonly property var lastAccount: root.lastAccount(modelData)
           // Every account read through a proxy, which rotates them.
@@ -1352,11 +1354,13 @@ Ui.Panel {
             ? String(accounts[shownIndex].accountId) : ""
           readonly property var limits: root.barLimitsFor(modelData.id)
           readonly property string quotaMode: root.quotaModeFor(modelData.id)
-          readonly property var failure: accountChip ? reading : modelData
+          readonly property var failure: accountChip ? reading : poolChip ? poolSource : modelData
           // An ended subscription with money left shows that money, like a pay-as-you-go account; without any,
           // it reads like a failure: one word, no figures, highlighted.
-          readonly property bool ended: UsageLogic.subscriptionEnded(reading)
-          readonly property bool failed: poolChip ? poolFigure === null || poolFigure.counted === 0
+          readonly property bool ended: !poolChip && UsageLogic.subscriptionEnded(reading)
+          // No account reports this limit: a dash, not a failure, so it is not highlighted.
+          readonly property bool poolEmpty: poolChip && poolFigure === null
+          readonly property bool failed: poolChip ? poolFigure !== null && poolFigure.counted === 0
             : ended ? UsageLogic.endedWithoutMoney(reading) : String(failure.status) === "error"
           readonly property string blocking: failed || poolChip ? "" : UsageLogic.blockingWindow(
             limits.top, UsageLogic.exactRemainingForWindow(reading, limits.top),
@@ -1382,8 +1386,8 @@ Ui.Panel {
             : UsageLogic.usedForWindow(reading, topWindow)
           readonly property bool stacked: windowStacked || (moneyChip && shownValue !== null)
           readonly property string shownText: shownValue === null
-            ? (throughProxy ? "—" : "") : UsageLogic.formatPercent(shownValue) + "%"
-          readonly property string severity: UsageLogic.severity(
+            ? (throughProxy || poolEmpty ? "—" : "") : UsageLogic.formatPercent(shownValue) + "%"
+          readonly property string severity: poolEmpty ? "none" : UsageLogic.severity(
             reading, root.warningThreshold, root.criticalThreshold, remainingValue)
           readonly property string moneySeverity: moneyChip ? root.moneySeverityOf(reading) : "none"
           readonly property var secondaryRemaining: windowStacked
@@ -1391,7 +1395,9 @@ Ui.Panel {
           readonly property string secondaryText: secondaryRemaining === null ? "—"
             : UsageLogic.formatPercent(providerChip.quotaMode === "Remaining"
               ? secondaryRemaining : UsageLogic.usedFromRemaining(secondaryRemaining)) + "%"
-          readonly property string topTag: root.barShowPeriods ? UsageLogic.barTagFor(reading, topWindow, true) : ""
+          readonly property string topTag: root.barShowPeriods
+            ? (poolChip ? (poolFigure === null ? "" : UsageLogic.windowShortLabel(poolFigure.window))
+              : UsageLogic.barTagFor(reading, topWindow, true)) : ""
           readonly property string bottomTag: root.barShowPeriods ? UsageLogic.windowShortLabel(secondaryWindow) : ""
           readonly property string topReset: root.barShowResets && !poolChip
             ? root.barResetText(UsageLogic.windowRowFor(reading, topWindow, true)) : ""
@@ -1400,7 +1406,7 @@ Ui.Panel {
           readonly property string percentTag: topTag !== "" || !moneyChip || !root.barShowPeriods ? topTag
             : UsageLogic.rowPeriodTag(UsageLogic.windowRowFor(reading, topWindow, true))
           readonly property string percentLine: (percentTag ? percentTag + " " : "") + shownText + (topReset ? " · " + topReset : "")
-          readonly property string topText: ended && failed ? "ended" : poolChip && failed ? "—"
+          readonly property string topText: ended && failed ? "ended"
             : failed ? UsageLogic.errorReasonLabel(failure.errorKind) : moneyChip ? moneyShown.text : percentLine
           readonly property string bottomText: moneyChip ? percentLine
             : (bottomTag ? bottomTag + " " : "") + secondaryText + (bottomReset ? " · " + bottomReset : "")
@@ -1439,13 +1445,13 @@ Ui.Panel {
               formatClock: root.clockText })
             : null
           readonly property string plainTooltip: ended && failed ? String(modelData.name || modelData.id) + " · Subscription ended"
-            : poolChip && failed ? String(modelData.name || modelData.id) + " · no account reports this limit"
+            : poolEmpty ? String(modelData.name || modelData.id) + " · no account reports this limit"
             : failed ? String(modelData.name || modelData.id) + " · " + root.errorBody(failure)
             : String(modelData.name || modelData.id) + (ended ? " · Subscription ended" : "")
             + (moneyChip ? (moneyShown.unit === "used" ? "\nSpent: " + moneyShown.text + " of " + UsageLogic.formatMoney(moneyShown.total, moneyShown.currency) : "")
               + "\nCan spend now: " + UsageLogic.formatMoney(money, moneyShown.currency) : "")
             + (shownValue === null ? (moneyChip ? "" : " usage unavailable")
-              : "\n" + root.limitName(UsageLogic.windowRowFor(reading, topWindow, true), topWindow)
+              : "\n" + root.limitName(poolChip ? null : UsageLogic.windowRowFor(reading, topWindow, true), poolChip && poolFigure !== null ? poolFigure.window : topWindow)
                 + ": " + UsageLogic.quotaText(shownValue, providerChip.quotaMode))
             + (windowStacked ? "\n" + root.limitName(UsageLogic.windowRowFor(reading, secondaryWindow, false), secondaryWindow)
               + (secondaryRemaining === null ? ": not reported"
@@ -1490,7 +1496,7 @@ Ui.Panel {
           horizontalMargin: 0
           tooltipText: hoverCardEligible ? "" : plainTooltip
           Accessible.role: Accessible.Button
-          Accessible.name: multiAccount
+          Accessible.name: multiAccount && !poolChip
             ? UsageLogic.barAccessibleName(modelData, accountState, { selector: topWindow, quotaMode: quotaMode,
               extraKeys: root.setting("extraKeys", "{}"), accountIndex: accountChip ? accountIndex : -1, strip: strip })
             : plainTooltip.split("\n").join(", ")
