@@ -319,7 +319,7 @@ class UsageComputerTests(unittest.TestCase):
         # A provider this computer is not given has no sign-in here.
         mine = {provider_id: mine.get(provider_id) or usage.error_provider(provider_id, "no_credentials", "Not signed in.")
                 for provider_id in ids}
-        fetchers = {provider_id: (lambda _timeout, value=value: json.loads(json.dumps(value)))
+        fetchers = {provider_id: (lambda _timeout, value=value, **_: json.loads(json.dumps(value)))
                     for provider_id, value in mine.items()}
         with mock.patch.dict(usage.FETCHERS, fetchers), mock.patch.object(usage.quotatank_remote, "run_reader", run_reader), \
                 mock.patch.object(usage, "collect_cliproxy", collect_cliproxy):
