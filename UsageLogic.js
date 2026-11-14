@@ -471,8 +471,9 @@ function windowRowFor(provider, selector, allowFallback) {
 // mean share of the accounts counted. An account is in the pool unless its subscription has ended. It counts
 // from its own reading of the window, stale or not. One that failed without any reading stays in `total` only,
 // so "2 of 3 accounts" says how many readings the figure rests on. A provider without accounts is its own pool.
-// Returns { percent, counted, total }, or null when no account is in the pool. `auto`, the menu bar's default,
-// pools each window and returns the one with the least left, as an auto chip shows a reading's tightest window.
+// Returns { percent, counted, total, window }, or null when no account is in the pool. `window` names the
+// pooled selector. `auto`, the menu bar's default, pools each window and returns the one with the least left,
+// as an auto chip shows a reading's tightest window.
 function poolTotal(provider, selector) {
   var want = normalizeBarWindow(selector)
   if (want === "auto") {
@@ -507,7 +508,7 @@ function poolTotal(provider, selector) {
     }
   }
   if (!total) return null
-  return { percent: counted ? Math.round(sum / counted) : null, counted: counted, total: total }
+  return { percent: counted ? Math.round(sum / counted) : null, counted: counted, total: total, window: want }
 }
 
 // Limit cards in one order for every provider: shortest window first, so a 5-hour
@@ -3101,10 +3102,6 @@ function setBarChipValue(raw, providerId, value) {
   return JSON.stringify(values)
 }
 
-function barChipValueLabel(value) {
-  return value === "pool" ? "Pool" : "Account"
-}
-
 // Accounts hidden under Settings → Providers → Customize (`hiddenAccounts`, a JSON object of provider id →
 // account ids, as text or already parsed). A hidden account stays signed in and keeps its key; it is only
 // left out of Limits, the menu bar and the notices. The one reading of the setting.
@@ -3494,9 +3491,10 @@ function leastHeadroomIndex(accounts, indexes) {
 // Indexes (ascending) of the accounts the chip counts. One at a time: the in-use account, else the
 // summary's, even once its subscription has ended (new sessions still go there). Together: every account
 // of the pool spending now; else, with nothing spending, omp's next account when omp holds one; else the
-// one of the pool with the least headroom. Without a limit to compare, the summary's account, or the
-// pool's first when that one has ended.
-function countedAccounts(provider, mode, nowSeconds, recentByAccount) {
+// one of the pool with the least headroom, when some account has a limit to compare; else the summary's
+// account, or the pool's first that has not ended. `ranked` is omp's ranking of the pool (ompRankedFor),
+// passed in so it is computed once.
+function countedAccounts(provider, mode, nowSeconds, recentByAccount, ranked) {
   var accounts = providerAccounts(provider)
   if (accounts.length === 0) return []
   var summary = summaryAccountIndex(provider)
@@ -3505,7 +3503,6 @@ function countedAccounts(provider, mode, nowSeconds, recentByAccount) {
   for (var i = 0; i < accounts.length; i++)
     if (!subscriptionEnded(accounts[i]) && spendingNow(accounts[i], nowSeconds, recentByAccount)) spending.push(i)
   if (spending.length > 0) return spending
-  var ranked = ompRankedFor(provider, mode, nowSeconds)
   if (ranked.length > 0) return [ranked[0].index]
   var least = leastHeadroomIndex(accounts, null)
   if (least >= 0) return [least]
@@ -3756,7 +3753,8 @@ function accountState(provider, options) {
   if (accounts.length === 0) return null
   var opts = options || {}
   var mode = accountMode(provider, opts.modes, opts.nowSeconds, opts.recentByAccount)
-  var counted = countedAccounts(provider, mode, opts.nowSeconds, opts.recentByAccount)
+  var ranked = ompRankedFor(provider, mode, opts.nowSeconds)
+  var counted = countedAccounts(provider, mode, opts.nowSeconds, opts.recentByAccount, ranked)
   var spending = []
   var rings = []
   var inUse = []
@@ -3774,7 +3772,6 @@ function accountState(provider, options) {
     dots.push({ index: index, state: rings[index], counted: isCounted, spending: isCounted && spending[index] })
   }
   var value = leastHeadroomIndex(accounts, counted)
-  var ranked = ompRankedFor(provider, mode, opts.nowSeconds)
   var routing = ompRoutingLines(provider, opts, mode, ranked)
   return {
     mode: mode,
@@ -3809,7 +3806,7 @@ function ompTagsOf(accounts, ranked) {
   var tags = []
   for (var t = 0; t < accounts.length; t++) tags.push("")
   for (var r = 0; r < ranked.length; r++) tags[ranked[r].index] = ranked[r].inReserve ? "in reserve" : ranked[r].hot ? "5h nearly full" : ""
-  if (ranked.length > 0) tags[ranked[0].index] = "next"
+  tags[ranked[0].index] = "next"
   return tags
 }
 
@@ -3945,17 +3942,15 @@ function ompOrder(a, b) {
   return step.order !== 0 ? step.order : a.index - b.index
 }
 
-// The OMP ROUTING block under the account rows (ticket 48). Three lines, each empty when it has nothing
-// to say: omp's next account and why, the share at which another account would take over, and one
-// warning. Only omp accounts are routed; a proxy pool or a provider without omp accounts gets nothing.
-function ompRouting(provider, options) {
-  var opts = options || {}
-  return ompRoutingLines(provider, opts, opts.mode, ompRankedFor(provider, opts.mode, opts.nowSeconds))
-}
-
 // accountState's routing line: { text, tooltip } with the full text as the tooltip, or null when empty.
 function routingLine(text) {
   return text === "" ? null : { text: text, tooltip: text }
+}
+
+// The name of account `index` as a routing line says it: the name rows show, never with " · in use". The
+// active account is still a pick for the next session, so that suffix would mislead there.
+function routingName(accounts, index, opts) {
+  return accountName(Object.assign({}, accounts[index], { active: false }), opts.extraKeys, opts.hideEmails, index + 1)
 }
 
 // The three routing lines for `ranked`, the omp candidates the caller ranked once (ompRankedFor), in `mode`.
@@ -3973,11 +3968,11 @@ function ompRoutingLines(provider, opts, mode, ranked) {
   }
   if (!hasOmp || mode !== "together") return lines
   if (endedAccount >= 0) {
-    lines.warning = accountName(accounts[endedAccount], opts.extraKeys, opts.hideEmails, endedAccount + 1) + "'s subscription ended, but omp still signs in with it: remove it in omp."
+    lines.warning = routingName(accounts, endedAccount, opts) + "'s subscription ended, but omp still signs in with it: remove it in omp."
   }
   if (ranked.length === 0) return lines
-  var name = accountName(accounts[ranked[0].index], opts.extraKeys, opts.hideEmails, ranked[0].index + 1)
-  var runnerName = ranked.length > 1 ? accountName(accounts[ranked[1].index], opts.extraKeys, opts.hideEmails, ranked[1].index + 1) : ""
+  var name = routingName(accounts, ranked[0].index, opts)
+  var runnerName = ranked.length > 1 ? routingName(accounts, ranked[1].index, opts) : ""
   var reason = ompReason(ranked)
   lines.next = "Next session: " + name + " · " + ompReasonText(reason, runnerName)
   var percent = reason === "drain" && ranked.length > 1 ? ompSwitchPercent(accounts[ranked[0].index], ranked[0], ranked[1], now) : null
@@ -3999,8 +3994,8 @@ function ompLeftoverWarning(accounts, ranked, opts, now) {
   }
   if (best === null) return ""
   var leftoverAccount = accounts[best.index]
-  var nextName = accountName(accounts[ranked[0].index], opts.extraKeys, opts.hideEmails, ranked[0].index + 1)
-  return accountName(leftoverAccount, opts.extraKeys, opts.hideEmails, best.index + 1) + " ends " + subscriptionEndLabel(leftoverAccount.subscription, now)
+  var nextName = routingName(accounts, ranked[0].index, opts)
+  return routingName(accounts, best.index, opts) + " ends " + subscriptionEndLabel(leftoverAccount.subscription, now)
     + " with " + Math.round(best.left.percent) + "% left over: omp spends it only after " + nextName + ". Raise its priority in omp (auth.accountPolicies)."
 }
 
@@ -4425,7 +4420,7 @@ function poolLine(provider, row) {
     if (windowMatches({ windowSeconds: seconds }, name)) { selector = name; break }
   }
   var pool = selector ? poolTotal(provider, selector) : null
-  if (pool === null || pool.percent === null) return ""
+  if (pool === null || pool.percent === null || pool.total < 2) return ""
   var period = { session: "5-hour window", weekly: "week", monthly: "month" }[selector]
   var counts = pool.counted < pool.total
     ? pool.counted + " of " + pool.total + " accounts"
