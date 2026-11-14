@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Checks that a release tag (v3.1.3) agrees with manifest.json's version and has its CHANGELOG.md section.
+set -euo pipefail
+
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+tag=${1:?usage: tests/check-release vX.Y.Z}
+version=${tag#v}
+status=0
+manifest=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$repo_root/manifest.json")
+if [[ $manifest != "$version" ]]; then
+  echo "manifest.json says $manifest, the tag says $version" >&2
+  status=1
+fi
+if ! grep -qx "## $version" "$repo_root/CHANGELOG.md"; then
+  echo "CHANGELOG.md has no '## $version' section" >&2
+  status=1
+fi
+if grep -qx "## Unreleased" "$repo_root/CHANGELOG.md"; then
+  echo "CHANGELOG.md still has an '## Unreleased' section" >&2
+  status=1
+fi
+exit $status
