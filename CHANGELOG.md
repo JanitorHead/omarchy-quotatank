@@ -4,7 +4,9 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 3.2.0
+
+Quotatank 3.2.0 shows which omp account comes next and why, when each subscription ends and what each limit leaves over, and can pool a provider's accounts into one chip.
 
 ### Added
 
@@ -18,7 +20,7 @@ All notable changes to this project will be documented here. The format follows
 
 - **Custom account names.** In Settings → Providers → Customize → Accounts shown, an omp, proxy or other-computer account, or this computer's own sign-in, can take a name of its own (up to 40 characters). The name replaces its email or `Account N` in rows, the chip hover card, notices, the runway, Settings and the JSON export; hidden emails stay hidden, and Omarchy logins and extra keys keep their own names. The names are kept in the new `accountNames` setting, keyed by provider and account id.
 
-- **Pool total.** In Settings → Providers → Customize, **Menu bar shows** can be set to **Pool** per provider: the chip then shows what is left of the window across the provider's shown accounts whose subscription has not ended, counting only accounts that carry that limit (an Ultra account without a 5-hour limit is left out). A stale reading counts; an account that fails with no reading is left out, and the tooltip says so (**Pool from 2 of 3 accounts**). The runway's pool line shows the same figure (`Pool: 55% left this week · 2 accounts`) in place of omp's capacity figures. The choice is kept in the new `barChipValues` setting.
+- **Pool total.** In Settings → Providers → Customize, **Menu bar shows** can be set to **Pool** per provider: the chip then shows what is left of the window across the provider's shown accounts whose subscription has not ended, counting only accounts that carry that limit (an Ultra account without a 5-hour limit is left out). A stale reading counts; an account that fails with no reading is left out, and the tooltip says so (**Pool from 2 of 3 accounts**). When every account fails, the chip shows the failure. The runway's pool line shows the same figure (`Pool: 55% left this week · 2 accounts`) in place of omp's capacity figures. The choice is kept in the new `barChipValues` setting.
 
 - **Codex subscription end.** Codex's own account check now says when a Codex subscription ends: a cancelled one ends on its cancellation date, an expired one has ended, and a renewing one has no end date. Codex's date replaces the manual field for that account, and the check runs at most once every six hours per account.
 
