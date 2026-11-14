@@ -574,7 +574,7 @@ class OmpTestCase(unittest.TestCase):
 
     def run_main(self, *arguments: str, fetchers: dict | None = None) -> dict:
         output = io.StringIO()
-        defaults = {provider_id: (lambda timeout, provider_id=provider_id: native(provider_id)) for provider_id in usage.FETCHERS}
+        defaults = {provider_id: (lambda timeout, provider_id=provider_id, **_: native(provider_id)) for provider_id in usage.FETCHERS}
         with mock.patch.dict(usage.FETCHERS, {**defaults, **(fetchers or {})}), contextlib.redirect_stdout(output):
             self.assertEqual(usage.main(["--state-dir", str(self.state), *arguments]), 0)
         return json.loads(output.getvalue())
@@ -662,8 +662,8 @@ class UnreadableOmpDataTests(OmpTestCase):
 
     def setUp(self):
         super().setUp()
-        self.fetchers = {"claude": lambda timeout: native("claude", "dev@example.com"),
-                         "codex": lambda timeout: native("codex", "work@example.com")}
+        self.fetchers = {"claude": lambda timeout, **_: native("claude", "dev@example.com"),
+                         "codex": lambda timeout, **_: native("codex", "work@example.com")}
 
     def test_an_integer_too_large_for_a_float_is_no_number(self):
         for value in (10 ** 400, -10 ** 400, "1e999", float("nan"), True, None):

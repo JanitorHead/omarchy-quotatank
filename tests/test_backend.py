@@ -505,11 +505,11 @@ done
                 usage.read_json(path, max_bytes=32)
 
     def test_one_provider_failure_does_not_suppress_others(self):
-        def failed(_timeout):
+        def failed(_timeout, **_):
             raise RuntimeError("collector exploded")
 
         def valid(provider_id):
-            return lambda _timeout: usage.base_provider(provider_id)
+            return lambda _timeout, **_: usage.base_provider(provider_id)
 
         replacements = {
             "claude": valid("claude"),
@@ -532,7 +532,7 @@ done
         self.assertEqual(providers[0]["status"], "ok")
 
     def test_invalid_normalized_result_is_isolated(self):
-        with mock.patch.dict(usage.FETCHERS, {"claude": lambda _timeout: []}, clear=False):
+        with mock.patch.dict(usage.FETCHERS, {"claude": lambda _timeout, **_: []}, clear=False):
             result = usage.safe_fetch("claude", 1)
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["errorKind"], "internal")

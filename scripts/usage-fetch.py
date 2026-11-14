@@ -9496,6 +9496,8 @@ def collect_providers(provider_ids: list[str], timeout: float,
     if not provider_ids:
         return []
     fetchers = dict(FETCHERS)
+    for provider_id in ("claude", "codex"):
+        fetchers[provider_id] = functools.partial(fetchers[provider_id], state_dir=state_dir)
     for provider_id, path in (key_files or {}).items():
         keyed = KEYED_FETCHERS.get(provider_id)
         if keyed is not None and FETCHERS.get(provider_id) is keyed:
@@ -9504,8 +9506,6 @@ def collect_providers(provider_ids: list[str], timeout: float,
         keyed = KEYED_FETCHERS.get(provider_id)
         if keyed is not None and FETCHERS.get(provider_id) is keyed:
             fetchers[provider_id] = functools.partial(key_account_result, provider_id, fetchers[provider_id], keyed, extras)
-    for provider_id in ("claude", "codex"):
-        fetchers[provider_id] = functools.partial(fetchers[provider_id], state_dir=state_dir)
     results: dict[str, dict[str, Any]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(provider_ids)) as executor:
         futures = {executor.submit(safe_fetch, provider_id, timeout, fetchers): provider_id for provider_id in provider_ids}
