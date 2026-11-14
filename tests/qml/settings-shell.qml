@@ -260,7 +260,7 @@ ShellRoot {
       form.page = "providers"
       form.usagePayload = payload(ompFound, [
         { id: "claude", status: "ok", accounts: [{ accountId: "main", origin: "omarchy" }, { accountId: "omp-0123456789ab", origin: "omp" }] },
-        { id: "codex", status: "ok", accounts: [{ accountId: "work", origin: "omarchy" }] }])
+        { id: "codex", status: "ok", origin: "omarchy" }])
       shown("providerList").forceLayout()
       shown("customize-claude").expanded = true
       shown("customize-codex").expanded = true
@@ -295,9 +295,10 @@ ShellRoot {
       check(saved.subscriptionEnds === "{}", "Subscription ends: clearing the date removes it: " + saved.subscriptionEnds)
       // A single account gets the date field too, with no "Accounts shown" switch.
       edit("subscriptionEnd-codex-0Field", "2030-07-01", true)
-      check(saved.subscriptionEnds === '{"codex":{"work":"2030-07-01"}}', "Subscription ends: a single account has the date field: " + saved.subscriptionEnds)
+      check(saved.subscriptionEnds === '{"codex":{"main":"2030-07-01"}}', "Subscription ends: a single sign-in has the date field, saved under main: " + saved.subscriptionEnds)
       edit("subscriptionEnd-codex-0Field", "", true)
-      check(saved.subscriptionEnds === "{}" && !find(form, "showAccount-codex-0"), "Subscription ends: a single account has no show switch")
+      var codexSwitch = find(form, "showAccount-codex-0")
+      check(saved.subscriptionEnds === "{}" && (!codexSwitch || !codexSwitch.visible), "Subscription ends: a single sign-in has no show switch")
       // Custom account names: an omp account takes a name saved per provider; Omarchy logins take none.
       edit("accountName-claude-1Field", "Personal", true)
       check(saved.accountNames === '{"claude":{"omp-0123456789ab":"Personal"}}', "Account names: the name is saved for that account: " + saved.accountNames)
@@ -309,9 +310,17 @@ ShellRoot {
       check(!omarchyName || !omarchyName.visible, "Account names: an Omarchy login has no name field")
       var singleName = find(form, "accountName-codex-0")
       check(!singleName || !singleName.visible, "Account names: a single Omarchy login has no name field")
+      // An API key is the primary account: a date typed for a single key saves under primary.
+      form.usagePayload = payload(ompFound, [{ id: "codex", status: "ok", origin: "key" }])
+      shown("providerList").forceLayout()
+      shown("customize-codex").expanded = true
+      edit("subscriptionEnd-codex-0Field", "2030-08-01", true)
+      check(saved.subscriptionEnds === '{"codex":{"primary":"2030-08-01"}}', "Subscription ends: a single API key saves under primary: " + saved.subscriptionEnds)
+      edit("subscriptionEnd-codex-0Field", "", true)
+      check(saved.subscriptionEnds === "{}", "Subscription ends: clearing a single key's date removes it")
       // Codex reports its own end: the manual date field gives way to the provider's date, read only.
       form.usagePayload = payload(ompFound, [
-        { id: "codex", status: "ok", accounts: [{ accountId: "work", origin: "omarchy", subscription: { source: "provider", ended: false, endsAt: 1909094400 } }] }])
+        { id: "codex", status: "ok", origin: "omarchy", subscription: { source: "provider", ended: false, endsAt: 1909094400 } }])
       shown("providerList").forceLayout()
       shown("customize-codex").expanded = true
       check(!shown("subscriptionEnd-codex-0").visible && text("subscriptionReported-codex-0") === "OpenAI Codex reports it ends 1 Jul 2030",
