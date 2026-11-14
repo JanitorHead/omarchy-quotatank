@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import Quickshell.Io
 import "UsageLogic.js" as UsageLogic
 
@@ -16,6 +17,8 @@ Item {
   property double lastAttemptAt: 0
   property bool pendingRefresh: false
   property bool launchPending: false
+  // refresh.json read (or found missing); until then it, not the settings, decides the first check.
+  property bool stateLoaded: false
 
   readonly property int refreshIntervalSec: Math.max(60, Math.min(3600,
     Math.round(Number(setting("refreshIntervalSec", 900)) || 900)))
@@ -57,7 +60,11 @@ Item {
   readonly property var mainComputer: UsageLogic.mainComputer(settings)
   readonly property string connectionId: JSON.stringify([keyFiles, extraKeyArguments, ompArguments, computerArguments,
     proxyArguments])
+  // A saved reading stands in only for the same providers and connection.
+  readonly property string readingKey: JSON.stringify([enabledProviderIds, connectionId])
   readonly property string scriptPath: localPath(Qt.resolvedUrl("scripts/usage-fetch.py"))
+  readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")
+  readonly property string refreshStatePath: stateHome + "/omarchy/quotatank/refresh.json"
   readonly property double nextRefreshAt: lastAttemptAt > 0
     ? lastAttemptAt + refreshIntervalSec * 1000 : 0
 
@@ -84,8 +91,46 @@ Item {
     try { return decodeURIComponent(value) } catch (e) { return value }
   }
 
+  // restart(), not start(): a running timer would keep its old deadline, and the automatic check would come
+  // too soon after a manual one.
+  function scheduleRefresh() {
+    var delay = UsageLogic.refreshDelayMs(Date.now(), lastAttemptAt, refreshIntervalSec)
+    refreshTimer.interval = Math.max(1, delay)
+    refreshTimer.restart()
+  }
+
+  // A reading with a provider that could not be reached (no network yet, a timeout): worth a second try soon.
+  function hasUnreachable(reading) {
+    return UsageLogic.listOrEmpty(reading.providers).some(function(provider) {
+      return provider && (provider.errorKind === "network" || provider.errorKind === "timeout")
+    })
+  }
+
+  // The backend saves refresh.json (usage-fetch.py --refresh-key) as privately as its other state files; the
+  // widget only reads it. A reading stands in only for the providers and sources it was read for.
+  function restoreState(saved) {
+    stateLoaded = true
+    var attempted = saved ? Number(saved.lastAttemptAt) : NaN
+    if (isFinite(attempted) && attempted > 0) lastAttemptAt = attempted
+    var reading = saved && saved.reading && typeof saved.reading === "object" ? saved.reading : null
+    var usable = reading && reading.key === readingKey && reading.payload
+      && reading.payload.schemaVersion === 1 && UsageLogic.isListLike(reading.payload.providers)
+    if (!usable) {
+      requestRefresh(false)
+      return
+    }
+    UsageLogic.boundUsagePayload(reading.payload)
+    payload = reading.payload
+    var generated = new Date(String(reading.payload.generatedAt || "")).getTime()
+    lastSuccessAt = isFinite(generated) ? generated : 0
+    // No refreshed(): threshold notices, account events and the trackers they compare with start from the first
+    // live reading, as on a start without a saved one, never from a reading that may be hours old.
+    scheduleRefresh()
+    if (UsageLogic.refreshDelayMs(Date.now(), lastAttemptAt, refreshIntervalSec) > 0 && hasUnreachable(payload))
+      networkRetry.start()
+  }
+
   function requestRefresh(manual) {
-    if (manual) refreshTimer.restart()
     if (fetchProcess.running || launchPending || pendingRefresh) {
       pendingRefresh = true
       return
@@ -102,10 +147,12 @@ Item {
     loading = true
     pendingRefresh = false
     lastAttemptAt = Date.now()
+    scheduleRefresh()
     var command = [
       "python3", scriptPath,
       "--providers", enabledProviderIds.join(","),
-      "--timeout", "12"
+      "--timeout", "12",
+      "--refresh-key", readingKey
     ]
     for (var i = 0; i < keyFiles.length; i++) command.push("--key-file", keyFiles[i][0] + "=" + keyFiles[i][1])
     command = command.concat(extraKeyArguments).concat(ompArguments).concat(computerArguments).concat(proxyArguments)
@@ -146,10 +193,7 @@ Item {
           lastSuccessAt = isFinite(generated) ? generated : Date.now()
           // The first check of a session often runs before the network is up; try once more soon
           // instead of leaving the cards on a connection error until the next interval.
-          var unreachable = UsageLogic.listOrEmpty(parsed.providers).some(function(provider) {
-            return provider && (provider.errorKind === "network" || provider.errorKind === "timeout")
-          })
-          if (!unreachable) networkRetry.stop()
+          if (!hasUnreachable(parsed)) networkRetry.stop()
           else if (!wasRetry) networkRetry.start()
           refreshed()
         }
@@ -161,8 +205,10 @@ Item {
   }
 
   // Let bindings consuming this list settle before changing loading state.
-  onEnabledProviderIdsChanged: Qt.callLater(refreshForSettings)
+  onEnabledProviderIdsChanged: if (stateLoaded) Qt.callLater(refreshForSettings)
+  onRefreshIntervalSecChanged: if (lastAttemptAt > 0) scheduleRefresh()
   onConnectionIdChanged: {
+    if (!stateLoaded) return
     payload = ({ schemaVersion: 1, generatedAt: "", providers: [] })
     lastSuccessAt = 0
     fetchError = ""
@@ -243,12 +289,23 @@ Item {
     }
   }
 
+  FileView {
+    id: refreshState
+    path: root.refreshStatePath
+    printErrors: false
+    onLoaded: {
+      var saved = null
+      try { saved = JSON.parse(text()) } catch (e) {}
+      // Deferred so the settings given at creation are in readingKey.
+      Qt.callLater(function() { if (!root.stateLoaded) root.restoreState(saved) })
+    }
+    onLoadFailed: Qt.callLater(function() { if (!root.stateLoaded) root.restoreState(null) })
+  }
+
   Timer {
     id: refreshTimer
     interval: root.refreshIntervalSec * 1000
-    running: true
-    repeat: true
-    triggeredOnStart: true
+    repeat: false
     onTriggered: root.requestRefresh(false)
   }
 }

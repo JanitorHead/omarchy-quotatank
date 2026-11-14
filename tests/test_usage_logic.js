@@ -2341,6 +2341,12 @@ console.log("1.9 Coming up list: passed");
   assert.equal(context.readingStale(now * 1000, now * 1000 - 1801000, 900, false, null), true, "older than two intervals");
   assert.equal(context.readingStale(now * 1000, now * 1000 - 1799000, 900, false, null), false);
   assert.equal(context.readingStale(now * 1000, 0, 900, false, null), false, "no reading yet is not stale");
+  assert.equal(context.refreshDelayMs(now * 1000, now * 1000 - 300000, 900), 600000,
+    "a restarted panel waits for the remaining refresh interval");
+  assert.equal(context.refreshDelayMs(now * 1000, now * 1000 - 900000, 900), 0,
+    "a due refresh runs immediately");
+  assert.equal(context.refreshDelayMs(now * 1000, now * 1000 + 6 * 3600000, 900), 900000,
+    "a check time ahead of the clock waits one interval at most");
   const readAtIso = new Date((now - 120) * 1000).toISOString();
   const offsetClock = function (seconds) { return "T+" + (seconds - now) };
   assert.equal(context.staleReadingText({ stale: true, errorKind: "rate_limited", readAt: readAtIso }, offsetClock),
