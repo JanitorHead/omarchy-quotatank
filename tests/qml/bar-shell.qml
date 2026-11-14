@@ -746,12 +746,15 @@ ShellRoot {
       var block = namedChild(top, "ompRouting")
       var rows = namedChild(top, "accountList")
       var limits = namedChild(top, "limitsSection")
-      if (!widget.opened || !block || !block.visible || block.height <= 0 || !rows || !limits) {
+      // Opening the panel can start a synthetic refresh that replaces omp's payload: put it back and wait.
+      if (widget.usageBackend.payload !== ompIdlePayload || !widget.opened || !block || !block.visible || block.height <= 0
+          || !rows || !limits) {
+        if (widget.usageBackend.payload !== ompIdlePayload) widget.usageBackend.payload = ompIdlePayload
         if (!widget.opened) widget.showLimits()
         return waited < 150 ? false : check(false, "Claude's open panel shows OMP ROUTING: " + (block
           ? "visible " + block.visible + ", routing " + JSON.stringify(block.routing) + ", section " + block.parent.visible
             + ", view " + widget.viewMode + ", provider " + (widget.provider ? widget.provider.id : "none")
-            + ", opened " + widget.opened
+            + ", opened " + widget.opened + ", omp's payload " + (widget.usageBackend.payload === ompIdlePayload)
           : "no block"))
       }
       var blockTop = block.mapToItem(null, 0, 0).y
