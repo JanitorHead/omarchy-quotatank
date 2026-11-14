@@ -17,7 +17,7 @@ Column {
   property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
 
-  readonly property var items: UsageLogic.comingUpItems(root.account, root.readingAt > 0 ? root.readingAt : root.nowSeconds)
+  readonly property var items: UsageLogic.comingUpItems(root.account, root.nowSeconds, root.readingAt > 0 ? root.readingAt : root.nowSeconds)
 
   visible: items.length > 0
   spacing: Style.spacing.xs

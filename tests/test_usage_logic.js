@@ -2217,6 +2217,17 @@ console.log("1.9 Leftover at the reset: passed");
   assert.deepEqual(asJson(context.comingUpItems({ windows: [fiveHour] }, noon)), [], "a 5-hour reset is not listed");
   assert.equal(asJson(context.comingUpItems({ ...full, windows: [fiveHour, reset, monthly] }, noon))[0].at, noon + 3 * DAY,
     "the next reset is the next day-long one");
+  // A reset that passed after the reading stays listed until the next reading; its leftover is the one at the live clock.
+  const justPassed = { id: "weekly", label: "Weekly limit", used: 40, remaining: 60, windowSeconds: WEEK, resetsAt: noon + 60, samples: [] };
+  const livePassed = noon + 120;
+  const stillListed = asJson(context.comingUpItems({ windows: [justPassed] }, livePassed, noon));
+  assert.equal(stillListed.length, 1, "a reset that passed after the reading stays listed");
+  const liveLeftover = context.windowLeftover(justPassed, { windows: [justPassed] }, livePassed);
+  const leftoverSuffix = liveLeftover ? " · " + Math.round(liveLeftover.percent) + "% left over" : ""
+  assert.ok(stillListed[0].text.startsWith("Weekly limit resets ") && stillListed[0].text.endsWith(leftoverSuffix),
+    "the leftover is the one at the live clock: " + stillListed[0].text)
+  assert.deepEqual(asJson(context.comingUpItems({ windows: [justPassed] }, livePassed, noon + 90)), [],
+    "a reset that passed before the reading is not listed");
 }
 console.log("1.9 Coming up list: passed");
 
