@@ -82,7 +82,7 @@ The built-in `omarchy.agents` widget can run alongside Quotatank. To keep only Q
 
 ## Several accounts at a glance
 
-![Three views: the hover card over the Claude chip listing Work in use and spending now and Personal idle, each with a trend and 5-hour and weekly meters; Limits with two accounts used together through omp, sorted by headroom, with a pool line under the runway; and Limits with every account used up, a clock in the chip, and a runway card with the gap until the reset](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/accounts.png)
+![Three views: the hover card over the Claude chip listing Work in use and spending now and Personal idle, each with a trend and 5-hour and weekly meters; four Claude accounts used together through omp, with Lab in reserve, Work holding a banked Fable reset, Personal marked next with its end date and what it leaves over, the ended Old Pro last, OMP ROUTING naming the next session, and Personal's detail with what its weekly limit leaves over and what comes up; and Limits with every account used up, a clock in the chip, and a runway card with the gap until the reset](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/accounts.png)
 
 Every source of a second account shows the same way:
 
@@ -102,9 +102,11 @@ In the menu bar, a dot per account sits beside the chip: filled for the account 
 
 Every limit card has a meter and a forecast: a dashed stretch after the fill shows where the current pace takes the limit before it resets, red when it runs out first. While the account spends, the block being filled breathes and a glow travels along the forecast, quicker as the pace presses on what is left; the last dash turns red as it lands when the limit runs out first. The fill itself only moves with a new reading. Hover the meter for the pace tick, where even use would be by now, and for the time a point is reached at this pace, or when it was passed. **Live figure** adds two decimals that climb at the current rate between readings. A 5-hour limit projects from its recent rate, newest samples weighing most; weekly and monthly limits blend this window's average with the last 24 hours, so one busy hour does not predict a weekly run-out. Hover a card's status line for how the tick and the projection work.
 
-**Banked resets.** When Anthropic grants Claude a limit reset (a launch reset, say), each account row with one you can spend now shows a badge that counts them (`1 Fable` when it clears only the Fable weekly limit). The badge dims while that limit is still healthy. Clicking it applies the reset where Quotatank can apply one today; otherwise its tooltip says where to apply it. A card under the limits counts every banked reset and lists those you can spend now and those that wait, with the limits each clears and when it expires (`1 reset usable now, for the weekly and Fable weekly limits, expires 10 Dec`, `2 resets later, for the Fable weekly limit, expire 9 Mar`); **Apply…** spends it after a confirmation, and when Claude holds it back, the card says why.
+**Banked resets.** When Anthropic grants Claude a limit reset (a launch reset, say), each account row with one you can spend now shows a badge that counts them (`1 Fable` when it clears only the Fable weekly limit); a Codex account with banked resets shows its count the same way. The badge dims while that limit is still healthy. Clicking it applies the reset where Quotatank can apply one today; otherwise its tooltip says where to apply it. A card under the limits counts every banked reset and lists those you can spend now and those that wait, with the limits each clears and when it expires (`1 reset usable now, for the weekly and Fable weekly limits, expires 10 Dec`, `2 resets later, for the Fable weekly limit, expire 9 Mar`); **Apply…** spends it after a confirmation, and when Claude holds it back, the card says why.
 
 **Left over and coming up.** A limit that resets in a day or more shows what it leaves over at reset. Its verdict reads `65% left over at reset · use 27%/day to spend it`. An account row shows the leftover alone (`65% left over`) in place of its plan when no subscription end is near, and joins it to a near end (`Ends 1 Jan · 65% left over`). The deadline is the reset, or the subscription's end when that comes first. Five-hour limits, balances and credits never show it, and it shows only when the current pace would leave at least 5 points unused. Below the limits, a Coming up list gives the account's next dates in order: a banked reset that expires, the next reset of a limit of a day or more with what it leaves over, and the subscription's end. Five-hour resets are left out, and an ended subscription lists nothing.
+
+![Work's detail: the weekly limit leaves 32% over at reset at 24% a day, the Fable weekly limit runs out first, Coming up lists the weekly reset with its leftover and a banked reset that expires 10 Dec, and the banked-reset card lists one reset usable now and two later, with Apply](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/coming-up.png)
 
 <details>
 <summary>Every status line</summary>
@@ -113,6 +115,8 @@ Every limit card has a meter and a forecast: a dashed stretch after the fill sho
 |---|---|
 | `runs out 17:50 · pace 58%` | At the projected rate, the limit empties before the window resets |
 | `lasts until reset` | At the projected rate, the limit lasts until the window resets |
+| `32% left over at reset · use 24%/day to spend it` | A limit that resets in a day or more would leave this much unused at the current pace; the second part is the pace that spends it |
+| `45% left over at subscription end · use 18%/day to spend it` | The same, when the subscription ends before the limit resets |
 | `Idle 1h 2m · pace 40%` | A 5-hour limit has not risen for an hour, so no projection is made |
 | `Collecting data · pace 12%` | A 5-hour limit has less than ten minutes of samples so far |
 | `No recent data · pace 30%` | A 5-hour limit's newest sample is more than an hour old |
@@ -139,7 +143,7 @@ When something is wrong, the panel says what and what to do: a used-up limit nam
 
 ## Menu bar
 
-![The menu bar chip in eight states: two accounts with the one in use filled; spending now with a soft halo; near the limit with an arrow to Personal; every account used up with a clock to the reset; five accounts as three dots and a count; two accounts used together; an old reading faded with dashed rings; and one chip per account](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/menu-bar.png)
+![The menu bar chip in nine states: two accounts with the one in use filled; spending now with a soft halo; near the limit with an arrow to Personal; every account used up with a clock to the reset; five accounts as three dots and a count; two accounts used together; one pool figure for every account; an old reading faded with dashed rings; and one chip per account](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/menu-bar.png)
 
 - **Limit shown** picks the window every chip shows. The default is each provider's most constrained limit; 5-hour, 7-day, and monthly pin one window. Every line is tagged with its period (`7d 91%`); turn off **Show limit period** for narrower chips without the tag.
 - **Second limit below** stacks a second limit under the first; **Show when limits reset** appends when each line resets.
@@ -168,7 +172,7 @@ Local Claude Code, Codex, OpenCode, omp, and (when turned on) grok CLI history a
 
 If you work through [omp](https://github.com/can1357/oh-my-pi), Quotatank reads what omp knows, on this computer and on every other computer you added: it merges omp's accounts into the providers you already monitor and follows omp's sessions, so requests mark their account as spending and Costs gains projects and subagents. Nothing has to listen on a port: another computer is read over SSH.
 
-**OMP ROUTING** sits under the limits when omp runs accounts together. It names the account the next session starts on and why (`Next session: Work · first in omp's order.`), gives the share at which another account takes over when drain decides (`New sessions move to Work when Personal reaches about 65%.`), and shows one warning when an omp account's subscription has ended while omp still signs in with it, which is the ended-account warning for an account that still holds money. Until omp reports the next account itself (can1357/oh-my-pi#19144), Quotatank mirrors the ranking of oh-my-pi 18.18.8. A proxy pool or a provider without omp accounts shows no block.
+**OMP ROUTING** sits under the account rows when omp runs accounts together. It names the account the next session starts on and why (`Next session: Work · first in omp's order.`) and gives the share at which another account takes over when drain decides (`New sessions move to Work when Personal reaches about 65%.`). It warns about one thing at a time: an omp account whose subscription has ended while omp still signs in with it (remove it in omp), or else an account omp ranks behind the next one that ends with a share left over (`Personal ends 4 Dec with 59% left over: omp spends it only after Work. Raise its priority in omp (auth.accountPolicies).`). Until omp reports the next account itself (can1357/oh-my-pi#19144), Quotatank mirrors the ranking of oh-my-pi 18.18.8. A proxy pool or a provider without omp accounts shows no block.
 
 ## Balances, not just percentages
 
