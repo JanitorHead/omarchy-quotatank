@@ -116,7 +116,7 @@ Item {
     var usable = reading && reading.key === readingKey && reading.payload
       && reading.payload.schemaVersion === 1 && UsageLogic.isListLike(reading.payload.providers)
     if (!usable) {
-      requestRefresh(false)
+      refresh()
       return
     }
     UsageLogic.boundUsagePayload(reading.payload)
@@ -130,16 +130,13 @@ Item {
       networkRetry.start()
   }
 
-  function requestRefresh(manual) {
+  function refresh() {
     if (fetchProcess.running || launchPending || pendingRefresh) {
       pendingRefresh = true
       return
     }
     startFetch()
   }
-
-  function refresh() { requestRefresh(true) }
-  function refreshForSettings() { requestRefresh(false) }
 
   function startFetch() {
     if (fetchProcess.running || launchPending) return
@@ -205,14 +202,14 @@ Item {
   }
 
   // Let bindings consuming this list settle before changing loading state.
-  onEnabledProviderIdsChanged: if (stateLoaded) Qt.callLater(refreshForSettings)
+  onEnabledProviderIdsChanged: if (stateLoaded) Qt.callLater(refresh)
   onRefreshIntervalSecChanged: if (lastAttemptAt > 0) scheduleRefresh()
   onConnectionIdChanged: {
     if (!stateLoaded) return
     payload = ({ schemaVersion: 1, generatedAt: "", providers: [] })
     lastSuccessAt = 0
     fetchError = ""
-    requestRefresh(false)
+    refresh()
   }
 
   Process {
@@ -285,7 +282,7 @@ Item {
     repeat: false
     onTriggered: {
       retrying = true
-      root.requestRefresh(false)
+      root.refresh()
     }
   }
 
@@ -306,6 +303,6 @@ Item {
     id: refreshTimer
     interval: root.refreshIntervalSec * 1000
     repeat: false
-    onTriggered: root.requestRefresh(false)
+    onTriggered: root.refresh()
   }
 }

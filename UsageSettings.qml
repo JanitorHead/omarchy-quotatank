@@ -1156,11 +1156,14 @@ Column {
         readonly property bool dragging: providerList.draggingId === providerId
         // This provider's accounts in the last reading (Omarchy sign-ins, extra keys, omp, a proxy).
         readonly property var accountReading: reading
-        readonly property var accountList: accountReading ? UsageLogic.listOrEmpty(accountReading.accounts) : []
-        readonly property int accountCount: accountList.length
+        readonly property var readerAccounts: accountReading ? UsageLogic.listOrEmpty(accountReading.accounts) : []
+        // Two or more accounts from the reader. The hide switch and the menu bar choice need them.
+        readonly property int accountCount: readerAccounts.length
+        // One row per account. A provider without accounts is one account: its own reading (one sign-in or key).
+        readonly property var accountList: accountCount > 0 ? readerAccounts : (accountReading ? [accountReading] : [])
         readonly property var hiddenIds: UsageLogic.parseHiddenAccounts(root.value("hiddenAccounts", "{}"))[providerId] || []
         readonly property int shownAccountCount: Array.prototype.filter.call(accountList, function (account) {
-          return hiddenIds.indexOf(String(account && account.accountId || "")) < 0 }).length
+          return hiddenIds.indexOf(UsageLogic.readingAccountId(account)) < 0 }).length
         // Key editor and Customize line up with the name, under the grip and the mark.
         readonly property real indent: grip.width + mark.width + Style.spacing.sm * 2
         width: providerList.width
@@ -1408,77 +1411,67 @@ Column {
                 visible: providerRow.accountCount >= 2
                 text: "Automatically: together while omp or a proxy spreads requests over the accounts, or when two of them spend within the same hour; otherwise one at a time."
               }
-              // Each account shown or hidden. A hidden one keeps its sign-in or key; the last one shown stays.
+              // One group per account: its show switch (two or more accounts), its end date or the provider's
+              // reported one, and its name. A hidden account keeps its sign-in or key; the last one shown stays.
               Label {
                 visible: providerRow.accountCount >= 2
                 text: "Accounts shown"
               }
               Repeater {
-                model: providerRow.accountCount >= 2 ? providerRow.accountList : []
-                delegate: SwitchRow {
-                  id: accountSwitch
-                  required property var modelData
-                  required property int index
-                  readonly property string accountId: String(modelData && modelData.accountId || "")
-                  readonly property bool hidden: providerRow.hiddenIds.indexOf(accountId) >= 0
-                  objectName: "showAccount-" + providerRow.providerId + "-" + index
-                  label: UsageLogic.accountSettingsLabel(modelData, root.value("extraKeys", "{}"),
-                    root.value("hideAccountEmails", true) !== false, index)
-                  checked: !hidden
-                  enabled: accountId !== "" && (hidden || providerRow.shownAccountCount > 1)
-                  onToggled: if (enabled) root.set("hiddenAccounts", UsageLogic.setAccountHidden(
-                    root.value("hiddenAccounts", "{}"), providerRow.providerId, accountId, !hidden))
-                }
-              }
-              Repeater {
-                model: providerRow.accountCount >= 1 ? providerRow.accountList : []
+                model: providerRow.accountList
                 delegate: Column {
-                  id: endRow
+                  id: accountGroup
                   required property var modelData
                   required property int index
-                  readonly property string accountId: String(modelData && modelData.accountId || "")
+                  readonly property string accountId: UsageLogic.readingAccountId(modelData)
+                  readonly property bool hidden: providerRow.hiddenIds.indexOf(accountId) >= 0
+                  // Built once here and shared by the rows below.
+                  readonly property string label: UsageLogic.accountSettingsLabel(modelData, root.value("extraKeys", "{}"),
+                    root.value("hideAccountEmails", true) !== false, index)
                   // The provider's own end date takes the place of the manual date field, in the same spot.
                   readonly property string reportedEnd: UsageLogic.providerSubscriptionEndsOn(modelData && modelData.subscription)
                   width: parent ? parent.width : 0
+                  SwitchRow {
+                    visible: providerRow.accountCount >= 2
+                    objectName: "showAccount-" + providerRow.providerId + "-" + accountGroup.index
+                    label: accountGroup.label
+                    checked: !accountGroup.hidden
+                    enabled: accountGroup.hidden || providerRow.shownAccountCount > 1
+                    onToggled: if (enabled) root.set("hiddenAccounts", UsageLogic.setAccountHidden(
+                      root.value("hiddenAccounts", "{}"), providerRow.providerId, accountGroup.accountId, !accountGroup.hidden))
+                  }
                   TextRow {
-                    width: endRow.width
-                    objectName: "subscriptionEnd-" + providerRow.providerId + "-" + endRow.index
-                    label: "Subscription ends for " + UsageLogic.accountSettingsLabel(endRow.modelData, root.value("extraKeys", "{}"),
-                      root.value("hideAccountEmails", true) !== false, endRow.index)
+                    width: accountGroup.width
+                    objectName: "subscriptionEnd-" + providerRow.providerId + "-" + accountGroup.index
+                    label: "Subscription ends for " + accountGroup.label
                     placeholder: "YYYY-MM-DD"
                     maximumLength: 10
-                    source: UsageLogic.subscriptionEndOf(root.value("subscriptionEnds", "{}"), providerRow.providerId, endRow.accountId)
-                    visible: endRow.reportedEnd === ""
+                    source: UsageLogic.subscriptionEndOf(root.value("subscriptionEnds", "{}"), providerRow.providerId, accountGroup.accountId)
+                    visible: accountGroup.reportedEnd === ""
                     validate: function (text) { return (text === "" || UsageLogic.calendarDayNumber(text) !== null) ? "" : "Use a real date as YYYY-MM-DD" }
                     onApplied: function(text) {
                       root.set("subscriptionEnds", UsageLogic.setSubscriptionEnds(
-                        root.value("subscriptionEnds", "{}"), providerRow.providerId, endRow.accountId, text))
+                        root.value("subscriptionEnds", "{}"), providerRow.providerId, accountGroup.accountId, text))
                     }
                   }
                   Hint {
-                    width: endRow.width
-                    objectName: "subscriptionReported-" + providerRow.providerId + "-" + endRow.index
-                    visible: endRow.reportedEnd !== ""
-                    text: providerRow.name + " reports it ends " + UsageLogic.subscriptionEndText(endRow.reportedEnd, Date.now() / 1000)
+                    width: accountGroup.width
+                    objectName: "subscriptionReported-" + providerRow.providerId + "-" + accountGroup.index
+                    visible: accountGroup.reportedEnd !== ""
+                    text: providerRow.name + " reports it ends " + UsageLogic.subscriptionEndText(accountGroup.reportedEnd, Date.now() / 1000)
                   }
-                }
-              }
-              Repeater {
-                model: providerRow.accountCount >= 1 ? providerRow.accountList : []
-                delegate: TextRow {
-                  required property var modelData
-                  required property int index
-                  readonly property string accountId: String(modelData && modelData.accountId || "")
-                  objectName: "accountName-" + providerRow.providerId + "-" + index
-                  label: "Name for " + UsageLogic.accountSettingsLabel(modelData, root.value("extraKeys", "{}"),
-                    root.value("hideAccountEmails", true) !== false, index)
-                  placeholder: "Name"
-                  maximumLength: UsageLogic.ACCOUNT_NAME_LIMIT
-                  source: UsageLogic.accountNameOf(root.value("accountNames", "{}"), providerRow.providerId, accountId)
-                  visible: UsageLogic.acceptsAccountName(modelData)
-                  onApplied: function(text) {
-                    root.set("accountNames", UsageLogic.setAccountName(
-                      root.value("accountNames", "{}"), providerRow.providerId, accountId, text))
+                  TextRow {
+                    width: accountGroup.width
+                    objectName: "accountName-" + providerRow.providerId + "-" + accountGroup.index
+                    label: "Name for " + accountGroup.label
+                    placeholder: "Name"
+                    maximumLength: UsageLogic.ACCOUNT_NAME_LIMIT
+                    source: UsageLogic.accountNameOf(root.value("accountNames", "{}"), providerRow.providerId, accountGroup.accountId)
+                    visible: UsageLogic.acceptsAccountName(accountGroup.modelData)
+                    onApplied: function(text) {
+                      root.set("accountNames", UsageLogic.setAccountName(
+                        root.value("accountNames", "{}"), providerRow.providerId, accountGroup.accountId, text))
+                    }
                   }
                 }
               }
