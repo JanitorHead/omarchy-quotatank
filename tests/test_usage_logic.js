@@ -1478,8 +1478,6 @@ console.log("Provider setup: passed");
   assert.equal(context.barChipValue('{"claude":"pool"}', "codex"), "account", "an unset provider shows its account");
   assert.equal(context.setBarChipValue('{"claude":"pool"}', "codex", "pool"), '{"claude":"pool","codex":"pool"}');
   assert.equal(context.setBarChipValue('{"claude":"pool"}', "claude", "account"), "{}", "account is the default, so it is not stored");
-  assert.equal(context.barChipValueLabel("pool"), "Pool");
-  assert.equal(context.barChipValueLabel("account"), "Account");
   assert.equal(context.setAccountMode('{"claude":"together"}', "claude", "auto"), "{}", "Automatic removes the override");
   assert.equal(context.accountModeLabel("single") + "/" + context.accountModeLabel("together") + "/" + context.accountModeLabel(undefined),
     "One at a time/Together/Automatic");
@@ -1601,17 +1599,21 @@ console.log("omp settings, live feed and account modes: passed");
   const personal = login("personal", [quiet(3), week(39)], { active: false });
   const spare = login("spare", [quiet(100), week(90)], { active: false });
   const claude = { id: "claude", name: "Claude Code", status: "ok", accountId: "work", accounts: [work, personal, spare] };
-  assert.deepEqual(Array.from(context.countedAccounts(claude, "single", NOW, {})), [0]);
+  const countedOf = (provider, mode, recent) =>
+    context.countedAccounts(provider, mode, NOW, recent, context.ompRankedFor(provider, mode, NOW));
+  assert.deepEqual(Array.from(countedOf(claude, "single", {})), [0]);
   const noActive = { ...claude, accountId: "personal", accounts: [{ ...work, active: undefined }, personal, spare] };
-  assert.deepEqual(Array.from(context.countedAccounts(noActive, "single", NOW, {})), [1], "falls back to the summary's account");
-  assert.deepEqual(Array.from(context.countedAccounts(claude, "together", NOW, { "claude@spare": NOW - 30 })), [0, 2],
+  assert.deepEqual(Array.from(countedOf(noActive, "single", {})), [1], "falls back to the summary's account");
+  assert.deepEqual(Array.from(countedOf(claude, "together", { "claude@spare": NOW - 30 })), [0, 2],
     "together counts every account spending now, in account order");
   const idle = { ...claude, accounts: [{ ...work, activity: null }, personal, spare] };
-  assert.deepEqual(Array.from(context.countedAccounts(idle, "together", NOW, {})), [0],
+  assert.deepEqual(Array.from(countedOf(idle, "together", {})), [0],
     "nothing spending: the least headroom that still has room, not the used-up one");
   const allOut = { ...claude, accounts: [login("a", [quiet(100)]), login("b", [quiet(100)])] };
-  assert.deepEqual(Array.from(context.countedAccounts(allOut, "together", NOW, {})), [0]);
-  assert.deepEqual(Array.from(context.countedAccounts({ id: "claude" }, "single", NOW, {})), []);
+  assert.deepEqual(Array.from(countedOf(allOut, "together", {})), [0]);
+  assert.deepEqual(Array.from(context.countedAccounts(idle, "together", NOW, {}, [{ index: 2 }])), [2],
+    "the ranking passed in decides omp's account");
+  assert.deepEqual(Array.from(countedOf({ id: "claude" }, "single", {})), []);
 
   // Row order: stable (Omarchy logins, keys, omp) one at a time; least headroom first together.
   const mixed = [login("omp-1a2b3c4d5e6f", [quiet(10)], { origin: "omp" }), login("k-0123abcd", [quiet(50)]),
@@ -1849,6 +1851,8 @@ console.log("omp settings, live feed and account modes: passed");
     "an account that failed without a reading is in the pool but not counted, so the line says so");
   assert.equal(context.poolLine({ id: "claude", status: "ok", accounts: [login("work", [week(45)])] }, { windowSeconds: SESSION }), "",
     "no account carries the 5-hour window, so no pool line");
+  assert.equal(context.poolLine({ id: "claude", status: "ok", accounts: [login("work", [quiet(45)])] }, { windowSeconds: SESSION }), "",
+    "one account is no pool, so no pool line");
 
   // The pool total of a window: what is left across the accounts that carry it, as a mean share of the
   // accounts with a reading. An Ultra with no 5-hour limit is out of the 5-hour pool, a stale reading counts,
@@ -1857,20 +1861,20 @@ console.log("omp settings, live feed and account modes: passed");
   const poolWork = login("work", [quiet(60)]);
   const poolPersonal = login("personal", [quiet(20)]);
   const poolUltra = login("ultra", [week(10)]);
-  assert.deepEqual(plain(poolOf([poolWork, poolPersonal])), { percent: 60, counted: 2, total: 2 });
-  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, poolUltra])), { percent: 60, counted: 2, total: 2 }, "an Ultra with no 5-hour limit is out of the 5-hour pool");
-  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, poolUltra], "weekly")), { percent: 90, counted: 1, total: 1 });
-  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, login("stale", [quiet(80)], { status: "error" })])), { percent: 47, counted: 3, total: 3 }, "a stale reading still counts");
-  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, { id: "claude", accountId: "broken", status: "error", windows: [] }])), { percent: 60, counted: 2, total: 3 }, "an account that failed without a reading is counted in the total only");
-  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, login("old", [quiet(10)], { subscription: { ended: true } })])), { percent: 60, counted: 2, total: 2 }, "an ended subscription is out");
-  assert.deepEqual(plain(context.poolTotal(context.withoutHiddenAccounts([{ id: "claude", name: "Claude Code", status: "ok", accounts: [poolWork, poolPersonal, poolUltra] }], '{"claude":["personal"]}')[0], "session")), { percent: 40, counted: 1, total: 1 }, "a hidden account is out");
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal])), { percent: 60, counted: 2, total: 2, window: "session" });
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, poolUltra])), { percent: 60, counted: 2, total: 2, window: "session" }, "an Ultra with no 5-hour limit is out of the 5-hour pool");
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, poolUltra], "weekly")), { percent: 90, counted: 1, total: 1, window: "weekly" });
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, login("stale", [quiet(80)], { status: "error" })])), { percent: 47, counted: 3, total: 3, window: "session" }, "a stale reading still counts");
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, { id: "claude", accountId: "broken", status: "error", windows: [] }])), { percent: 60, counted: 2, total: 3, window: "session" }, "an account that failed without a reading is counted in the total only");
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, login("old", [quiet(10)], { subscription: { ended: true } })])), { percent: 60, counted: 2, total: 2, window: "session" }, "an ended subscription is out");
+  assert.deepEqual(plain(context.poolTotal(context.withoutHiddenAccounts([{ id: "claude", name: "Claude Code", status: "ok", accounts: [poolWork, poolPersonal, poolUltra] }], '{"claude":["personal"]}')[0], "session")), { percent: 40, counted: 1, total: 1, window: "session" }, "a hidden account is out");
   assert.equal(poolOf([]), null, "no account in the pool");
-  assert.deepEqual(plain(context.poolTotal({ id: "kimi", status: "ok", windows: [quiet(30)] }, "session")), { percent: 70, counted: 1, total: 1 }, "a provider without accounts is its own pool");
+  assert.deepEqual(plain(context.poolTotal({ id: "kimi", status: "ok", windows: [quiet(30)] }, "session")), { percent: 70, counted: 1, total: 1, window: "session" }, "a provider without accounts is its own pool");
   // The menu bar's default window is auto: the pool chip shows the window whose pool has the least left.
-  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, poolUltra], "auto")), { percent: 60, counted: 2, total: 2 },
+  assert.deepEqual(plain(poolOf([poolWork, poolPersonal, poolUltra], "auto")), { percent: 60, counted: 2, total: 2, window: "session" },
     "auto pools the 5-hour window when its pool has less left than the weekly one");
   assert.deepEqual(plain(poolOf([login("work", [quiet(10), week(80)]), login("personal", [quiet(10), week(70)])], "auto")),
-    { percent: 25, counted: 2, total: 2 }, "and the weekly window when that pool has less left");
+    { percent: 25, counted: 2, total: 2, window: "weekly" }, "and the weekly window when that pool has less left");
 
   // Events: the first reading seeds; then a switch, a reset after heavy use, and an omp sign-in lost.
   const team = (active, workUsed) => ({ id: "claude", name: "Claude Code", status: "ok", accounts: [
@@ -2555,8 +2559,12 @@ console.log("1.9 Coming up list: passed");
   console.log("1.10 omp's next account: passed");
 
   // OMP ROUTING block (ticket 48): the line under the account rows names omp's next account and why.
-  const routed = (provider, extra = {}) => context.ompRouting(provider, { mode: "together", nowSeconds: now,
-    extraKeys: "{}", hideEmails: true, ...extra });
+  const routed = (provider, extra = {}) => {
+    const lines = context.accountState(provider, { modes: '{"claude":"together"}', nowSeconds: now,
+      recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10, extraKeys: "{}", hideEmails: true, ...extra }).routing;
+    const textOf = (line) => (line ? line.text : "");
+    return { next: textOf(lines.next), switchPoint: textOf(lines.switchPoint), warning: textOf(lines.warning) };
+  };
   const onlyRoute = routed(ompProvider([ompAccount("Work", cool)]));
   assert.equal(onlyRoute.next, "Next session: Work · only account with room.");
   assert.equal(onlyRoute.switchPoint, "");
@@ -2571,6 +2579,9 @@ console.log("1.9 Coming up list: passed");
   const endedUnnamed = unnamed("omp-aaaaaaaaaaaa", cool, { subscription: { endsAt: now - DAY, endsOn: "2020-01-01", source: "manual", ended: true } });
   assert.equal(routed(ompProvider([endedUnnamed, unnamed("omp-bbbbbbbbbbbb", cool)])).warning,
     "Account 1's subscription ended, but omp still signs in with it: remove it in omp.", "the ended line names the row number");
+  // The account in use is named as rows name it: a routing line never adds " · in use".
+  assert.equal(routed(ompProvider([ompAccount("Work", cool, { active: true })])).next,
+    "Next session: Work · only account with room.", "the account in use has no in-use mark in its routing line");
 
   // Each reason omp gives for its pick names what decided it.
   assert.equal(routed(ompProvider([ompAccount("Work", blocked), ompAccount("Personal", cool)])).next,
@@ -2630,7 +2641,7 @@ console.log("1.9 Coming up list: passed");
   const endedWork = { ...ompAccount("Work", cool), subscription: { endsAt: now - DAY, endsOn: "2020-01-01", source: "manual", ended: true } };
   assert.equal(routed(ompProvider([endedWork, ompAccount("Personal", cool)])).warning,
     "Work's subscription ended, but omp still signs in with it: remove it in omp.", "an ended omp account is named");
-  assert.equal(routed(ompProvider([endedWork, ompAccount("Personal", cool)]), { mode: "single" }).warning, "",
+  assert.equal(routed(ompProvider([endedWork, ompAccount("Personal", cool)]), { modes: '{"claude":"single"}' }).warning, "",
     "the ended line is omp-mode only, like the rest of the OMP ROUTING line");
   const endingWeekly = { ...ompAccount("Work", [ompWin("session", 100, 3600, 18000), { ...ompWin("weekly", 40, WEEK / 2, WEEK), samples: [] }]),
     subscription: { endsAt: now + 2 * DAY, endsOn: "2030-01-01", source: "manual", ended: false } };
