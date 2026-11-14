@@ -338,7 +338,7 @@ function parseProviderOrder(text) {
   var result = []
   for (var i = 0; i < parsed.length && result.length < USAGE_LIST_LIMITS.providers; i++) {
     var id = parsed[i]
-    if (typeof id === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(id) && result.indexOf(id) === -1) result.push(id)
+    if (isProviderId(id) && result.indexOf(id) === -1) result.push(id)
   }
   return result
 }
@@ -1553,29 +1553,38 @@ function isExtraKeyId(id) {
   return id === "primary" || /^k-[0-9a-f]{8}$/.test(id)
 }
 
-function parseAccountNames(raw) {
+// A provider id as the settings and the account commands use it: lowercase letters, digits, "-" and "_".
+function isProviderId(id) {
+  return typeof id === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(id)
+}
+
+// Parses a setting of provider id → account id → value (`accountNames`, `subscriptionEnds`). `normalize` gives the
+// value as it is kept, or null or "" to drop it. Ids that are not valid, and rows that are not objects, are dropped.
+function parseAccountValues(raw, normalize) {
   var parsed = parseSettingObject(raw)
   if (!parsed) return {}
   var result = {}
   Object.keys(parsed).forEach(function (providerId) {
     var rows = parsed[providerId]
-    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(providerId) || !rows || typeof rows !== "object" || isListLike(rows)) return
+    if (!isProviderId(providerId) || !rows || typeof rows !== "object" || isListLike(rows)) return
     Object.keys(rows).forEach(function (accountId) {
-      var name = accountNameText(rows[accountId])
-      if (accountId === "" || accountId.length > 128 || name === "") return
+      var value = normalize(rows[accountId])
+      if (accountId === "" || accountId.length > 128 || value === null || value === "") return
       if (!result[providerId]) result[providerId] = {}
-      result[providerId][accountId] = name
+      result[providerId][accountId] = value
     })
   })
   return result
 }
 
-// Sets (a name) or clears (a blank name) one account's name. The name is trimmed and cut to 40 characters.
-function setAccountName(raw, providerId, accountId, value) {
-  var all = parseAccountNames(raw)
+// Sets one account's value of a setting: `value` goes through `normalize`, "" clears it, and null leaves the
+// setting as it was.
+function setAccountValue(raw, providerId, accountId, value, normalize) {
+  var all = parseAccountValues(raw, normalize)
+  var text = normalize(value)
+  if (text === null) return JSON.stringify(all)
   var key = String(providerId)
   var rows = Object.assign({}, all[key] || {})
-  var text = accountNameText(value)
   if (text === "") delete rows[String(accountId)]
   else rows[String(accountId)] = text
   if (Object.keys(rows).length) all[key] = rows
@@ -1583,40 +1592,74 @@ function setAccountName(raw, providerId, accountId, value) {
   return JSON.stringify(all)
 }
 
-// The name one account has in Settings (`accountNames`), or "" when none is set.
-function accountNameOf(raw, providerId, accountId) {
-  var rows = parseAccountNames(raw)[String(providerId)]
+// One account's value of a setting, or "" when none is set.
+function accountValueOf(raw, providerId, accountId, normalize) {
+  var rows = parseAccountValues(raw, normalize)[String(providerId)]
   return rows && typeof rows[String(accountId)] === "string" ? rows[String(accountId)] : ""
 }
 
-// Whether an account may take a custom name: it has no name of its own (no Omarchy `label`, not an Omarchy
+// Applies a setting's values to the providers: `applyOne(reading, rows)` gives one reading (the provider's own,
+// then each account) with its provider's rows. A provider that no reading changes comes back as it was.
+function applyAccountValues(providers, values, applyOne) {
+  return Array.prototype.map.call(listOrEmpty(providers), function (provider) {
+    if (!provider) return provider
+    var rows = values[provider.id] || {}
+    var accounts = providerAccounts(provider)
+    var own = applyOne(provider, rows)
+    var changed = own !== provider
+    var named = accounts.map(function (account) {
+      var next = applyOne(account, rows)
+      if (next !== account) changed = true
+      return next
+    })
+    if (!changed) return provider
+    if (!accounts.length) return own
+    return Object.assign({}, own, { accounts: named })
+  })
+}
+
+// The account id a reading's settings are keyed by. A provider read through one sign-in has no accountId: a
+// sign-in is "main" and an API key is "primary".
+function readingAccountId(reading) {
+  var id = reading ? reading.accountId : undefined
+  if (id !== undefined && id !== null && id !== "") return String(id)
+  return reading && reading.origin === "key" ? "primary" : "main"
+}
+
+function parseAccountNames(raw) {
+  return parseAccountValues(raw, accountNameText)
+}
+
+// Sets (a name) or clears (a blank name) one account's name. The name is trimmed and cut to 40 characters.
+function setAccountName(raw, providerId, accountId, value) {
+  return setAccountValue(raw, providerId, accountId, value, accountNameText)
+}
+
+// The name one account has in Settings (`accountNames`), or "" when none is set.
+function accountNameOf(raw, providerId, accountId) {
+  return accountValueOf(raw, providerId, accountId, accountNameText)
+}
+
+// Whether a reading may take a custom name: it has no name of its own (no Omarchy `label`, not an Omarchy
 // login) and it is not an extra key (`primary` or `k-<8 hex>`).
 function acceptsAccountName(account) {
   if (!account || account.label || account.origin === "omarchy") return false
-  var id = String(account.accountId || "")
-  return id !== "" && !isExtraKeyId(id)
+  return !isExtraKeyId(readingAccountId(account))
 }
 
 function applyAccountName(reading, rows) {
-  var id = reading && reading.accountId
-  if (id === undefined || !acceptsAccountName(reading) || !Object.prototype.hasOwnProperty.call(rows, String(id))) return reading
-  return Object.assign({}, reading, { customName: rows[String(id)] })
+  if (!acceptsAccountName(reading)) return reading
+  var id = readingAccountId(reading)
+  if (!Object.prototype.hasOwnProperty.call(rows, id)) return reading
+  return Object.assign({}, reading, { customName: rows[id] })
 }
 
 // The providers with their custom names applied to each account that accepts one, and to the provider's own
 // reading (the active account). Providers without a name come back as they were.
 function withAccountNames(providers, raw) {
   var names = parseAccountNames(raw)
-  var list = listOrEmpty(providers)
-  if (!Object.keys(names).length) return list
-  return Array.prototype.map.call(list, function (provider) {
-    var rows = provider && names[provider.id]
-    if (!rows) return provider
-    var accounts = providerAccounts(provider)
-    var named = applyAccountName(provider, rows)
-    if (!accounts.length) return named
-    return Object.assign({}, named, { accounts: accounts.map(function (account) { return applyAccountName(account, rows) }) })
-  })
+  if (!Object.keys(names).length) return listOrEmpty(providers)
+  return applyAccountValues(providers, names, applyAccountName)
 }
 
 // The name an account is exported and last used under: its custom name, else the email, else "Account N"
@@ -1625,7 +1668,6 @@ function accountExportName(account, hideEmails, index) {
   if (account.customName) return String(account.customName)
   return hideEmails ? "Account " + index : String(account.account || "Account " + index)
 }
-
 
 // `list` with `id` present or absent, in `order`; ids that `order` does not know are dropped.
 function withMember(list, id, present, order) {
@@ -1987,7 +2029,6 @@ function accountResetLines(account, nowSeconds) {
 // tooltip says what every reset clears and when it expires (`accountResetLines`); a badge this widget cannot apply
 // ends it with where the reset is applied (`accountResetNote`).
 function accountResetBadge(account, warningThreshold, nowSeconds) {
-  if (nowSeconds === undefined) nowSeconds = Date.now() / 1000
   if (!accountResetShown(account)) return null
   var credits = account.credits
   var claude = account.id === "claude"
@@ -2023,7 +2064,6 @@ function windowClearsName(row, name) {
   var modelMeter = model !== want && label.indexOf(model) === 0 && /weekly$/.test(label)
   return label === want || label === want + " limit" || String(row.id || "") === slug || modelMeter
 }
-
 
 // The other computer a reading came from, its own (`computer`) or standing in (`standIn` with a computer's id).
 function readingComputer(account) {
@@ -3059,7 +3099,7 @@ function parseAccountModes(raw) {
   var result = {}
   var ids = Object.keys(parsed)
   for (var i = 0; i < ids.length; i++)
-    if (/^[a-z0-9][a-z0-9_-]{0,63}$/.test(ids[i]) && (parsed[ids[i]] === "single" || parsed[ids[i]] === "together"))
+    if (isProviderId(ids[i]) && (parsed[ids[i]] === "single" || parsed[ids[i]] === "together"))
       result[ids[i]] = parsed[ids[i]]
   return result
 }
@@ -3084,7 +3124,7 @@ function parseBarChipValues(raw) {
   var result = {}
   var ids = Object.keys(parsed)
   for (var i = 0; i < ids.length; i++)
-    if (/^[a-z0-9][a-z0-9_-]{0,63}$/.test(ids[i]) && (parsed[ids[i]] === "account" || parsed[ids[i]] === "pool"))
+    if (isProviderId(ids[i]) && (parsed[ids[i]] === "account" || parsed[ids[i]] === "pool"))
       result[ids[i]] = parsed[ids[i]]
   return result
 }
@@ -3122,7 +3162,7 @@ function parseHiddenAccounts(raw) {
   var providerIds = Object.keys(parsed)
   for (var i = 0; i < providerIds.length; i++) {
     var rows = parsed[providerIds[i]]
-    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(providerIds[i]) || !isListLike(rows)) continue
+    if (!isProviderId(providerIds[i]) || !isListLike(rows)) continue
     var ids = []
     for (var j = 0; j < rows.length && ids.length < HIDDEN_ACCOUNT_LIMIT; j++)
       if (typeof rows[j] === "string" && rows[j] !== "" && rows[j].length <= 128 && ids.indexOf(rows[j]) < 0) ids.push(rows[j])
@@ -3185,10 +3225,7 @@ function withoutHiddenAccounts(providers, raw) {
   })
 }
 
-// Manual "Subscription ends" dates (`subscriptionEnds`, a JSON object of provider id → account id →
-// "YYYY-MM-DD", as text or already parsed): the last day of a subscription that will not renew. It runs
-// through that day and is ended from the day after on. Dates that are not real calendar days are dropped.
-function subscriptionEndDay(text) {
+function calendarDayNumber(text) {
   var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text === undefined || text === null ? "" : String(text))
   if (!match) return null
   var year = Number(match[1])
@@ -3207,36 +3244,31 @@ function subscriptionEndDay(text) {
   return era * 146097 + dayOfEra - 719468
 }
 
+// The instant (epoch seconds) of local midnight after the day YYYY-MM-DD: a subscription dated to end that day
+// is ended from then on.
+function localMidnightAfter(day) {
+  var parts = String(day).split("-").map(Number)
+  return new Date(parts[0], parts[1] - 1, parts[2] + 1).getTime() / 1000
+}
+
+// A date as the setting keeps it: a YYYY-MM-DD that names a real day (null when it does not; "" clears).
+function subscriptionEndValue(value) {
+  if (value === undefined || value === null || value === "") return ""
+  return calendarDayNumber(value) === null ? null : String(value).trim()
+}
+
+// Manual "Subscription ends" dates (`subscriptionEnds`, a JSON object of provider id → account id →
+// "YYYY-MM-DD", as text or already parsed): the last day of a subscription that will not renew. It runs
+// through that day and is ended from the day after on. Dates that are not real calendar days are dropped.
 function parseSubscriptionEnds(raw) {
-  var parsed = parseSettingObject(raw)
-  if (!parsed) return {}
-  var result = {}
-  Object.keys(parsed).forEach(function (providerId) {
-    var rows = parsed[providerId]
-    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(providerId) || !rows || typeof rows !== "object" || isListLike(rows)) return
-    Object.keys(rows).forEach(function (accountId) {
-      if (accountId === "" || accountId.length > 128 || subscriptionEndDay(rows[accountId]) === null) return
-      if (!result[providerId]) result[providerId] = {}
-      result[providerId][accountId] = String(rows[accountId]).trim()
-    })
-  })
-  return result
+  return parseAccountValues(raw, subscriptionEndValue)
 }
 
 // Sets (a "YYYY-MM-DD" date) or clears (an empty date) one account's end date. A date that is not a real
 // calendar day leaves the setting as it was.
 function setSubscriptionEnds(raw, providerId, accountId, value) {
-  var all = parseSubscriptionEnds(raw)
-  var key = String(providerId)
-  var id = String(accountId)
   var text = value === undefined || value === null ? "" : String(value).trim()
-  if (text !== "" && subscriptionEndDay(text) === null) return JSON.stringify(all)
-  var rows = Object.assign({}, all[key] || {})
-  if (text === "") delete rows[id]
-  else rows[id] = text
-  if (Object.keys(rows).length) all[key] = rows
-  else delete all[key]
-  return JSON.stringify(all)
+  return setAccountValue(raw, providerId, accountId, text, subscriptionEndValue)
 }
 
 // One account's (or provider's) reading with its end date. A date the provider reports wins and stays
@@ -3252,9 +3284,10 @@ function endSubscriptionReading(reading, rows, nowSeconds) {
       ended: !!(subscriptionEnded(reading) || nowSeconds >= provided.endsAt)
     }) })
   }
-  if (reading.accountId === undefined || !Object.prototype.hasOwnProperty.call(rows, String(reading.accountId))) return reading
-  var endsOn = rows[String(reading.accountId)]
-  var endsAt = (subscriptionEndDay(endsOn) + 1) * PACE_DAY_SECONDS
+  var id = readingAccountId(reading)
+  if (!Object.prototype.hasOwnProperty.call(rows, id)) return reading
+  var endsOn = rows[id]
+  var endsAt = localMidnightAfter(endsOn)
   var subscription = Object.assign({}, provided, {
     ended: !!(subscriptionEnded(reading) || nowSeconds >= endsAt), endsAt: endsAt, endsOn: endsOn, source: "manual"
   })
@@ -3264,21 +3297,14 @@ function endSubscriptionReading(reading, rows, nowSeconds) {
 // The providers with their end dates applied to each account and to the provider's own reading (the active
 // account). Providers without a date come back as they were.
 function withSubscriptionEnds(providers, raw, nowSeconds) {
-  var ends = parseSubscriptionEnds(raw)
-  return Array.prototype.map.call(listOrEmpty(providers), function (provider) {
-    if (!provider) return provider
-    var rows = ends[provider.id] || {}
-    var accounts = providerAccounts(provider)
-    var dated = endSubscriptionReading(provider, rows, nowSeconds)
-    if (!accounts.length) return dated
-    return Object.assign({}, dated, { accounts: accounts.map(function (account) { return endSubscriptionReading(account, rows, nowSeconds) }) })
+  return applyAccountValues(providers, parseSubscriptionEnds(raw), function (reading, rows) {
+    return endSubscriptionReading(reading, rows, nowSeconds)
   })
 }
 
 // The end date (YYYY-MM-DD) set for one account of one provider, or "" when none is set.
 function subscriptionEndOf(raw, providerId, accountId) {
-  var rows = parseSubscriptionEnds(raw)[providerId]
-  return rows && typeof rows[accountId] === "string" ? rows[accountId] : ""
+  return accountValueOf(raw, providerId, accountId, subscriptionEndValue)
 }
 
 // A subscription's last day as the panel and the row say it: "3 Dec", with the year only when it is not the
@@ -3301,10 +3327,18 @@ function subscriptionEndLabel(subscription, nowSeconds) {
   return text !== "" || endsAt === null ? text : dayText(endsAt, nowSeconds)
 }
 
-// The day (YYYY-MM-DD, UTC) a provider dated its subscription to end, or "" when it did not date it.
+// The local day (YYYY-MM-DD) a Unix time falls on.
+function localDayOf(seconds) {
+  var date = new Date(seconds * 1000)
+  var month = date.getMonth() + 1
+  var day = date.getDate()
+  return date.getFullYear() + "-" + (month < 10 ? "0" : "") + month + "-" + (day < 10 ? "0" : "") + day
+}
+
+// The local day (YYYY-MM-DD) a provider dated its subscription to end, or "" when it did not date it.
 function providerSubscriptionEndsOn(subscription) {
   if (!subscription || subscription.source !== "provider" || typeof subscription.endsAt !== "number") return ""
-  return new Date(subscription.endsAt * 1000).toISOString().slice(0, 10)
+  return localDayOf(subscription.endsAt)
 }
 
 var ACCOUNT_ORIGIN_TEXT = { omarchy: "Omarchy login", signin: "sign-in", key: "API key", proxy: "CLIProxyAPI", omp: "omp" }
@@ -3680,7 +3714,7 @@ function accountStatusLine(account, spending, nowSeconds, event) {
 // not a plain id, so nothing can be read as an option.
 function accountUseArgv(providerId, account) {
   var provider = String(providerId || "")
-  if (!account || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(provider)) return null
+  if (!account || !isProviderId(provider)) return null
   var id = String(account.accountId || "")
   if (account.primary === true && (id === "main" || id === "primary")) id = "primary"
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) return null
@@ -4128,10 +4162,7 @@ function comingUpItems(account, nowSeconds) {
 
 // A local day (from epoch seconds) as the status line writes it: "13 Jan", with the year when it is not this one.
 function dayText(seconds, nowSeconds) {
-  var date = new Date(seconds * 1000)
-  var month = date.getMonth() + 1
-  var day = date.getDate()
-  return subscriptionEndText(date.getFullYear() + "-" + (month < 10 ? "0" : "") + month + "-" + (day < 10 ? "0" : "") + day, nowSeconds)
+  return subscriptionEndText(localDayOf(seconds), nowSeconds)
 }
 
 // The dashed stretch a meter draws for the forecast, on the side the meter shows (fractions 0-1):

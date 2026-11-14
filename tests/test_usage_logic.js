@@ -195,24 +195,31 @@ assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }),
   const plain = (value) => JSON.parse(JSON.stringify(value));
   const fableWindow = (remaining) => ({ id: "fable-weekly", label: "Fable weekly", remaining });
   const weeklyWindow = (remaining) => ({ id: "weekly", label: "Weekly limit", remaining });
+  // Local noon on 9 Mar 2030: the same calendar day in every time zone.
+  const fableExpiry = new Date(2030, 2, 9, 12).getTime() / 1000;
   const fableCredits = { resetCreditsAvailable: 2, resetCreditsUsableNow: 1, resetCreditsLater: 1,
-    resetCreditsLaterGroups: [{ count: 1, clears: ["Fable weekly"], expiresAt: 1899288000 }],
-    resetCreditsUsableExpiresAt: 1899288000, resetCreditsClears: ["Fable weekly"], resetCreditsUsable: true };
+    resetCreditsLaterGroups: [{ count: 1, clears: ["Fable weekly"], expiresAt: fableExpiry }],
+    resetCreditsUsableExpiresAt: fableExpiry, resetCreditsClears: ["Fable weekly"], resetCreditsUsable: true };
   const fableTooltip = "1 reset usable now, for the Fable weekly limit, expires 9 Mar 2030 · 1 reset later, for the Fable weekly limit, expires 9 Mar 2030";
   const badgeAccount = (credits, windows, extra) => ({ ...provider("claude", 40), credits: { ...fableCredits, ...credits }, windows, ...extra });
+  // accountResetBadge takes the clock as an argument: the tests pass a fixed time, not the wall clock.
+  const badgeNow = 1000000;
   const fable = badgeAccount({}, [fableWindow(88), weeklyWindow(60)]);
-  assert.deepEqual(plain(context.accountResetBadge(fable, 25)),
+  assert.deepEqual(plain(context.accountResetBadge(fable, 25, badgeNow)),
     { label: "1 Fable", tooltip: fableTooltip, dim: true, actionable: true });
-  assert.equal(context.accountResetBadge(badgeAccount({}, [fableWindow(25)]), 25).dim, false, "at the warning threshold: not dimmed");
-  assert.equal(context.accountResetBadge(badgeAccount({}, [fableWindow(10)]), 25).dim, false, "critical: not dimmed");
+  assert.equal(context.accountResetBadge(badgeAccount({}, [fableWindow(25)]), 25, badgeNow).dim, false, "at the warning threshold: not dimmed");
+  assert.equal(context.accountResetBadge(badgeAccount({}, [fableWindow(10)]), 25, badgeNow).dim, false, "critical: not dimmed");
   const claudeFable = { id: "fable-1m-an-intentionally-long-model-label-weekly", label: "Fable 1M - an intentionally long model label weekly", remaining: 88 };
-  assert.equal(context.accountResetBadge(badgeAccount({}, [claudeFable]), 25).dim, true, "Claude names the Fable meter after its model, and it is still the Fable weekly limit");
-  assert.equal(context.accountResetBadge(badgeAccount({}, []), 25).dim, false, "no measured limit to compare");
-  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsLater: 0, resetCreditsLaterGroups: [], resetCreditsAvailable: 1 }, [fableWindow(88)]), 25).tooltip,
+  assert.equal(context.accountResetBadge(badgeAccount({}, [claudeFable]), 25, badgeNow).dim, true, "Claude names the Fable meter after its model, and it is still the Fable weekly limit");
+  assert.equal(context.accountResetBadge(badgeAccount({}, []), 25, badgeNow).dim, false, "no measured limit to compare");
+  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsLater: 0, resetCreditsLaterGroups: [], resetCreditsAvailable: 1 }, [fableWindow(88)]), 25, badgeNow).tooltip,
     "1 reset usable now, for the Fable weekly limit, expires 9 Mar 2030", "no later line when none wait");
   // A full reset usable now and two Fable-only resets waiting: each line names what it clears and when it expires.
+  // Local noon on these days: the same calendar day in every time zone.
+  const dec10 = new Date(2030, 11, 10, 12).getTime() / 1000;
+  const mar9 = new Date(2031, 2, 9, 12).getTime() / 1000;
   const mixed = badgeAccount({ resetCreditsAvailable: 3, resetCreditsLater: 2, resetCreditsClears: ["weekly", "Fable weekly"],
-    resetCreditsUsableExpiresAt: 1923134400, resetCreditsLaterGroups: [{ count: 2, clears: ["Fable weekly"], expiresAt: 1930824000 }] }, [weeklyWindow(60)]);
+    resetCreditsUsableExpiresAt: dec10, resetCreditsLaterGroups: [{ count: 2, clears: ["Fable weekly"], expiresAt: mar9 }] }, [weeklyWindow(60)]);
   assert.deepEqual(plain(context.accountResetLines(mixed, 1920974400)), ["1 reset usable now, for the weekly and Fable weekly limits, expires 10 Dec",
     "2 resets later, for the Fable weekly limit, expire 9 Mar 2031"]);
   assert.equal(context.accountResetBadge(mixed, 25, 1920974400).label, "1 reset", "a reset that clears more than Fable is not a Fable reset");
@@ -225,43 +232,43 @@ assert.equal(context.accountResetLabel({ ...resetAccount, status: "disabled" }),
   assert.deepEqual(plain(context.accountResetLines({ ...provider("codex", 55), credits: { resetCreditsAvailable: 2 } }, 1920974400)), [],
     "Codex has no usable-now split");
   const viaOmp = badgeAccount({}, [fableWindow(88)], { origin: "omp" });
-  assert.deepEqual([context.accountResetBadge(viaOmp, 25).label, context.accountResetBadge(viaOmp, 25).actionable], ["1 Fable", false],
+  assert.deepEqual([context.accountResetBadge(viaOmp, 25, badgeNow).label, context.accountResetBadge(viaOmp, 25, badgeNow).actionable], ["1 Fable", false],
     "an omp row shows its badge but applies it in omp");
   // Quickshell hands list values over without Array.isArray(), so the clears must be read by length and index.
   const listLikeClears = { 0: "Fable weekly", length: 1 };
-  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsClears: listLikeClears }, [fableWindow(88)]), 25).label, "1 Fable",
+  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsClears: listLikeClears }, [fableWindow(88)]), 25, badgeNow).label, "1 Fable",
     "list-like clears still name the Fable reset");
-  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsClears: listLikeClears }, [fableWindow(88)]), 25).dim, true,
+  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsClears: listLikeClears }, [fableWindow(88)]), 25, badgeNow).dim, true,
     "list-like clears still dim the limit they clear");
   // A list-like windows value (Quickshell) must not throw; the clear is still found by index.
-  assert.equal(context.accountResetBadge(badgeAccount({}, { 0: fableWindow(88), length: 1 }), 25).label, "1 Fable",
+  assert.equal(context.accountResetBadge(badgeAccount({}, { 0: fableWindow(88), length: 1 }), 25, badgeNow).label, "1 Fable",
     "list-like windows still name the Fable reset");
-  assert.equal(context.accountResetBadge(badgeAccount({}, { 0: fableWindow(88), length: 1 }), 25).dim, true,
+  assert.equal(context.accountResetBadge(badgeAccount({}, { 0: fableWindow(88), length: 1 }), 25, badgeNow).dim, true,
     "list-like windows still dim the limit they clear");
   const elsewhere = badgeAccount({}, [fableWindow(88)], { computer: { id: "c-00000001", name: "devbox" } });
-  assert.equal(context.accountResetBadge(elsewhere, 25).actionable, false, "another computer's sign-in is not applied here");
-  assert.equal(context.accountResetBadge(viaOmp, 25).tooltip, fableTooltip + " · Apply it in omp: omp usage reset.",
+  assert.equal(context.accountResetBadge(elsewhere, 25, badgeNow).actionable, false, "another computer's sign-in is not applied here");
+  assert.equal(context.accountResetBadge(viaOmp, 25, badgeNow).tooltip, fableTooltip + " · Apply it in omp: omp usage reset.",
     "a badge that is not applied here says where it is applied");
-  assert.equal(context.accountResetBadge(elsewhere, 25).tooltip, fableTooltip + " · Its sign-in is on devbox: apply it there.",
+  assert.equal(context.accountResetBadge(elsewhere, 25, badgeNow).tooltip, fableTooltip + " · Its sign-in is on devbox: apply it there.",
     "another computer's badge names the computer that holds the sign-in");
-  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsUsable: false, resetCreditsReason: "limit" }, [fableWindow(88)]), 25).actionable, false);
-  const session = { resetCreditsUsableNow: 1, resetCreditsLater: 0, resetCreditsUsableExpiresAt: 1899288000,
+  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsUsable: false, resetCreditsReason: "limit" }, [fableWindow(88)]), 25, badgeNow).actionable, false);
+  const session = { resetCreditsUsableNow: 1, resetCreditsLater: 0, resetCreditsUsableExpiresAt: fableExpiry,
     resetCreditsClears: ["5-hour"], resetCreditsUsable: true };
   const sessionAccount = (windows) => ({ ...provider("claude", 40), credits: { resetCreditsAvailable: 1, ...session }, windows });
-  assert.deepEqual(plain(context.accountResetBadge(sessionAccount([{ id: "session", label: "5-hour limit", remaining: 80 }]), 25)),
+  assert.deepEqual(plain(context.accountResetBadge(sessionAccount([{ id: "session", label: "5-hour limit", remaining: 80 }]), 25, badgeNow)),
     { label: "1 reset", tooltip: "1 reset usable now, for the 5-hour limit, expires 9 Mar 2030", dim: true, actionable: true });
   const codex = { ...provider("codex", 55), accountId: "reset-account", credits: { resetCreditsAvailable: 2 },
     proxy: { id: "p-00000001", name: "CLIProxyAPI" } };
-  assert.deepEqual(plain(context.accountResetBadge(codex, 25)), { label: "2 resets", tooltip: "2 banked resets", dim: false, actionable: true },
+  assert.deepEqual(plain(context.accountResetBadge(codex, 25, badgeNow)), { label: "2 resets", tooltip: "2 banked resets", dim: false, actionable: true },
     "Codex has no usable-now split: its count shows");
-  assert.deepEqual(plain(context.accountResetBadge(resetAccount, 25)),
+  assert.deepEqual(plain(context.accountResetBadge(resetAccount, 25, badgeNow)),
     { label: "2 resets", tooltip: "2 banked resets · Codex resets are applied through CLIProxyAPI.", dim: false, actionable: false },
     "a native Codex row shows its count; CLIProxyAPI applies it");
-  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsUsableNow: 0 }, []), 25), null, "later resets alone show no badge");
-  assert.equal(context.accountResetBadge({ ...codex, credits: { resetCreditsAvailable: 0 } }, 25), null);
-  assert.equal(context.accountResetBadge({ ...codex, status: "disabled" }, 25), null);
-  assert.equal(context.accountResetBadge({ ...provider("kimi", 40), credits: { resetCreditsAvailable: 1 } }, 25), null);
-  assert.equal(context.accountResetBadge({ ...codex, credits: null }, 25), null);
+  assert.equal(context.accountResetBadge(badgeAccount({ resetCreditsUsableNow: 0 }, []), 25, badgeNow), null, "later resets alone show no badge");
+  assert.equal(context.accountResetBadge({ ...codex, credits: { resetCreditsAvailable: 0 } }, 25, badgeNow), null);
+  assert.equal(context.accountResetBadge({ ...codex, status: "disabled" }, 25, badgeNow), null);
+  assert.equal(context.accountResetBadge({ ...provider("kimi", 40), credits: { resetCreditsAvailable: 1 } }, 25, badgeNow), null);
+  assert.equal(context.accountResetBadge({ ...codex, credits: null }, 25, badgeNow), null);
 }
 
 const customRows = [{model: " vendor/Model[1m] ", inputCostPerMillionTokens: "2",
@@ -828,7 +835,6 @@ assert.equal(context.providerShortName({ id: "openrouter", name: "OpenRouter" })
 assert.equal(context.providerShortName({ id: "claude", name: "Claude Code" }), "Claude");
 assert.equal(context.providerShortName({ id: "gemini-cli", name: "Gemini CLI" }), "Gemini CLI", "proxy providers keep their name");
 
-
 // Per-provider "Show limits as" overrides follow the global choice unless set.
 assert.equal(context.quotaModeFor("{}", "claude", "Used"), "Used");
 assert.equal(context.quotaModeFor("{}", "claude", "Remaining"), "Remaining");
@@ -883,7 +889,7 @@ const manifestDefaults = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "
 for (const key of Object.keys(context.DEFAULT_SETTINGS))
   assert.equal(JSON.stringify(context.DEFAULT_SETTINGS[key]), JSON.stringify(manifestDefaults[key]), "reset default for " + key + " matches the manifest");
 const keyFileSettings = context.KEY_PROVIDER_IDS.map((id) => id + "KeyFile");
-for (const kept of ["sources", "mainComputer", ...keyFileSettings, "costPriceOverrides", "accountNames"])
+for (const kept of ["sources", "mainComputer", ...keyFileSettings, "costPriceOverrides", "accountNames", "subscriptionEnds"])
   assert.ok(!(kept in context.DEFAULT_SETTINGS), kept + " survives a reset");
 assert.equal(context.changedFromDefaults({}).length, 0, "missing keys already read as defaults");
 assert.equal(context.changedFromDefaults({ quotaMode: "Remaining", barWindow: "auto", sources: '[{"id":"p-1a2b3c4d","kind":"proxy"}]' }).join(","), "quotaMode",
@@ -1974,7 +1980,8 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
 // a subscription that will not renew. It runs through that day and is ended from the day after on.
 {
   const plain = (value) => JSON.parse(JSON.stringify(value));
-  const epoch = (iso) => Date.parse(`${iso}T00:00:00Z`) / 1000;
+  // Local noon of a calendar day, so the day is the same in every time zone.
+  const epoch = (iso) => { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d, 12).getTime() / 1000 };
   const provider = { id: "claude", name: "Claude Code", status: "ok", accountId: "main", active: true, accounts: [
     { id: "claude", status: "ok", accountId: "main", active: true, origin: "omarchy", windows: [] },
     { id: "claude", status: "ok", accountId: "omp-0123456789ab", active: false, origin: "omp", windows: [] },
@@ -1982,7 +1989,7 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
   const accountOf = (reading, accountId) => reading.accounts.find((account) => account.accountId === accountId);
   const raw = context.setSubscriptionEnds("{}", "claude", "omp-0123456789ab", "2030-06-10");
   assert.equal(raw, '{"claude":{"omp-0123456789ab":"2030-06-10"}}');
-  const lastDay = context.withSubscriptionEnds([provider], raw, epoch("2030-06-10") + DAY - 1)[0];
+  const lastDay = context.withSubscriptionEnds([provider], raw, epoch("2030-06-10"))[0];
   const nextDay = context.withSubscriptionEnds([provider], raw, epoch("2030-06-11"))[0];
   assert.equal(context.subscriptionEnded(accountOf(lastDay, "omp-0123456789ab")), false, "the end date itself is still subscribed");
   assert.equal(context.subscriptionEnded(accountOf(nextDay, "omp-0123456789ab")), true, "ended from the day after");
@@ -2018,11 +2025,15 @@ console.log("1.9 QmlLimits accounts, forecast and runway: passed");
   assert.equal(context.providerSubscriptionEndsOn({ source: "provider", ended: false, endsAt: epoch("2030-07-01") }), "2030-07-01",
     "a provider's end day");
   assert.equal(context.providerSubscriptionEndsOn({ source: "manual", endsAt: epoch("2030-07-01") }), "", "a manual date is not the provider's");
+  // One login (no accounts, no accountId) is "main", so its manual end date applies to it.
+  const oneLogin = { id: "claude", name: "Claude Code", status: "ok", active: true, windows: [] };
+  assert.equal(context.subscriptionEnded(context.withSubscriptionEnds([oneLogin], context.setSubscriptionEnds("{}", "claude", "main", "2030-06-10"), epoch("2030-06-11"))[0]), true,
+    "a one login's end date ends it");
   assert.equal(context.providerSubscriptionEndsOn(undefined), "", "no subscription, no day");
   // The row says when a dated subscription stops: "Ends <date>" within 30 days, urgent within 7 days.
   const statusAt = (iso, now, extra = {}) => context.accountStatusLine(context.withSubscriptionEnds([{ id: "claude", name: "Claude Code",
     status: "ok", accountId: "main", active: true, windows: [], ...extra }], context.setSubscriptionEnds("{}", "claude", "main", iso), now)[0], false, now, null);
-  const endsAt = epoch("2030-06-11");
+  const endsAt = new Date(2030, 5, 11).getTime() / 1000; // local midnight: the instant a 10 Jun end date stops the subscription
   assert.deepEqual(plain(statusAt("2030-06-10", endsAt - 30 * DAY)), { kind: "ends", text: "Ends 10 Jun", at: null, tone: "dim" },
     "the row shows the end date 30 days out");
   assert.equal(statusAt("2030-06-10", endsAt - 30 * DAY - 1).text.startsWith("Ends"), false, "no end date more than 30 days out");
@@ -2088,7 +2099,7 @@ console.log("1.9 Manual subscription end dates: passed");
 // or not, and never reaches an Omarchy login or an extra key.
 {
   const plain = (value) => JSON.parse(JSON.stringify(value));
-  const epoch = (iso) => Date.parse(`${iso}T00:00:00Z`) / 1000;
+  const epoch = (iso) => { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d, 12).getTime() / 1000 };
   const provider = { id: "claude", name: "Claude Code", status: "ok", accountId: "main", active: true, accounts: [
     { id: "claude", status: "ok", accountId: "main", active: true, origin: "omarchy", label: "Work", account: "work@example.com", windows: [] },
     { id: "claude", status: "ok", accountId: "omp-0123456789ab", active: false, origin: "omp", account: "personal@example.com", accountNumber: 2, windows: [] },
@@ -2124,6 +2135,15 @@ console.log("1.9 Manual subscription end dates: passed");
     .claude["omp-0123456789ab"].length, 40, "a long name is cut to 40 characters");
   assert.deepEqual(plain(context.withAccountNames([provider], "{}")[0]), plain(provider), "without names the reading is left as it was");
   assert.deepEqual(plain(context.withAccountNames([provider], "not json")[0]), plain(provider), "a broken setting is ignored");
+  // Invalid provider ids are dropped; the valid rows are kept.
+  assert.deepEqual(plain(context.parseAccountNames('{"Bad Id":{"main":"X"},"claude":{"main":"Y"}}')), { claude: { main: "Y" } }, "an invalid provider id is dropped");
+  // A key reading is keyed "primary" (or its k- id), so a stored name for "primary" never reaches it.
+  const keyReading = { id: "claude", status: "ok", accountId: "primary", origin: "key", active: false, windows: [] };
+  assert.equal(context.withAccountNames([{ ...provider, accounts: [keyReading] }], context.setAccountName("{}", "claude", "primary", "Mine"))[0].accounts[0].customName, undefined,
+    "a key reading takes no name");
+  // One login (no accounts, no accountId) is "main": it takes a name.
+  const oneLogin = { id: "claude", name: "Claude Code", status: "ok", active: true, windows: [] };
+  assert.equal(context.withAccountNames([oneLogin], context.setAccountName("{}", "claude", "main", "Work"))[0].customName, "Work", "a one login takes the name under main");
 }
 console.log("1.10 Custom account names: passed");
 
@@ -2167,33 +2187,34 @@ console.log("1.10 Custom account names: passed");
 console.log("1.9 Leftover at the reset: passed");
 // comingUpItems: the next limit reset (with its leftover), the banked-reset expiry and the subscription end, by date.
 {
-  const reset = { id: "weekly", label: "Weekly limit", used: 40, remaining: 60, windowSeconds: WEEK, resetsAt: NOW + 3 * DAY, samples: [] };
-  const monthly = { id: "monthly", label: "Monthly limit", used: 10, remaining: 90, windowSeconds: 4 * WEEK, resetsAt: NOW + 20 * DAY, samples: [] };
-  const full = { windows: [monthly, reset], credits: { resetCreditsExpiresAt: NOW + 10 * DAY },
-    subscription: { endsAt: NOW + 30 * DAY, endsOn: "1970-02-10", source: "manual", ended: false } };
-  const items = asJson(context.comingUpItems(full, NOW));
+  // Local noon, so each day below is the same local day in every time zone.
+  const noon = new Date(1970, 0, 12, 12).getTime() / 1000;
+  const reset = { id: "weekly", label: "Weekly limit", used: 40, remaining: 60, windowSeconds: WEEK, resetsAt: noon + 3 * DAY, samples: [] };
+  const monthly = { id: "monthly", label: "Monthly limit", used: 10, remaining: 90, windowSeconds: 4 * WEEK, resetsAt: noon + 20 * DAY, samples: [] };
+  const full = { windows: [monthly, reset], credits: { resetCreditsExpiresAt: noon + 10 * DAY },
+    subscription: { endsAt: noon + 30 * DAY, endsOn: "1970-02-10", source: "manual", ended: false } };
+  const items = asJson(context.comingUpItems(full, noon));
   assert.deepEqual(items.map((item) => item.kind), ["reset", "banked", "end"], "date order");
-  assert.equal(items[0].at, NOW + 3 * DAY, "the next reset is the earliest one");
-  assert.match(items[0].text, /^Weekly limit resets \d+ \w+ · \d+% left over$/, "the next reset carries its leftover");
-  assert.match(items[1].text, /^Banked reset expires \d+ \w+$/);
+  assert.equal(items[0].at, noon + 3 * DAY, "the next reset is the earliest one");
+  assert.match(items[0].text, /^Weekly limit resets 15 Jan · \d+% left over$/, "the next reset carries its leftover");
+  assert.equal(items[1].text, "Banked reset expires 22 Jan");
   assert.equal(items[2].text, "Subscription ends 10 Feb", "the end date is the manual day, not the instant");
-  // A provider's end straight from the reader carries only the instant: it is listed on its local day. Noon UTC on
-  // 11 Feb (NOW is 13:46:40 UTC) is 11 Feb from UTC−11 to UTC+11.
-  const providerEnd = asJson(context.comingUpItems({ ...full, subscription: { endsAt: NOW + 30 * DAY - 6400, source: "provider" } }, NOW));
+  // A provider's end straight from the reader carries only the instant: 1 h 46 min before local noon on 11 Feb,
+  // so it is listed on 11 Feb in every time zone.
+  const providerEnd = asJson(context.comingUpItems({ ...full, subscription: { endsAt: noon + 30 * DAY - 6400, source: "provider" } }, noon));
   assert.equal(providerEnd[2].text, "Subscription ends 11 Feb", "a provider end without a day is still listed");
-  const early = asJson(context.comingUpItems({ ...full, credits: { resetCreditsExpiresAt: NOW + DAY } }, NOW));
+  const early = asJson(context.comingUpItems({ ...full, credits: { resetCreditsExpiresAt: noon + DAY } }, noon));
   assert.deepEqual(early.map((item) => item.kind), ["banked", "reset", "end"], "an earlier banked expiry comes first");
-  const ended = { windows: [], subscription: { endsAt: NOW + DAY, endsOn: "1970-01-02", source: "manual", ended: true } };
-  assert.equal(context.comingUpItems(ended, NOW).length, 0, "an ended subscription lists nothing");
-  assert.equal(context.comingUpItems(null, NOW).length, 0, "no account lists nothing");
+  const ended = { windows: [], subscription: { endsAt: noon + DAY, endsOn: "1970-01-02", source: "manual", ended: true } };
+  assert.equal(context.comingUpItems(ended, noon).length, 0, "an ended subscription lists nothing");
+  assert.equal(context.comingUpItems(null, noon).length, 0, "no account lists nothing");
   // A limit under a day (a 5-hour window) is not listed: it resets too often to name.
-  const fiveHour = { id: "five", label: "5-hour limit", used: 10, remaining: 90, windowSeconds: 5 * 3600, resetsAt: NOW + 3600, samples: [] };
-  assert.deepEqual(asJson(context.comingUpItems({ windows: [fiveHour] }, NOW)), [], "a 5-hour reset is not listed");
-  assert.equal(asJson(context.comingUpItems({ ...full, windows: [fiveHour, reset, monthly] }, NOW))[0].at, NOW + 3 * DAY,
+  const fiveHour = { id: "five", label: "5-hour limit", used: 10, remaining: 90, windowSeconds: 5 * 3600, resetsAt: noon + 3600, samples: [] };
+  assert.deepEqual(asJson(context.comingUpItems({ windows: [fiveHour] }, noon)), [], "a 5-hour reset is not listed");
+  assert.equal(asJson(context.comingUpItems({ ...full, windows: [fiveHour, reset, monthly] }, noon))[0].at, noon + 3 * DAY,
     "the next reset is the next day-long one");
 }
 console.log("1.9 Coming up list: passed");
-
 
 // ---- 1.9 QmlBar ----
 {
