@@ -31,6 +31,8 @@ ShellRoot {
   property var poolPayload: null
   property var noFigurePayload: null
   property var ompIdlePayload: null
+  property var failedPoolPayload: null
+  property var autoPoolPayload: null
 
   Item {
     id: panelHost
@@ -633,6 +635,51 @@ ShellRoot {
       return true
     },
     function () {
+      // Every account failed without a reading: the pool chip shows the failure, highlighted, not a dash.
+      var copy = JSON.parse(JSON.stringify(savedPayload))
+      copy.providers = copy.providers.map(function (item) {
+        return item.id === "claude" ? provider([account("work", "Work", 0, { status: "error", windows: [] }),
+          account("personal", "Personal", 0, { status: "error", windows: [] })]) : item
+      })
+      root.failedPoolPayload = copy
+      widget.usageBackend.payload = copy
+      widget.settings = Object.assign({}, widget.settings, { barChipValues: '{"claude":"pool"}', barProviderLimits: "{}" })
+      return true
+    },
+    function () {
+      var chip = namedChild(widget, "barChip-claude")
+      if (!chip || !chip.poolChip || widget.usageBackend.payload !== failedPoolPayload || !chip.failed) {
+        if (widget.usageBackend.payload !== failedPoolPayload) widget.usageBackend.payload = failedPoolPayload
+        return waited < 150 ? false : check(false, "Claude's pool chip fails when every account failed: " + (chip ? chip.topText : "no pool chip"))
+      }
+      check(chip.topText !== "—" && chip.active, "a failed pool chip is highlighted, not a dash: " + chip.topText)
+      widget.settings = Object.assign({}, widget.settings, { barChipValues: "{}" })
+      return true
+    },
+    function () {
+      // Auto pools each window and shows the tightest pool: weekly (50 left) beats the 5-hour pool (60 left), so the tag names weekly.
+      var copy = JSON.parse(JSON.stringify(savedPayload))
+      copy.providers = copy.providers.map(function (item) {
+        return item.id === "claude" ? provider([
+          account("work", "Work", 80, { windows: [win("session", "5-hour limit", 80, 7200, 18000), win("weekly", "Weekly limit", 10, 300000, 604800)] }),
+          account("personal", "Personal", 0, { windows: [win("session", "5-hour limit", 0, 7200, 18000), win("weekly", "Weekly limit", 90, 300000, 604800)] })]) : item
+      })
+      root.autoPoolPayload = copy
+      widget.usageBackend.payload = copy
+      widget.settings = Object.assign({}, widget.settings, { barChipValues: '{"claude":"pool"}', barProviderLimits: "{}" })
+      return true
+    },
+    function () {
+      var chip = namedChild(widget, "barChip-claude")
+      if (!chip || !chip.poolChip || widget.usageBackend.payload !== autoPoolPayload || chip.remainingValue !== 50) {
+        if (widget.usageBackend.payload !== autoPoolPayload) widget.usageBackend.payload = autoPoolPayload
+        return waited < 150 ? false : check(false, "Claude's auto pool chip shows the weekly pool, 50: " + (chip ? chip.remainingValue : "no pool chip"))
+      }
+      check(chip.topTag !== "5h", "on auto the pool chip names the window it pooled, not the 5-hour one: " + chip.topTag)
+      widget.settings = Object.assign({}, widget.settings, { barChipValues: "{}" })
+      return true
+    },
+    function () {
       // The pool choice: the chip shows the pool total of the 5-hour limit, one chip for Claude in either bar mode.
       // Work and Personal have the limit; Account 1 has no reading, so it is left out and the tooltip says so.
       var copy = JSON.parse(JSON.stringify(savedPayload))
@@ -648,7 +695,7 @@ ShellRoot {
     function () {
       var chip = namedChild(widget, "barChip-claude")
       // A synthetic refresh can replace the pool payload between steps: put it back and wait for the chip to read it.
-      if (!chip || !chip.poolChip || widget.usageBackend.payload !== poolPayload || chip.remainingValue !== 70) {
+      if (!chip || !chip.poolChip || widget.usageBackend.payload !== poolPayload || chip.remainingValue !== 70 || widget.settings.barAccountMode !== "chips") {
         if (widget.usageBackend.payload !== poolPayload) widget.usageBackend.payload = poolPayload
         return waited < 150 ? false : check(false, "Claude's pool chip shows 70 in chips mode: " + (chip ? chip.remainingValue : "no pool chip"))
       }
@@ -669,7 +716,7 @@ ShellRoot {
       widget.usageBackend.payload = copy
       // The ended-account steps left Claude one at a time; omp's next account counts only when used together, and the
       // pool check after this one then runs in that mode too (the steps before it ran one at a time).
-      widget.settings = Object.assign({}, widget.settings, { barChipValues: "{}", accountModes: '{"claude":"together"}' })
+      widget.settings = Object.assign({}, widget.settings, { barChipValues: "{}", accountModes: '{"claude":"together"}', barAccountMode: "dots" })
       return true
     },
     function () {
@@ -682,12 +729,12 @@ ShellRoot {
       }
       var counted = countedEverywhere("claude").split(" | ")[0]
       check(counted === "[1]", "with nothing spending the idle chip counts omp's next account, Personal, not the one with the least headroom: " + counted)
-      widget.settings = Object.assign({}, widget.settings, { barChipValues: '{"claude":"pool"}' })
+      widget.settings = Object.assign({}, widget.settings, { barChipValues: '{"claude":"pool"}', barAccountMode: "dots" })
       return true
     },
     function () {
       var chip = namedChild(widget, "barChip-claude")
-      if (!chip || !chip.poolChip || widget.usageBackend.payload !== poolPayload || chip.remainingValue !== 70) {
+      if (!chip || !chip.poolChip || widget.usageBackend.payload !== poolPayload || chip.remainingValue !== 70 || widget.settings.barAccountMode !== "dots") {
         if (widget.usageBackend.payload !== poolPayload) widget.usageBackend.payload = poolPayload
         return waited < 150 ? false : check(false, "Claude's pool chip shows 70 in dots mode: " + (chip ? chip.remainingValue : "no pool chip"))
       }
