@@ -343,7 +343,7 @@ ShellRoot {
       "stored order gives no switch point or warning")
     check(find(ompDrain, "ompRoutingLine-1").text === "New sessions move to Work when Personal reaches about 65%.",
       "the switch point when drain decides: " + find(ompDrain, "ompRoutingLine-1").text)
-    check(find(ompDrain, "ompRoutingTooltip-1").text.indexOf("Running sessions keep their account while active.") >= 0,
+    check(find(ompDrain, "ompRoutingLine-1").line.tooltip.indexOf("Running sessions keep their account while active.") >= 0,
       "the switch point explains that running sessions stay")
     var endedLines = ompLines(ompEnded)
     check(endedLines.indexOf("Work's subscription ended, but omp still signs in with it: remove it in omp.") >= 0,

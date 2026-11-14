@@ -638,19 +638,26 @@ ShellRoot {
       // Every account failed without a reading: the pool chip shows the failure, highlighted, not a dash.
       var copy = JSON.parse(JSON.stringify(savedPayload))
       copy.providers = copy.providers.map(function (item) {
+        // As the reader sends it: with no healthy account, the provider's own reading is the failed one.
         return item.id === "claude" ? provider([account("work", "Work", 0, { status: "error", windows: [] }),
-          account("personal", "Personal", 0, { status: "error", windows: [] })]) : item
+          account("personal", "Personal", 0, { status: "error", windows: [] })],
+          { status: "error", errorKind: "expired", message: "Claude Code sign-in expired." }) : item
       })
       root.failedPoolPayload = copy
       widget.usageBackend.payload = copy
-      widget.settings = Object.assign({}, widget.settings, { barChipValues: '{"claude":"pool"}', barProviderLimits: "{}" })
+      // Dots mode: one chip per provider, so Codex's accounts cannot push Claude past the chip cap.
+      widget.settings = Object.assign({}, widget.settings, { barChipValues: '{"claude":"pool"}', barProviderLimits: "{}",
+        barAccountMode: "dots" })
       return true
     },
     function () {
       var chip = namedChild(widget, "barChip-claude")
-      if (!chip || !chip.poolChip || widget.usageBackend.payload !== failedPoolPayload || !chip.failed) {
+      if (!chip || !chip.poolChip || widget.usageBackend.payload !== failedPoolPayload || !chip.failed
+          || widget.settings.barAccountMode !== "dots") {
         if (widget.usageBackend.payload !== failedPoolPayload) widget.usageBackend.payload = failedPoolPayload
-        return waited < 150 ? false : check(false, "Claude's pool chip fails when every account failed: " + (chip ? chip.topText : "no pool chip"))
+        return waited < 150 ? false : check(false, "Claude's pool chip fails when every account failed: " + (chip
+          ? chip.topText + ", pool " + chip.poolChip + ", failed " + chip.failed
+          : "no chip; chips " + namedChildren(widget, "barChip-", []).map(function (c) { return c.objectName }).join(",")))
       }
       check(chip.topText !== "—" && chip.active, "a failed pool chip is highlighted, not a dash: " + chip.topText)
       widget.settings = Object.assign({}, widget.settings, { barChipValues: "{}" })
@@ -729,6 +736,25 @@ ShellRoot {
       }
       var counted = countedEverywhere("claude").split(" | ")[0]
       check(counted === "[1]", "with nothing spending the idle chip counts omp's next account, Personal, not the one with the least headroom: " + counted)
+      widget.selectProviderId("claude")
+      widget.showLimits()
+      return true
+    },
+    function () {
+      // The open panel: OMP ROUTING sits under the account rows and above the limits.
+      var top = panelRoot()
+      var block = namedChild(top, "ompRouting")
+      var rows = namedChild(top, "accountList")
+      var limits = namedChild(top, "limitsSection")
+      if (!widget.opened || !block || !block.visible || block.height <= 0 || !rows || !limits) {
+        if (!widget.opened) widget.showLimits()
+        return waited < 150 ? false : check(false, "Claude's open panel shows OMP ROUTING: "
+          + (block ? "visible " + block.visible + ", height " + block.height : "no block"))
+      }
+      var blockTop = block.mapToItem(null, 0, 0).y
+      check(blockTop >= rows.mapToItem(null, 0, rows.height).y, "OMP ROUTING sits under the account rows")
+      check(blockTop + block.height <= limits.mapToItem(null, 0, 0).y, "and above the limits")
+      widget.close()
       widget.settings = Object.assign({}, widget.settings, { barChipValues: '{"claude":"pool"}', barAccountMode: "dots" })
       return true
     },
