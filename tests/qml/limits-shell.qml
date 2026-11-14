@@ -132,6 +132,12 @@ ShellRoot {
       recentByAccount: {}, warningThreshold: 25, criticalThreshold: 10, extraKeys: "{}", hideEmails: true })
     return state ? state.routing : null
   }
+  // The text of the three OMP ROUTING slots, top to bottom (" " where a slot is empty).
+  function ompLines(panel) {
+    var lines = []
+    for (var i = 0; i < 3; i++) lines.push(find(panel, "ompRoutingLine-" + i).text)
+    return lines
+  }
   property var ompPair: null
   property var ompDrain: null
   property var ompEnded: null
@@ -337,13 +343,16 @@ ShellRoot {
       "stored order gives no switch point or warning")
     check(find(ompDrain, "ompRoutingLine-1").text === "New sessions move to Work when Personal reaches about 65%.",
       "the switch point when drain decides: " + find(ompDrain, "ompRoutingLine-1").text)
-    check(find(ompDrain, "ompRoutingSwitchHover") !== null && ompDrain.switchTooltip === "Running sessions keep their account while active.",
+    check(find(ompDrain, "ompRoutingTooltip-1").text.indexOf("Running sessions keep their account while active.") >= 0,
       "the switch point explains that running sessions stay")
-    check(find(ompEnded, "ompRoutingLine-2").text === "Work's subscription ended, but omp still signs in with it: remove it in omp.",
-      "an ended omp account is warned: " + find(ompEnded, "ompRoutingLine-2").text)
+    var endedLines = ompLines(ompEnded)
+    check(endedLines.indexOf("Work's subscription ended, but omp still signs in with it: remove it in omp.") >= 0,
+      "an ended omp account is warned: " + endedLines.join(" | "))
+    check(endedLines.indexOf(" ") === -1 || endedLines.slice(endedLines.indexOf(" ")).every(function (t) { return t === " " }),
+      "the lines fill the slots from the top")
     check(!ompNone.visible && find(ompNone, "ompRoutingLine-0").text === " ", "no omp account, no OMP ROUTING block")
     // The block stays with an ended omp account: the warning is what the user needs to see.
-    check(ompEnded.visible && find(ompEnded, "ompRoutingLine-2").text !== " ", "an ended omp account keeps the OMP ROUTING block visible")
+    check(ompEnded.visible && ompLines(ompEnded)[0] !== " ", "an ended omp account keeps the OMP ROUTING block visible")
     // Spending: the meter would sweep, but reduced motion keeps it still; the live figure climbs.
     rising.spending = true
     rising.readingAt = now - 50
