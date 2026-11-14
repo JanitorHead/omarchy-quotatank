@@ -82,7 +82,7 @@ The built-in `omarchy.agents` widget can run alongside Quotatank. To keep only Q
 
 ## Several accounts at a glance
 
-![Three views: the hover card over the Claude chip listing Work in use and spending now and Personal idle, each with a trend and 5-hour and weekly meters; four Claude accounts used together through omp, with Lab in reserve, Work holding a banked Fable reset, Personal marked next with its end date and what it leaves over, the ended Old Pro last, OMP ROUTING naming the next session, and Personal's detail with what its weekly limit leaves over and what comes up; and Limits with every account used up, a clock in the chip, and a runway card with the gap until the reset](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/accounts.png)
+![Three views: the hover card over the Claude chip listing Work in use and spending now and Personal idle, each with a trend and 5-hour and weekly meters; four Claude accounts used together through omp, with Lab in reserve, Work holding a banked Fable reset, Personal marked next with its end date and what it leaves over, the ended Old Pro last, OMP ROUTING naming the next session and warning that omp still signs in with Old Pro, and Personal's detail with what its weekly limit leaves over and what comes up; and Limits with every account used up, a clock in the chip, and a runway card with the gap until the reset](https://raw.githubusercontent.com/JanitorHead/omarchy-quotatank/main/docs/screenshots/accounts.png)
 
 Every source of a second account shows the same way:
 
