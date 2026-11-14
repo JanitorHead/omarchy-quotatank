@@ -7855,6 +7855,32 @@ def good_readings_path(state_dir: Path | None = None) -> Path:
     return history_path(state_dir).with_name("readings.json")
 
 
+def refresh_state_path(state_dir: Path | None = None) -> Path:
+    return history_path(state_dir).with_name("refresh.json")
+
+
+# The widget reads at most this much of the reader's output (UsageBackend.qml, maxBodyChars); a larger reading is
+# not saved for its next start either.
+MAX_SAVED_READING_CHARS = 2 * 1024 * 1024
+
+
+def save_refresh_state(path: Path, key: str, attempted_ms: int, payload: dict[str, Any]) -> None:
+    """`refresh.json`, which the widget reads when it starts (UsageBackend.qml): the reading of the check that started
+    at `attempted_ms`, with the widget's settings `key` it was read for. Saved only when a check returns a reading,
+    so the time always goes with its reading: a check that fails or is stopped leaves the file as it was, and the
+    widget checks as soon as that older reading is due. A reading too large for the widget is saved as none, so the
+    widget checks when it starts. A failed save is ignored."""
+    if payload.get("backendError"):
+        return
+    fits = len(json.dumps(payload, separators=(",", ":"))) <= MAX_SAVED_READING_CHARS
+    try:
+        atomic_write_json(path, {"lastAttemptAt": attempted_ms,
+                                 "reading": {"key": key, "payload": payload} if fits else None})
+    except OSError:
+        pass
+
+
+
 def load_good_readings(path: Path, stamp: int) -> tuple[dict[str, dict[str, Any]], bool]:
     """The saved readings still young enough to stand in, and whether any saved entry was dropped."""
     try:
@@ -9387,10 +9413,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="Another computer to read over SSH (c- and eight hex digits, then its SSH destination).")
     parser.add_argument("--reader", action="store_true",
                         help="Run as another computer's reader: no history is read or written.")
+    parser.add_argument("--refresh-key", metavar="KEY",
+                        help="Save refresh.json for the widget's next start, its reading marked with KEY (the widget's "
+                             "providers and sources).")
     args = parser.parse_args(argv)
 
     provider_ids = parse_provider_ids(args.providers)
     timeout = clamp(args.timeout, 1.0, 30.0)
+    refresh_path = refresh_state_path(args.state_dir) if args.refresh_key is not None and not args.reader else None
+    attempted_ms = int(time.time() * 1000)
     try:
         key_files = parse_key_files(args.key_file)
         extra_keys = parse_extra_keys(args.extra_key)
@@ -9404,6 +9435,8 @@ def main(argv: list[str] | None = None) -> int:
             "providers": [],
             "backendError": clean_message(exc),
         }
+    if refresh_path is not None:
+        save_refresh_state(refresh_path, args.refresh_key, attempted_ms, payload)
     json.dump(payload, sys.stdout, separators=(",", ":"))
     sys.stdout.write("\n")
     return 0
