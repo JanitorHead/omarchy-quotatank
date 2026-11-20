@@ -28,6 +28,25 @@ function releaseLive(key) {
   }
 }
 
+// Every bar runs its own panel; only the oldest one still alive sends threshold notifications.
+var limitNotifiers = []
+var nextLimitNotifierId = 0
+
+function claimLimitNotifier() {
+  nextLimitNotifierId++
+  limitNotifiers.push(nextLimitNotifierId)
+  return nextLimitNotifierId
+}
+
+function releaseLimitNotifier(id) {
+  var index = limitNotifiers.indexOf(id)
+  if (index !== -1) limitNotifiers.splice(index, 1)
+}
+
+function isLimitNotifier(id) {
+  return limitNotifiers.length > 0 && limitNotifiers[0] === id
+}
+
 function clamp(value, minimum, maximum) {
   var number = Number(value)
   if (!isFinite(number)) return minimum

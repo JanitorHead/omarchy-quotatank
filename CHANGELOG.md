@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- **A limit crossing sends one desktop notification, not one per monitor.** Each bar runs its own panel, and every panel notified for the same crossing; now only the oldest panel still open does, and the next one takes over when its monitor goes away.
+
 ## 3.1.4
 
 Quotatank 3.1.4 carries the omp artwork's MIT notice; the widget is unchanged from 3.1.3.

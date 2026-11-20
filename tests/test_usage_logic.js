@@ -597,6 +597,22 @@ const dropped = step({ "codex|weekly": "critical" }, []);
 assert.equal(Object.keys(dropped.state).length, 0, "a window that disappears is forgotten");
 assert.equal(step(dropped.state, [reading("codex|weekly", "critical")]).crossings.length, 0, "a returning window seeds again");
 
+const firstBar = context.claimLimitNotifier();
+const secondBar = context.claimLimitNotifier();
+const thirdBar = context.claimLimitNotifier();
+assert.equal(context.isLimitNotifier(firstBar), true, "the first bar notifies");
+assert.equal(context.isLimitNotifier(secondBar), false, "other bars stay silent");
+assert.equal(context.isLimitNotifier(thirdBar), false, "other bars stay silent");
+context.releaseLimitNotifier(secondBar);
+assert.equal(context.isLimitNotifier(firstBar), true, "closing a silent bar keeps the notifier");
+context.releaseLimitNotifier(firstBar);
+assert.equal(context.isLimitNotifier(thirdBar), true, "the next bar takes over when the notifier closes");
+context.releaseLimitNotifier(firstBar);
+assert.equal(context.isLimitNotifier(thirdBar), true, "releasing twice changes nothing");
+assert.equal(context.isLimitNotifier(0), false, "an unregistered bar never notifies");
+context.releaseLimitNotifier(thirdBar);
+assert.equal(context.isLimitNotifier(thirdBar), false, "no bar left, no notifier");
+
 const batch = step({ "codex|weekly": "ok", "claude|session": "ok" },
   [reading("codex|weekly", "warning"), reading("claude|session", "critical")]);
 assert.equal(batch.crossings.length, 2, "each window crosses independently in one refresh");

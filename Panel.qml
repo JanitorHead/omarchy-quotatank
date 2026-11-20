@@ -670,7 +670,8 @@ Ui.Panel {
     settings = entry
   }
   onSettingsChanged: moveLegacyPaths()
-  Component.onCompleted: { moveLegacyPaths(); beginSetupIfWanted() }
+  Component.onCompleted: { limitNotifierId = UsageLogic.claimLimitNotifier(); moveLegacyPaths(); beginSetupIfWanted() }
+  Component.onDestruction: UsageLogic.releaseLimitNotifier(limitNotifierId)
 
   function handleBarPress(buttonCode) {
     if (buttonCode === Qt.MiddleButton) nextProvider()
@@ -711,6 +712,7 @@ Ui.Panel {
   }
 
   property var limitSeverityState: ({})
+  property int limitNotifierId: 0
 
   // Runs after each successful refresh: a desktop notification per window that moved to a worse severity, at most
   // UsageLogic.MAX_LIMIT_NOTIFICATIONS of them and one that counts the rest.
@@ -745,7 +747,7 @@ Ui.Panel {
     }
     var result = UsageLogic.severityCrossings(limitSeverityState, readings)
     limitSeverityState = result.state
-    if (!notifyLimitThresholds) return
+    if (!notifyLimitThresholds || !UsageLogic.isLimitNotifier(limitNotifierId)) return
     var notifications = UsageLogic.limitNotifications(result.crossings)
     for (var k = 0; k < notifications.length; k++)
       Util.execArgv(["notify-send", "--app-name=Quotatank", "--urgency=" + (notifications[k].critical ? "critical" : "normal"),
