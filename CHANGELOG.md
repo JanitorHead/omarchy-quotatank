@@ -4,6 +4,12 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.1.5 (unreleased)
+
+### Fixed
+
+- **SSH fixture tests keep each computer's environment separate.** Local XDG folders and agent path overrides no longer make an empty simulated computer appear to have agent history.
+
 ## 3.1.4
 
 Quotatank 3.1.4 carries the omp artwork's MIT notice; the widget is unchanged from 3.1.3.

@@ -169,6 +169,38 @@ class BundleTests(FakeSsh):
 
 
 class ComputerCheckTests(FakeSsh):
+    def test_local_history_paths_do_not_leak_into_another_computer(self):
+        local = self.root / "local"
+        database = local / "data" / "opencode" / "opencode.db"
+        database.parent.mkdir(parents=True)
+        database.touch()  # Inventory checks metadata only, without opening the database.
+        sessions = local / "sessions"
+        sessions.mkdir()
+        (sessions / "local.jsonl").write_text("{}\n")
+        baseline = dict.fromkeys(("OPENCODE_DB", "OPENCODE_DATABASE", "CLAUDE_CONFIG_DIR", "CODEX_HOME",
+                                  "OMP_SESSIONS_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_CODING_AGENT_DIR",
+                                  "GROK_HOME", "KIMI_SHARE_DIR"), "")
+        baseline.update(HOME=str(local), XDG_DATA_HOME=str(local / "empty-data"))
+        environments = [
+            {"XDG_DATA_HOME": str(local / "data")},
+            {"OMP_SESSIONS_DIR": str(sessions)},
+            {"OPENCODE_DB": str(database), "OPENCODE_DATABASE": str(database),
+             "CLAUDE_CONFIG_DIR": str(local / "claude"), "CODEX_HOME": str(local / "codex"),
+             "OMP_SESSIONS_DIR": str(sessions), "PI_CODING_AGENT_SESSION_DIR": str(sessions),
+             "PI_CODING_AGENT_DIR": str(local / "pi"), "GROK_HOME": str(local / "grok"),
+             "KIMI_SHARE_DIR": str(local / "kimi")},
+        ]
+        for environment in environments:
+            with self.subTest(overrides=sorted(environment)), mock.patch.dict(os.environ, {**baseline, **environment}), \
+                    mock.patch.object(remote, "machine_id", return_value="this-computer"):
+                expected = "opencode" if "OMP_SESSIONS_DIR" not in environment else "omp"
+                self.assertIn(expected, {entry["id"] for entry in costs.history_inventory(int(time.time() * 1000))})
+                result = check.test("devbox", "", "off")
+                self.assertFalse(result["ok"], "local history does not make an empty destination worth adding")
+                self.assertEqual(result["found"]["history"], [])
+                self.assertFalse(result["steps"][3]["ok"])
+                self.assertFalse(result["steps"][-1]["ok"])
+
     def test_suggestions_are_computers_with_the_users_ssh_connects_as(self):
         ssh = self.root / "home" / ".ssh"
         (ssh / "conf.d").mkdir(parents=True)
