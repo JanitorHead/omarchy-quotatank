@@ -31,4 +31,6 @@ HOME="${FAKE_SSH_HOMES:?}/$host"
 mkdir -p "$HOME"
 export HOME
 cd "$HOME" || exit 1
-exec sh -c "$command"
+# A real SSH destination has its own environment. Do not forward the test runner's XDG folders,
+# agent home overrides or credentials into it; PATH is needed to find the test machine's tools.
+exec env -i HOME="$HOME" PATH="$PATH" sh -c "$command"

@@ -15,6 +15,7 @@ All notable changes to this project will be documented here. The format follows
 ### Changed
 
 - **`./tests/run test_module` runs one Python test module, and CI checks that a release tag matches `manifest.json` and has its CHANGELOG section** (`tests/check-release`).
+- **The remote tests no longer read the developer's own agent history.** The fake `ssh` passed the test runner's environment to the simulated computer, so local XDG folders and agent path overrides (`OPENCODE_DB`, `OMP_SESSIONS_DIR` and the like) made an empty computer look as if it had history, and three `ComputerCheckTests` failed on a developer's machine. The remote command now starts with only `HOME` and `PATH`. Contributed by @cbayschm74 in #50.
 
 ## 3.1.4
 
