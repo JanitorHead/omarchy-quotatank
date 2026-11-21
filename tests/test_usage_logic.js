@@ -298,6 +298,25 @@ assert.equal(context.acquireLive('test', factory, {}), context.acquireLive('test
 assert.equal(created,1);
 context.releaseLive('test'); assert.equal(stopped,0);
 context.releaseLive('test'); assert.equal(stopped,1);
+
+// Threshold notifications across bars: only the oldest panel still alive notifies, against one shared record, so a
+// takeover neither repeats nor loses a crossing.
+const weeklyLevel = (severity) => [{ key: "claude|weekly", severity, title: "Claude · Weekly limit" }];
+const leftBar = context.claimLimitNotifier();
+const middleBar = context.claimLimitNotifier();
+const rightBar = context.claimLimitNotifier();
+assert.equal(context.notifierCrossings(leftBar, weeklyLevel("ok")).length, 0, "the first check only seeds");
+assert.equal(context.notifierCrossings(middleBar, weeklyLevel("warning")).length, 0, "a bar that is not the oldest stays silent");
+context.releaseLimitNotifier(middleBar);
+context.releaseLimitNotifier(leftBar);
+context.releaseLimitNotifier(leftBar); // a second release changes nothing
+assert.equal(context.notifierCrossings(rightBar, weeklyLevel("warning")).length, 1,
+  "the next bar takes over and sends the crossing the old one had not seen yet");
+const newBar = context.claimLimitNotifier();
+context.releaseLimitNotifier(rightBar);
+assert.equal(context.notifierCrossings(newBar, weeklyLevel("warning")).length, 0, "a takeover does not repeat a crossing already sent");
+assert.equal(context.notifierCrossings(newBar, weeklyLevel("critical")).length, 1, "and sends the next one");
+context.releaseLimitNotifier(newBar);
 // The menu bar limit setting: which window supplies the percentage, the
 // fallbacks, and the spellings shared with the AI usage widget.
 const windowed = (windows) => ({ id: "opencode", name: "OpenCode Go", status: "ok", windows });

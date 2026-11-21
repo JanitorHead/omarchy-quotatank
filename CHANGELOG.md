@@ -39,7 +39,8 @@ Quotatank 3.2.0 shows which omp account comes next and why, when each subscripti
 - **A cancelled Kilo Pass no longer shows its last month as a live allowance.** Kilo keeps a cancelled pass with that month's figures; only an active, past-due or trialing pass counts now.
 - **An expired Alibaba Coding Plan no longer shows its last quota or an unreadable-data error**, and an expired Xiaomi MiMo Token Plan reads as an ended subscription beside its balance instead of a notice.
 - **A reading standing in for a failed one no longer keeps the failure's HTTP status**, whether it comes from another computer, a proxy or omp.
-- **A shell restart no longer checks every provider at once.** The last reading is saved with the time of its check, so a restarted shell, or a panel opened on another screen, shows it right away and waits out the rest of the refresh interval. Changed providers, keys or sources still check at once.
+- **A limit crossing sends one desktop notification, not one per monitor.** Each bar runs its own panel, and every panel notified for the same crossing; now only the oldest panel still open does. When its monitor goes away the next one takes over, without repeating a crossing already sent or losing one not yet sent. Contributed by @lkshrk in #51.
+- **A shell restart no longer checks every provider at once.** The last reading is saved with the time of its check, so a restarted shell, or a panel opened on another screen, shows it right away and waits out the rest of the refresh interval. Changed providers, keys or sources still check at once. Contributed by @lkshrk in #49.
 - **The backend contract and the README describe 3.1.3's Claude resets as they work.** The contract still said Claude's banked resets clear the 5-hour and weekly limits, did not list the Fable weekly limit or the reset expiry that omp accounts now carry, and did not say that a signed-out Claude Code reading names no account. The README said every launch reset clears only the Fable weekly limit; the confirmation names what each one clears.
 
 ### Changed
@@ -47,6 +48,7 @@ Quotatank 3.2.0 shows which omp account comes next and why, when each subscripti
 - **`./tests/run test_module` runs one Python test module, and CI checks that a release tag matches `manifest.json` and has its CHANGELOG section** (`tests/check-release`). The Python tests print only failures and the summary; `./tests/run -v` names each test.
 - **CI runs the QML contracts that need Wayland.** The qml job starts a headless sway (`tests/headless-wayland`), so the contracts that drive the whole panel, its menu bar chips and the live runtime run there too; before, they ran only on a desktop.
 - **`./tests/run` runs every phase and lists the ones that failed.** It stopped at the first failing phase, so a Python failure hid the `qmllint` and QML contract results behind it.
+- **The remote tests no longer read the developer's own agent history.** The fake `ssh` passed the test runner's environment to the simulated computer, so local XDG folders and agent path overrides (`OPENCODE_DB`, `OMP_SESSIONS_DIR` and the like) made an empty computer look as if it had history, and three `ComputerCheckTests` failed on a developer's machine. The remote command now starts with only `HOME` and `PATH`. Contributed by @cbayschm74 in #50.
 
 ## 3.1.4
 
