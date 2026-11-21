@@ -17,6 +17,8 @@ parser.add_argument("--proxy-key-file", action="append", default=[])
 parser.add_argument("--key-file", action="append", default=[])
 # omp is read on this computer by default (Settings → Providers → omp), so every direct refresh passes it.
 parser.add_argument("--omp", choices=("local",))
+# The widget asks every check to save refresh.json for its next start; these contracts do not restart.
+parser.add_argument("--refresh-key")
 args = parser.parse_args()
 
 # A singleton-backend instance in the QML contract deliberately gets bad

@@ -172,13 +172,15 @@ No credential is printed or included in display errors. T3 access tokens are cac
 
 ```text
 ${XDG_STATE_HOME:-~/.local/state}/omarchy/quotatank/history.json
+${XDG_STATE_HOME:-~/.local/state}/omarchy/quotatank/readings.json
+${XDG_STATE_HOME:-~/.local/state}/omarchy/quotatank/refresh.json
 ${XDG_STATE_HOME:-~/.local/state}/omarchy/quotatank/cost-scan-cache.json
 ${XDG_STATE_HOME:-~/.local/state}/omarchy/quotatank/cost-model-rates.json
 ```
 
 Quotatank 1.x kept its keys and state in `omarchy/model-usage`. The first 2.0 backend run renames those folders to `omarchy/quotatank` (only when the new folder does not exist yet and the old one is a real folder, not a symlink), and the widget rewrites the key paths saved in its settings once.
 
-`history.json` contains bounded quota percentages: one series per provider and account for the 24-hour trend (the chip hover card) and one per limit window for pacing, each kept for seven days. The cost scan cache contains only timestamps, model names, token counters, reported cost values, SHA-256 identifiers for transcript paths, sessions, and deduplication keys, and bounded resume metadata (byte position, device/inode, hashed tail guard, and sanitized Codex parser state). It never contains prompts, responses, or tool output. The model-rate cache is a compact copy of public LiteLLM prices.
+`history.json` contains bounded quota percentages: one series per provider and account for the 24-hour trend (the chip hover card) and one per limit window for pacing, each kept for seven days. `readings.json` keeps each provider's and account's last good reading for 24 hours, shown while a refresh fails for a temporary reason. `refresh.json` keeps when the last limits check started and the last whole reading, accounts included, with the monitored providers, keys and sources it was read for; the widget shows it when the shell starts and waits out the rest of the refresh interval. The cost scan cache contains only timestamps, model names, token counters, reported cost values, SHA-256 identifiers for transcript paths, sessions, and deduplication keys, and bounded resume metadata (byte position, device/inode, hashed tail guard, and sanitized Codex parser state). It never contains prompts, responses, or tool output. The model-rate cache is a compact copy of public LiteLLM prices.
 
 ## Settings
 
@@ -196,7 +198,7 @@ In **Settings → Costs → Custom prices**, choose a model from the ones in you
 
 | Key | Default | Meaning |
 |---|---:|---|
-| `refreshIntervalSec` | `900` | Automatic refresh interval; clamped to 60–3600 seconds. A check that finds providers unreachable is retried once a minute later |
+| `refreshIntervalSec` | `900` | Automatic refresh interval; clamped to 60–3600 seconds. A check that finds providers unreachable is retried once a minute later. After a shell restart the last reading shows at once and the next check waits out the rest of the interval, unless the monitored providers, keys or sources changed |
 | `enabledProviders` | every sign-in provider | Providers monitored: read from every source and shown in Limits. API-key providers are off by default |
 | `dismissedProviders` | `[]` | Providers set up somewhere that **Ignore** stopped suggesting |
 | `sources` | `"[]"` | Managed by **Settings → Sources**: a JSON list of the other places read, in order, each with an `id`, a `kind` and an `on` switch. `computer` rows (`c-` id) hold an SSH destination in `host`; `proxy` rows (`p-` id) a CLIProxyAPI `url`, its management `keyFile`, and an optional CPA Usage Keeper `keeperUrl` and `keeperPasswordFile`; `t3` rows a `name`, `url` and `tokenFile`. Key fields are private file references |

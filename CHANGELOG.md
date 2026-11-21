@@ -4,11 +4,17 @@ All notable changes to this project will be documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and releases use
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 3.1.5 (unreleased)
+## Unreleased
 
 ### Fixed
 
-- **SSH fixture tests keep each computer's environment separate.** Local XDG folders and agent path overrides no longer make an empty simulated computer appear to have agent history.
+- **A shell restart no longer checks every provider at once.** The last reading is saved with the time of its check, so a restarted shell, or a panel opened on another screen, shows it right away and waits out the rest of the refresh interval. Changed providers, keys or sources still check at once.
+- **The backend contract and the README describe 3.1.3's Claude resets as they work.** The contract still said Claude's banked resets clear the 5-hour and weekly limits, did not list the Fable weekly limit or the reset expiry that omp accounts now carry, and did not say that a signed-out Claude Code reading names no account. The README said every launch reset clears only the Fable weekly limit; the confirmation names what each one clears.
+
+### Changed
+
+- **`./tests/run test_module` runs one Python test module, and CI checks that a release tag matches `manifest.json` and has its CHANGELOG section** (`tests/check-release`).
+- **The remote tests no longer read the developer's own agent history.** The fake `ssh` passed the test runner's environment to the simulated computer, so local XDG folders and agent path overrides (`OPENCODE_DB`, `OMP_SESSIONS_DIR` and the like) made an empty computer look as if it had history, and three `ComputerCheckTests` failed on a developer's machine. The remote command now starts with only `HOME` and `PATH`. Contributed by @cbayschm74 in #50.
 
 ## 3.1.4
 

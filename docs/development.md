@@ -5,7 +5,7 @@
 ## Architecture
 
 - `Panel.qml` owns the injected bar widget, native popup, keyboard behavior, provider selection, error/credit/limit presentation, and namespaced IPC.
-- `UsageBackend.qml` owns one bounded asynchronous Python process, coalesces duplicate refresh requests, applies the configured interval, and rejects malformed contract output.
+- `UsageBackend.qml` owns one bounded asynchronous Python process, coalesces duplicate refresh requests, applies the configured interval, and rejects malformed contract output. When it starts it shows the reading saved in `refresh.json` for the same providers and sources and waits out the rest of the interval; the backend writes that file (`--refresh-key`).
 - `scripts/usage-fetch.py` performs parallel, failure-isolated provider collection and emits the versioned provider-neutral contract documented in [docs/backend-contract.md](backend-contract.md). It merges, in order, this computer's readings, omp's accounts, the other computers' (`--computer`) and the proxies' (`--proxy`).
 - `scripts/quotatank_remote.py` runs the readers on another computer over SSH (keys only, one shared connection per computer) and brings their JSON back; `scripts/computer-check.py` suggests, tests and removes computers for Settings → Sources and carries omp's live feed from them.
 - `CostBackend.qml` owns an independent, on-demand transcript scan, keeps the last known-good result across malformed responses, and never changes quota polling.
