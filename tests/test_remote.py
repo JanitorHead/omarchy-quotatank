@@ -177,19 +177,14 @@ class ComputerCheckTests(FakeSsh):
         sessions = local / "sessions"
         sessions.mkdir()
         (sessions / "local.jsonl").write_text("{}\n")
-        baseline = dict.fromkeys(("OPENCODE_DB", "OPENCODE_DATABASE", "CLAUDE_CONFIG_DIR", "CODEX_HOME",
-                                  "OMP_SESSIONS_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_CODING_AGENT_DIR",
-                                  "GROK_HOME", "KIMI_SHARE_DIR"), "")
+        every_override = {"OPENCODE_DB": str(database), "OPENCODE_DATABASE": str(database),
+                          "CLAUDE_CONFIG_DIR": str(local / "claude"), "CODEX_HOME": str(local / "codex"),
+                          "OMP_SESSIONS_DIR": str(sessions), "PI_CODING_AGENT_SESSION_DIR": str(sessions),
+                          "PI_CODING_AGENT_DIR": str(local / "pi"), "GROK_HOME": str(local / "grok"),
+                          "KIMI_SHARE_DIR": str(local / "kimi")}
+        baseline = dict.fromkeys(every_override, "")
         baseline.update(HOME=str(local), XDG_DATA_HOME=str(local / "empty-data"))
-        environments = [
-            {"XDG_DATA_HOME": str(local / "data")},
-            {"OMP_SESSIONS_DIR": str(sessions)},
-            {"OPENCODE_DB": str(database), "OPENCODE_DATABASE": str(database),
-             "CLAUDE_CONFIG_DIR": str(local / "claude"), "CODEX_HOME": str(local / "codex"),
-             "OMP_SESSIONS_DIR": str(sessions), "PI_CODING_AGENT_SESSION_DIR": str(sessions),
-             "PI_CODING_AGENT_DIR": str(local / "pi"), "GROK_HOME": str(local / "grok"),
-             "KIMI_SHARE_DIR": str(local / "kimi")},
-        ]
+        environments = [{"XDG_DATA_HOME": str(local / "data")}, {"OMP_SESSIONS_DIR": str(sessions)}, every_override]
         for environment in environments:
             with self.subTest(overrides=sorted(environment)), mock.patch.dict(os.environ, {**baseline, **environment}), \
                     mock.patch.object(remote, "machine_id", return_value="this-computer"):
@@ -198,8 +193,8 @@ class ComputerCheckTests(FakeSsh):
                 result = check.test("devbox", "", "off")
                 self.assertFalse(result["ok"], "local history does not make an empty destination worth adding")
                 self.assertEqual(result["found"]["history"], [])
-                self.assertFalse(result["steps"][3]["ok"])
-                self.assertFalse(result["steps"][-1]["ok"])
+                self.assertEqual((result["steps"][3]["id"], result["steps"][3]["ok"]), ("found", False))
+                self.assertEqual((result["steps"][-1]["id"], result["steps"][-1]["ok"]), ("history", False))
 
     def test_suggestions_are_computers_with_the_users_ssh_connects_as(self):
         ssh = self.root / "home" / ".ssh"
