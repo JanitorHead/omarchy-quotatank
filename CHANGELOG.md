@@ -8,6 +8,7 @@ All notable changes to this project will be documented here. The format follows
 
 ### Fixed
 
+- **A limit crossing sends one desktop notification, not one per monitor.** Each bar runs its own panel, and every panel notified for the same crossing; now only the oldest panel still open does. When its monitor goes away the next one takes over, without repeating a crossing already sent or losing one not yet sent. Contributed by @lkshrk in #51.
 - **A shell restart no longer checks every provider at once.** The last reading is saved with the time of its check, so a restarted shell, or a panel opened on another screen, shows it right away and waits out the rest of the refresh interval. Changed providers, keys or sources still check at once.
 - **The backend contract and the README describe 3.1.3's Claude resets as they work.** The contract still said Claude's banked resets clear the 5-hour and weekly limits, did not list the Fable weekly limit or the reset expiry that omp accounts now carry, and did not say that a signed-out Claude Code reading names no account. The README said every launch reset clears only the Fable weekly limit; the confirmation names what each one clears.
 

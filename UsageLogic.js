@@ -28,6 +28,33 @@ function releaseLive(key) {
   }
 }
 
+// Threshold notifications. Every bar runs its own panel with its own refreshes; only the oldest panel still alive
+// sends notifications, and it checks them against one record shared by every panel. When it goes away, the next one
+// starts from that record, so a crossing already sent is not sent again and one not yet sent is not lost.
+var limitNotifiers = []
+var nextLimitNotifierId = 0
+var notifiedSeverity = ({})
+
+function claimLimitNotifier() {
+  nextLimitNotifierId++
+  limitNotifiers.push(nextLimitNotifierId)
+  return nextLimitNotifierId
+}
+
+function releaseLimitNotifier(id) {
+  var index = limitNotifiers.indexOf(id)
+  if (index !== -1) limitNotifiers.splice(index, 1)
+}
+
+// The crossings of panel `id`'s check (severityCrossings against the shared record), which moves the record. Another
+// panel's check has none and leaves the record alone.
+function notifierCrossings(id, readings) {
+  if (limitNotifiers.length === 0 || limitNotifiers[0] !== id) return []
+  var result = severityCrossings(notifiedSeverity, readings)
+  notifiedSeverity = result.state
+  return result.crossings
+}
+
 function clamp(value, minimum, maximum) {
   var number = Number(value)
   if (!isFinite(number)) return minimum
